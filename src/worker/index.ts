@@ -1,0 +1,115 @@
+import { NonDeterminismError } from "../task/exception/non-determinism-error";
+import * as pb from "../proto/orchestrator_service_pb";
+import { getName } from "../task";
+import { OrchestrationContext } from "../task/context/orchestration-context";
+import { enumValueToKey } from "../utils/enum.util";
+
+export function getNonDeterminismError(taskId: number, actionName: string): NonDeterminismError {
+  return new NonDeterminismError(
+    `A previous execution called ${actionName} with ID=${taskId} but the current execution doesn't have this action with this ID. This problem occurs when either the orchestration has non-deterministic logic or if the code was changed after an instance of this orchestration already started running`,
+  );
+}
+
+export function getWrongActionTypeError(
+  taskId: number,
+  expectedMethodName: string,
+  action: pb.OrchestratorAction,
+): NonDeterminismError {
+  const unexpectedMethodName = getMethodNameForAction(action);
+  console.log("getWrongActionTypeError");
+  return new NonDeterminismError(
+    `Failed to restore orchestration state due to a history mismatch: A previous execution called ${expectedMethodName} with ID=${taskId}, but the current execution is instead trying to call ${unexpectedMethodName} as part of rebuilding it's history. This kind of mismatch can happen if an orchestration has non-deterministic logic or if the code was changed after an instance of this orchestration already started running.`,
+  );
+}
+
+export function getWrongActionNameError(
+  taskId: number,
+  methodName: string,
+  expectedTaskName?: string,
+  actualTaskName?: string,
+): NonDeterminismError {
+  return new NonDeterminismError(
+    `Failed to restore orchestration state due to a history mismatch: A previous execution called ${methodName} with name='${expectedTaskName}' and sequence number ${taskId}, but the current execution is instead trying to call ${actualTaskName} as part of rebuilding it's history. This kind of mismatch can happen if an orchestration has non-deterministic logic or if the code was changed after an instance of this orchestration already started running.`,
+  );
+}
+
+export function getMethodNameForAction(action: pb.OrchestratorAction): string {
+  const actionType = action.getOrchestratoractiontypeCase();
+
+  // What we think is easy is not that easy in Typescript
+  // it is not javascript, but typescript that implements methods as abstract
+  // this means that we cannot just get the name of the method from the prototype
+  // instead, we hardcode them here
+  switch (actionType) {
+    case pb.OrchestratorAction.OrchestratoractiontypeCase.SCHEDULETASK:
+      return "callActivity";
+    case pb.OrchestratorAction.OrchestratoractiontypeCase.CREATETIMER:
+      return "createTimer";
+    case pb.OrchestratorAction.OrchestratoractiontypeCase.CREATESUBORCHESTRATION:
+      return "callSubOrchestrator";
+    default:
+      throw new Error(`Unknown action type: ${actionType}`);
+  }
+}
+
+export function getNewEventSummary(newEvents: pb.HistoryEvent[]): string {
+  if (!newEvents?.length) {
+    return "[]";
+  } else if (newEvents.length == 1) {
+    const enumKey = enumValueToKey(pb.HistoryEvent.EventtypeCase, newEvents[0].getEventtypeCase());
+    return `[${enumKey}]`;
+  } else {
+    let counts = new Map<string, number>();
+
+    for (const event of newEvents) {
+      const eventTypeName = enumValueToKey(pb.HistoryEvent.EventtypeCase, event.getEventtypeCase()) ?? "UNKNOWN";
+      const count = counts.get(eventTypeName) ?? 0;
+      counts.set(eventTypeName, count + 1);
+    }
+
+    return `[${Array.from(counts.entries())
+      .map(([name, count]) => `${name}=${count}`)
+      .join(", ")}]`;
+  }
+}
+
+/**
+ * Returns a summary of the new actions that can be used for logging
+ * @param newActions
+ */
+export function getActionSummary(newActions: pb.OrchestratorAction[]): string {
+  if (!newActions?.length) {
+    return "[]";
+  } else if (newActions.length == 1) {
+    const actionType = newActions[0].getOrchestratoractiontypeCase();
+    const actionTypeName = enumValueToKey(pb.OrchestratorAction.OrchestratoractiontypeCase, actionType) ?? "UNKNOWN";
+
+    return actionTypeName;
+  } else {
+    let counts = new Map<string, number>();
+
+    for (const action of newActions) {
+      const actionType = action.getOrchestratoractiontypeCase();
+      const actionTypeName = enumValueToKey(pb.OrchestratorAction.OrchestratoractiontypeCase, actionType) ?? "UNKNOWN";
+
+      const count = counts.get(actionTypeName) ?? 0;
+      counts.set(actionTypeName, count + 1);
+    }
+
+    return `[${Array.from(counts.entries())
+      .map(([name, count]) => `${name}=${count}`)
+      .join(", ")}]`;
+  }
+}
+
+/**
+ * Returns true of the event is one that can be suspended and resumed
+ * @param event
+ */
+export function isSuspendable(event: pb.HistoryEvent): boolean {
+  return (
+    [pb.HistoryEvent.EventtypeCase.EXECUTIONRESUMED, pb.HistoryEvent.EventtypeCase.EXECUTIONTERMINATED].indexOf(
+      event.getEventtypeCase(),
+    ) == -1
+  );
+}
