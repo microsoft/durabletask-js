@@ -12,7 +12,7 @@ if [ ! "$(docker ps -q -f name=durabletask-sidecar)" ]; then
         --name durabletask-sidecar -d --rm \
         -p 4001:4001 \
         --env 'DURABLETASK_SIDECAR_LOGLEVEL=Debug' \
-        cgillum/durabletask-sidecar:latest start \
+        kaibocai/durabletask-sidecar:latest start \
         --backend Emulator
 fi
 
