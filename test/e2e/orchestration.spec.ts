@@ -111,6 +111,37 @@ describe("Durable Functions", () => {
     expect(activityCounter).toEqual(10);
   }, 31000);
 
+  it("should be able to use the sub-orchestration", async () => {
+    let activityCounter = 0;
+
+    const increment = (ctx: ActivityContext, _: any) => {
+      activityCounter++;
+    };
+
+    const orchestratorChild: TOrchestrator = async function* (ctx: OrchestrationContext, activityCount: number): any {
+      yield ctx.callActivity(increment);
+    };
+
+    const orchestratorParent: TOrchestrator = async function* (ctx: OrchestrationContext, count: number): any {
+      // Call sub-orchestration
+      yield ctx.callSubOrchestrator(orchestratorChild)
+
+    };
+
+    taskHubWorker.addActivity(increment);
+    taskHubWorker.addOrchestrator(orchestratorChild);
+    taskHubWorker.addOrchestrator(orchestratorParent);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestratorParent, 10);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state);
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.failureDetails).toBeUndefined();
+    expect(activityCounter).toEqual(1);
+  }, 31000);
+
   it("should be able to use the sub-orchestration for fan-out", async () => {
     let activityCounter = 0;
 
