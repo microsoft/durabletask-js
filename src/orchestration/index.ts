@@ -1,6 +1,7 @@
 import * as pb from "../proto/orchestrator_service_pb";
 import { FailureDetails } from "../task/failure-details";
 import { OrchestrationStatus, parseGrpcValue } from "./enum/orchestration-status.enum";
+import { PurgeResult } from "./orchestration-purge-result";
 import { OrchestrationState } from "./orchestration-state";
 
 export function newOrchestrationState(
@@ -52,5 +53,17 @@ export function newOrchestrationState(
     state?.getOutput()?.toString(),
     state?.getCustomstatus()?.toString(),
     failureDetails,
+  );
+}
+
+export function newPurgeResult(
+  res: pb.PurgeInstancesResponse
+): PurgeResult | undefined {
+  if (!res || !res.getDeletedinstancecount()) {
+    return;
+  }
+
+  return new PurgeResult(
+    res.getDeletedinstancecount(),
   );
 }

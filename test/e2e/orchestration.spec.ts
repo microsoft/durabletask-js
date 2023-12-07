@@ -343,22 +343,51 @@ describe("Durable Functions", () => {
   }, 31000);
 
   it("should be able to run an single orchestration without activity", async () => {
-    const sequence: TOrchestrator = async function* (ctx: OrchestrationContext, startVal: number): any {
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, startVal: number): any {
       return startVal + 1;
     };
 
-    taskHubWorker.addOrchestrator(sequence);
+    taskHubWorker.addOrchestrator(orchestrator);
     await taskHubWorker.start();
 
-    const id = await taskHubClient.scheduleNewOrchestration(sequence, 15);
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator, 15);
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
     expect(state);
-    expect(state?.name).toEqual(getName(sequence));
+    expect(state?.name).toEqual(getName(orchestrator));
     expect(state?.instanceId).toEqual(id);
     expect(state?.failureDetails).toBeUndefined();
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(state?.serializedInput).toEqual(JSON.stringify(15));
     expect(state?.serializedOutput).toEqual(JSON.stringify(16));
+  }, 31000);
+
+  it("should be able purge orchestration", async () => {
+    const plusOne = async (_: ActivityContext, input: number) => {
+      return input + 1;
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, startVal: number): any {
+      return yield ctx.callActivity(plusOne, startVal);
+    };
+
+    taskHubWorker.addOrchestrator(orchestrator);
+    taskHubWorker.addActivity(plusOne);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator, 1);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state);
+    expect(state?.name).toEqual(getName(orchestrator));
+    expect(state?.instanceId).toEqual(id);
+    expect(state?.failureDetails).toBeUndefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.serializedInput).toEqual(JSON.stringify(1));
+    expect(state?.serializedOutput).toEqual(JSON.stringify(2));
+
+    const purgeResult = await taskHubClient.purgeInstanceById(id);
+    expect(purgeResult);
+    expect(purgeResult?.deletedInstanceCount).toEqual(1);
   }, 31000);
 });

@@ -4,15 +4,15 @@ import * as pb from "./proto/orchestrator_service_pb";
 import * as stubs from "./proto/orchestrator_service_grpc_pb";
 import { TOrchestrator } from "./types/orchestrator.type";
 import { TInput } from "./types/input.type";
-import { TOutput } from "./types/output.type";
 import { getName } from "./task";
 import { randomUUID } from "crypto";
 import { promisify } from "util";
-import { newOrchestrationState } from "./orchestration";
+import { newOrchestrationState, newPurgeResult } from "./orchestration";
 import { OrchestrationState } from "./orchestration/orchestration-state";
 import { GrpcClient } from "./client-grpc";
 import { OrchestrationStatus } from "./orchestration/enum/orchestration-status.enum";
 import { TimeoutError } from "./exception/timeout-error";
+import { PurgeResult } from "./orchestration/orchestration-purge-result";
 
 export class TaskHubGrpcClient {
   private _stub: stubs.TaskHubSidecarServiceClient;
@@ -190,5 +190,15 @@ export class TaskHubGrpcClient {
 
     const prom = promisify(this._stub.resumeInstance.bind(this._stub));
     await prom(req);
+  }
+
+  async purgeInstanceById(instanceId: string,): Promise<PurgeResult | undefined> {
+    const req = new pb.PurgeInstancesRequest;
+    req.setInstanceid(instanceId);
+    console.log(`Purging Instance '${instanceId}'`);
+    const prom = promisify(this._stub.purgeInstances.bind(this._stub));
+    // Execute the request and wait for the first response or timeout
+    const res = (await prom(req)) as pb.PurgeInstancesResponse;
+    return newPurgeResult(res);
   }
 }
