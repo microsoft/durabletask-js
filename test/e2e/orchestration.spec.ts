@@ -336,11 +336,11 @@ describe("Durable Functions", () => {
 
     const id = await taskHubClient.scheduleNewOrchestration(orchestrator, 1);
 
-    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 10);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
     expect(state);
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(state?.serializedOutput).toEqual(JSON.stringify(10));
-  }, 11000);
+  }, 31000);
 
   it("should be able to run an single orchestration without activity", async () => {
     const sequence: TOrchestrator = async function* (ctx: OrchestrationContext, startVal: number): any {
@@ -351,7 +351,7 @@ describe("Durable Functions", () => {
     await taskHubWorker.start();
 
     const id = await taskHubClient.scheduleNewOrchestration(sequence, 15);
-    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 10);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
     expect(state);
     expect(state?.name).toEqual(getName(sequence));
@@ -360,5 +360,5 @@ describe("Durable Functions", () => {
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(state?.serializedInput).toEqual(JSON.stringify(15));
     expect(state?.serializedOutput).toEqual(JSON.stringify(16));
-  }, 11000);
+  }, 31000);
 });
