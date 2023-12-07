@@ -99,9 +99,9 @@ describe("Orchestration Executor", () => {
     expect(actions[0]?.getCreatetimer()?.getFireat()?.toDate()).toEqual(expectedFireAt);
   });
   it("should test the resumption of a task using a timerFired event", async () => {
-    const delayOrchestrator: TOrchestrator = async (ctx: OrchestrationContext, _: any) => {
+    const delayOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any) :any {
       const dueTime = new Date(ctx.currentUtcDateTime.getTime() + 1000);
-      await ctx.createTimer(dueTime);
+      yield ctx.createTimer(dueTime);
       return "done";
     };
     const registry = new Registry();
@@ -369,7 +369,7 @@ describe("Orchestration Executor", () => {
     // user_code_statement = "ctx.call_sub_orchestrator(suborchestrator)"
     // assert user_code_statement in complete_action.failureDetails.stackTrace.value
   });
-  it("should test the non-determinism detection when a sub-orchestration action is encountered when it shouldn't be", async () => {
+  it("should test the non-determinism detection when a sub-orchestration action is encountered when it shouldn't be-subOrchestrator", async () => {
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
       const res = new CompletableTask(); // dummy task
       return res;
@@ -399,7 +399,7 @@ describe("Orchestration Executor", () => {
    * This variation tests the case where the expected task type is wrong (e.g. the code schedules a timer task
    * but the history contains a sub-orchestration completed task)
    */
-  it("should test the non-determinism detection when a sub-orchestration action is encountered when it shouldn't be", async () => {
+  it("should test the non-determinism detection when a sub-orchestration action is encountered when it shouldn't be-timer", async () => {
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
       const res = yield ctx.createTimer(new Date()); // Created timer but history expects sub-orchestration
       return res;
@@ -607,7 +607,7 @@ describe("Orchestration Executor", () => {
         tasks.push(ctx.callActivity(hello, i.toString()));
       }
 
-      const results = whenAll(tasks);
+      const results = yield whenAll(tasks);
       return results;
     };
 

@@ -150,9 +150,10 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   }
 
   setFailed(e: Error) {
-    if (this._isComplete) {
-      return;
-    }
+    // should allow orchestration to fail, even it's completed.
+    // if (this._isComplete) {
+    //   return;
+    // }
 
     this._isComplete = true;
     this._completionStatus = pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED;
