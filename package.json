@@ -12,15 +12,15 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/XavierGeerinck/durabletask-js.git"
+    "url": "git+https://github.com/microsoft/durabletask-js.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/XavierGeerinck/durabletask-js/issues"
+    "url": "https://github.com/microsoft/durabletask-js/issues"
   },
-  "homepage": "https://github.com/XavierGeerinck/durabletask-js#readme",
+  "homepage": "https://github.com/microsoft/durabletask-js#readme",
   "devDependencies": {
     "@swc/core": "^1.3.55",
     "@swc/helpers": "^0.5.1",

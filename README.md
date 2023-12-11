@@ -10,16 +10,6 @@ Note that this project is **not** currently affiliated with the [Durable Functio
 
 ⚠️ **This SDK is currently under active development and is not yet ready for production use.** ⚠️
 
-## Open Issues
-
-### Not able to fan-out
-
-When running end to end tests and using a fan-out pattern, we get the below
-
-```bash
-2023-17-14T08:17:07.449443Z fail: DurableTask.Sidecar[25] TaskOrchestrationDispatcher-1: Unexpected execute failure for work-item 'undefined:0009': System.ArgumentException: Could not find an orchestration instance ID in the work item's runtime state. (Parameter 'workItem')    at DurableTask.Sidecar.Dispatcher.TaskOrchestrationDispatcher.ExecuteWorkItemAsync(TaskOrchestrationWorkItem workItem) in /root/src/DurableTask.Sidecar/Dispatcher/TaskOrchestrationDispatcher.cs:line 44    at DurableTask.Sidecar.Dispatcher.WorkItemDispatcher`1.ExecuteWorkItem(T workItem) in /root/src/DurableTask.Sidecar/Dispatcher/WorkItemDispatcher.cs:line 257
-```
-
 ## Supported patterns
 
 The following orchestration patterns are currently supported.
@@ -28,18 +18,23 @@ The following orchestration patterns are currently supported.
 
 An orchestration can chain a sequence of function calls using the following syntax:
 
-```python
-# simple activity function that returns a greeting
-def hello(ctx: task.ActivityContext, name: str) -> str:
-    return f'Hello {name}!'
+```typescript
+function hello(ctx: ActivityContext, name: string): string {
+    return `Hello ${name}!`;
+}
 
-# orchestrator function that sequences the activity calls
-def sequence(ctx: task.OrchestrationContext, _):
-    result1 = yield ctx.call_activity(hello, input='Tokyo')
-    result2 = yield ctx.call_activity(hello, input='Seattle')
-    result3 = yield ctx.call_activity(hello, input='London')
+const sequence: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+    const cities = [];
 
-    return [result1, result2, result3]
+    const result1 = yield ctx.callActivity(hello, "Tokyo");
+    cities.push(result1);
+    const result2 = yield ctx.callActivity(hello, "Seatle");
+    cities.push(result2);
+    const result3 = yield ctx.callActivity(hello, "London");
+    cities.push(result3);
+
+    return cities;
+};
 ```
 
 You can find the full sample [here](./examples/activity_sequence.py).
@@ -48,26 +43,25 @@ You can find the full sample [here](./examples/activity_sequence.py).
 
 An orchestration can fan-out a dynamic number of function calls in parallel and then fan-in the results using the following syntax:
 
-```python
+```typescript
 # activity function for getting the list of work items
-def get_work_items(ctx: task.ActivityContext, _) -> List[str]:
-    # ...
+function getWorkItems (ctx: ActivityContext): string[] {
+    //...
+}
 
-# activity function for processing a single work item
-def process_work_item(ctx: task.ActivityContext, item: str) -> int:
-    # ...
+function processWorkItem(ctx: ActivityContext): number {
+    //...
+}
 
-# orchestrator function that fans-out the work items and then fans-in the results
-def orchestrator(ctx: task.OrchestrationContext, _):
-    # the number of work-items is unknown in advance
-    work_items = yield ctx.call_activity(get_work_items)
-
-    # fan-out: schedule the work items in parallel and wait for all of them to complete
-    tasks = [ctx.call_activity(process_work_item, input=item) for item in work_items]
-    results = yield task.when_all(tasks)
-
-    # fan-in: summarize and return the results
-    return {'work_items': work_items, 'results': results, 'total': sum(results)}
+const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+    const tasks = [];
+    const workItems = yield ctx.callActivity(getWorkItems);
+    for (const workItem of workItems) {
+    tasks.push(ctx.callActivity(processWorkItem, workItem));
+    }
+    const results = yield whenAll(tasks);
+    return results
+}
 ```
 
 You can find the full sample [here](./examples/fanout_fanin.py).
@@ -76,27 +70,24 @@ You can find the full sample [here](./examples/fanout_fanin.py).
 
 An orchestration can wait for a user-defined event, such as a human approval event, before proceding to the next step. In addition, the orchestration can create a timer with an arbitrary duration that triggers some alternate action if the external event hasn't been received:
 
-```python
-def purchase_order_workflow(ctx: task.OrchestrationContext, order: Order):
-    """Orchestrator function that represents a purchase order workflow"""
-    # Orders under $1000 are auto-approved
-    if order.Cost < 1000:
-        return "Auto-approved"
+```typescript
+const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, order: Order): any {
+    if (order.cost < 1000) {
+    return "Auto-approvied";
+    }
 
-    # Orders of $1000 or more require manager approval
-    yield ctx.call_activity(send_approval_request, input=order)
+    yield ctx.callActivity(sendApprovalRequest, order);
+    const approvalEvent = ctx.waitForExternalEvent("approval_received");
+    const timerEvent = ctx.createTimer(10 * 60);
+    const winner = yield whenAny([approvalEvent, timerEvent]);
+    if (winner == timerEvent) {
+    return "Canceled"
+    }
 
-    # Approvals must be received within 24 hours or they will be canceled.
-    approval_event = ctx.wait_for_external_event("approval_received")
-    timeout_event = ctx.create_timer(timedelta(hours=24))
-    winner = yield task.when_any([approval_event, timeout_event])
-    if winner == timeout_event:
-        return "Canceled"
-
-    # The order was approved
-    ctx.call_activity(place_order, input=order)
-    approval_details = approval_event.get_result()
-    return f"Approved by '{approval_details.approver}'"
+    ctx.callActivity(placeOrder, order);
+    const approvalDetails = approvalEvent.getResult();
+    return `Approved by ${approvalDetails.approver}`
+}
 ```
 
 As an aside, you'll also notice that the example orchestration above works with custom business objects. Support for custom business objects includes support for custom classes, custom data classes, and named tuples. Serialization and deserialization of these objects is handled automatically by the SDK.
@@ -171,7 +162,7 @@ make proto-gen
 Unit tests can be run using the following command from the project root. Unit tests _don't_ require a sidecar process to be running.
 
 ```sh
-make test-unit
+npm run test:unit
 ```
 
 ### Running E2E tests
@@ -185,7 +176,7 @@ docker run --name durabletask-sidecar -p 4001:4001 --env 'DURABLETASK_SIDECAR_LO
 To run the E2E tests, run the following command from the project root:
 
 ```sh
-make test-e2e
+npm run test:e2e
 ```
 
 ## Contributing
