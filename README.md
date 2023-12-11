@@ -154,7 +154,19 @@ git submodule update --init
 Once the submodule is available, the corresponding source code can be regenerated using the following command from the project root:
 
 ```sh
-make proto-gen
+npm install grpc_tools_node_protoc_ts --save-dev
+
+# generate js codes via grpc-tools
+grpc_tools_node_protoc \
+--js_out=import_style=commonjs,binary:src/proto \
+--grpc_out=grpc_js:src/proto \
+--plugin=protoc-gen-grpc=`which grpc_tools_node_protoc_plugin` \
+-I ./submodules/durabletask-protobuf/protos orchestrator_service.proto
+
+protoc \
+--plugin=protoc-gen-ts=./node_modules/.bin/protoc-gen-ts \
+--ts_out=grpc_js:src/proto \
+-I ./submodules/durabletask-protobuf/protos orchestrator_service.proto
 ```
 
 ### Running unit tests
