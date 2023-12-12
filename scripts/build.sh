@@ -41,4 +41,4 @@ cp package.json build/
 cp README.md build/
 
 # Copy Proto Files
-cp -R ./src/proto ./build
+cp -R ./submodules/durabletask-protobuf/protos ./build
