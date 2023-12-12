@@ -22,6 +22,7 @@ import { Registry } from "../../src/worker/registry";
 import { TOrchestrator } from "../../src/types/orchestrator.type";
 import { ActivityContext } from "../../src/task/context/activity-context";
 import { CompletableTask } from "../../src/task/completable-task";
+import { Task } from "../../src/task/task"
 import { getName, whenAll, whenAny } from "../../src/task";
 
 const TEST_INSTANCE_ID = "abc123";
@@ -601,7 +602,7 @@ describe("Orchestration Executor", () => {
     };
 
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, count: number): any {
-      const tasks = [];
+      const tasks : Task<any>[] = [];
 
       for (let i = 0; i < count; i++) {
         tasks.push(ctx.callActivity(hello, i.toString()));
@@ -640,7 +641,7 @@ describe("Orchestration Executor", () => {
     };
 
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, count: number): any {
-      const tasks = [];
+      const tasks : Task<string>[] = [];
 
       for (let i = 0; i < 10; i++) {
         tasks.push(ctx.callActivity(printInt, i));
@@ -689,7 +690,7 @@ describe("Orchestration Executor", () => {
     };
 
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, count: number): any {
-      const tasks = [];
+      const tasks : Task<string>[] = [];
 
       for (let i = 0; i < 10; i++) {
         tasks.push(ctx.callActivity(printInt, i));
