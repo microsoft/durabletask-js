@@ -124,8 +124,7 @@ describe("Durable Functions", () => {
 
     const orchestratorParent: TOrchestrator = async function* (ctx: OrchestrationContext, count: number): any {
       // Call sub-orchestration
-      yield ctx.callSubOrchestrator(orchestratorChild)
-
+      yield ctx.callSubOrchestrator(orchestratorChild);
     };
 
     taskHubWorker.addActivity(increment);
@@ -205,9 +204,9 @@ describe("Durable Functions", () => {
   });
 
   it("should be able to run an single timer", async () => {
-    const delay = 3
+    const delay = 3;
     const singleTimer: TOrchestrator = async function* (ctx: OrchestrationContext, startVal: number): any {
-      yield ctx.createTimer(delay)
+      yield ctx.createTimer(delay);
     };
 
     taskHubWorker.addOrchestrator(singleTimer);
@@ -218,7 +217,7 @@ describe("Durable Functions", () => {
 
     const expectedCompletionSecond = state?.createdAt?.getTime()! + delay * 1000;
     const actualCompletionSecond = state?.lastUpdatedAt?.getTime();
-    
+
     expect(state);
     expect(state?.name).toEqual(getName(singleTimer));
     expect(state?.instanceId).toEqual(id);
@@ -230,7 +229,7 @@ describe("Durable Functions", () => {
   }, 31000);
 
   it("should wait for external events with a timeout - true", async () => {
-    const shouldRaiseEvent = true
+    const shouldRaiseEvent = true;
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
       const approval = ctx.waitForExternalEvent("Approval");
       const timeout = ctx.createTimer(3);
@@ -266,7 +265,7 @@ describe("Durable Functions", () => {
   }, 31000);
 
   it("should wait for external events with a timeout - false", async () => {
-    const shouldRaiseEvent = false
+    const shouldRaiseEvent = false;
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
       const approval = ctx.waitForExternalEvent("Approval");
       const timeout = ctx.createTimer(3);

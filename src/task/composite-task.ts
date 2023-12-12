@@ -25,5 +25,5 @@ export class CompositeTask<T> extends Task<T> {
   }
 
   // @todo: should be abstract method
-  onChildCompleted(task: Task<any>): void { }
+  onChildCompleted(task: Task<any>): void {}
 }

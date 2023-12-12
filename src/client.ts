@@ -192,8 +192,8 @@ export class TaskHubGrpcClient {
     await prom(req);
   }
 
-  async purgeInstanceById(instanceId: string,): Promise<PurgeResult | undefined> {
-    const req = new pb.PurgeInstancesRequest;
+  async purgeInstanceById(instanceId: string): Promise<PurgeResult | undefined> {
+    const req = new pb.PurgeInstancesRequest();
     req.setInstanceid(instanceId);
     console.log(`Purging Instance '${instanceId}'`);
     const prom = promisify(this._stub.purgeInstances.bind(this._stub));
