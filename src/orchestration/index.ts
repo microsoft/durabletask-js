@@ -56,14 +56,10 @@ export function newOrchestrationState(
   );
 }
 
-export function newPurgeResult(
-  res: pb.PurgeInstancesResponse
-): PurgeResult | undefined {
+export function newPurgeResult(res: pb.PurgeInstancesResponse): PurgeResult | undefined {
   if (!res || !res.getDeletedinstancecount()) {
     return;
   }
 
-  return new PurgeResult(
-    res.getDeletedinstancecount(),
-  );
+  return new PurgeResult(res.getDeletedinstancecount());
 }

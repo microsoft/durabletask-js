@@ -1,9 +1,7 @@
 export class PurgeResult {
-    deletedInstanceCount: number;
+  deletedInstanceCount: number;
 
-    constructor(
-        deletedInstanceCount: number,
-    ) {
-        this.deletedInstanceCount = deletedInstanceCount;
-    }
+  constructor(deletedInstanceCount: number) {
+    this.deletedInstanceCount = deletedInstanceCount;
+  }
 }

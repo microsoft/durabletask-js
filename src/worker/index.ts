@@ -48,7 +48,7 @@ export function getMethodNameForAction(action: pb.OrchestratorAction): string {
     case pb.OrchestratorAction.OrchestratoractiontypeCase.CREATESUBORCHESTRATION:
       return "callSubOrchestrator";
     case pb.OrchestratorAction.OrchestratoractiontypeCase.COMPLETEORCHESTRATION:
-      return "completeOrchestration"
+      return "completeOrchestration";
     default:
       throw new Error(`Unknown action type: ${actionType}`);
   }

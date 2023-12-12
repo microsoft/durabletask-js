@@ -70,7 +70,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     // start the generator
     const { value, done } = await this._generator.next();
 
-    // if the generator finished, complete the orchestration. 
+    // if the generator finished, complete the orchestration.
     if (done) {
       this.setComplete(value, pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
       return;

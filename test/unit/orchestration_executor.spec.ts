@@ -99,7 +99,7 @@ describe("Orchestration Executor", () => {
     expect(actions[0]?.getCreatetimer()?.getFireat()?.toDate()).toEqual(expectedFireAt);
   });
   it("should test the resumption of a task using a timerFired event", async () => {
-    const delayOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any) :any {
+    const delayOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
       const dueTime = new Date(ctx.currentUtcDateTime.getTime() + 1000);
       yield ctx.createTimer(dueTime);
       return "done";
