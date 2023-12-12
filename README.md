@@ -20,20 +20,20 @@ An orchestration can chain a sequence of function calls using the following synt
 
 ```typescript
 function hello(ctx: ActivityContext, name: string): string {
-    return `Hello ${name}!`;
+  return `Hello ${name}!`;
 }
 
 const sequence: TOrchestrator = async function* (ctx: OrchestrationContext): any {
-    const cities = [];
+  const cities = [];
 
-    const result1 = yield ctx.callActivity(hello, "Tokyo");
-    cities.push(result1);
-    const result2 = yield ctx.callActivity(hello, "Seatle");
-    cities.push(result2);
-    const result3 = yield ctx.callActivity(hello, "London");
-    cities.push(result3);
+  const result1 = yield ctx.callActivity(hello, "Tokyo");
+  cities.push(result1);
+  const result2 = yield ctx.callActivity(hello, "Seatle");
+  cities.push(result2);
+  const result3 = yield ctx.callActivity(hello, "London");
+  cities.push(result3);
 
-    return cities;
+  return cities;
 };
 ```
 
@@ -72,22 +72,22 @@ An orchestration can wait for a user-defined event, such as a human approval eve
 
 ```typescript
 const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, order: Order): any {
-    if (order.cost < 1000) {
+  if (order.cost < 1000) {
     return "Auto-approvied";
-    }
+  }
 
-    yield ctx.callActivity(sendApprovalRequest, order);
-    const approvalEvent = ctx.waitForExternalEvent("approval_received");
-    const timerEvent = ctx.createTimer(10 * 60);
-    const winner = yield whenAny([approvalEvent, timerEvent]);
-    if (winner == timerEvent) {
-    return "Canceled"
-    }
+  yield ctx.callActivity(sendApprovalRequest, order);
+  const approvalEvent = ctx.waitForExternalEvent("approval_received");
+  const timerEvent = ctx.createTimer(10 * 60);
+  const winner = yield whenAny([approvalEvent, timerEvent]);
+  if (winner == timerEvent) {
+    return "Canceled";
+  }
 
-    ctx.callActivity(placeOrder, order);
-    const approvalDetails = approvalEvent.getResult();
-    return `Approved by ${approvalDetails.approver}`
-}
+  ctx.callActivity(placeOrder, order);
+  const approvalDetails = approvalEvent.getResult();
+  return `Approved by ${approvalDetails.approver}`;
+};
 ```
 
 As an aside, you'll also notice that the example orchestration above works with custom business objects. Support for custom business objects includes support for custom classes, custom data classes, and named tuples. Serialization and deserialization of these objects is handled automatically by the SDK.

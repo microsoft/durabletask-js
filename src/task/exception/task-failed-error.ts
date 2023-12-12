@@ -7,7 +7,11 @@ export class TaskFailedError extends Error {
   constructor(message: string, details: pb.TaskFailureDetails) {
     super(message);
 
-    this._details = new FailureDetails(details.getErrormessage(), details.getErrortype(), details?.getStacktrace()?.getValue());
+    this._details = new FailureDetails(
+      details.getErrormessage(),
+      details.getErrortype(),
+      details?.getStacktrace()?.getValue(),
+    );
   }
 
   get details(): FailureDetails {
