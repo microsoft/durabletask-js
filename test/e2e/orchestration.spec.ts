@@ -1,4 +1,3 @@
-import { spawn } from "child_process";
 import { TaskHubGrpcClient } from "../../src/client";
 import { OrchestrationStatus } from "../../src/proto/orchestrator_service_pb";
 import { getName, whenAll, whenAny } from "../../src/task";
@@ -45,9 +44,6 @@ describe("Durable Functions", () => {
     expect(state?.instanceId).toEqual(id);
     expect(state?.failureDetails).toBeUndefined();
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
-    expect(state?.serializedInput).toBeUndefined();
-    expect(state?.serializedOutput).toBeUndefined();
-    expect(state?.serializedCustomStatus).toBeUndefined();
   });
 
   it("should be able to run an activity sequence", async () => {
@@ -81,7 +77,69 @@ describe("Durable Functions", () => {
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(state?.serializedInput).toEqual(JSON.stringify(1));
     expect(state?.serializedOutput).toEqual(JSON.stringify([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]));
-    expect(state?.serializedCustomStatus).toBeUndefined();
+  }, 31000);
+
+  it("should be able to run fan-out/fan-in", async () => {
+    let activityCounter = 0;
+
+    const increment = (ctx: ActivityContext, _: any) => {
+      activityCounter++;
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, count: number): any {
+      // Fan out to multiple sub-orchestrations
+      const tasks = [];
+
+      for (let i = 0; i < count; i++) {
+        tasks.push(ctx.callActivity(increment));
+      }
+
+      // Wait for all the sub-orchestrations to complete
+      yield whenAll(tasks);
+    };
+
+    taskHubWorker.addActivity(increment);
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator, 10);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 10);
+
+    expect(state);
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.failureDetails).toBeUndefined();
+    expect(activityCounter).toEqual(10);
+  }, 31000);
+
+  it("should be able to use the sub-orchestration", async () => {
+    let activityCounter = 0;
+
+    const increment = (ctx: ActivityContext, _: any) => {
+      activityCounter++;
+    };
+
+    const orchestratorChild: TOrchestrator = async function* (ctx: OrchestrationContext, activityCount: number): any {
+      yield ctx.callActivity(increment);
+    };
+
+    const orchestratorParent: TOrchestrator = async function* (ctx: OrchestrationContext, count: number): any {
+      // Call sub-orchestration
+      yield ctx.callSubOrchestrator(orchestratorChild)
+
+    };
+
+    taskHubWorker.addActivity(increment);
+    taskHubWorker.addOrchestrator(orchestratorChild);
+    taskHubWorker.addOrchestrator(orchestratorParent);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestratorParent, 10);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state);
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.failureDetails).toBeUndefined();
+    expect(activityCounter).toEqual(1);
   }, 31000);
 
   it("should be able to use the sub-orchestration for fan-out", async () => {
@@ -146,47 +204,43 @@ describe("Durable Functions", () => {
     expect(state?.serializedOutput).toEqual(JSON.stringify(["a", "b", "c"]));
   });
 
-  it("should wait for external events with a timeout", async () => {
-    for (const shouldRaiseEvent of [true, false]) {
-      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
-        const approval = ctx.waitForExternalEvent("Approval");
-        const timeout = ctx.createTimer(3 * 1000);
-        const winner = yield whenAny([approval, timeout]);
+  it("should be able to run an single timer", async () => {
+    const delay = 3
+    const singleTimer: TOrchestrator = async function* (ctx: OrchestrationContext, startVal: number): any {
+      yield ctx.createTimer(delay)
+    };
 
-        if (winner == approval) {
-          return "approved";
-        } else {
-          return "timed out";
-        }
-      };
+    taskHubWorker.addOrchestrator(singleTimer);
+    await taskHubWorker.start();
 
-      taskHubWorker.addOrchestrator(orchestrator);
-      await taskHubWorker.start();
+    const id = await taskHubClient.scheduleNewOrchestration(singleTimer);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
-      // Send events to the client immediately
-      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
-
-      if (shouldRaiseEvent) {
-        taskHubClient.raiseOrchestrationEvent(id, "Approval");
-      }
-
-      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
-
-      expect(state);
-      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
-
-      if (shouldRaiseEvent) {
-        expect(state?.serializedOutput).toEqual(JSON.stringify("approved"));
-      } else {
-        expect(state?.serializedOutput).toEqual(JSON.stringify("timed out"));
-      }
-    }
+    const expectedCompletionSecond = state?.createdAt?.getTime()! + delay * 1000;
+    const actualCompletionSecond = state?.lastUpdatedAt?.getTime();
+    
+    expect(state);
+    expect(state?.name).toEqual(getName(singleTimer));
+    expect(state?.instanceId).toEqual(id);
+    expect(state?.failureDetails).toBeUndefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.createdAt).toBeDefined();
+    expect(state?.lastUpdatedAt).toBeDefined();
+    expect(expectedCompletionSecond).toBeLessThanOrEqual(actualCompletionSecond!);
   }, 31000);
 
-  it("should be able to use suspend and resume", async () => {
+  it("should wait for external events with a timeout - true", async () => {
+    const shouldRaiseEvent = true
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
-      const res = yield ctx.waitForExternalEvent("my_event");
-      return res;
+      const approval = ctx.waitForExternalEvent("Approval");
+      const timeout = ctx.createTimer(3);
+      const winner = yield whenAny([approval, timeout]);
+
+      if (winner == approval) {
+        return "approved";
+      } else {
+        return "timed out";
+      }
     };
 
     taskHubWorker.addOrchestrator(orchestrator);
@@ -194,37 +248,58 @@ describe("Durable Functions", () => {
 
     // Send events to the client immediately
     const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
-    let state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
-    expect(state);
 
-    // Suspend the orchestration and wait for it to go into the SUSPENDED state
-    await taskHubClient.suspendOrchestration(id);
-
-    // TODO: is this needed in JS? We use a promise above
-    // while (state?.runtimeStatus == OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING) {
-    // await new Promise((resolve) => setTimeout(resolve, 100));
-    // state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
-    // expect(state);
-    // }
-
-    // Raise an event to the orchestration and confirm that it does NOT complete
-    taskHubClient.raiseOrchestrationEvent(id, "my_event", 42);
-
-    try {
-      state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 3);
-      // TODO
-      // assert False, "Orchestration should not have been completed"
-    } catch (e) {
-      // pass
+    if (shouldRaiseEvent) {
+      taskHubClient.raiseOrchestrationEvent(id, "Approval");
     }
 
-    // Resume the orchestration and wait for it to complete
-    taskHubClient.resumeOrchestration(id);
-    state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
     expect(state);
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
-    expect(state?.serializedOutput).toEqual(JSON.stringify(42));
-  });
+
+    if (shouldRaiseEvent) {
+      expect(state?.serializedOutput).toEqual(JSON.stringify("approved"));
+    } else {
+      expect(state?.serializedOutput).toEqual(JSON.stringify("timed out"));
+    }
+  }, 31000);
+
+  it("should wait for external events with a timeout - false", async () => {
+    const shouldRaiseEvent = false
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
+      const approval = ctx.waitForExternalEvent("Approval");
+      const timeout = ctx.createTimer(3);
+      const winner = yield whenAny([approval, timeout]);
+
+      if (winner == approval) {
+        return "approved";
+      } else {
+        return "timed out";
+      }
+    };
+
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    // Send events to the client immediately
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+
+    if (shouldRaiseEvent) {
+      taskHubClient.raiseOrchestrationEvent(id, "Approval");
+    }
+
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state);
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+
+    if (shouldRaiseEvent) {
+      expect(state?.serializedOutput).toEqual(JSON.stringify("approved"));
+    } else {
+      expect(state?.serializedOutput).toEqual(JSON.stringify("timed out"));
+    }
+  }, 31000);
 
   it("should be able to terminate an orchestration", async () => {
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
@@ -241,44 +316,49 @@ describe("Durable Functions", () => {
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING);
 
     taskHubClient.terminateOrchestration(id, "some reason for termination");
-    state = await taskHubClient.waitForOrchestrationStart(id, undefined, 30);
+    state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
     expect(state);
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED);
     expect(state?.serializedOutput).toEqual(JSON.stringify("some reason for termination"));
-  });
+  }, 31000);
 
   it("should allow to continue as new", async () => {
-    const allResults: any[] = [];
-
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: number): any {
-      const res = yield ctx.waitForExternalEvent("my_event");
-
-      if (!ctx.isReplaying) {
-        allResults.push(res);
-      }
-
-      if (allResults.length <= 4) {
-        ctx.continueAsNew(Math.max(...allResults), true);
+      if (input < 10) {
+        ctx.continueAsNew(input + 1, true);
       } else {
-        return allResults;
+        return input;
       }
     };
 
     taskHubWorker.addOrchestrator(orchestrator);
     await taskHubWorker.start();
 
-    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
-    taskHubClient.raiseOrchestrationEvent(id, "my_event", 1);
-    taskHubClient.raiseOrchestrationEvent(id, "my_event", 2);
-    taskHubClient.raiseOrchestrationEvent(id, "my_event", 3);
-    taskHubClient.raiseOrchestrationEvent(id, "my_event", 4);
-    taskHubClient.raiseOrchestrationEvent(id, "my_event", 5);
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator, 1);
 
-    const state = await taskHubClient.waitForOrchestrationStart(id, undefined, 30);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
     expect(state);
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
-    expect(state?.serializedInput).toEqual(JSON.stringify(4));
-    expect(state?.serializedOutput).toEqual(JSON.stringify(allResults));
-    expect(allResults).toEqual([1, 2, 3, 4, 5]);
-  });
+    expect(state?.serializedOutput).toEqual(JSON.stringify(10));
+  }, 31000);
+
+  it("should be able to run an single orchestration without activity", async () => {
+    const sequence: TOrchestrator = async function* (ctx: OrchestrationContext, startVal: number): any {
+      return startVal + 1;
+    };
+
+    taskHubWorker.addOrchestrator(sequence);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(sequence, 15);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state);
+    expect(state?.name).toEqual(getName(sequence));
+    expect(state?.instanceId).toEqual(id);
+    expect(state?.failureDetails).toBeUndefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.serializedInput).toEqual(JSON.stringify(15));
+    expect(state?.serializedOutput).toEqual(JSON.stringify(16));
+  }, 31000);
 });

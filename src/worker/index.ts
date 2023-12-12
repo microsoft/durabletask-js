@@ -47,6 +47,8 @@ export function getMethodNameForAction(action: pb.OrchestratorAction): string {
       return "createTimer";
     case pb.OrchestratorAction.OrchestratoractiontypeCase.CREATESUBORCHESTRATION:
       return "callSubOrchestrator";
+    case pb.OrchestratorAction.OrchestratoractiontypeCase.COMPLETEORCHESTRATION:
+      return "completeOrchestration"
     default:
       throw new Error(`Unknown action type: ${actionType}`);
   }

@@ -70,6 +70,12 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     // start the generator
     const { value, done } = await this._generator.next();
 
+    // if the generator finished, complete the orchestration. 
+    if (done) {
+      this.setComplete(value, pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      return;
+    }
+
     // TODO: check if the task is null?
     this._previousTask = value;
   }
@@ -144,9 +150,10 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   }
 
   setFailed(e: Error) {
-    if (this._isComplete) {
-      return;
-    }
+    // should allow orchestration to fail, even it's completed.
+    // if (this._isComplete) {
+    //   return;
+    // }
 
     this._isComplete = true;
     this._completionStatus = pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED;
