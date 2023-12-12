@@ -3,6 +3,7 @@ import { OrchestrationStatus } from "../../src/proto/orchestrator_service_pb";
 import { getName, whenAll, whenAny } from "../../src/task";
 import { ActivityContext } from "../../src/task/context/activity-context";
 import { OrchestrationContext } from "../../src/task/context/orchestration-context";
+import { Task } from "../../src/task/task";
 import { TOrchestrator } from "../../src/types/orchestrator.type";
 import { TaskHubGrpcWorker } from "../../src/worker/task-hub-grpc-worker";
 
@@ -88,7 +89,7 @@ describe("Durable Functions", () => {
 
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, count: number): any {
       // Fan out to multiple sub-orchestrations
-      const tasks = [];
+      const tasks: Task<any>[] = [];
 
       for (let i = 0; i < count; i++) {
         tasks.push(ctx.callActivity(increment));
@@ -156,7 +157,7 @@ describe("Durable Functions", () => {
 
     const orchestratorParent: TOrchestrator = async function* (ctx: OrchestrationContext, count: number): any {
       // Fan out to multiple sub-orchestrations
-      const tasks = [];
+      const tasks: Task<any>[] = [];
 
       for (let i = 0; i < count; i++) {
         tasks.push(ctx.callSubOrchestrator(orchestratorChild, 3));

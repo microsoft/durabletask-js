@@ -9,6 +9,7 @@
     "test:one": "jest test/unit --runInBand --detectOpenHandles --testNamePattern",
     "test:e2e": "jest test/e2e --runInBand --detectOpenHandles",
     "start": "ts-node --swc ./src/index.ts",
+    "example": "ts-node --swc",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
     "dev": "nodemon --watch './src/**/*.ts' --exec 'ts-node --swc' ./src/index.ts",
     "pretty": "prettier --list-different \"**/*.{ts,tsx,js,jsx,json,md}\"",
