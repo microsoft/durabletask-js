@@ -11,46 +11,97 @@ pool:
 steps:
 - checkout: self
   submodules: true
-  
+
 - task: NodeTool@0
   inputs:
-    versionSpec: '10.x'
+    versionSpec: 18.x
   displayName: 'Install Node.js'
+- script: npm install
+  displayName: 'npm install'
+- script: npm run prebuild
+  displayName: 'npm run prebuild'
+- script: npm run build
+  displayName: 'npm run build'
+- script: npm pack build/
+  displayName: 'npm pack build - generate tarball file'
+  
+# - task: EsrpCodeSigning@4
+#   inputs:
+#     ConnectedServiceName: 'Durabletask ESRP Sign'
+#     FolderPath: 'src\myapp\$(BuildConfiguration)\Release'
+#     Pattern: '*.dll,*.exe'
+#     signConfigType: 'inlineSignParams'
+#     inlineOperation: |
+#       [    
+#         {
+#             "KeyCode": "CP-230012",
+#             "OperationCode": "SigntoolSign",
+#             "Parameters": {
+#                 "OpusName": "Microsoft",
+#                 "OpusInfo": "http://www.microsoft.com",
+#                 "FileDigest": "/fd \"SHA256\"",
+#                 "PageHash": "/NPH",
+#                 "TimeStamp": "/tr \"http://rfc3161.gtm.corp.microsoft.com/TSS/HttpTspServer\" /td sha256"
+#             },
+#             "ToolName": "sign",
+#             "ToolVersion": "1.0"
+#           },
+#           {
+#               "KeyCode": "CP-230012",
+#               "OperationCode": "SigntoolVerify",
+#               "Parameters": {},
+#               "ToolName": "sign",
+#               "ToolVersion": "1.0"
+#           }
+#       ]
+#     SessionTimeout: '60'
+#     MaxConcurrency: '50'
+#     MaxRetryAttempts: '5'
+#     PendingAnalysisWaitTimeoutMinutes: '5'
 
-- script: |
-    npm install
-    npm run build
-  displayName: 'npm install and build'
-- task: EsrpCodeSigning@4
+# Authenticode sign all the DLLs with the Microsoft certificate.
+# This appears to be an in-place signing job, which is convenient.
+# - task: EsrpCodeSigning@4
+#   displayName: 'ESRP CodeSigning: Authenticode'
+#   inputs:
+#     ConnectedServiceName: 'ESRP Service'
+#     FolderPath: './'
+#     Pattern: '*.tgz'
+#     signConfigType: inlineSignParams
+#     inlineOperation: |
+#      [    
+#         {
+#             "KeyCode": "CP-230012",
+#             "OperationCode": "SigntoolSign",
+#             "Parameters": {
+#                 "OpusName": "Microsoft",
+#                 "OpusInfo": "http://www.microsoft.com",
+#                 "FileDigest": "/fd \"SHA256\"",
+#                 "PageHash": "/NPH",
+#                 "TimeStamp": "/tr \"http://rfc3161.gtm.corp.microsoft.com/TSS/HttpTspServer\" /td sha256"
+#             },
+#             "ToolName": "sign",
+#             "ToolVersion": "1.0"
+#           },
+#           {
+#               "KeyCode": "CP-230012",
+#               "OperationCode": "SigntoolVerify",
+#               "Parameters": {},
+#               "ToolName": "sign",
+#               "ToolVersion": "1.0"
+#           }
+#       ]
+
+- task: CopyFiles@2
+  displayName: 'Copy publish file to Artifact Staging Directory'
   inputs:
-    ConnectedServiceName: 'Durabletask ESRP Sign'
-    FolderPath: 'src\myapp\$(BuildConfiguration)\Release'
-    Pattern: '*.dll,*.exe'
-    signConfigType: 'inlineSignParams'
-    inlineOperation: |
-      [    
-        {
-            "KeyCode": "CP-230012",
-            "OperationCode": "SigntoolSign",
-            "Parameters": {
-                "OpusName": "Microsoft",
-                "OpusInfo": "http://www.microsoft.com",
-                "FileDigest": "/fd \"SHA256\"",
-                "PageHash": "/NPH",
-                "TimeStamp": "/tr \"http://rfc3161.gtm.corp.microsoft.com/TSS/HttpTspServer\" /td sha256"
-            },
-            "ToolName": "sign",
-            "ToolVersion": "1.0"
-          },
-          {
-              "KeyCode": "CP-230012",
-              "OperationCode": "SigntoolVerify",
-              "Parameters": {},
-              "ToolName": "sign",
-              "ToolVersion": "1.0"
-          }
-      ]
-    SessionTimeout: '60'
-    MaxConcurrency: '50'
-    MaxRetryAttempts: '5'
-    PendingAnalysisWaitTimeoutMinutes: '5'
+    SourceFolder: ./
+    Contents: '*.tgz'
+    TargetFolder: $(Build.ArtifactStagingDirectory)
+
+- task: PublishPipelineArtifact@1
+  name: PublishPipelineArtifact1
+  displayName: 'Publish Artifact: Build Outputs'
+  inputs:
+    ArtifactName: BuildOutputs
+    TargetPath: $(Build.ArtifactStagingDirectory)

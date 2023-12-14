@@ -89,7 +89,7 @@ describe("Durable Functions", () => {
 
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, count: number): any {
       // Fan out to multiple sub-orchestrations
-      const tasks : Task<any>[] = [];
+      const tasks: Task<any>[] = [];
 
       for (let i = 0; i < count; i++) {
         tasks.push(ctx.callActivity(increment));
@@ -157,7 +157,7 @@ describe("Durable Functions", () => {
 
     const orchestratorParent: TOrchestrator = async function* (ctx: OrchestrationContext, count: number): any {
       // Fan out to multiple sub-orchestrations
-      const tasks : Task<any>[] = [];
+      const tasks: Task<any>[] = [];
 
       for (let i = 0; i < count; i++) {
         tasks.push(ctx.callSubOrchestrator(orchestratorChild, 3));
