@@ -61,41 +61,36 @@ steps:
 
 # Authenticode sign all the DLLs with the Microsoft certificate.
 # This appears to be an in-place signing job, which is convenient.
-# - task: EsrpCodeSigning@4
-#   displayName: 'ESRP CodeSigning: Authenticode'
-#   inputs:
-#     ConnectedServiceName: 'ESRP Service'
-#     FolderPath: 'build'
-#     Pattern: '*.ts,*.js'
-#     signConfigType: inlineSignParams
-#     inlineOperation: |
-#      [    
-#         {
-#             "KeyCode": "CP-230012",
-#             "OperationCode": "SigntoolSign",
-#             "Parameters": {
-#                 "OpusName": "Microsoft",
-#                 "OpusInfo": "http://www.microsoft.com",
-#                 "FileDigest": "/fd \"SHA256\"",
-#                 "PageHash": "/NPH",
-#                 "TimeStamp": "/tr \"http://rfc3161.gtm.corp.microsoft.com/TSS/HttpTspServer\" /td sha256"
-#             },
-#             "ToolName": "sign",
-#             "ToolVersion": "1.0"
-#           },
-#           {
-#               "KeyCode": "CP-230012",
-#               "OperationCode": "SigntoolVerify",
-#               "Parameters": {},
-#               "ToolName": "sign",
-#               "ToolVersion": "1.0"
-#           }
-#       ]
-
-# # Make the nuget packages available for download in the ADO portal UI
-# - publish: $(build.artifactStagingDirectory)
-#   displayName: 'Publish nuget packages to Artifacts'
-#   artifact: PackageOutput
+- task: EsrpCodeSigning@4
+  displayName: 'ESRP CodeSigning: Authenticode'
+  inputs:
+    ConnectedServiceName: 'ESRP Service'
+    FolderPath: './'
+    Pattern: '*.tgz'
+    signConfigType: inlineSignParams
+    inlineOperation: |
+     [    
+        {
+            "KeyCode": "CP-230012",
+            "OperationCode": "SigntoolSign",
+            "Parameters": {
+                "OpusName": "Microsoft",
+                "OpusInfo": "http://www.microsoft.com",
+                "FileDigest": "/fd \"SHA256\"",
+                "PageHash": "/NPH",
+                "TimeStamp": "/tr \"http://rfc3161.gtm.corp.microsoft.com/TSS/HttpTspServer\" /td sha256"
+            },
+            "ToolName": "sign",
+            "ToolVersion": "1.0"
+          },
+          {
+              "KeyCode": "CP-230012",
+              "OperationCode": "SigntoolVerify",
+              "Parameters": {},
+              "ToolName": "sign",
+              "ToolVersion": "1.0"
+          }
+      ]
 
 - task: CopyFiles@2
   displayName: 'Copy publish file to Artifact Staging Directory'
