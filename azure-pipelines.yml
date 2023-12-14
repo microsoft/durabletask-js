@@ -22,6 +22,8 @@ steps:
   displayName: 'npm run prebuild'
 - script: npm run build
   displayName: 'npm run build'
+- script: npm pack build/
+  displayName: 'npm pack build - generate tarball file'
   
 # - task: EsrpCodeSigning@4
 #   inputs:
