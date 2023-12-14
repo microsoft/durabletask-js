@@ -97,9 +97,16 @@ steps:
 #   displayName: 'Publish nuget packages to Artifacts'
 #   artifact: PackageOutput
 
+- task: CopyFiles@2
+  displayName: 'Copy publish file to Artifact Staging Directory'
+  inputs:
+    SourceFolder: ./
+    Contents: '*.tgz'
+    TargetFolder: $(Build.ArtifactStagingDirectory)
+
 - task: PublishPipelineArtifact@1
   name: PublishPipelineArtifact1
   displayName: 'Publish Artifact: Build Outputs'
   inputs:
-    ArtifactName: ./*.tgz
+    ArtifactName: BuildOutputs
     TargetPath: $(Build.ArtifactStagingDirectory)
