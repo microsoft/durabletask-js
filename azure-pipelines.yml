@@ -21,3 +21,36 @@ steps:
     npm install
     npm run build
   displayName: 'npm install and build'
+- task: EsrpCodeSigning@4
+  inputs:
+    ConnectedServiceName: 'Durabletask ESRP Sign'
+    FolderPath: 'src\myapp\$(BuildConfiguration)\Release'
+    Pattern: '*.dll,*.exe'
+    signConfigType: 'inlineSignParams'
+    inlineOperation: |
+      [    
+        {
+            "KeyCode": "CP-230012",
+            "OperationCode": "SigntoolSign",
+            "Parameters": {
+                "OpusName": "Microsoft",
+                "OpusInfo": "http://www.microsoft.com",
+                "FileDigest": "/fd \"SHA256\"",
+                "PageHash": "/NPH",
+                "TimeStamp": "/tr \"http://rfc3161.gtm.corp.microsoft.com/TSS/HttpTspServer\" /td sha256"
+            },
+            "ToolName": "sign",
+            "ToolVersion": "1.0"
+          },
+          {
+              "KeyCode": "CP-230012",
+              "OperationCode": "SigntoolVerify",
+              "Parameters": {},
+              "ToolName": "sign",
+              "ToolVersion": "1.0"
+          }
+      ]
+    SessionTimeout: '60'
+    MaxConcurrency: '50'
+    MaxRetryAttempts: '5'
+    PendingAnalysisWaitTimeoutMinutes: '5'
