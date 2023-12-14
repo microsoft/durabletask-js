@@ -63,8 +63,8 @@ steps:
   displayName: 'ESRP CodeSigning: Authenticode'
   inputs:
     ConnectedServiceName: 'ESRP Service'
-    FolderPath: 'src'
-    Pattern: 'DurableTask.*.dll'
+    FolderPath: 'build'
+    Pattern: '*.ts,*.js'
     signConfigType: inlineSignParams
     inlineOperation: |
      [    
