@@ -92,7 +92,14 @@ steps:
 #           }
 #       ]
 
-# Make the nuget packages available for download in the ADO portal UI
-- publish: $(build.artifactStagingDirectory)
-  displayName: 'Publish nuget packages to Artifacts'
-  artifact: PackageOutput
+# # Make the nuget packages available for download in the ADO portal UI
+# - publish: $(build.artifactStagingDirectory)
+#   displayName: 'Publish nuget packages to Artifacts'
+#   artifact: PackageOutput
+
+- task: PublishPipelineArtifact@1
+  name: PublishPipelineArtifact1
+  displayName: 'Publish Artifact: Build Outputs'
+  inputs:
+    ArtifactName: ./*.tgz
+    TargetPath: $(Build.ArtifactStagingDirectory)
