@@ -61,3 +61,8 @@ steps:
     MaxConcurrency: '50'
     MaxRetryAttempts: '5'
     PendingAnalysisWaitTimeoutMinutes: '5'
+
+# Make the nuget packages available for download in the ADO portal UI
+- publish: $(build.artifactStagingDirectory)
+  displayName: 'Publish nuget packages to Artifacts'
+  artifact: PackageOutput
