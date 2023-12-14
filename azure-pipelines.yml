@@ -59,7 +59,7 @@ steps:
 
 # Authenticode sign all the DLLs with the Microsoft certificate.
 # This appears to be an in-place signing job, which is convenient.
-- task: SFP.build-tasks.custom-build-task-1.EsrpCodeSigning@1
+- task: EsrpCodeSigning@4
   displayName: 'ESRP CodeSigning: Authenticode'
   inputs:
     ConnectedServiceName: 'ESRP Service'
