@@ -22,8 +22,7 @@ steps:
   displayName: 'npm run prebuild'
 - script: npm run build
   displayName: 'npm run build'
-- script: npm pack build/
-  displayName: 'npm pack build - generate tarball file'
+
   
 # - task: EsrpCodeSigning@4
 #   inputs:
@@ -91,6 +90,55 @@ steps:
 #               "ToolVersion": "1.0"
 #           }
 #       ]
+
+- task: EsrpCodeSigning@4
+  displayName: ESRP CodeSigning Files
+  inputs:
+    ConnectedServiceName: 'ESRP Service'
+    FolderPath: build
+    Pattern: >-
+      **/*.js
+      **/*.d.ts
+
+      !**/Tests/**
+    UseMinimatch: true
+    signConfigType: inlineSignParams
+    CertificateId: 0
+    inlineOperation: >-
+      [
+        {
+          "keyCode": "CP-230012",
+          "operationSetCode": "SigntoolSign",
+          "parameters": [
+            {
+              "parameterName": "OpusName",
+              "parameterValue": "Microsoft"
+            },
+            {
+              "parameterName": "OpusInfo",
+              "parameterValue": "http://www.microsoft.com"
+            },
+            {
+              "parameterName": "PageHash",
+              "parameterValue": "/NPH"
+            },
+            {
+              "parameterName": "FileDigest",
+              "parameterValue": "/fd sha256"
+            },
+            {
+              "parameterName": "TimeStamp",
+              "parameterValue": "/tr \"http://rfc3161.gtm.corp.microsoft.com/TSS/HttpTspServer\" /td sha256"
+            }
+          ],
+          "toolName": "signtool.exe",
+          "toolVersion": "6.2.9304.0"
+        }
+      ]
+    SessionTimeout: 20
+
+- script: npm pack build/
+  displayName: 'npm pack build - generate tarball file'
 
 - task: CopyFiles@2
   displayName: 'Copy publish file to Artifact Staging Directory'
