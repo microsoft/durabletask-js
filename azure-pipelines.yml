@@ -98,7 +98,6 @@ steps:
     FolderPath: build
     Pattern: >-
       **/*.js
-      **/*.d.ts
 
       !**/Tests/**
     UseMinimatch: true
