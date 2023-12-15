@@ -97,7 +97,7 @@ steps:
     ConnectedServiceName: 'ESRP Service'
     FolderPath: build
     Pattern: >-
-      **/*.d.ts
+      **/*.ts
 
       !**/Tests/**
     UseMinimatch: true
