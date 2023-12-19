@@ -7,12 +7,13 @@ import { TInput } from "./types/input.type";
 import { getName } from "./task";
 import { randomUUID } from "crypto";
 import { promisify } from "util";
-import { newOrchestrationState, newPurgeResult } from "./orchestration";
+import { newOrchestrationState } from "./orchestration";
 import { OrchestrationState } from "./orchestration/orchestration-state";
 import { GrpcClient } from "./client-grpc";
-import { OrchestrationStatus } from "./orchestration/enum/orchestration-status.enum";
+import { OrchestrationStatus, toProtobuf } from "./orchestration/enum/orchestration-status.enum";
 import { TimeoutError } from "./exception/timeout-error";
 import { PurgeResult } from "./orchestration/orchestration-purge-result";
+import { PurgeInstanceCriteria } from "./orchestration/orchestration-purge-criteria";
 
 export class TaskHubGrpcClient {
   private _stub: stubs.TaskHubSidecarServiceClient;
@@ -192,13 +193,69 @@ export class TaskHubGrpcClient {
     await prom(req);
   }
 
-  async purgeInstanceById(instanceId: string): Promise<PurgeResult | undefined> {
-    const req = new pb.PurgeInstancesRequest();
-    req.setInstanceid(instanceId);
-    console.log(`Purging Instance '${instanceId}'`);
-    const prom = promisify(this._stub.purgeInstances.bind(this._stub));
-    // Execute the request and wait for the first response or timeout
-    const res = (await prom(req)) as pb.PurgeInstancesResponse;
-    return newPurgeResult(res);
+  /**
+   * Purges orchestration instance metadata from the durable store.
+   *
+   * This method can be used to permanently delete orchestration metadata from the underlying storage provider,
+   * including any stored inputs, outputs, and orchestration history records. This is often useful for implementing
+   * data retention policies and for keeping storage costs minimal. Only orchestration instances in the
+   * `Completed`, `Failed`, or `Terminated` state can be purged.
+   *
+   * If the target orchestration instance is not found in the data store, or if the instance is found but not in a
+   * terminal state, then the returned {@link PurgeResult} will report that zero instances were purged.
+   * Otherwise, the existing data will be purged, and the returned {@link PurgeResult} will report that one instance
+   * was purged.
+   *
+   * @param value - The unique ID of the orchestration instance to purge or orchestration instance filter criteria used
+   * to determine which instances to purge.
+   * @returns A Promise that resolves to a {@link PurgeResult} or `undefined` if the purge operation was not successful.
+   */
+  async purgeOrchestration(value: string | PurgeInstanceCriteria): Promise<PurgeResult | undefined> {
+    let res;
+    if (typeof value === `string`) {
+      const instanceId = value;
+      const req = new pb.PurgeInstancesRequest();
+      req.setInstanceid(instanceId);
+
+      console.log(`Purging Instance '${instanceId}'`);
+
+      const prom = promisify(this._stub.purgeInstances.bind(this._stub));
+      res = (await prom(req)) as pb.PurgeInstancesResponse;
+    } else {
+      const purgeInstanceCriteria = value;
+      const req = new pb.PurgeInstancesRequest();
+      const filter = new pb.PurgeInstanceFilter();
+      const createdTimeFrom = purgeInstanceCriteria.getCreatedTimeFrom();
+      if (createdTimeFrom != undefined) {
+        const timestamp = new Timestamp();
+        timestamp.fromDate(createdTimeFrom);
+        filter.setCreatedtimefrom(timestamp);
+      }
+      const createdTimeTo = purgeInstanceCriteria.getCreatedTimeTo();
+      if (createdTimeTo != undefined) {
+        const timestamp = new Timestamp();
+        timestamp.fromDate(createdTimeTo);
+        filter.setCreatedtimeto(timestamp);
+      }
+      const runtimeStatusList = purgeInstanceCriteria.getRuntimeStatusList();
+      for (const status of runtimeStatusList) {
+        filter.addRuntimestatus(toProtobuf(status));
+      }
+      req.setPurgeinstancefilter(filter);
+      const timeout = purgeInstanceCriteria.getTimeout();
+
+      console.log("Purging Instance using purging criteria");
+
+      const prom = promisify(this._stub.purgeInstances.bind(this._stub));
+      // Execute the request and wait for the first response or timeout
+      res = (await Promise.race([
+        prom(req),
+        new Promise((_, reject) => setTimeout(() => reject(new TimeoutError()), timeout)),
+      ])) as pb.PurgeInstancesResponse;
+    }
+    if (!res) {
+      return;
+    }
+    return new PurgeResult(res.getDeletedinstancecount());
   }
 }
