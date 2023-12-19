@@ -1,7 +1,6 @@
 import * as pb from "../proto/orchestrator_service_pb";
 import { FailureDetails } from "../task/failure-details";
-import { OrchestrationStatus, parseGrpcValue } from "./enum/orchestration-status.enum";
-import { PurgeResult } from "./orchestration-purge-result";
+import { fromProtobuf } from "./enum/orchestration-status.enum";
 import { OrchestrationState } from "./orchestration-state";
 
 export function newOrchestrationState(
@@ -26,8 +25,6 @@ export function newOrchestrationState(
     );
   }
 
-  const status = OrchestrationStatus[state?.getOrchestrationstatus() ?? 0];
-
   // Convert Timestamp seconds and nanos to Date
   const tsCreated = state?.getCreatedtimestamp();
   const tsUpdated = state?.getLastupdatedtimestamp();
@@ -46,7 +43,7 @@ export function newOrchestrationState(
   return new OrchestrationState(
     instanceId,
     state?.getName() ?? "",
-    parseGrpcValue(state?.getOrchestrationstatus() ?? 0),
+    fromProtobuf(state?.getOrchestrationstatus() ?? 0),
     new Date(tsCreatedParsed),
     new Date(tsUpdatedParsed),
     state?.getInput()?.toString(),
@@ -54,12 +51,4 @@ export function newOrchestrationState(
     state?.getCustomstatus()?.toString(),
     failureDetails,
   );
-}
-
-export function newPurgeResult(res: pb.PurgeInstancesResponse): PurgeResult | undefined {
-  if (!res || !res.getDeletedinstancecount()) {
-    return;
-  }
-
-  return new PurgeResult(res.getDeletedinstancecount());
 }

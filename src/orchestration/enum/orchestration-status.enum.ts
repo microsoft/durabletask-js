@@ -1,12 +1,21 @@
 import * as pb from "../../proto/orchestrator_service_pb";
 
-export function parseGrpcValue(val: pb.OrchestrationStatus): OrchestrationStatus {
+export function fromProtobuf(val: pb.OrchestrationStatus): OrchestrationStatus {
   const values = Object.values(OrchestrationStatus);
   const valIdx = values.findIndex((v) => v == (val as number));
 
   // Return the entry of the OrchestrationStatus enum at index
   const entries = Object.entries(OrchestrationStatus);
   return entries[valIdx][1] as OrchestrationStatus;
+}
+
+export function toProtobuf(val: OrchestrationStatus): pb.OrchestrationStatus {
+  const values = Object.values(pb.OrchestrationStatus);
+  const valIdx = values.findIndex((v) => v == (val as number));
+
+  // Return the entry of the OrchestrationStatus enum at index
+  const entries = Object.entries(pb.OrchestrationStatus);
+  return entries[valIdx][1] as pb.OrchestrationStatus;
 }
 
 export enum OrchestrationStatus {

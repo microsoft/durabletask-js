@@ -1,5 +1,7 @@
 import { TaskHubGrpcClient } from "../../src/client";
+import { PurgeInstanceCriteria } from "../../src/orchestration/orchestration-purge-criteria";
 import { OrchestrationStatus } from "../../src/proto/orchestrator_service_pb";
+import { OrchestrationStatus as RuntimeStatus } from "../../src/orchestration/enum/orchestration-status.enum";
 import { getName, whenAll, whenAny } from "../../src/task";
 import { ActivityContext } from "../../src/task/context/activity-context";
 import { OrchestrationContext } from "../../src/task/context/orchestration-context";
@@ -362,7 +364,7 @@ describe("Durable Functions", () => {
     expect(state?.serializedOutput).toEqual(JSON.stringify(16));
   }, 31000);
 
-  it("should be able purge orchestration", async () => {
+  it("should be able to purge orchestration by id", async () => {
     const plusOne = async (_: ActivityContext, input: number) => {
       return input + 1;
     };
@@ -386,8 +388,97 @@ describe("Durable Functions", () => {
     expect(state?.serializedInput).toEqual(JSON.stringify(1));
     expect(state?.serializedOutput).toEqual(JSON.stringify(2));
 
-    const purgeResult = await taskHubClient.purgeInstanceById(id);
+    const purgeResult = await taskHubClient.purgeOrchestration(id);
     expect(purgeResult);
     expect(purgeResult?.deletedInstanceCount).toEqual(1);
+  }, 31000);
+
+  it("should be able to purge orchestration by PurgeInstanceCriteria", async () => {
+    const delaySeconds = 1;
+    const plusOne = async (_: ActivityContext, input: number) => {
+      return input + 1;
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, startVal: number): any {
+      return yield ctx.callActivity(plusOne, startVal);
+    };
+
+    const terminate: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      yield ctx.createTimer(delaySeconds);
+    };
+
+    taskHubWorker.addOrchestrator(orchestrator);
+    taskHubWorker.addOrchestrator(terminate);
+    taskHubWorker.addActivity(plusOne);
+    await taskHubWorker.start();
+
+    const startTime = new Date(Date.now());
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator, 1);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state);
+    expect(state?.name).toEqual(getName(orchestrator));
+    expect(state?.instanceId).toEqual(id);
+    expect(state?.failureDetails).toBeUndefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.serializedInput).toEqual(JSON.stringify(1));
+    expect(state?.serializedOutput).toEqual(JSON.stringify(2));
+
+    // purge instance, test CreatedTimeFrom
+    const criteria = new PurgeInstanceCriteria();
+    criteria.setCreatedTimeFrom(startTime);
+    let purgeResult = await taskHubClient.purgeOrchestration(criteria);
+    expect(purgeResult);
+    expect(purgeResult?.deletedInstanceCount).toEqual(1);
+
+    // assert instance doesn't exit.
+    let metadata = await taskHubClient.getOrchestrationState(id);
+    expect(metadata).toBeUndefined();
+
+    // purge instance, test CreatedTimeTo
+    criteria.setCreatedTimeTo(new Date(Date.now()));
+    purgeResult = await taskHubClient.purgeOrchestration(criteria);
+    expect(purgeResult);
+    expect(purgeResult?.deletedInstanceCount).toEqual(0);
+
+    // assert instance doesn't exit.
+    metadata = await taskHubClient.getOrchestrationState(id);
+    expect(metadata).toBeUndefined();
+
+    const id1 = await taskHubClient.scheduleNewOrchestration(orchestrator, 1);
+    const state1 = await taskHubClient.waitForOrchestrationCompletion(id1, undefined, 30);
+
+    expect(state1);
+    expect(state1?.name).toEqual(getName(orchestrator));
+    expect(state1?.instanceId).toEqual(id1);
+    expect(state1?.failureDetails).toBeUndefined();
+    expect(state1?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state1?.serializedInput).toEqual(JSON.stringify(1));
+    expect(state1?.serializedOutput).toEqual(JSON.stringify(2));
+
+    const id2 = await taskHubClient.scheduleNewOrchestration(terminate);
+    await taskHubClient.terminateOrchestration(id2, "termination");
+    const state2 = await taskHubClient.waitForOrchestrationCompletion(id2, undefined, 30);
+    expect(state2);
+    expect(state2?.name).toEqual(getName(terminate));
+    expect(state2?.instanceId).toEqual(id2);
+    expect(state2?.failureDetails).toBeUndefined();
+    expect(state2?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED);
+
+    const runtimeStatuses = new Array();
+    runtimeStatuses.push(RuntimeStatus.TERMINATED);
+    runtimeStatuses.push(RuntimeStatus.COMPLETED);
+
+    criteria.setCreatedTimeTo(new Date(Date.now()));
+    criteria.setRuntimeStatusList(runtimeStatuses);
+    purgeResult = await taskHubClient.purgeOrchestration(criteria);
+    expect(purgeResult);
+    expect(purgeResult?.deletedInstanceCount).toEqual(2);
+
+    // assert instance doesn't exit.
+    metadata = await taskHubClient.getOrchestrationState(id1);
+    expect(metadata).toBeUndefined();
+    metadata = await taskHubClient.getOrchestrationState(id2);
+    expect(metadata).toBeUndefined();
   }, 31000);
 });
