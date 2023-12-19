@@ -1,25 +1,26 @@
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 import { Timestamp } from "google-protobuf/google/protobuf/timestamp_pb";
-import * as pb from "./proto/orchestrator_service_pb";
-import * as stubs from "./proto/orchestrator_service_grpc_pb";
-import { TOrchestrator } from "./types/orchestrator.type";
-import { TInput } from "./types/input.type";
-import { getName } from "./task";
+import * as pb from "../proto/orchestrator_service_pb";
+import * as stubs from "../proto/orchestrator_service_grpc_pb";
+import { TOrchestrator } from "../types/orchestrator.type";
+import { TInput } from "../types/input.type";
+import { getName } from "../task";
 import { randomUUID } from "crypto";
 import { promisify } from "util";
-import { newOrchestrationState } from "./orchestration";
-import { OrchestrationState } from "./orchestration/orchestration-state";
+import { newOrchestrationState } from "../orchestration";
+import { OrchestrationState } from "../orchestration/orchestration-state";
 import { GrpcClient } from "./client-grpc";
-import { OrchestrationStatus, toProtobuf } from "./orchestration/enum/orchestration-status.enum";
-import { TimeoutError } from "./exception/timeout-error";
-import { PurgeResult } from "./orchestration/orchestration-purge-result";
-import { PurgeInstanceCriteria } from "./orchestration/orchestration-purge-criteria";
+import { OrchestrationStatus, toProtobuf } from "../orchestration/enum/orchestration-status.enum";
+import { TimeoutError } from "../exception/timeout-error";
+import { PurgeResult } from "../orchestration/orchestration-purge-result";
+import { PurgeInstanceCriteria } from "../orchestration/orchestration-purge-criteria";
+import * as grpc from "@grpc/grpc-js";
 
 export class TaskHubGrpcClient {
   private _stub: stubs.TaskHubSidecarServiceClient;
 
-  constructor(hostAddress: string) {
-    this._stub = new GrpcClient(hostAddress).stub;
+  constructor(hostAddress?: string, option?: grpc.ChannelOptions) {
+    this._stub = new GrpcClient(hostAddress, option).stub;
   }
 
   async stop(): Promise<void> {
@@ -30,14 +31,7 @@ export class TaskHubGrpcClient {
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 
-  async scheduleNewOrchestration(
-    orchestrator: TOrchestrator,
-    input?: TInput,
-    instanceId?: string,
-    startAt?: Date,
-  ): Promise<string> {
-    const name = getName(orchestrator);
-
+  async scheduleNewOrchestration(name: string, input?: TInput, instanceId?: string, startAt?: Date): Promise<string> {
     const req = new pb.CreateInstanceRequest();
     req.setName(name);
     req.setInstanceid(instanceId ?? randomUUID());

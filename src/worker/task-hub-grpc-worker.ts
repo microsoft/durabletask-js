@@ -6,7 +6,7 @@ import { TActivity } from "../types/activity.type";
 import { TInput } from "../types/input.type";
 import { TOrchestrator } from "../types/orchestrator.type";
 import { TOutput } from "../types/output.type";
-import { GrpcClient } from "../client-grpc";
+import { GrpcClient } from "../client/client-grpc";
 import { promisify } from "util";
 import { Empty } from "google-protobuf/google/protobuf/empty_pb";
 import * as pbh from "../utils/pb-helper.util";
@@ -35,12 +35,12 @@ export class TaskHubGrpcWorker {
    * @param fn
    * @returns
    */
-  addOrchestrator(fn: TOrchestrator): string {
+  addOrchestrator(name: string, fn: TOrchestrator): string {
     if (this._isRunning) {
       throw new Error("Cannot add orchestrator while worker is running.");
     }
 
-    return this._registry.addOrchestrator(fn);
+    return this._registry.addOrchestrator(name, fn);
   }
 
   /**
@@ -49,12 +49,12 @@ export class TaskHubGrpcWorker {
    * @param fn
    * @returns
    */
-  addActivity(fn: TActivity<TInput, TOutput>): string {
+  addActivity(name: string, fn: TActivity<TInput, TOutput>): string {
     if (this._isRunning) {
       throw new Error("Cannot add activity while worker is running.");
     }
 
-    return this._registry.addActivity(fn);
+    return this._registry.addActivity(name, fn);
   }
 
   /**

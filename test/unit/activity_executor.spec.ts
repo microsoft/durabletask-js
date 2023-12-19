@@ -1,3 +1,4 @@
+import { getName } from "../../src/task";
 import { ActivityContext } from "../../src/task/context/activity-context";
 import { TActivity } from "../../src/types/activity.type";
 import { ActivityExecutor } from "../../src/worker/activity-executor";
@@ -53,7 +54,7 @@ describe("Activity Executor", () => {
 // Activity = Callable[[ActivityContext, TInput], TOutput]
 function getActivityExecutor(fn: TActivity<any, any>): [ActivityExecutor, string] {
   const registry = new Registry();
-  const name = registry.addActivity(fn);
+  const name = registry.addActivity(getName(fn), fn);
   const executor = new ActivityExecutor(registry);
   return [executor, name];
 }

@@ -1,4 +1,4 @@
-import { TaskHubGrpcClient } from "../../src/client";
+import { TaskHubGrpcClient } from "../../src/client/client";
 import { PurgeInstanceCriteria } from "../../src/orchestration/orchestration-purge-criteria";
 import { OrchestrationStatus } from "../../src/proto/orchestrator_service_pb";
 import { OrchestrationStatus as RuntimeStatus } from "../../src/orchestration/enum/orchestration-status.enum";
@@ -35,10 +35,10 @@ describe("Durable Functions", () => {
       invoked = true;
     };
 
-    taskHubWorker.addOrchestrator(emptyOrchestrator);
+    taskHubWorker.addOrchestrator(getName(emptyOrchestrator), emptyOrchestrator);
     await taskHubWorker.start();
 
-    const id = await taskHubClient.scheduleNewOrchestration(emptyOrchestrator);
+    const id = await taskHubClient.scheduleNewOrchestration(getName(emptyOrchestrator));
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
     expect(invoked);
@@ -66,11 +66,11 @@ describe("Durable Functions", () => {
       return numbers;
     };
 
-    taskHubWorker.addOrchestrator(sequence);
-    taskHubWorker.addActivity(plusOne);
+    taskHubWorker.addOrchestrator(getName(sequence), sequence);
+    taskHubWorker.addActivity(getName(plusOne), plusOne);
     await taskHubWorker.start();
 
-    const id = await taskHubClient.scheduleNewOrchestration(sequence, 1);
+    const id = await taskHubClient.scheduleNewOrchestration(getName(sequence), 1);
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
     expect(state);
@@ -101,11 +101,11 @@ describe("Durable Functions", () => {
       yield whenAll(tasks);
     };
 
-    taskHubWorker.addActivity(increment);
-    taskHubWorker.addOrchestrator(orchestrator);
+    taskHubWorker.addActivity(getName(increment), increment);
+    taskHubWorker.addOrchestrator(getName(orchestrator), orchestrator);
     await taskHubWorker.start();
 
-    const id = await taskHubClient.scheduleNewOrchestration(orchestrator, 10);
+    const id = await taskHubClient.scheduleNewOrchestration(getName(orchestrator), 10);
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 10);
 
     expect(state);
@@ -130,12 +130,12 @@ describe("Durable Functions", () => {
       yield ctx.callSubOrchestrator(orchestratorChild);
     };
 
-    taskHubWorker.addActivity(increment);
-    taskHubWorker.addOrchestrator(orchestratorChild);
-    taskHubWorker.addOrchestrator(orchestratorParent);
+    taskHubWorker.addActivity(getName(increment), increment);
+    taskHubWorker.addOrchestrator(getName(orchestratorChild), orchestratorChild);
+    taskHubWorker.addOrchestrator(getName(orchestratorParent), orchestratorParent);
     await taskHubWorker.start();
 
-    const id = await taskHubClient.scheduleNewOrchestration(orchestratorParent, 10);
+    const id = await taskHubClient.scheduleNewOrchestration(getName(orchestratorParent), 10);
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
     expect(state);
@@ -169,12 +169,12 @@ describe("Durable Functions", () => {
       yield whenAll(tasks);
     };
 
-    taskHubWorker.addActivity(increment);
-    taskHubWorker.addOrchestrator(orchestratorChild);
-    taskHubWorker.addOrchestrator(orchestratorParent);
+    taskHubWorker.addActivity(getName(increment), increment);
+    taskHubWorker.addOrchestrator(getName(orchestratorChild), orchestratorChild);
+    taskHubWorker.addOrchestrator(getName(orchestratorParent), orchestratorParent);
     await taskHubWorker.start();
 
-    const id = await taskHubClient.scheduleNewOrchestration(orchestratorParent, 10);
+    const id = await taskHubClient.scheduleNewOrchestration(getName(orchestratorParent), 10);
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
     expect(state);
@@ -191,11 +191,11 @@ describe("Durable Functions", () => {
       return [a, b, c];
     };
 
-    taskHubWorker.addOrchestrator(orchestrator);
+    taskHubWorker.addOrchestrator(getName(orchestrator), orchestrator);
     await taskHubWorker.start();
 
     // Send events to the client immediately
-    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const id = await taskHubClient.scheduleNewOrchestration(getName(orchestrator));
     taskHubClient.raiseOrchestrationEvent(id, "A", "a");
     taskHubClient.raiseOrchestrationEvent(id, "B", "b");
     taskHubClient.raiseOrchestrationEvent(id, "C", "c");
@@ -212,10 +212,10 @@ describe("Durable Functions", () => {
       yield ctx.createTimer(delay);
     };
 
-    taskHubWorker.addOrchestrator(singleTimer);
+    taskHubWorker.addOrchestrator(getName(singleTimer), singleTimer);
     await taskHubWorker.start();
 
-    const id = await taskHubClient.scheduleNewOrchestration(singleTimer);
+    const id = await taskHubClient.scheduleNewOrchestration(getName(singleTimer));
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
     const expectedCompletionSecond = state?.createdAt?.getTime()! + delay * 1000;
@@ -245,11 +245,11 @@ describe("Durable Functions", () => {
       }
     };
 
-    taskHubWorker.addOrchestrator(orchestrator);
+    taskHubWorker.addOrchestrator(getName(orchestrator), orchestrator);
     await taskHubWorker.start();
 
     // Send events to the client immediately
-    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const id = await taskHubClient.scheduleNewOrchestration(getName(orchestrator));
 
     if (shouldRaiseEvent) {
       taskHubClient.raiseOrchestrationEvent(id, "Approval");
@@ -281,11 +281,11 @@ describe("Durable Functions", () => {
       }
     };
 
-    taskHubWorker.addOrchestrator(orchestrator);
+    taskHubWorker.addOrchestrator(getName(orchestrator), orchestrator);
     await taskHubWorker.start();
 
     // Send events to the client immediately
-    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const id = await taskHubClient.scheduleNewOrchestration(getName(orchestrator));
 
     if (shouldRaiseEvent) {
       taskHubClient.raiseOrchestrationEvent(id, "Approval");
@@ -309,10 +309,10 @@ describe("Durable Functions", () => {
       return res;
     };
 
-    taskHubWorker.addOrchestrator(orchestrator);
+    taskHubWorker.addOrchestrator(getName(orchestrator), orchestrator);
     await taskHubWorker.start();
 
-    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const id = await taskHubClient.scheduleNewOrchestration(getName(orchestrator));
     let state = await taskHubClient.waitForOrchestrationStart(id, undefined, 30);
     expect(state);
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING);
@@ -333,10 +333,10 @@ describe("Durable Functions", () => {
       }
     };
 
-    taskHubWorker.addOrchestrator(orchestrator);
+    taskHubWorker.addOrchestrator(getName(orchestrator), orchestrator);
     await taskHubWorker.start();
 
-    const id = await taskHubClient.scheduleNewOrchestration(orchestrator, 1);
+    const id = await taskHubClient.scheduleNewOrchestration(getName(orchestrator), 1);
 
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
     expect(state);
@@ -349,10 +349,10 @@ describe("Durable Functions", () => {
       return startVal + 1;
     };
 
-    taskHubWorker.addOrchestrator(orchestrator);
+    taskHubWorker.addOrchestrator(getName(orchestrator), orchestrator);
     await taskHubWorker.start();
 
-    const id = await taskHubClient.scheduleNewOrchestration(orchestrator, 15);
+    const id = await taskHubClient.scheduleNewOrchestration(getName(orchestrator), 15);
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
     expect(state);
@@ -373,11 +373,11 @@ describe("Durable Functions", () => {
       return yield ctx.callActivity(plusOne, startVal);
     };
 
-    taskHubWorker.addOrchestrator(orchestrator);
-    taskHubWorker.addActivity(plusOne);
+    taskHubWorker.addOrchestrator(getName(orchestrator), orchestrator);
+    taskHubWorker.addActivity(getName(plusOne), plusOne);
     await taskHubWorker.start();
 
-    const id = await taskHubClient.scheduleNewOrchestration(orchestrator, 1);
+    const id = await taskHubClient.scheduleNewOrchestration(getName(orchestrator), 1);
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
     expect(state);
@@ -407,13 +407,13 @@ describe("Durable Functions", () => {
       yield ctx.createTimer(delaySeconds);
     };
 
-    taskHubWorker.addOrchestrator(orchestrator);
-    taskHubWorker.addOrchestrator(terminate);
-    taskHubWorker.addActivity(plusOne);
+    taskHubWorker.addOrchestrator(getName(orchestrator), orchestrator);
+    taskHubWorker.addOrchestrator(getName(terminate), terminate);
+    taskHubWorker.addActivity(getName(plusOne), plusOne);
     await taskHubWorker.start();
 
     const startTime = new Date(Date.now());
-    const id = await taskHubClient.scheduleNewOrchestration(orchestrator, 1);
+    const id = await taskHubClient.scheduleNewOrchestration(getName(orchestrator), 1);
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
     expect(state);
@@ -445,7 +445,7 @@ describe("Durable Functions", () => {
     metadata = await taskHubClient.getOrchestrationState(id);
     expect(metadata).toBeUndefined();
 
-    const id1 = await taskHubClient.scheduleNewOrchestration(orchestrator, 1);
+    const id1 = await taskHubClient.scheduleNewOrchestration(getName(orchestrator), 1);
     const state1 = await taskHubClient.waitForOrchestrationCompletion(id1, undefined, 30);
 
     expect(state1);
@@ -456,7 +456,7 @@ describe("Durable Functions", () => {
     expect(state1?.serializedInput).toEqual(JSON.stringify(1));
     expect(state1?.serializedOutput).toEqual(JSON.stringify(2));
 
-    const id2 = await taskHubClient.scheduleNewOrchestration(terminate);
+    const id2 = await taskHubClient.scheduleNewOrchestration(getName(terminate));
     await taskHubClient.terminateOrchestration(id2, "termination");
     const state2 = await taskHubClient.waitForOrchestrationCompletion(id2, undefined, 30);
     expect(state2);

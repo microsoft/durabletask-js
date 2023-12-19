@@ -36,7 +36,7 @@ describe("Orchestration Executor", () => {
 
     const testInput = 42;
     const registry = new Registry();
-    const name = registry.addOrchestrator(orchestrator);
+    const name = registry.addOrchestrator(getName(orchestrator), orchestrator);
     const startTime = new Date();
     const newEvents = [
       newOrchestratorStartedEvent(startTime),
@@ -56,7 +56,7 @@ describe("Orchestration Executor", () => {
       return "done";
     };
     const registry = new Registry();
-    const name = registry.addOrchestrator(emptyOrchestrator);
+    const name = registry.addOrchestrator(getName(emptyOrchestrator), emptyOrchestrator);
     const newEvents = [newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined)];
     const executor = new OrchestrationExecutor(registry);
     const actions = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
@@ -83,7 +83,7 @@ describe("Orchestration Executor", () => {
       return "done";
     };
     const registry = new Registry();
-    const name = registry.addOrchestrator(delayOrchestrator);
+    const name = registry.addOrchestrator(getName(delayOrchestrator), delayOrchestrator);
     // Set start time to 2020-01-01 12:00:00
     const startTime = new Date(2020, 0, 1, 12, 0, 0);
     const expectedFireAt = new Date(startTime.getTime() + 1000);
@@ -106,7 +106,7 @@ describe("Orchestration Executor", () => {
       return "done";
     };
     const registry = new Registry();
-    const name = registry.addOrchestrator(delayOrchestrator);
+    const name = registry.addOrchestrator(getName(delayOrchestrator), delayOrchestrator);
     // Set start time to 2020-01-01 12:00:00
     const startTime = new Date(2020, 0, 1, 12, 0, 0);
     const expectedFireAt = new Date(startTime.getTime() + 1000);
@@ -132,7 +132,7 @@ describe("Orchestration Executor", () => {
       return "done";
     };
     const registry = new Registry();
-    const name = registry.addOrchestrator(orchestrator);
+    const name = registry.addOrchestrator(getName(orchestrator), orchestrator);
     const newEvents = [newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined)];
     const executor = new OrchestrationExecutor(registry);
     const actions = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
@@ -151,7 +151,7 @@ describe("Orchestration Executor", () => {
       return result;
     };
     const registry = new Registry();
-    const name = registry.addOrchestrator(orchestrator);
+    const name = registry.addOrchestrator(getName(orchestrator), orchestrator);
     const oldEvents = [
       newOrchestratorStartedEvent(),
       newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined),
@@ -175,7 +175,7 @@ describe("Orchestration Executor", () => {
       return result;
     };
     const registry = new Registry();
-    const name = registry.addOrchestrator(orchestrator);
+    const name = registry.addOrchestrator(getName(orchestrator), orchestrator);
     const oldEvents = [
       newOrchestratorStartedEvent(),
       newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined),
@@ -199,7 +199,7 @@ describe("Orchestration Executor", () => {
       return result;
     };
     const registry = new Registry();
-    const name = registry.addOrchestrator(orchestrator);
+    const name = registry.addOrchestrator(getName(orchestrator), orchestrator);
     const oldEvents = [
       newOrchestratorStartedEvent(),
       newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined),
@@ -229,7 +229,7 @@ describe("Orchestration Executor", () => {
       return result;
     };
     const registry = new Registry();
-    const name = registry.addOrchestrator(orchestrator);
+    const name = registry.addOrchestrator(getName(orchestrator), orchestrator);
     const fireAt = new Date();
     const oldEvents = [
       newOrchestratorStartedEvent(),
@@ -252,7 +252,7 @@ describe("Orchestration Executor", () => {
       return result;
     };
     const registry = new Registry();
-    const name = registry.addOrchestrator(orchestrator);
+    const name = registry.addOrchestrator(getName(orchestrator), orchestrator);
     const oldEvents = [
       newOrchestratorStartedEvent(),
       newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined),
@@ -276,7 +276,7 @@ describe("Orchestration Executor", () => {
       yield ctx.createTimer(new Date());
     };
     const registry = new Registry();
-    const name = registry.addOrchestrator(orchestrator);
+    const name = registry.addOrchestrator(getName(orchestrator), orchestrator);
     const oldEvents = [
       newOrchestratorStartedEvent(),
       newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined),
@@ -301,7 +301,7 @@ describe("Orchestration Executor", () => {
       yield ctx.callActivity(dummyActivity);
     };
     const registry = new Registry();
-    const name = registry.addOrchestrator(orchestrator);
+    const name = registry.addOrchestrator(getName(orchestrator), orchestrator);
     const oldEvents = [
       newOrchestratorStartedEvent(),
       newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined),
@@ -327,8 +327,8 @@ describe("Orchestration Executor", () => {
       return res;
     };
     const registry = new Registry();
-    const subOrchestratorName = registry.addOrchestrator(subOrchestrator);
-    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const subOrchestratorName = registry.addOrchestrator(getName(subOrchestrator), subOrchestrator);
+    const orchestratorName = registry.addOrchestrator(getName(orchestrator), orchestrator);
     const oldEvents = [
       newOrchestratorStartedEvent(),
       newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID, undefined),
@@ -350,8 +350,8 @@ describe("Orchestration Executor", () => {
       return res;
     };
     const registry = new Registry();
-    const subOrchestratorName = registry.addOrchestrator(subOrchestrator);
-    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const subOrchestratorName = registry.addOrchestrator(getName(subOrchestrator), subOrchestrator);
+    const orchestratorName = registry.addOrchestrator(getName(orchestrator), orchestrator);
     const oldEvents = [
       newOrchestratorStartedEvent(),
       newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID, undefined),
@@ -376,7 +376,7 @@ describe("Orchestration Executor", () => {
       return res;
     };
     const registry = new Registry();
-    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const orchestratorName = registry.addOrchestrator(getName(orchestrator), orchestrator);
     const oldEvents = [
       newOrchestratorStartedEvent(),
       newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID, undefined),
@@ -406,7 +406,7 @@ describe("Orchestration Executor", () => {
       return res;
     };
     const registry = new Registry();
-    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const orchestratorName = registry.addOrchestrator(getName(orchestrator), orchestrator);
     const oldEvents = [
       newOrchestratorStartedEvent(),
       newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID, undefined),
@@ -433,7 +433,7 @@ describe("Orchestration Executor", () => {
     };
 
     const registry = new Registry();
-    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const orchestratorName = registry.addOrchestrator(getName(orchestrator), orchestrator);
 
     let oldEvents: any[] = [];
     let newEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
@@ -464,7 +464,7 @@ describe("Orchestration Executor", () => {
     };
 
     const registry = new Registry();
-    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const orchestratorName = registry.addOrchestrator(getName(orchestrator), orchestrator);
 
     let oldEvents: any[] = [];
     let newEvents = [
@@ -502,7 +502,7 @@ describe("Orchestration Executor", () => {
     };
 
     const registry = new Registry();
-    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const orchestratorName = registry.addOrchestrator(getName(orchestrator), orchestrator);
 
     let oldEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
 
@@ -533,7 +533,7 @@ describe("Orchestration Executor", () => {
     };
 
     const registry = new Registry();
-    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const orchestratorName = registry.addOrchestrator(getName(orchestrator), orchestrator);
 
     let oldEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
 
@@ -559,7 +559,7 @@ describe("Orchestration Executor", () => {
       };
 
       const registry = new Registry();
-      const orchestratorName = registry.addOrchestrator(orchestrator);
+      const orchestratorName = registry.addOrchestrator(getName(orchestrator), orchestrator);
 
       const oldEvents = [
         newOrchestratorStartedEvent(),
@@ -613,8 +613,8 @@ describe("Orchestration Executor", () => {
     };
 
     const registry = new Registry();
-    const orchestratorName = registry.addOrchestrator(orchestrator);
-    const activityName = registry.addActivity(hello);
+    const orchestratorName = registry.addOrchestrator(getName(orchestrator), orchestrator);
+    const activityName = registry.addActivity(getName(hello), hello);
 
     const oldEvents: any[] = [];
     const newEvents = [
@@ -652,8 +652,8 @@ describe("Orchestration Executor", () => {
     };
 
     const registry = new Registry();
-    const orchestratorName = registry.addOrchestrator(orchestrator);
-    const activityName = registry.addActivity(printInt);
+    const orchestratorName = registry.addOrchestrator(getName(orchestrator), orchestrator);
+    const activityName = registry.addActivity(getName(printInt), printInt);
 
     const oldEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
 
@@ -701,8 +701,8 @@ describe("Orchestration Executor", () => {
     };
 
     const registry = new Registry();
-    const orchestratorName = registry.addOrchestrator(orchestrator);
-    const activityName = registry.addActivity(printInt);
+    const orchestratorName = registry.addOrchestrator(getName(orchestrator), orchestrator);
+    const activityName = registry.addActivity(getName(printInt), printInt);
 
     const oldEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
 
@@ -751,8 +751,8 @@ describe("Orchestration Executor", () => {
     };
 
     const registry = new Registry();
-    const orchestratorName = registry.addOrchestrator(orchestrator);
-    const activityName = registry.addActivity(hello);
+    const orchestratorName = registry.addOrchestrator(getName(orchestrator), orchestrator);
+    const activityName = registry.addActivity(getName(hello), hello);
 
     // Test 1: Start the orchestration and let it yield on the whenAny
     // this should return 2 actions: a Tokyo Task Schedule and a Seattle Task Schedule
