@@ -241,7 +241,10 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     return timerTask;
   }
 
-  callActivity<TInput, TOutput>(activity: TActivity<TInput, TOutput>, input?: TInput | undefined): Task<TOutput> {
+  callActivity<TInput, TOutput>(
+    activity: TActivity<TInput, TOutput> | string,
+    input?: TInput | undefined,
+  ): Task<TOutput> {
     const id = this.nextSequenceNumber();
     const name = typeof activity === "string" ? activity : getName(activity);
     const encodedInput = input ? JSON.stringify(input) : undefined;

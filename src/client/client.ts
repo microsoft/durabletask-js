@@ -31,7 +31,18 @@ export class TaskHubGrpcClient {
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 
-  async scheduleNewOrchestration(name: string, input?: TInput, instanceId?: string, startAt?: Date): Promise<string> {
+  async scheduleNewOrchestration(
+    orchestrator: TOrchestrator | string,
+    input?: TInput,
+    instanceId?: string,
+    startAt?: Date,
+  ): Promise<string> {
+    let name;
+    if (typeof orchestrator === "string") {
+      name = orchestrator;
+    } else {
+      name = getName(orchestrator);
+    }
     const req = new pb.CreateInstanceRequest();
     req.setName(name);
     req.setInstanceid(instanceId ?? randomUUID());

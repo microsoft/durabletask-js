@@ -12,11 +12,12 @@ export class Registry {
     this._activities = {};
   }
 
-  addOrchestrator(name: string, fn: TOrchestrator): string {
+  addOrchestrator(fn: TOrchestrator): string {
     if (!fn) {
       throw new Error("An orchestrator function argument is required.");
     }
 
+    const name = this._getFunctionName(fn);
     this.addNamedOrchestrator(name, fn);
     return name;
   }
@@ -41,11 +42,12 @@ export class Registry {
     return this._orchestrators[name];
   }
 
-  addActivity(name: string, fn: TActivity<TInput, TOutput>): string {
+  addActivity(fn: TActivity<TInput, TOutput>): string {
     if (!fn) {
       throw new Error("An activity function argument is required.");
     }
 
+    const name = this._getFunctionName(fn);
     this.addNamedActivity(name, fn);
     return name;
   }

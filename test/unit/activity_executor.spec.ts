@@ -54,7 +54,7 @@ describe("Activity Executor", () => {
 // Activity = Callable[[ActivityContext, TInput], TOutput]
 function getActivityExecutor(fn: TActivity<any, any>): [ActivityExecutor, string] {
   const registry = new Registry();
-  const name = registry.addActivity(getName(fn), fn);
+  const name = registry.addActivity(fn);
   const executor = new ActivityExecutor(registry);
   return [executor, name];
 }

@@ -17,13 +17,15 @@ import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 export class TaskHubGrpcWorker {
   private _responseStream: grpc.ClientReadableStream<pb.WorkItem> | null;
   private _registry: Registry;
-  private _hostAddress: string;
+  private _hostAddress?: string;
+  private _grpcClientOptions?: grpc.ClientOptions;
   private _isRunning: boolean;
   private _stub: stubs.TaskHubSidecarServiceClient | null;
 
-  constructor(hostAddress?: string) {
+  constructor(hostAddress?: string, options?: grpc.ClientOptions) {
     this._registry = new Registry();
-    this._hostAddress = hostAddress ?? "localhost:4001";
+    this._hostAddress = hostAddress;
+    this._grpcClientOptions = options;
     this._responseStream = null;
     this._isRunning = false;
     this._stub = null;
@@ -35,12 +37,12 @@ export class TaskHubGrpcWorker {
    * @param fn
    * @returns
    */
-  addOrchestrator(name: string, fn: TOrchestrator): string {
+  addOrchestrator(fn: TOrchestrator): string {
     if (this._isRunning) {
       throw new Error("Cannot add orchestrator while worker is running.");
     }
 
-    return this._registry.addOrchestrator(name, fn);
+    return this._registry.addOrchestrator(fn);
   }
 
   /**
@@ -49,12 +51,12 @@ export class TaskHubGrpcWorker {
    * @param fn
    * @returns
    */
-  addActivity(name: string, fn: TActivity<TInput, TOutput>): string {
+  addActivity(fn: TActivity<TInput, TOutput>): string {
     if (this._isRunning) {
       throw new Error("Cannot add activity while worker is running.");
     }
 
-    return this._registry.addActivity(name, fn);
+    return this._registry.addActivity(fn);
   }
 
   /**
@@ -62,7 +64,7 @@ export class TaskHubGrpcWorker {
    * Therefore, we open the stream and simply listen through the eventemitter behind the scenes
    */
   async start(): Promise<void> {
-    const client = new GrpcClient(this._hostAddress);
+    const client = new GrpcClient(this._hostAddress, this._grpcClientOptions);
 
     if (this._isRunning) {
       throw new Error("The worker is already running.");

@@ -51,7 +51,7 @@ export abstract class OrchestrationContext {
    *
    * @returns {Task<TOutput>} A Durable Task that completes when the sub-orchestrator function completes.
    */
-  abstract callActivity<TInput, TOutput>(activity: TActivity<TInput, TOutput>, input?: TInput): Task<TOutput>;
+  abstract callActivity<TInput, TOutput>(activity: TActivity<TInput, TOutput> | string, input?: TInput): Task<TOutput>;
 
   /**
    * Schedule sub-orchestrator function for execution.
