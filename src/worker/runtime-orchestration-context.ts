@@ -257,12 +257,17 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   }
 
   callSubOrchestrator<TInput, TOutput>(
-    orchestrator: TOrchestrator,
+    orchestrator: TOrchestrator | string,
     input?: TInput | undefined,
     instanceId?: string | undefined,
   ): Task<TOutput> {
+    let name;
+    if (typeof orchestrator === "string") {
+      name = orchestrator;
+    } else {
+      name = getName(orchestrator);
+    }
     const id = this.nextSequenceNumber();
-    const name = getName(orchestrator);
 
     // Create a deterministic instance ID based on the parent instance ID
     // use the instanceId and apprent the id to it in hexadecimal with 4 digits (e.g. 0001)

@@ -31,6 +31,12 @@ export class TaskHubGrpcClient {
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 
+  /**
+   * Schedules a new orchestrator using the DurableTask client.
+   *
+   * @param {TOrchestrator | string} orchestrator - The orchestrator or the name of the orchestrator to be scheduled.
+   * @return {Promise<string>} A Promise resolving to the unique ID of the scheduled orchestrator instance.
+   */
   async scheduleNewOrchestration(
     orchestrator: TOrchestrator | string,
     input?: TInput,
@@ -64,6 +70,16 @@ export class TaskHubGrpcClient {
     return res.getInstanceid();
   }
 
+  /**
+   * Fetches orchestrator instance metadata from the configured durable store.
+   *
+   * @param {string} instanceId - The unique identifier of the orchestrator instance to fetch.
+   * @param {boolean} fetchPayloads - Indicates whether to fetch the orchestrator instance's
+   *                                       inputs, outputs, and custom status (true) or omit them (false).
+   * @returns {Promise<OrchestrationState | undefined>} A Promise that resolves to a metadata record describing
+   *                                              the orchestrator instance and its execution status, or undefined
+   *                                              if the instance is not found.
+   */
   async getOrchestrationState(
     instanceId: string,
     fetchPayloads: boolean = true,
@@ -78,6 +94,22 @@ export class TaskHubGrpcClient {
     return newOrchestrationState(req.getInstanceid(), res);
   }
 
+  /**
+   * Waits for a orchestrator to start running and returns a {@link OrchestrationState} object
+   * containing metadata about the started instance, and optionally, its input, output,
+   * and custom status payloads.
+   *
+   * A "started" orchestrator instance refers to any instance not in the Pending state.
+   *
+   * If a orchestrator instance is already running when this method is called, it returns immediately.
+   *
+   * @param {string} instanceId - The unique identifier of the orchestrator instance to wait for.
+   * @param {boolean} fetchPayloads - Indicates whether to fetch the orchestrator instance's
+   *                                  inputs, outputs (true) or omit them (false).
+   * @param {number} timeout - The amount of time, in seconds, to wait for the orchestrator instance to start.
+   * @returns {Promise<OrchestrationState | undefined>} A Promise that resolves to the orchestrator instance metadata
+   *                                               or undefined if no such instance is found.
+   */
   async waitForOrchestrationStart(
     instanceId: string,
     fetchPayloads: boolean = false,
@@ -103,6 +135,23 @@ export class TaskHubGrpcClient {
     }
   }
 
+  /**
+   * Waits for a orchestrator to complete running and returns a {@link OrchestrationState} object
+   * containing metadata about the completed instance, and optionally, its input, output,
+   * and custom status payloads.
+   *
+   * A "completed" orchestrator instance refers to any instance in one of the terminal states.
+   * For example, the Completed, Failed, or Terminated states.
+   *
+   * If a orchestrator instance is already running when this method is called, it returns immediately.
+   *
+   * @param {string} instanceId - The unique identifier of the orchestrator instance to wait for.
+   * @param {boolean} fetchPayloads - Indicates whether to fetch the orchestrator instance's
+   *                                  inputs, outputs (true) or omit them (false).
+   * @param {number} timeout - The amount of time, in seconds, to wait for the orchestrator instance to start.
+   * @returns {Promise<OrchestrationState | undefined>} A Promise that resolves to the orchestrator instance metadata
+   *                                               or undefined if no such instance is found.
+   */
   async waitForOrchestrationCompletion(
     instanceId: string,
     fetchPayloads: boolean = true,
@@ -147,6 +196,16 @@ export class TaskHubGrpcClient {
     }
   }
 
+  /**
+   * Sends an event notification message to an awaiting orchestrator instance.
+   *
+   * This method triggers the specified event in a running orchestrator instance,
+   * allowing the orchestrator to respond to the event if it has defined event handlers.
+   *
+   * @param {string} instanceId - The unique identifier of the orchestrator instance that will handle the event.
+   * @param {string} eventName - The name of the event. Event names are case-insensitive.
+   * @param {any} [data] - An optional serializable data payload to include with the event.
+   */
   async raiseOrchestrationEvent(instanceId: string, eventName: string, data: any = null): Promise<void> {
     const req = new pb.RaiseEventRequest();
     req.setInstanceid(instanceId);
@@ -163,6 +222,12 @@ export class TaskHubGrpcClient {
     await prom(req);
   }
 
+  /**
+   * Terminates the orchestrator associated with the provided instance id.
+   *
+   * @param {string} instanceId - orchestrator instance id to terminate.
+   * @param {any} output - The optional output to set for the terminated orchestrator instance.
+   */
   async terminateOrchestration(instanceId: string, output: any = null): Promise<void> {
     const req = new pb.TerminateRequest();
     req.setInstanceid(instanceId);
