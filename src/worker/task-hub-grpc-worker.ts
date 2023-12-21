@@ -46,6 +46,21 @@ export class TaskHubGrpcWorker {
   }
 
   /**
+   * Registers an named orchestrator function with the worker.
+   *
+   * @param fn
+   * @returns
+   */
+  addNamedOrchestrator(name: string, fn: TOrchestrator): string {
+    if (this._isRunning) {
+      throw new Error("Cannot add orchestrator while worker is running.");
+    }
+
+    this._registry.addNamedOrchestrator(name, fn);
+    return name;
+  }
+
+  /**
    * Registers an activity function with the worker.
    *
    * @param fn
@@ -57,6 +72,21 @@ export class TaskHubGrpcWorker {
     }
 
     return this._registry.addActivity(fn);
+  }
+
+  /**
+   * Registers an named activity function with the worker.
+   *
+   * @param fn
+   * @returns
+   */
+  addNamedActivity(name: string, fn: TActivity<TInput, TOutput>): string {
+    if (this._isRunning) {
+      throw new Error("Cannot add activity while worker is running.");
+    }
+
+    this._registry.addNamedActivity(name, fn);
+    return name;
   }
 
   /**

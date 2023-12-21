@@ -42,7 +42,7 @@ import { TaskHubGrpcWorker } from "../src/worker/task-hub-grpc-worker";
 
   // Schedule a new orchestration
   try {
-    const id = await taskHubClient.scheduleNewOrchestration(sequence, 1);
+    const id = await taskHubClient.scheduleNewOrchestration(sequence);
     console.log(`Orchestration scheduled with ID: ${id}`);
 
     // Wait for orchestration completion
