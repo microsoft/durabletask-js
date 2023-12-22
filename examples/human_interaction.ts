@@ -43,7 +43,7 @@ import * as readlineSync from 'readline-sync';
 
     // Activity function that places an order
     const placeOrder =async (_: ActivityContext, order: Order) => {
-        console.log(`Placing order: ${order.toString()}`);
+        console.log(`Placing order: ${order.product}`);
     }
 
     // Orchestrator function that represents a purchase order workflow
