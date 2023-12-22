@@ -19,10 +19,6 @@ import * as readlineSync from 'readline-sync';
             this.product = product;
             this.quantity = quantity;
         }
-
-        public toString(): string {
-            return `Order: ${this.product}, Cost: ${this.cost}, Quantity: ${this.quantity}`;
-        }
     }
 
     function sleep(ms: number): Promise<void> {
