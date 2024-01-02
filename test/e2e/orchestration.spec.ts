@@ -317,7 +317,7 @@ describe("Durable Functions", () => {
     expect(state);
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING);
 
-    taskHubClient.terminateOrchestration(id, "some reason for termination");
+    await taskHubClient.terminateOrchestration(id, "some reason for termination");
     state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
     expect(state);
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED);
