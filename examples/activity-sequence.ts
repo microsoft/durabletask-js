@@ -1,5 +1,4 @@
 import { TaskHubGrpcClient } from "../src/client/client";
-import { getName } from "../src/task";
 import { ActivityContext } from "../src/task/context/activity-context";
 import { OrchestrationContext } from "../src/task/context/orchestration-context";
 import { TOrchestrator } from "../src/types/orchestrator.type";
