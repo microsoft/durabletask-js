@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
 import * as stubs from "../proto/orchestrator_service_grpc_pb";
 import * as grpc from "@grpc/grpc-js";
 

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
 import { TaskHubGrpcClient } from "../src/client/client";
 import { whenAll } from "../src/task";
 import { ActivityContext } from "../src/task/context/activity-context";
@@ -10,14 +13,14 @@ import { TaskHubGrpcWorker } from "../src/worker/task-hub-grpc-worker";
 (async () => {
   // Update the gRPC client and worker to use a local address and port
   const grpcServerAddress = "localhost:4001";
-  let taskHubClient: TaskHubGrpcClient = new TaskHubGrpcClient(grpcServerAddress);
-  let taskHubWorker: TaskHubGrpcWorker = new TaskHubGrpcWorker(grpcServerAddress);
+  const taskHubClient: TaskHubGrpcClient = new TaskHubGrpcClient(grpcServerAddress);
+  const taskHubWorker: TaskHubGrpcWorker = new TaskHubGrpcWorker(grpcServerAddress);
 
   function getRandomInt(min: number, max: number): number {
     return Math.floor(Math.random() * (max - min + 1)) + min;
   }
 
-  async function getWorkItemsActivity(context: ActivityContext): Promise<string[]> {
+  async function getWorkItemsActivity(_: ActivityContext): Promise<string[]> {
     const count: number = getRandomInt(2, 10);
     console.log(`generating ${count} work items...`);
 

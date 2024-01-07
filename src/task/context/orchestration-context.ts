@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
 import { TActivity } from "../../types/activity.type";
 import { TOrchestrator } from "../../types/orchestrator.type";
 import { Task } from "../task";

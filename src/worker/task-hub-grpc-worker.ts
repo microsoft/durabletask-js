@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
 import * as pb from "../proto/orchestrator_service_pb";
 import * as stubs from "../proto/orchestrator_service_grpc_pb";
 import * as grpc from "@grpc/grpc-js";
@@ -101,7 +104,7 @@ export class TaskHubGrpcWorker {
     }
 
     // send a "Hello" message to the sidecar to ensure that it's listening
-    let prom = promisify(client.stub.hello.bind(client.stub));
+    const prom = promisify(client.stub.hello.bind(client.stub));
     await prom(new Empty());
 
     // Stream work items from the sidecar
