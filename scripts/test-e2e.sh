@@ -17,7 +17,7 @@ if [ ! "$(docker ps -q -f name=durabletask-sidecar)" ]; then
 fi
 
 echo "Running E2E tests"
-npm run test:e2e
+npm run test:e2e:internal
 
 # It should fail if the npm run fails
 if [ $? -ne 0 ]; then
