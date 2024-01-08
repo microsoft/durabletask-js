@@ -1,4 +1,4 @@
-import { TaskHubGrpcClient } from "../src/client";
+import { TaskHubGrpcClient } from "../src/client/client";
 import { whenAll } from "../src/task";
 import { ActivityContext } from "../src/task/context/activity-context";
 import { OrchestrationContext } from "../src/task/context/orchestration-context";

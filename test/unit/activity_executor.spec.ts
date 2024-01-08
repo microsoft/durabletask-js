@@ -1,3 +1,4 @@
+import { getName } from "../../src/task";
 import { ActivityContext } from "../../src/task/context/activity-context";
 import { TActivity } from "../../src/types/activity.type";
 import { ActivityExecutor } from "../../src/worker/activity-executor";

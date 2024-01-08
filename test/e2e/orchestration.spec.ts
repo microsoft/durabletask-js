@@ -1,4 +1,4 @@
-import { TaskHubGrpcClient } from "../../src/client";
+import { TaskHubGrpcClient } from "../../src/client/client";
 import { PurgeInstanceCriteria } from "../../src/orchestration/orchestration-purge-criteria";
 import { OrchestrationStatus } from "../../src/proto/orchestrator_service_pb";
 import { OrchestrationStatus as RuntimeStatus } from "../../src/orchestration/enum/orchestration-status.enum";
@@ -317,7 +317,7 @@ describe("Durable Functions", () => {
     expect(state);
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING);
 
-    taskHubClient.terminateOrchestration(id, "some reason for termination");
+    await taskHubClient.terminateOrchestration(id, "some reason for termination");
     state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
     expect(state);
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED);
