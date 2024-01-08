@@ -1,4 +1,4 @@
-import { TaskHubGrpcClient } from "../src/client/client";
+import { TaskHubGrpcClient } from "../src/client";
 import { ActivityContext } from "../src/task/context/activity-context";
 import { OrchestrationContext } from "../src/task/context/orchestration-context";
 import { TOrchestrator } from "../src/types/orchestrator.type";
@@ -41,7 +41,7 @@ import { TaskHubGrpcWorker } from "../src/worker/task-hub-grpc-worker";
 
   // Schedule a new orchestration
   try {
-    const id = await taskHubClient.scheduleNewOrchestration(sequence);
+    const id = await taskHubClient.scheduleNewOrchestration(sequence, 1);
     console.log(`Orchestration scheduled with ID: ${id}`);
 
     // Wait for orchestration completion
