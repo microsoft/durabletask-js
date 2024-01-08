@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
 import { isPromise } from "util/types";
 import { ActivityContext } from "../task/context/activity-context";
 import { ActivityNotRegisteredError } from "./exception/activity-not-registered-error";

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
 import { ActivityContext } from "../../src/task/context/activity-context";
 import { TActivity } from "../../src/types/activity.type";
 import { ActivityExecutor } from "../../src/worker/activity-executor";
@@ -28,7 +31,7 @@ describe("Activity Executor", () => {
   });
 
   it("It should raise a worker.ActivityNotRegisteredError exception when attempting to execute an unregistered activity", async () => {
-    const testActivity = (ctx: ActivityContext, _: any) => {
+    const testActivity = (_: ActivityContext) => {
       return;
     };
 

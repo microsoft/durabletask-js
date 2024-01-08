@@ -8,9 +8,14 @@
     "amd": true,
     "node": true
   },
+  "ignorePatterns": ["src/version.ts", "jest.config.js"],
   "rules": {
     "@typescript-eslint/ban-ts-comment": "off",
     "@typescript-eslint/no-explicit-any": "off",
+    "@typescript-eslint/no-inferrable-types": "off",
+    "@typescript-eslint/no-empty-function": "off",
+    "@typescript-eslint/ban-types": "off",
+    "no-constant-condition": "off",
     "@typescript-eslint/no-unused-vars": [
       "error",
       {
@@ -18,17 +23,6 @@
         "argsIgnorePattern": "^_"
       }
     ],
-    "header/header": [
-      "error",
-      "block",
-      [
-        "",
-        { "pattern": "Copyright \\(c\\) Microsoft Corporation.", "template": "Copyright (c) Microsoft Corporation." },
-        "Licensed under the MIT License.",
-        ""
-        // ... rest of the header
-      ],
-      2
-    ]
+    "header/header": [2, "config/header.ts"]
   }
 }

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
 import { getName } from "../task";
 import { OrchestrationContext } from "../task/context/orchestration-context";
 import * as pb from "../proto/orchestrator_service_pb";
@@ -241,7 +244,10 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     return timerTask;
   }
 
-  callActivity<TInput, TOutput>(activity: TActivity<TInput, TOutput>, input?: TInput | undefined): Task<TOutput> {
+  callActivity<TInput, TOutput>(
+    activity: TActivity<TInput, TOutput> | string,
+    input?: TInput | undefined,
+  ): Task<TOutput> {
     const id = this.nextSequenceNumber();
     const name = typeof activity === "string" ? activity : getName(activity);
     const encodedInput = input ? JSON.stringify(input) : undefined;
@@ -254,12 +260,17 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   }
 
   callSubOrchestrator<TInput, TOutput>(
-    orchestrator: TOrchestrator,
+    orchestrator: TOrchestrator | string,
     input?: TInput | undefined,
     instanceId?: string | undefined,
   ): Task<TOutput> {
+    let name;
+    if (typeof orchestrator === "string") {
+      name = orchestrator;
+    } else {
+      name = getName(orchestrator);
+    }
     const id = this.nextSequenceNumber();
-    const name = getName(orchestrator);
 
     // Create a deterministic instance ID based on the parent instance ID
     // use the instanceId and apprent the id to it in hexadecimal with 4 digits (e.g. 0001)

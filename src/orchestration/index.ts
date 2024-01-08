@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
 import * as pb from "../proto/orchestrator_service_pb";
 import { FailureDetails } from "../task/failure-details";
 import { fromProtobuf } from "./enum/orchestration-status.enum";
@@ -11,7 +14,7 @@ export function newOrchestrationState(
     return;
   }
 
-  let state = res.getOrchestrationstate();
+  const state = res.getOrchestrationstate();
   let failureDetails;
 
   const failureDetailsErrorMessage = state?.getFailuredetails()?.getErrormessage();

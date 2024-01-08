@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
 import { TActivity } from "../../types/activity.type";
 import { TOrchestrator } from "../../types/orchestrator.type";
 import { Task } from "../task";
@@ -43,7 +46,7 @@ export abstract class OrchestrationContext {
   abstract createTimer(fireAt: Date | number): Task<any>;
 
   /**
-   * chedule an activity for execution.
+   * Schedule an activity for execution.
    *
    * @param {Orchestrator} orchestrator The sub-orchestrator function to call.
    * @param {TInput} input The JSON-serializable input value for the sub-orchestrator function.
@@ -51,7 +54,7 @@ export abstract class OrchestrationContext {
    *
    * @returns {Task<TOutput>} A Durable Task that completes when the sub-orchestrator function completes.
    */
-  abstract callActivity<TInput, TOutput>(activity: TActivity<TInput, TOutput>, input?: TInput): Task<TOutput>;
+  abstract callActivity<TInput, TOutput>(activity: TActivity<TInput, TOutput> | string, input?: TInput): Task<TOutput>;
 
   /**
    * Schedule sub-orchestrator function for execution.
@@ -63,7 +66,7 @@ export abstract class OrchestrationContext {
    * @returns {Task<TOutput>} A Durable Task that completes when the sub-orchestrator function completes.
    */
   abstract callSubOrchestrator<TInput, TOutput>(
-    orchestrator: TOrchestrator,
+    orchestrator: TOrchestrator | string,
     input?: TInput,
     instanceId?: string,
   ): Task<TOutput>;

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
 import * as pb from "../proto/orchestrator_service_pb";
 import * as stubs from "../proto/orchestrator_service_grpc_pb";
 import * as grpc from "@grpc/grpc-js";
@@ -6,7 +9,7 @@ import { TActivity } from "../types/activity.type";
 import { TInput } from "../types/input.type";
 import { TOrchestrator } from "../types/orchestrator.type";
 import { TOutput } from "../types/output.type";
-import { GrpcClient } from "../client-grpc";
+import { GrpcClient } from "../client/client-grpc";
 import { promisify } from "util";
 import { Empty } from "google-protobuf/google/protobuf/empty_pb";
 import * as pbh from "../utils/pb-helper.util";
@@ -17,13 +20,15 @@ import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 export class TaskHubGrpcWorker {
   private _responseStream: grpc.ClientReadableStream<pb.WorkItem> | null;
   private _registry: Registry;
-  private _hostAddress: string;
+  private _hostAddress?: string;
+  private _grpcChannelOptions?: grpc.ChannelOptions;
   private _isRunning: boolean;
   private _stub: stubs.TaskHubSidecarServiceClient | null;
 
-  constructor(hostAddress?: string) {
+  constructor(hostAddress?: string, options?: grpc.ChannelOptions) {
     this._registry = new Registry();
-    this._hostAddress = hostAddress ?? "localhost:4001";
+    this._hostAddress = hostAddress;
+    this._grpcChannelOptions = options;
     this._responseStream = null;
     this._isRunning = false;
     this._stub = null;
@@ -44,6 +49,21 @@ export class TaskHubGrpcWorker {
   }
 
   /**
+   * Registers an named orchestrator function with the worker.
+   *
+   * @param fn
+   * @returns
+   */
+  addNamedOrchestrator(name: string, fn: TOrchestrator): string {
+    if (this._isRunning) {
+      throw new Error("Cannot add orchestrator while worker is running.");
+    }
+
+    this._registry.addNamedOrchestrator(name, fn);
+    return name;
+  }
+
+  /**
    * Registers an activity function with the worker.
    *
    * @param fn
@@ -58,18 +78,33 @@ export class TaskHubGrpcWorker {
   }
 
   /**
+   * Registers an named activity function with the worker.
+   *
+   * @param fn
+   * @returns
+   */
+  addNamedActivity(name: string, fn: TActivity<TInput, TOutput>): string {
+    if (this._isRunning) {
+      throw new Error("Cannot add activity while worker is running.");
+    }
+
+    this._registry.addNamedActivity(name, fn);
+    return name;
+  }
+
+  /**
    * In node.js we don't require a new thread as we have a main event loop
    * Therefore, we open the stream and simply listen through the eventemitter behind the scenes
    */
   async start(): Promise<void> {
-    const client = new GrpcClient(this._hostAddress);
+    const client = new GrpcClient(this._hostAddress, this._grpcChannelOptions);
 
     if (this._isRunning) {
       throw new Error("The worker is already running.");
     }
 
     // send a "Hello" message to the sidecar to ensure that it's listening
-    let prom = promisify(client.stub.hello.bind(client.stub));
+    const prom = promisify(client.stub.hello.bind(client.stub));
     await prom(new Empty());
 
     // Stream work items from the sidecar

@@ -1,4 +1,7 @@
-import { TaskHubGrpcClient } from "../../src/client";
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
+import { TaskHubGrpcClient } from "../../src/client/client";
 import { PurgeInstanceCriteria } from "../../src/orchestration/orchestration-purge-criteria";
 import { OrchestrationStatus } from "../../src/proto/orchestrator_service_pb";
 import { OrchestrationStatus as RuntimeStatus } from "../../src/orchestration/enum/orchestration-status.enum";
@@ -12,8 +15,6 @@ import { TaskHubGrpcWorker } from "../../src/worker/task-hub-grpc-worker";
 describe("Durable Functions", () => {
   let taskHubClient: TaskHubGrpcClient;
   let taskHubWorker: TaskHubGrpcWorker;
-
-  beforeAll(async () => {});
 
   beforeEach(async () => {
     // Start a worker, which will connect to the sidecar in a background thread
@@ -29,7 +30,7 @@ describe("Durable Functions", () => {
   it("should be able to run an empty orchestration", async () => {
     let invoked = false;
 
-    const emptyOrchestrator: TOrchestrator = async (ctx: OrchestrationContext, input: any) => {
+    const emptyOrchestrator: TOrchestrator = async (_: OrchestrationContext) => {
       // nonlocal invoked
       // TODO: What is the above in python??
       invoked = true;
@@ -85,7 +86,7 @@ describe("Durable Functions", () => {
   it("should be able to run fan-out/fan-in", async () => {
     let activityCounter = 0;
 
-    const increment = (ctx: ActivityContext, _: any) => {
+    const increment = (_: ActivityContext) => {
       activityCounter++;
     };
 
@@ -117,15 +118,15 @@ describe("Durable Functions", () => {
   it("should be able to use the sub-orchestration", async () => {
     let activityCounter = 0;
 
-    const increment = (ctx: ActivityContext, _: any) => {
+    const increment = (_: ActivityContext) => {
       activityCounter++;
     };
 
-    const orchestratorChild: TOrchestrator = async function* (ctx: OrchestrationContext, activityCount: number): any {
+    const orchestratorChild: TOrchestrator = async function* (ctx: OrchestrationContext): any {
       yield ctx.callActivity(increment);
     };
 
-    const orchestratorParent: TOrchestrator = async function* (ctx: OrchestrationContext, count: number): any {
+    const orchestratorParent: TOrchestrator = async function* (ctx: OrchestrationContext): any {
       // Call sub-orchestration
       yield ctx.callSubOrchestrator(orchestratorChild);
     };
@@ -147,7 +148,7 @@ describe("Durable Functions", () => {
   it("should be able to use the sub-orchestration for fan-out", async () => {
     let activityCounter = 0;
 
-    const increment = (ctx: ActivityContext, _: any) => {
+    const increment = (_: ActivityContext) => {
       activityCounter++;
     };
 
@@ -208,7 +209,7 @@ describe("Durable Functions", () => {
 
   it("should be able to run an single timer", async () => {
     const delay = 3;
-    const singleTimer: TOrchestrator = async function* (ctx: OrchestrationContext, startVal: number): any {
+    const singleTimer: TOrchestrator = async function* (ctx: OrchestrationContext): any {
       yield ctx.createTimer(delay);
     };
 
@@ -218,8 +219,13 @@ describe("Durable Functions", () => {
     const id = await taskHubClient.scheduleNewOrchestration(singleTimer);
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
-    const expectedCompletionSecond = state?.createdAt?.getTime()! + delay * 1000;
+    let expectedCompletionSecond = state?.createdAt?.getTime() ?? 0;
+    if (state && state.createdAt !== undefined) {
+      expectedCompletionSecond += delay * 1000;
+    }
+    expect(expectedCompletionSecond).toBeDefined();
     const actualCompletionSecond = state?.lastUpdatedAt?.getTime();
+    expect(actualCompletionSecond).toBeDefined();
 
     expect(state);
     expect(state?.name).toEqual(getName(singleTimer));
@@ -317,7 +323,7 @@ describe("Durable Functions", () => {
     expect(state);
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING);
 
-    taskHubClient.terminateOrchestration(id, "some reason for termination");
+    await taskHubClient.terminateOrchestration(id, "some reason for termination");
     state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
     expect(state);
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED);
@@ -325,7 +331,7 @@ describe("Durable Functions", () => {
   }, 31000);
 
   it("should allow to continue as new", async () => {
-    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: number): any {
+    const orchestrator: TOrchestrator = async (ctx: OrchestrationContext, input: number) => {
       if (input < 10) {
         ctx.continueAsNew(input + 1, true);
       } else {
@@ -345,7 +351,7 @@ describe("Durable Functions", () => {
   }, 31000);
 
   it("should be able to run an single orchestration without activity", async () => {
-    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, startVal: number): any {
+    const orchestrator: TOrchestrator = async (ctx: OrchestrationContext, startVal: number) => {
       return startVal + 1;
     };
 
@@ -465,7 +471,7 @@ describe("Durable Functions", () => {
     expect(state2?.failureDetails).toBeUndefined();
     expect(state2?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED);
 
-    const runtimeStatuses = new Array();
+    const runtimeStatuses: RuntimeStatus[] = [];
     runtimeStatuses.push(RuntimeStatus.TERMINATED);
     runtimeStatuses.push(RuntimeStatus.COMPLETED);
 
