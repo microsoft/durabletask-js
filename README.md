@@ -118,7 +118,7 @@ Orchestrations can start child orchestrations using the `call_sub_orchestrator` 
 
 Orchestrations can wait for external events using the `wait_for_external_event` API. External events are useful for implementing human interaction patterns, such as waiting for a user to approve an order before continuing.
 
-### Continue-as-new (TODO)
+### Continue-as-new
 
 Orchestrations can be continued as new using the `continue_as_new` API. This API allows an orchestration to restart itself from scratch, optionally with a new input.
 
@@ -179,17 +179,13 @@ npm run test:unit
 
 ### Running E2E tests
 
-The E2E (end-to-end) tests require a sidecar process to be running. You can use the Dapr sidecar for this or run a Durable Task test sidecar using the following `docker` command:
-
-```sh
-docker run --name durabletask-sidecar -p 4001:4001 --env 'DURABLETASK_SIDECAR_LOGLEVEL=Debug' --rm cgillum/durabletask-sidecar:latest start --backend Emulator
-```
-
 To run the E2E tests, run the following command from the project root:
 
 ```sh
 npm run test:e2e
 ```
+
+This command will start a durabletask sidecar docker container (cgillum/durabletask-sidecar:latest).
 
 ## Contributing
 
