@@ -6,9 +6,10 @@
   "scripts": {
     "test": "jest --runInBand --detectOpenHandles",
     "test:unit": "jest test/unit --runInBand --detectOpenHandles",
-    "test:unit-one": "jest test/unit --runInBand --detectOpenHandles --testNamePattern",
+    "test:unit:one": "jest test/unit --runInBand --detectOpenHandles --testNamePattern",
+    "test:e2e:internal": "jest test/e2e --runInBand --detectOpenHandles",
     "test:e2e": "./scripts/test-e2e.sh",
-    "test:e2e-one": "jest test/e2e --runInBand --detectOpenHandles --testNamePattern",
+    "test:e2e:one": "jest test/e2e --runInBand --detectOpenHandles --testNamePattern",
     "start": "ts-node --swc ./src/index.ts",
     "example": "ts-node --swc",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
