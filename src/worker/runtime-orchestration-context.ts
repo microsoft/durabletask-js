@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
 import { getName } from "../task";
 import { OrchestrationContext } from "../task/context/orchestration-context";
 import * as pb from "../proto/orchestrator_service_pb";

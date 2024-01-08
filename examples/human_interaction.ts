@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
 import { TaskHubGrpcClient } from "../src/client/client";
 import { whenAny } from "../src/task";
 import { ActivityContext } from "../src/task/context/activity-context";
@@ -26,8 +29,8 @@ import * as readlineSync from "readline-sync";
 
   // Update the gRPC client and worker to use a local address and port
   const grpcServerAddress = "localhost:4001";
-  let taskHubClient: TaskHubGrpcClient = new TaskHubGrpcClient(grpcServerAddress);
-  let taskHubWorker: TaskHubGrpcWorker = new TaskHubGrpcWorker(grpcServerAddress);
+  const taskHubClient: TaskHubGrpcClient = new TaskHubGrpcClient(grpcServerAddress);
+  const taskHubWorker: TaskHubGrpcWorker = new TaskHubGrpcWorker(grpcServerAddress);
 
   //Activity function that sends an approval request to the manager
   const sendApprovalRequest = async (_: ActivityContext, order: Order) => {

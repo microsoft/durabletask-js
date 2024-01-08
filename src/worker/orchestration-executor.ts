@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
 import {
   getNewEventSummary,
   getNonDeterminismError,
@@ -38,7 +41,7 @@ export class OrchestrationExecutor {
       throw new OrchestrationStateError("The new history event list must have at least one event in it");
     }
 
-    let ctx = new RuntimeOrchestrationContext(instanceId);
+    const ctx = new RuntimeOrchestrationContext(instanceId);
 
     try {
       // Rebuild the local state by replaying the history events into the orchestrator function
@@ -445,7 +448,7 @@ export class OrchestrationExecutor {
 
           this._suspendedEvents = [];
           break;
-        case pb.HistoryEvent.EventtypeCase.EXECUTIONTERMINATED:
+        case pb.HistoryEvent.EventtypeCase.EXECUTIONTERMINATED: {
           if (!ctx._isReplaying) {
             console.log(`${ctx._instanceId}: Execution terminated`);
           }
@@ -458,6 +461,7 @@ export class OrchestrationExecutor {
 
           ctx.setComplete(encodedOutput, pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED, true);
           break;
+        }
         default:
           console.info(`Unknown history event type: ${eventTypeName} (value: ${eventType}), skipping...`);
         // throw new OrchestrationStateError(`Unknown history event type: ${eventTypeName} (value: ${eventType})`);

@@ -1,7 +1,8 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
 import { NonDeterminismError } from "../task/exception/non-determinism-error";
 import * as pb from "../proto/orchestrator_service_pb";
-import { getName } from "../task";
-import { OrchestrationContext } from "../task/context/orchestration-context";
 import { enumValueToKey } from "../utils/enum.util";
 
 export function getNonDeterminismError(taskId: number, actionName: string): NonDeterminismError {
@@ -61,7 +62,7 @@ export function getNewEventSummary(newEvents: pb.HistoryEvent[]): string {
     const enumKey = enumValueToKey(pb.HistoryEvent.EventtypeCase, newEvents[0].getEventtypeCase());
     return `[${enumKey}]`;
   } else {
-    let counts = new Map<string, number>();
+    const counts = new Map<string, number>();
 
     for (const event of newEvents) {
       const eventTypeName = enumValueToKey(pb.HistoryEvent.EventtypeCase, event.getEventtypeCase()) ?? "UNKNOWN";
@@ -88,7 +89,7 @@ export function getActionSummary(newActions: pb.OrchestratorAction[]): string {
 
     return actionTypeName;
   } else {
-    let counts = new Map<string, number>();
+    const counts = new Map<string, number>();
 
     for (const action of newActions) {
       const actionType = action.getOrchestratoractiontypeCase();

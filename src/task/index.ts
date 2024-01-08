@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
 import { WhenAllTask } from "./when-all-task";
 import { Task } from "./task";
 import { WhenAnyTask } from "./when-any-task";

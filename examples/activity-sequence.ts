@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
 import { TaskHubGrpcClient } from "../src/client/client";
 import { ActivityContext } from "../src/task/context/activity-context";
 import { OrchestrationContext } from "../src/task/context/orchestration-context";
@@ -8,8 +11,8 @@ import { TaskHubGrpcWorker } from "../src/worker/task-hub-grpc-worker";
 (async () => {
   // Update the gRPC client and worker to use a local address and port
   const grpcServerAddress = "localhost:4001";
-  let taskHubClient: TaskHubGrpcClient = new TaskHubGrpcClient(grpcServerAddress);
-  let taskHubWorker: TaskHubGrpcWorker = new TaskHubGrpcWorker(grpcServerAddress);
+  const taskHubClient: TaskHubGrpcClient = new TaskHubGrpcClient(grpcServerAddress);
+  const taskHubWorker: TaskHubGrpcWorker = new TaskHubGrpcWorker(grpcServerAddress);
 
   const hello = async (_: ActivityContext, name: string) => {
     return `Hello ${name}!`;

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
 import { FailureDetails } from "../../task/failure-details";
 
 export class OrchestrationFailedError extends Error {

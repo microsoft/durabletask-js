@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
 import { CompleteOrchestrationAction, OrchestratorAction } from "../../src/proto/orchestrator_service_pb";
 import { OrchestrationContext } from "../../src/task/context/orchestration-context";
 import {
@@ -52,7 +55,7 @@ describe("Orchestration Executor", () => {
   });
 
   it("should test the actions output for a completed orchestration", async () => {
-    const emptyOrchestrator: TOrchestrator = async (ctx: OrchestrationContext, input: any) => {
+    const emptyOrchestrator: TOrchestrator = async (_: OrchestrationContext) => {
       return "done";
     };
     const registry = new Registry();
@@ -77,7 +80,7 @@ describe("Orchestration Executor", () => {
     expect(completeAction?.getFailuredetails()?.getErrormessage()).not.toBeNull();
   });
   it("should the actions output for the createTimer orchestrator method", async () => {
-    const delayOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: any) {
+    const delayOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext) {
       const dueTime = new Date(ctx.currentUtcDateTime.getTime() + 1000);
       yield ctx.createTimer(dueTime);
       return "done";
@@ -124,7 +127,7 @@ describe("Orchestration Executor", () => {
     expect(completeAction?.getResult()?.getValue()).toEqual('"done"');
   });
   it("should test the actions output for the callActivity orchestrator method", async () => {
-    const dummyActivity = async (ctx: ActivityContext, _: any) => {
+    const dummyActivity = async (_: ActivityContext) => {
       // do nothing
     };
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any) {
@@ -143,7 +146,7 @@ describe("Orchestration Executor", () => {
     expect(actions[0]?.getScheduletask()?.getName()).toEqual("dummyActivity");
   });
   it("should test the successful completion of an activity task", async () => {
-    const dummyActivity = async (ctx: ActivityContext, _: any) => {
+    const dummyActivity = async (_: ActivityContext) => {
       // do nothing
     };
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
@@ -167,7 +170,7 @@ describe("Orchestration Executor", () => {
     expect(completeAction?.getResult()?.getValue()).toEqual(encodedOutput);
   });
   it("should test the successful completion of an activity task", async () => {
-    const dummyActivity = async (ctx: ActivityContext, _: any) => {
+    const dummyActivity = async (_: ActivityContext) => {
       // do nothing
     };
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
@@ -191,7 +194,7 @@ describe("Orchestration Executor", () => {
     expect(completeAction?.getResult()?.getValue()).toEqual(encodedOutput);
   });
   it("should test the failure of an activity task", async () => {
-    const dummyActivity = async (ctx: ActivityContext, _: any) => {
+    const dummyActivity = async (_: ActivityContext) => {
       // do nothing
     };
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, orchestratorInput: any): any {
@@ -221,7 +224,7 @@ describe("Orchestration Executor", () => {
     // expect(completeAction?.getFailuredetails()?.getStacktrace()?.getValue()).toContain(userCodeStatement);
   });
   it("should test the non-determinism detection logic when callTimer is expected but some other method (callActivity) is called instead", async () => {
-    const dummyActivity = async (ctx: ActivityContext, _: any) => {
+    const dummyActivity = async (_: ActivityContext) => {
       // do nothing
     };
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
@@ -247,7 +250,7 @@ describe("Orchestration Executor", () => {
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("callActivity");
   });
   it("should test the non-determinism detection logic when invoking activity functions", async () => {
-    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
+    const orchestrator: TOrchestrator = async function* (_: OrchestrationContext): any {
       const result = yield new CompletableTask(); // dummy task
       return result;
     };
@@ -268,7 +271,7 @@ describe("Orchestration Executor", () => {
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("callActivity");
   });
   it("should test the non-determinism detection when an activity exists in the history but a non-activity is in the code", async () => {
-    const dummyActivity = async (ctx: ActivityContext, _: any) => {
+    const dummyActivity = async (_: ActivityContext) => {
       // do nothing
     };
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
@@ -293,7 +296,7 @@ describe("Orchestration Executor", () => {
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("createTimer");
   });
   it("should test the non-determinism detection when calling an activity with a name that differs from the name in the history", async () => {
-    const dummyActivity = async (ctx: ActivityContext, _: any) => {
+    const dummyActivity = async (_: ActivityContext) => {
       // do nothing
     };
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
@@ -319,7 +322,7 @@ describe("Orchestration Executor", () => {
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("dummyActivity");
   });
   it("should test that a sub-orchestration task is completed when the sub-orchestration completes", async () => {
-    const subOrchestrator = async (ctx: OrchestrationContext, _: any) => {
+    const subOrchestrator = async (_: OrchestrationContext) => {
       // do nothing
     };
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
@@ -342,7 +345,7 @@ describe("Orchestration Executor", () => {
     expect(completeAction?.getResult()?.getValue()).toEqual("42");
   });
   it("should test that a sub-orchestration task is completed when the sub-orchestration fails", async () => {
-    const subOrchestrator = async (ctx: OrchestrationContext, _: any) => {
+    const subOrchestrator = async (_: OrchestrationContext) => {
       // do nothing
     };
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
@@ -371,7 +374,7 @@ describe("Orchestration Executor", () => {
     // assert user_code_statement in complete_action.failureDetails.stackTrace.value
   });
   it("should test the non-determinism detection when a sub-orchestration action is encountered when it shouldn't be-subOrchestrator", async () => {
-    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
+    const orchestrator: TOrchestrator = async (_: OrchestrationContext) => {
       const res = new CompletableTask(); // dummy task
       return res;
     };
@@ -504,7 +507,7 @@ describe("Orchestration Executor", () => {
     const registry = new Registry();
     const orchestratorName = registry.addOrchestrator(orchestrator);
 
-    let oldEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
+    const oldEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
 
     let newEvents = [newSuspendEvent(), newEventRaisedEvent("my_event", "42")];
 
@@ -535,9 +538,9 @@ describe("Orchestration Executor", () => {
     const registry = new Registry();
     const orchestratorName = registry.addOrchestrator(orchestrator);
 
-    let oldEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
+    const oldEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
 
-    let newEvents = [newTerminatedEvent(JSON.stringify("terminated!")), newEventRaisedEvent("my_event", "42")];
+    const newEvents = [newTerminatedEvent(JSON.stringify("terminated!")), newEventRaisedEvent("my_event", "42")];
 
     // Execute the orchestration
     // It should be in a running state waiting for an external event
@@ -640,7 +643,7 @@ describe("Orchestration Executor", () => {
       return value.toString();
     };
 
-    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, count: number): any {
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
       const tasks: Task<string>[] = [];
 
       for (let i = 0; i < 10; i++) {
@@ -689,7 +692,7 @@ describe("Orchestration Executor", () => {
       return value.toString();
     };
 
-    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, count: number): any {
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
       const tasks: Task<string>[] = [];
 
       for (let i = 0; i < 10; i++) {
@@ -723,8 +726,8 @@ describe("Orchestration Executor", () => {
 
     // Now test with the full set of new events
     // We expect the orchestration to complete
-    let executor = new OrchestrationExecutor(registry);
-    let actions = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    const executor = new OrchestrationExecutor(registry);
+    const actions = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
 
     const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
@@ -737,7 +740,7 @@ describe("Orchestration Executor", () => {
       return `Hello ${name}!`;
     };
 
-    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, count: number): any {
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
       const t1 = ctx.callActivity(hello, "Tokyo");
       const t2 = ctx.callActivity(hello, "Seattle");
 

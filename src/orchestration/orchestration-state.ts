@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
 import { FailureDetails } from "../task/failure-details";
 import { OrchestrationStatus } from "./enum/orchestration-status.enum";
 import { OrchestrationFailedError } from "./exception/orchestration-failed-error";

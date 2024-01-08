@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
 import { Task } from "./task";
 
 /**
@@ -25,5 +28,5 @@ export class CompositeTask<T> extends Task<T> {
   }
 
   // @todo: should be abstract method
-  onChildCompleted(task: Task<any>): void {}
+  onChildCompleted(_: Task<any>): void {}
 }

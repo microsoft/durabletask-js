@@ -1,13 +1,14 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
 import { OrchestrationStatus } from "./enum/orchestration-status.enum";
 
 export class PurgeInstanceCriteria {
   createdTimeFrom?: Date;
   createdTimeTo?: Date;
-  runtimeStatusList: OrchestrationStatus[] = new Array();
+  runtimeStatusList: OrchestrationStatus[] = [];
   // default timeout 5 mins
   timeout: number = 5 * 60 * 1000;
-
-  constructor() {}
 
   // Setter methods to allow users to set values later
   setCreatedTimeFrom(date: Date | undefined): void {
