@@ -21,13 +21,15 @@ export class TaskHubGrpcWorker {
   private _responseStream: grpc.ClientReadableStream<pb.WorkItem> | null;
   private _registry: Registry;
   private _hostAddress?: string;
+  private _tls?: boolean;
   private _grpcChannelOptions?: grpc.ChannelOptions;
   private _isRunning: boolean;
   private _stub: stubs.TaskHubSidecarServiceClient | null;
 
-  constructor(hostAddress?: string, options?: grpc.ChannelOptions) {
+  constructor(hostAddress?: string, options?: grpc.ChannelOptions, useTLS?: boolean) {
     this._registry = new Registry();
     this._hostAddress = hostAddress;
+    this._tls = useTLS;
     this._grpcChannelOptions = options;
     this._responseStream = null;
     this._isRunning = false;
@@ -97,7 +99,7 @@ export class TaskHubGrpcWorker {
    * Therefore, we open the stream and simply listen through the eventemitter behind the scenes
    */
   async start(): Promise<void> {
-    const client = new GrpcClient(this._hostAddress, this._grpcChannelOptions);
+    const client = new GrpcClient(this._hostAddress, this._grpcChannelOptions, this._tls);
 
     if (this._isRunning) {
       throw new Error("The worker is already running.");
