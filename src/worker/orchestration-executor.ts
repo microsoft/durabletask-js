@@ -128,12 +128,8 @@ export class OrchestrationExecutor {
             // [object AsyncGenerator]
             const resultType = result?.toString();
 
-            // Try to extract AsyncGenerator
-            const match = /\[object (\w+)\]/.exec(resultType);
-            const resultTypeName = (match && match[1]) ?? "";
-
-            // Check if the result is a generator
-            if (resultTypeName.indexOf("Generator") > -1) {
+            const isAsyncGenerator = typeof result[Symbol.asyncIterator] === 'function';
+            if (isAsyncGenerator) {
               // Start the orchestrator's generator function
               await ctx.run(result);
             } else {
