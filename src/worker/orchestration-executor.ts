@@ -124,15 +124,12 @@ export class OrchestrationExecutor {
             // since we create an async iterator, we await the creation (so we can use await in the generator itself beside yield)
             const result = await fn(ctx, input);
 
-            // When a generator is passed this is
-            // [object AsyncGenerator]
-            const resultType = result?.toString();
-
-            const isAsyncGenerator = typeof result[Symbol.asyncIterator] === 'function';
+            const isAsyncGenerator = typeof result?.[Symbol.asyncIterator] === 'function';
             if (isAsyncGenerator) {
               // Start the orchestrator's generator function
               await ctx.run(result);
             } else {
+              const resultType = Object.prototype.toString.call(result);
               console.log(`An orchestrator was returned that doesn't schedule any tasks (type = ${resultType})`);
 
               // This is an orchestrator that doesn't schedule any tasks
