@@ -37,7 +37,7 @@ const sequence: TOrchestrator = async function* (ctx: OrchestrationContext): any
 };
 ```
 
-You can find the full sample [here](./examples/activity_sequence.py).
+You can find the full sample [here](./examples/activity-sequence.ts).
 
 ### Fan-out/fan-in
 
@@ -64,7 +64,7 @@ const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext):
 }
 ```
 
-You can find the full sample [here](./examples/fanout_fanin.py).
+You can find the full sample [here](./examples/fanout-fanin.ts).
 
 ### Human interaction and durable timers
 
@@ -92,7 +92,7 @@ const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, 
 
 As an aside, you'll also notice that the example orchestration above works with custom business objects. Support for custom business objects includes support for custom classes, custom data classes, and named tuples. Serialization and deserialization of these objects is handled automatically by the SDK.
 
-You can find the full sample [here](./examples/human_interaction.py).
+You can find the full sample [here](./examples/human_interaction.ts).
 
 ## Feature overview
 
