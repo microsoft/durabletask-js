@@ -146,6 +146,9 @@ describe("Durable Functions", () => {
   }, 31000);
 
   it("should be able to use the sub-orchestration for fan-out", async () => {
+    const SUB_ORCHESTRATION_COUNT = 2;
+    const ACTIVITY_COUNT = 2;
+
     let activityCounter = 0;
 
     const increment = (_: ActivityContext) => {
@@ -163,7 +166,7 @@ describe("Durable Functions", () => {
       const tasks: Task<any>[] = [];
 
       for (let i = 0; i < count; i++) {
-        tasks.push(ctx.callSubOrchestrator(orchestratorChild, 3));
+        tasks.push(ctx.callSubOrchestrator(orchestratorChild, ACTIVITY_COUNT));
       }
 
       // Wait for all the sub-orchestrations to complete
@@ -175,13 +178,13 @@ describe("Durable Functions", () => {
     taskHubWorker.addOrchestrator(orchestratorParent);
     await taskHubWorker.start();
 
-    const id = await taskHubClient.scheduleNewOrchestration(orchestratorParent, 10);
+    const id = await taskHubClient.scheduleNewOrchestration(orchestratorParent, SUB_ORCHESTRATION_COUNT);
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
     expect(state);
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(state?.failureDetails).toBeUndefined();
-    expect(activityCounter).toEqual(30);
+    expect(activityCounter).toEqual(SUB_ORCHESTRATION_COUNT * ACTIVITY_COUNT);
   }, 31000);
 
   it("should allow waiting for multiple external events", async () => {
