@@ -22,8 +22,8 @@ import * as grpc from "@grpc/grpc-js";
 export class TaskHubGrpcClient {
   private _stub: stubs.TaskHubSidecarServiceClient;
 
-  constructor(hostAddress?: string, option?: grpc.ChannelOptions) {
-    this._stub = new GrpcClient(hostAddress, option).stub;
+  constructor(hostAddress?: string, option?: grpc.ChannelOptions, useTLS?: boolean) {
+    this._stub = new GrpcClient(hostAddress, option, useTLS).stub;
   }
 
   async stop(): Promise<void> {

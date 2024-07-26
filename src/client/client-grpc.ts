@@ -6,11 +6,13 @@ import * as grpc from "@grpc/grpc-js";
 
 export class GrpcClient {
   private readonly _hostAddress: string;
+  private readonly _tls: boolean;
   private readonly _options: grpc.ChannelOptions;
   private _stub: stubs.TaskHubSidecarServiceClient;
 
-  constructor(hostAddress: string = "localhost:4001", options: grpc.ChannelOptions = {}) {
+  constructor(hostAddress: string = "localhost:4001", options: grpc.ChannelOptions = {}, useTLS: boolean = false) {
     this._hostAddress = hostAddress;
+    this._tls = useTLS;
     this._options = this._generateChannelOptions(options);
     this._stub = this._generateClient();
   }
@@ -20,8 +22,15 @@ export class GrpcClient {
   }
 
   _generateClient(): stubs.TaskHubSidecarServiceClient {
-    const channelCreds = grpc.credentials.createInsecure();
+    const channelCreds = this._generateCredentials();
     return new stubs.TaskHubSidecarServiceClient(this._hostAddress, channelCreds, this._options);
+  }
+
+  _generateCredentials(): grpc.ChannelCredentials {
+    if (this._tls) {
+      return grpc.ChannelCredentials.createSsl();
+    }
+    return grpc.ChannelCredentials.createInsecure();
   }
 
   _generateChannelOptions(options: grpc.ChannelOptions = {}): grpc.ChannelOptions {
