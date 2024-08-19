@@ -72,7 +72,14 @@ export class Registry {
   }
 
   _getFunctionName(fn: Function): string {
-    const match = fn.toString().match(/function\s*([^(]*)\(/);
-    return fn.name || (match ? match[1] : '');
+    if (fn.name) {
+      return fn.name;
+    }
+  
+    const fnStr = fn.toString();
+    const start = fnStr.indexOf('function') + 'function'.length;
+    const end = fnStr.indexOf('(', start);
+    
+    return fnStr.slice(start, end).trim() || '';
   }
 }
