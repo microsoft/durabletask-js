@@ -227,7 +227,7 @@ describe("Durable Functions", () => {
       expectedCompletionSecond += delay * 1000;
     }
     expect(expectedCompletionSecond).toBeDefined();
-    const actualCompletionSecond = state?.lastUpdatedAt?.getTime();
+    const actualCompletionSecond = state?.lastUpdatedAt?.getTime() ?? 0;
     expect(actualCompletionSecond).toBeDefined();
 
     expect(state);
@@ -237,7 +237,7 @@ describe("Durable Functions", () => {
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(state?.createdAt).toBeDefined();
     expect(state?.lastUpdatedAt).toBeDefined();
-    expect(expectedCompletionSecond).toBeLessThanOrEqual(actualCompletionSecond!);
+    expect(expectedCompletionSecond).toBeLessThanOrEqual(actualCompletionSecond);
   }, 31000);
 
   it("should wait for external events with a timeout - true", async () => {
