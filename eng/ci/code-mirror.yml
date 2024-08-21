@@ -5,6 +5,10 @@ trigger:
     # Keep this set limited as appropriate (don't mirror individual user branches).
     - main
 
+steps:
+- checkout: self
+  submodules: true
+
 resources:
   repositories:
   - repository: eng
