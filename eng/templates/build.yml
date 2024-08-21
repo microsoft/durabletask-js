@@ -10,6 +10,8 @@ jobs:
                 # The list of components can't be determined from the webpacked file in the staging dir, so reference the original node_modules folder
                 sbomBuildComponentPath: "$(Build.SourcesDirectory)/node_modules"
       steps:
+          - checkout: self
+            submodules: true
           - task: NodeTool@0
             inputs:
                 versionSpec: 20.x
