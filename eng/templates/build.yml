@@ -32,9 +32,3 @@ jobs:
                 SourceFolder: $(System.DefaultWorkingDirectory)
                 Contents: "*.tgz"
                 TargetFolder: $(Build.ArtifactStagingDirectory)/buildoutputs
-          - task: PublishPipelineArtifact@1
-            name: PublishPipelineArtifact1
-            displayName: 'Publish Artifact: Build Outputs'
-            inputs:
-              ArtifactName: BuildOutputs
-              TargetPath: $(Build.ArtifactStagingDirectory)
