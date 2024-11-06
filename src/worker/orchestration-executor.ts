@@ -16,6 +16,7 @@ import { enumValueToKey } from "../utils/enum.util";
 import { getOrchestrationStatusStr, isEmpty } from "../utils/pb-helper.util";
 import { OrchestratorNotRegisteredError } from "./exception/orchestrator-not-registered-error";
 import { StopIterationError } from "./exception/stop-iteration-error";
+import { OrchestrationExecuteResult } from "./orchestration-execute-result";
 import { Registry } from "./registry";
 import { RuntimeOrchestrationContext } from "./runtime-orchestration-context";
 
@@ -36,7 +37,7 @@ export class OrchestrationExecutor {
     instanceId: string,
     oldEvents: pb.HistoryEvent[],
     newEvents: pb.HistoryEvent[],
-  ): Promise<pb.OrchestratorAction[]> {
+  ): Promise<OrchestrationExecuteResult> {
     if (!newEvents?.length) {
       throw new OrchestrationStateError("The new history event list must have at least one event in it");
     }
@@ -79,7 +80,7 @@ export class OrchestrationExecutor {
     const actions = ctx.getActions();
     console.log(`${instanceId}: Returning ${actions.length} action(s)`);
 
-    return actions;
+    return new OrchestrationExecuteResult(actions, ctx._customStatus);
   }
 
   private async processEvent(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {

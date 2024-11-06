@@ -64,6 +64,8 @@ describe("Durable Functions", () => {
         numbers.push(current);
       }
 
+      ctx.setCustomStatus("foobaz");
+
       return numbers;
     };
 
@@ -81,6 +83,7 @@ describe("Durable Functions", () => {
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(state?.serializedInput).toEqual(JSON.stringify(1));
     expect(state?.serializedOutput).toEqual(JSON.stringify([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]));
+    expect(state?.serializedCustomStatus).toEqual(JSON.stringify("foobaz"));
   }, 31000);
 
   it("should be able to run fan-out/fan-in", async () => {
