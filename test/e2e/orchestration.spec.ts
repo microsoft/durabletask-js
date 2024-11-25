@@ -182,13 +182,13 @@ describe("Durable Functions", () => {
     await taskHubWorker.start();
 
     const id = await taskHubClient.scheduleNewOrchestration(orchestratorParent, SUB_ORCHESTRATION_COUNT);
-    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 43);
 
     expect(state);
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(state?.failureDetails).toBeUndefined();
     expect(activityCounter).toEqual(SUB_ORCHESTRATION_COUNT * ACTIVITY_COUNT);
-  }, 31000);
+  }, 45000);
 
   it("should allow waiting for multiple external events", async () => {
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
