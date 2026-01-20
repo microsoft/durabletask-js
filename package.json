@@ -31,6 +31,7 @@
   },
   "homepage": "https://github.com/microsoft/durabletask-js#readme",
   "devDependencies": {
+    "@azure/identity": "^4.6.0",
     "@swc/core": "^1.3.55",
     "@swc/helpers": "^0.5.1",
     "@types/body-parser": "^1.19.1",
@@ -60,5 +61,13 @@
   "dependencies": {
     "@grpc/grpc-js": "^1.8.14",
     "google-protobuf": "^3.21.2"
+  },
+  "peerDependencies": {
+    "@azure/identity": "^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@azure/identity": {
+      "optional": true
+    }
   }
 }
