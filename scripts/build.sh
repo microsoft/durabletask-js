@@ -42,4 +42,4 @@ cp README.md build/
 
 # Copy Proto Files
 cp -R ./src/proto ./build
-cp -R ./submodules/durabletask-protobuf/protos/orchestrator_service.proto ./build/proto
+cp -R ./internal/durabletask-protobuf/protos/orchestrator_service.proto ./build/proto

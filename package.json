@@ -16,6 +16,7 @@
     "dev": "nodemon --watch './src/**/*.ts' --exec 'ts-node --swc' ./src/index.ts",
     "pretty": "prettier --list-different \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "pretty-fix": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
+    "download-proto": "./scripts/download-proto.sh",
     "prebuild": "./scripts/prebuild.sh",
     "build": "npm install && npm run lint && npm run pretty && ./scripts/build.sh"
   },

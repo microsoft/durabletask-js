@@ -1,3 +1,9 @@
+## Upcoming
+
+### New
+
+- Add automatic proto file download and commit hash tracking during build ([#XX](https://github.com/microsoft/durabletask-js/pull/XX))
+
 ## v0.1.0-alpha.2
 
 ### New
