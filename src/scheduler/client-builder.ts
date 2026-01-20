@@ -10,15 +10,15 @@ import * as stubs from "../proto/orchestrator_service_grpc_pb";
 /**
  * A wrapper around TaskHubGrpcClient that provides scheduler-specific configuration.
  * This allows the gRPC client to be created with scheduler credentials and options.
+ *
+ * Note: This class uses type assertions to set the internal stub property since the
+ * parent class doesn't provide a protected setter. This is intentional to maintain
+ * backward compatibility while enabling scheduler-specific authentication.
  */
 export class SchedulerTaskHubGrpcClient extends TaskHubGrpcClient {
-  private _schedulerStub: stubs.TaskHubSidecarServiceClient;
-
   constructor(stub: stubs.TaskHubSidecarServiceClient) {
-    // Call parent with dummy values - we'll override the stub
     super();
-    this._schedulerStub = stub;
-    // Override the parent's stub by directly setting it
+    // Set the internal stub directly since the parent class doesn't provide a setter
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (this as any)._stub = stub;
   }

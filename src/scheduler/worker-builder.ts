@@ -10,6 +10,25 @@ import { TOrchestrator } from "../types/orchestrator.type";
 import { TActivity } from "../types/activity.type";
 import { TInput } from "../types/input.type";
 import { TOutput } from "../types/output.type";
+import { GrpcClient } from "../client/client-grpc";
+
+/**
+ * An adapter that provides a GrpcClient-like interface using a pre-configured gRPC stub.
+ * This allows the scheduler to use custom credentials while being compatible with the existing worker implementation.
+ */
+class SchedulerGrpcClientAdapter extends GrpcClient {
+  private readonly _schedulerStub: stubs.TaskHubSidecarServiceClient;
+
+  constructor(schedulerStub: stubs.TaskHubSidecarServiceClient) {
+    // Call parent with default values - we'll override the stub getter
+    super("localhost:4001", {}, false);
+    this._schedulerStub = schedulerStub;
+  }
+
+  override get stub(): stubs.TaskHubSidecarServiceClient {
+    return this._schedulerStub;
+  }
+}
 
 /**
  * A wrapper around TaskHubGrpcWorker that provides scheduler-specific configuration.
@@ -21,7 +40,6 @@ export class SchedulerTaskHubGrpcWorker extends TaskHubGrpcWorker {
   private _schedulerChannelOptions: grpc.ChannelOptions;
 
   constructor(hostAddress: string, credentials: grpc.ChannelCredentials, channelOptions: grpc.ChannelOptions) {
-    // Call parent with undefined to skip normal initialization
     super();
     this._schedulerHostAddress = hostAddress;
     this._schedulerCredentials = credentials;
@@ -48,13 +66,11 @@ export class SchedulerTaskHubGrpcWorker extends TaskHubGrpcWorker {
 
     self._stub = stub;
 
-    // Create a custom GrpcClient-like object for the internal worker
-    const clientLike = {
-      stub: stub,
-    };
+    // Create a GrpcClient-compatible adapter for the internal worker method
+    const clientAdapter = new SchedulerGrpcClientAdapter(stub);
 
     // Call the internal worker method
-    self.internalRunWorker(clientLike);
+    self.internalRunWorker(clientAdapter);
     self._isRunning = true;
   }
 }
