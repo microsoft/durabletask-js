@@ -1,4 +1,4 @@
-# @microsoft/durabletask-azuremanaged
+# @microsoft/durabletask-js-azuremanaged
 
 Azure-managed Durable Task support for the Durable Task JavaScript SDK.
 
@@ -7,7 +7,7 @@ This package provides support for connecting to Azure-managed Durable Task servi
 ## Installation
 
 ```bash
-npm install @microsoft/durabletask-azuremanaged @microsoft/durabletask-js
+npm install @microsoft/durabletask-js-azuremanaged @microsoft/durabletask-js
 ```
 
 ## Usage
@@ -15,7 +15,7 @@ npm install @microsoft/durabletask-azuremanaged @microsoft/durabletask-js
 ### Via Connection String
 
 ```typescript
-import { createAzureManagedClient, createAzureManagedWorkerBuilder } from "@microsoft/durabletask-azuremanaged";
+import { createAzureManagedClient, createAzureManagedWorkerBuilder } from "@microsoft/durabletask-js-azuremanaged";
 
 // Create a client
 const client = createAzureManagedClient(
@@ -37,7 +37,7 @@ await worker.start();
 
 ```typescript
 import { DefaultAzureCredential } from "@azure/identity";
-import { createAzureManagedClient, createAzureManagedWorkerBuilder } from "@microsoft/durabletask-azuremanaged";
+import { createAzureManagedClient, createAzureManagedWorkerBuilder } from "@microsoft/durabletask-js-azuremanaged";
 
 const credential = new DefaultAzureCredential();
 

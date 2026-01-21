@@ -1,5 +1,5 @@
 {
-  "name": "@microsoft/durabletask-azuremanaged",
+  "name": "@microsoft/durabletask-js-azuremanaged",
   "version": "0.1.0-alpha.1",
   "description": "Azure-managed Durable Task Scheduler support for the Durable Task JavaScript SDK",
   "main": "./dist/index.js",
@@ -27,7 +27,7 @@
   "bugs": {
     "url": "https://github.com/microsoft/durabletask-js/issues"
   },
-  "homepage": "https://github.com/microsoft/durabletask-js/tree/main/packages/durabletask-azuremanaged#readme",
+  "homepage": "https://github.com/microsoft/durabletask-js/tree/main/extensions/durabletask-js-azuremanaged#readme",
   "dependencies": {
     "@azure/identity": "^4.0.0",
     "@grpc/grpc-js": "^1.8.14"

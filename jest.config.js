@@ -5,5 +5,5 @@ module.exports = {
     // We are using tsconfig rewrites and need to let jest klnow about it
     "^@/(.*)$": "<rootDir>/src/$1",
   },
-  testPathIgnorePatterns: ["/node_modules/", "/packages/"],
+  testPathIgnorePatterns: ["/node_modules/", "/extensions/"],
 };
