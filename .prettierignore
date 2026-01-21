@@ -9,3 +9,5 @@ coverage
 proto
 # don't lint submodules
 submodules
+# don't lint packages (they have their own config)
+packages

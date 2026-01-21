@@ -3,51 +3,33 @@
 
 import { TokenCredential } from "@azure/identity";
 import * as grpc from "@grpc/grpc-js";
-import { DurableTaskSchedulerOptions } from "./options";
-import { TaskHubGrpcWorker } from "../worker/task-hub-grpc-worker";
-import * as stubs from "../proto/orchestrator_service_grpc_pb";
-import { TOrchestrator } from "../types/orchestrator.type";
-import { TActivity } from "../types/activity.type";
-import { TInput } from "../types/input.type";
-import { TOutput } from "../types/output.type";
-import { GrpcClient } from "../client/client-grpc";
+import { DurableTaskAzureManagedOptions } from "./options";
+import { TaskHubGrpcWorker } from "@microsoft/durabletask-js";
+
+// Types for orchestrator and activity functions
+type TOrchestrator = (...args: any[]) => any;
+type TActivity<TInput, TOutput> = (ctx: any, input: TInput) => TOutput | Promise<TOutput>;
+type TInput = any;
+type TOutput = any;
 
 /**
- * An adapter that provides a GrpcClient-like interface using a pre-configured gRPC stub.
- * This allows the scheduler to use custom credentials while being compatible with the existing worker implementation.
+ * A wrapper around TaskHubGrpcWorker that provides Azure-managed-specific configuration.
+ * This allows the gRPC worker to be created with Azure-managed credentials and options.
  */
-class SchedulerGrpcClientAdapter extends GrpcClient {
-  private readonly _schedulerStub: stubs.TaskHubSidecarServiceClient;
-
-  constructor(schedulerStub: stubs.TaskHubSidecarServiceClient) {
-    // Call parent with default values - we'll override the stub getter
-    super("localhost:4001", {}, false);
-    this._schedulerStub = schedulerStub;
-  }
-
-  override get stub(): stubs.TaskHubSidecarServiceClient {
-    return this._schedulerStub;
-  }
-}
-
-/**
- * A wrapper around TaskHubGrpcWorker that provides scheduler-specific configuration.
- * This allows the gRPC worker to be created with scheduler credentials and options.
- */
-export class SchedulerTaskHubGrpcWorker extends TaskHubGrpcWorker {
-  private _schedulerHostAddress: string;
-  private _schedulerCredentials: grpc.ChannelCredentials;
-  private _schedulerChannelOptions: grpc.ChannelOptions;
+export class AzureManagedTaskHubGrpcWorker extends TaskHubGrpcWorker {
+  private _azureManagedHostAddress: string;
+  private _azureManagedCredentials: grpc.ChannelCredentials;
+  private _azureManagedChannelOptions: grpc.ChannelOptions;
 
   constructor(hostAddress: string, credentials: grpc.ChannelCredentials, channelOptions: grpc.ChannelOptions) {
     super();
-    this._schedulerHostAddress = hostAddress;
-    this._schedulerCredentials = credentials;
-    this._schedulerChannelOptions = channelOptions;
+    this._azureManagedHostAddress = hostAddress;
+    this._azureManagedCredentials = credentials;
+    this._azureManagedChannelOptions = channelOptions;
   }
 
   /**
-   * Overrides the parent start method to use scheduler-specific configuration.
+   * Overrides the parent start method to use Azure-managed-specific configuration.
    */
   override async start(): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -57,17 +39,36 @@ export class SchedulerTaskHubGrpcWorker extends TaskHubGrpcWorker {
       throw new Error("The worker is already running.");
     }
 
-    // Create the gRPC client with scheduler-specific configuration
+    // Dynamically require the proto stubs from the main package
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const stubs = require("@microsoft/durabletask-js/dist/proto/orchestrator_service_grpc_pb");
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { GrpcClient } = require("@microsoft/durabletask-js/dist/client/client-grpc");
+
+    // Create the gRPC client with Azure-managed-specific configuration
     const stub = new stubs.TaskHubSidecarServiceClient(
-      this._schedulerHostAddress,
-      this._schedulerCredentials,
-      this._schedulerChannelOptions,
+      this._azureManagedHostAddress,
+      this._azureManagedCredentials,
+      this._azureManagedChannelOptions,
     );
 
     self._stub = stub;
 
-    // Create a GrpcClient-compatible adapter for the internal worker method
-    const clientAdapter = new SchedulerGrpcClientAdapter(stub);
+    // Create a GrpcClient-compatible adapter
+    class AzureManagedGrpcClientAdapter extends GrpcClient {
+      private readonly _azureManagedStub: any;
+
+      constructor(azureManagedStub: any) {
+        super("localhost:4001", {}, false);
+        this._azureManagedStub = azureManagedStub;
+      }
+
+      override get stub(): any {
+        return this._azureManagedStub;
+      }
+    }
+
+    const clientAdapter = new AzureManagedGrpcClientAdapter(stub);
 
     // Call the internal worker method
     self.internalRunWorker(clientAdapter);
@@ -76,42 +77,42 @@ export class SchedulerTaskHubGrpcWorker extends TaskHubGrpcWorker {
 }
 
 /**
- * Builder for creating DurableTaskWorker instances that connect to Azure-managed Durable Task Scheduler.
+ * Builder for creating DurableTaskWorker instances that connect to Azure-managed Durable Task service.
  * This class provides various methods to create and configure workers using either connection strings or explicit parameters.
  */
-export class DurableTaskSchedulerWorkerBuilder {
-  private _options: DurableTaskSchedulerOptions;
+export class DurableTaskAzureManagedWorkerBuilder {
+  private _options: DurableTaskAzureManagedOptions;
   private _grpcChannelOptions: grpc.ChannelOptions = {};
   private _orchestrators: { name?: string; fn: TOrchestrator }[] = [];
   private _activities: { name?: string; fn: TActivity<TInput, TOutput> }[] = [];
 
   /**
-   * Creates a new instance of DurableTaskSchedulerWorkerBuilder.
+   * Creates a new instance of DurableTaskAzureManagedWorkerBuilder.
    */
   constructor() {
-    this._options = new DurableTaskSchedulerOptions();
+    this._options = new DurableTaskAzureManagedOptions();
   }
 
   /**
    * Configures the builder using a connection string.
    *
-   * @param connectionString The connection string for Azure-managed Durable Task Scheduler.
+   * @param connectionString The connection string for Azure-managed Durable Task service.
    * @returns This builder instance.
    * @throws Error if connectionString is null or undefined.
    */
-  connectionString(connectionString: string): DurableTaskSchedulerWorkerBuilder {
+  connectionString(connectionString: string): DurableTaskAzureManagedWorkerBuilder {
     if (!connectionString) {
       throw new Error("connectionString must not be null or empty");
     }
 
-    this._options = DurableTaskSchedulerOptions.fromConnectionString(connectionString);
+    this._options = DurableTaskAzureManagedOptions.fromConnectionString(connectionString);
     return this;
   }
 
   /**
    * Configures the builder using explicit parameters.
    *
-   * @param endpoint The endpoint address for Azure-managed Durable Task Scheduler.
+   * @param endpoint The endpoint address for Azure-managed Durable Task service.
    * @param taskHubName The name of the task hub to connect to.
    * @param credential The token credential for authentication, or null for anonymous access.
    * @returns This builder instance.
@@ -121,7 +122,7 @@ export class DurableTaskSchedulerWorkerBuilder {
     endpoint: string,
     taskHubName: string,
     credential?: TokenCredential | null,
-  ): DurableTaskSchedulerWorkerBuilder {
+  ): DurableTaskAzureManagedWorkerBuilder {
     if (!endpoint) {
       throw new Error("endpoint must not be null or empty");
     }
@@ -144,7 +145,7 @@ export class DurableTaskSchedulerWorkerBuilder {
    * @param resourceId The resource ID.
    * @returns This builder instance.
    */
-  resourceId(resourceId: string): DurableTaskSchedulerWorkerBuilder {
+  resourceId(resourceId: string): DurableTaskAzureManagedWorkerBuilder {
     this._options.setResourceId(resourceId);
     return this;
   }
@@ -155,7 +156,7 @@ export class DurableTaskSchedulerWorkerBuilder {
    * @param marginMs The token refresh margin in milliseconds.
    * @returns This builder instance.
    */
-  tokenRefreshMargin(marginMs: number): DurableTaskSchedulerWorkerBuilder {
+  tokenRefreshMargin(marginMs: number): DurableTaskAzureManagedWorkerBuilder {
     this._options.setTokenRefreshMargin(marginMs);
     return this;
   }
@@ -166,7 +167,7 @@ export class DurableTaskSchedulerWorkerBuilder {
    * @param allowInsecure True to allow insecure credentials.
    * @returns This builder instance.
    */
-  allowInsecureCredentials(allowInsecure: boolean): DurableTaskSchedulerWorkerBuilder {
+  allowInsecureCredentials(allowInsecure: boolean): DurableTaskAzureManagedWorkerBuilder {
     this._options.setAllowInsecureCredentials(allowInsecure);
     return this;
   }
@@ -177,7 +178,7 @@ export class DurableTaskSchedulerWorkerBuilder {
    * @param options The gRPC channel options.
    * @returns This builder instance.
    */
-  grpcChannelOptions(options: grpc.ChannelOptions): DurableTaskSchedulerWorkerBuilder {
+  grpcChannelOptions(options: grpc.ChannelOptions): DurableTaskAzureManagedWorkerBuilder {
     this._grpcChannelOptions = options;
     return this;
   }
@@ -188,7 +189,7 @@ export class DurableTaskSchedulerWorkerBuilder {
    * @param fn The orchestrator function.
    * @returns This builder instance.
    */
-  addOrchestrator(fn: TOrchestrator): DurableTaskSchedulerWorkerBuilder {
+  addOrchestrator(fn: TOrchestrator): DurableTaskAzureManagedWorkerBuilder {
     this._orchestrators.push({ fn });
     return this;
   }
@@ -200,7 +201,7 @@ export class DurableTaskSchedulerWorkerBuilder {
    * @param fn The orchestrator function.
    * @returns This builder instance.
    */
-  addNamedOrchestrator(name: string, fn: TOrchestrator): DurableTaskSchedulerWorkerBuilder {
+  addNamedOrchestrator(name: string, fn: TOrchestrator): DurableTaskAzureManagedWorkerBuilder {
     this._orchestrators.push({ name, fn });
     return this;
   }
@@ -211,7 +212,7 @@ export class DurableTaskSchedulerWorkerBuilder {
    * @param fn The activity function.
    * @returns This builder instance.
    */
-  addActivity(fn: TActivity<TInput, TOutput>): DurableTaskSchedulerWorkerBuilder {
+  addActivity(fn: TActivity<TInput, TOutput>): DurableTaskAzureManagedWorkerBuilder {
     this._activities.push({ fn });
     return this;
   }
@@ -223,7 +224,7 @@ export class DurableTaskSchedulerWorkerBuilder {
    * @param fn The activity function.
    * @returns This builder instance.
    */
-  addNamedActivity(name: string, fn: TActivity<TInput, TOutput>): DurableTaskSchedulerWorkerBuilder {
+  addNamedActivity(name: string, fn: TActivity<TInput, TOutput>): DurableTaskAzureManagedWorkerBuilder {
     this._activities.push({ name, fn });
     return this;
   }
@@ -240,7 +241,7 @@ export class DurableTaskSchedulerWorkerBuilder {
     const defaultOptions: grpc.ChannelOptions = {
       "grpc.max_receive_message_length": -1,
       "grpc.max_send_message_length": -1,
-      "grpc.primary_user_agent": "durabletask-js-scheduler",
+      "grpc.primary_user_agent": "durabletask-js-azuremanaged",
     };
 
     const combinedOptions = {
@@ -248,7 +249,7 @@ export class DurableTaskSchedulerWorkerBuilder {
       ...this._grpcChannelOptions,
     };
 
-    const worker = new SchedulerTaskHubGrpcWorker(hostAddress, channelCredentials, combinedOptions);
+    const worker = new AzureManagedTaskHubGrpcWorker(hostAddress, channelCredentials, combinedOptions);
 
     // Register all orchestrators
     for (const { name, fn } of this._orchestrators) {
@@ -273,35 +274,35 @@ export class DurableTaskSchedulerWorkerBuilder {
 }
 
 /**
- * Creates a TaskHubGrpcWorker configured for Azure-managed Durable Task Scheduler using a connection string.
+ * Creates an Azure-managed Durable Task worker builder using a connection string.
  *
- * @param connectionString The connection string for Azure-managed Durable Task Scheduler.
- * @returns A new DurableTaskSchedulerWorkerBuilder instance.
+ * @param connectionString The connection string for Azure-managed Durable Task service.
+ * @returns A new DurableTaskAzureManagedWorkerBuilder instance.
  * @throws Error if connectionString is null or undefined.
  */
-export function createSchedulerWorkerBuilder(connectionString: string): DurableTaskSchedulerWorkerBuilder;
+export function createAzureManagedWorkerBuilder(connectionString: string): DurableTaskAzureManagedWorkerBuilder;
 
 /**
- * Creates a TaskHubGrpcWorker configured for Azure-managed Durable Task Scheduler using explicit parameters.
+ * Creates an Azure-managed Durable Task worker builder using explicit parameters.
  *
- * @param endpoint The endpoint address for Azure-managed Durable Task Scheduler.
+ * @param endpoint The endpoint address for Azure-managed Durable Task service.
  * @param taskHubName The name of the task hub to connect to.
  * @param credential The token credential for authentication, or null for anonymous access.
- * @returns A new DurableTaskSchedulerWorkerBuilder instance.
+ * @returns A new DurableTaskAzureManagedWorkerBuilder instance.
  * @throws Error if endpoint or taskHubName is null or undefined.
  */
-export function createSchedulerWorkerBuilder(
+export function createAzureManagedWorkerBuilder(
   endpoint: string,
   taskHubName: string,
   credential?: TokenCredential | null,
-): DurableTaskSchedulerWorkerBuilder;
+): DurableTaskAzureManagedWorkerBuilder;
 
-export function createSchedulerWorkerBuilder(
+export function createAzureManagedWorkerBuilder(
   endpointOrConnectionString: string,
   taskHubName?: string,
   credential?: TokenCredential | null,
-): DurableTaskSchedulerWorkerBuilder {
-  const builder = new DurableTaskSchedulerWorkerBuilder();
+): DurableTaskAzureManagedWorkerBuilder {
+  const builder = new DurableTaskAzureManagedWorkerBuilder();
 
   if (taskHubName !== undefined) {
     // Called with (endpoint, taskHubName, credential?)

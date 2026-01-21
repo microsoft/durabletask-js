@@ -3,20 +3,19 @@
 
 import { TokenCredential } from "@azure/identity";
 import * as grpc from "@grpc/grpc-js";
-import { DurableTaskSchedulerOptions } from "./options";
-import { TaskHubGrpcClient } from "../client/client";
-import * as stubs from "../proto/orchestrator_service_grpc_pb";
+import { DurableTaskAzureManagedOptions } from "./options";
+import { TaskHubGrpcClient } from "@microsoft/durabletask-js";
 
 /**
- * A wrapper around TaskHubGrpcClient that provides scheduler-specific configuration.
- * This allows the gRPC client to be created with scheduler credentials and options.
+ * A wrapper around TaskHubGrpcClient that provides Azure-managed-specific configuration.
+ * This allows the gRPC client to be created with Azure-managed credentials and options.
  *
  * Note: This class uses type assertions to set the internal stub property since the
  * parent class doesn't provide a protected setter. This is intentional to maintain
- * backward compatibility while enabling scheduler-specific authentication.
+ * backward compatibility while enabling Azure-managed-specific authentication.
  */
-export class SchedulerTaskHubGrpcClient extends TaskHubGrpcClient {
-  constructor(stub: stubs.TaskHubSidecarServiceClient) {
+export class AzureManagedTaskHubGrpcClient extends TaskHubGrpcClient {
+  constructor(stub: grpc.Client) {
     super();
     // Set the internal stub directly since the parent class doesn't provide a setter
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -25,40 +24,40 @@ export class SchedulerTaskHubGrpcClient extends TaskHubGrpcClient {
 }
 
 /**
- * Builder for creating DurableTaskClient instances that connect to Azure-managed Durable Task Scheduler.
+ * Builder for creating DurableTaskClient instances that connect to Azure-managed Durable Task service.
  * This class provides various methods to create and configure clients using either connection strings or explicit parameters.
  */
-export class DurableTaskSchedulerClientBuilder {
-  private _options: DurableTaskSchedulerOptions;
+export class DurableTaskAzureManagedClientBuilder {
+  private _options: DurableTaskAzureManagedOptions;
   private _grpcChannelOptions: grpc.ChannelOptions = {};
 
   /**
-   * Creates a new instance of DurableTaskSchedulerClientBuilder.
+   * Creates a new instance of DurableTaskAzureManagedClientBuilder.
    */
   constructor() {
-    this._options = new DurableTaskSchedulerOptions();
+    this._options = new DurableTaskAzureManagedOptions();
   }
 
   /**
    * Configures the builder using a connection string.
    *
-   * @param connectionString The connection string for Azure-managed Durable Task Scheduler.
+   * @param connectionString The connection string for Azure-managed Durable Task service.
    * @returns This builder instance.
    * @throws Error if connectionString is null or undefined.
    */
-  connectionString(connectionString: string): DurableTaskSchedulerClientBuilder {
+  connectionString(connectionString: string): DurableTaskAzureManagedClientBuilder {
     if (!connectionString) {
       throw new Error("connectionString must not be null or empty");
     }
 
-    this._options = DurableTaskSchedulerOptions.fromConnectionString(connectionString);
+    this._options = DurableTaskAzureManagedOptions.fromConnectionString(connectionString);
     return this;
   }
 
   /**
    * Configures the builder using explicit parameters.
    *
-   * @param endpoint The endpoint address for Azure-managed Durable Task Scheduler.
+   * @param endpoint The endpoint address for Azure-managed Durable Task service.
    * @param taskHubName The name of the task hub to connect to.
    * @param credential The token credential for authentication, or null for anonymous access.
    * @returns This builder instance.
@@ -68,7 +67,7 @@ export class DurableTaskSchedulerClientBuilder {
     endpoint: string,
     taskHubName: string,
     credential?: TokenCredential | null,
-  ): DurableTaskSchedulerClientBuilder {
+  ): DurableTaskAzureManagedClientBuilder {
     if (!endpoint) {
       throw new Error("endpoint must not be null or empty");
     }
@@ -91,7 +90,7 @@ export class DurableTaskSchedulerClientBuilder {
    * @param resourceId The resource ID.
    * @returns This builder instance.
    */
-  resourceId(resourceId: string): DurableTaskSchedulerClientBuilder {
+  resourceId(resourceId: string): DurableTaskAzureManagedClientBuilder {
     this._options.setResourceId(resourceId);
     return this;
   }
@@ -102,7 +101,7 @@ export class DurableTaskSchedulerClientBuilder {
    * @param marginMs The token refresh margin in milliseconds.
    * @returns This builder instance.
    */
-  tokenRefreshMargin(marginMs: number): DurableTaskSchedulerClientBuilder {
+  tokenRefreshMargin(marginMs: number): DurableTaskAzureManagedClientBuilder {
     this._options.setTokenRefreshMargin(marginMs);
     return this;
   }
@@ -113,7 +112,7 @@ export class DurableTaskSchedulerClientBuilder {
    * @param allowInsecure True to allow insecure credentials.
    * @returns This builder instance.
    */
-  allowInsecureCredentials(allowInsecure: boolean): DurableTaskSchedulerClientBuilder {
+  allowInsecureCredentials(allowInsecure: boolean): DurableTaskAzureManagedClientBuilder {
     this._options.setAllowInsecureCredentials(allowInsecure);
     return this;
   }
@@ -124,7 +123,7 @@ export class DurableTaskSchedulerClientBuilder {
    * @param options The gRPC channel options.
    * @returns This builder instance.
    */
-  grpcChannelOptions(options: grpc.ChannelOptions): DurableTaskSchedulerClientBuilder {
+  grpcChannelOptions(options: grpc.ChannelOptions): DurableTaskAzureManagedClientBuilder {
     this._grpcChannelOptions = options;
     return this;
   }
@@ -141,7 +140,7 @@ export class DurableTaskSchedulerClientBuilder {
     const defaultOptions: grpc.ChannelOptions = {
       "grpc.max_receive_message_length": -1,
       "grpc.max_send_message_length": -1,
-      "grpc.primary_user_agent": "durabletask-js-scheduler",
+      "grpc.primary_user_agent": "durabletask-js-azuremanaged",
     };
 
     const combinedOptions = {
@@ -149,41 +148,44 @@ export class DurableTaskSchedulerClientBuilder {
       ...this._grpcChannelOptions,
     };
 
+    // Dynamically require the proto stubs from the main package
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const stubs = require("@microsoft/durabletask-js/dist/proto/orchestrator_service_grpc_pb");
     const stub = new stubs.TaskHubSidecarServiceClient(hostAddress, channelCredentials, combinedOptions);
-    return new SchedulerTaskHubGrpcClient(stub);
+    return new AzureManagedTaskHubGrpcClient(stub);
   }
 }
 
 /**
- * Creates a DurableTaskSchedulerClientBuilder configured for Azure-managed Durable Task Scheduler using a connection string.
+ * Creates an Azure-managed Durable Task client using a connection string.
  *
- * @param connectionString The connection string for Azure-managed Durable Task Scheduler.
- * @returns A new configured DurableTaskSchedulerClientBuilder instance.
+ * @param connectionString The connection string for Azure-managed Durable Task service.
+ * @returns A new configured TaskHubGrpcClient instance.
  * @throws Error if connectionString is null or undefined.
  */
-export function createSchedulerClient(connectionString: string): TaskHubGrpcClient;
+export function createAzureManagedClient(connectionString: string): TaskHubGrpcClient;
 
 /**
- * Creates a DurableTaskSchedulerClientBuilder configured for Azure-managed Durable Task Scheduler using explicit parameters.
+ * Creates an Azure-managed Durable Task client using explicit parameters.
  *
- * @param endpoint The endpoint address for Azure-managed Durable Task Scheduler.
+ * @param endpoint The endpoint address for Azure-managed Durable Task service.
  * @param taskHubName The name of the task hub to connect to.
  * @param credential The token credential for authentication, or null for anonymous access.
- * @returns A new configured DurableTaskSchedulerClientBuilder instance.
+ * @returns A new configured TaskHubGrpcClient instance.
  * @throws Error if endpoint or taskHubName is null or undefined.
  */
-export function createSchedulerClient(
+export function createAzureManagedClient(
   endpoint: string,
   taskHubName: string,
   credential?: TokenCredential | null,
 ): TaskHubGrpcClient;
 
-export function createSchedulerClient(
+export function createAzureManagedClient(
   endpointOrConnectionString: string,
   taskHubName?: string,
   credential?: TokenCredential | null,
 ): TaskHubGrpcClient {
-  const builder = new DurableTaskSchedulerClientBuilder();
+  const builder = new DurableTaskAzureManagedClientBuilder();
 
   if (taskHubName !== undefined) {
     // Called with (endpoint, taskHubName, credential?)

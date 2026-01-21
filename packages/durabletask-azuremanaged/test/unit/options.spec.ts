@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { DurableTaskSchedulerOptions } from "../../../src/scheduler/options";
+import { DurableTaskAzureManagedOptions } from "../../src/options";
 import { TokenCredential, AccessToken, GetTokenOptions } from "@azure/identity";
 
 // Mock TokenCredential for testing
@@ -14,8 +14,8 @@ class MockTokenCredential implements TokenCredential {
   }
 }
 
-describe("DurableTaskSchedulerOptions", () => {
-  const VALID_CONNECTION_STRING = "Endpoint=https://example.com;Authentication=ManagedIdentity;TaskHub=myTaskHub";
+describe("DurableTaskAzureManagedOptions", () => {
+  const VALID_CONNECTION_STRING = "Endpoint=https://example.com;Authentication=None;TaskHub=myTaskHub";
   const VALID_ENDPOINT = "https://example.com";
   const VALID_TASKHUB = "myTaskHub";
   const CUSTOM_RESOURCE_ID = "https://custom.resource";
@@ -23,7 +23,7 @@ describe("DurableTaskSchedulerOptions", () => {
 
   describe("fromConnectionString", () => {
     it("should create valid options from connection string", () => {
-      const options = DurableTaskSchedulerOptions.fromConnectionString(VALID_CONNECTION_STRING);
+      const options = DurableTaskAzureManagedOptions.fromConnectionString(VALID_CONNECTION_STRING);
 
       expect(options.getEndpointAddress()).toBe(VALID_ENDPOINT);
       expect(options.getTaskHubName()).toBe(VALID_TASKHUB);
@@ -32,7 +32,7 @@ describe("DurableTaskSchedulerOptions", () => {
 
   describe("setEndpointAddress", () => {
     it("should update endpoint", () => {
-      const options = new DurableTaskSchedulerOptions();
+      const options = new DurableTaskAzureManagedOptions();
 
       options.setEndpointAddress(VALID_ENDPOINT);
 
@@ -40,7 +40,7 @@ describe("DurableTaskSchedulerOptions", () => {
     });
 
     it("should return this for method chaining", () => {
-      const options = new DurableTaskSchedulerOptions();
+      const options = new DurableTaskAzureManagedOptions();
 
       const result = options.setEndpointAddress(VALID_ENDPOINT);
 
@@ -50,7 +50,7 @@ describe("DurableTaskSchedulerOptions", () => {
 
   describe("setTaskHubName", () => {
     it("should update task hub name", () => {
-      const options = new DurableTaskSchedulerOptions();
+      const options = new DurableTaskAzureManagedOptions();
 
       options.setTaskHubName(VALID_TASKHUB);
 
@@ -58,7 +58,7 @@ describe("DurableTaskSchedulerOptions", () => {
     });
 
     it("should return this for method chaining", () => {
-      const options = new DurableTaskSchedulerOptions();
+      const options = new DurableTaskAzureManagedOptions();
 
       const result = options.setTaskHubName(VALID_TASKHUB);
 
@@ -68,7 +68,7 @@ describe("DurableTaskSchedulerOptions", () => {
 
   describe("setCredential", () => {
     it("should update credential", () => {
-      const options = new DurableTaskSchedulerOptions();
+      const options = new DurableTaskAzureManagedOptions();
       const mockCredential = new MockTokenCredential();
 
       options.setCredential(mockCredential);
@@ -77,7 +77,7 @@ describe("DurableTaskSchedulerOptions", () => {
     });
 
     it("should return this for method chaining", () => {
-      const options = new DurableTaskSchedulerOptions();
+      const options = new DurableTaskAzureManagedOptions();
 
       const result = options.setCredential(null);
 
@@ -87,7 +87,7 @@ describe("DurableTaskSchedulerOptions", () => {
 
   describe("setResourceId", () => {
     it("should update resource ID", () => {
-      const options = new DurableTaskSchedulerOptions();
+      const options = new DurableTaskAzureManagedOptions();
 
       options.setResourceId(CUSTOM_RESOURCE_ID);
 
@@ -95,7 +95,7 @@ describe("DurableTaskSchedulerOptions", () => {
     });
 
     it("should have default resource ID", () => {
-      const options = new DurableTaskSchedulerOptions();
+      const options = new DurableTaskAzureManagedOptions();
 
       expect(options.getResourceId()).toBe("https://durabletask.io");
     });
@@ -103,7 +103,7 @@ describe("DurableTaskSchedulerOptions", () => {
 
   describe("setAllowInsecureCredentials", () => {
     it("should update insecure credentials flag", () => {
-      const options = new DurableTaskSchedulerOptions();
+      const options = new DurableTaskAzureManagedOptions();
 
       options.setAllowInsecureCredentials(true);
 
@@ -111,7 +111,7 @@ describe("DurableTaskSchedulerOptions", () => {
     });
 
     it("should default to false", () => {
-      const options = new DurableTaskSchedulerOptions();
+      const options = new DurableTaskAzureManagedOptions();
 
       expect(options.isAllowInsecureCredentials()).toBe(false);
     });
@@ -119,7 +119,7 @@ describe("DurableTaskSchedulerOptions", () => {
 
   describe("setTokenRefreshMargin", () => {
     it("should update token refresh margin", () => {
-      const options = new DurableTaskSchedulerOptions();
+      const options = new DurableTaskAzureManagedOptions();
 
       options.setTokenRefreshMargin(CUSTOM_REFRESH_MARGIN);
 
@@ -127,7 +127,7 @@ describe("DurableTaskSchedulerOptions", () => {
     });
 
     it("should have default token refresh margin of 5 minutes", () => {
-      const options = new DurableTaskSchedulerOptions();
+      const options = new DurableTaskAzureManagedOptions();
 
       expect(options.getTokenRefreshMargin()).toBe(5 * 60 * 1000);
     });
@@ -135,25 +135,25 @@ describe("DurableTaskSchedulerOptions", () => {
 
   describe("getHostAddress", () => {
     it("should parse https endpoint correctly", () => {
-      const options = new DurableTaskSchedulerOptions().setEndpointAddress("https://example.com");
+      const options = new DurableTaskAzureManagedOptions().setEndpointAddress("https://example.com");
 
       expect(options.getHostAddress()).toBe("example.com");
     });
 
     it("should handle endpoint without protocol by adding https", () => {
-      const options = new DurableTaskSchedulerOptions().setEndpointAddress("example.com");
+      const options = new DurableTaskAzureManagedOptions().setEndpointAddress("example.com");
 
       expect(options.getHostAddress()).toBe("example.com");
     });
 
     it("should handle endpoint with port", () => {
-      const options = new DurableTaskSchedulerOptions().setEndpointAddress("https://example.com:8080");
+      const options = new DurableTaskAzureManagedOptions().setEndpointAddress("https://example.com:8080");
 
       expect(options.getHostAddress()).toBe("example.com:8080");
     });
 
     it("should throw for invalid URL", () => {
-      const options = new DurableTaskSchedulerOptions().setEndpointAddress("invalid:url");
+      const options = new DurableTaskAzureManagedOptions().setEndpointAddress("invalid:url");
 
       expect(() => options.getHostAddress()).toThrow("Invalid endpoint URL:");
     });
@@ -161,7 +161,7 @@ describe("DurableTaskSchedulerOptions", () => {
 
   describe("createChannelCredentials", () => {
     it("should create credentials when allowInsecure is false", () => {
-      const options = new DurableTaskSchedulerOptions()
+      const options = new DurableTaskAzureManagedOptions()
         .setEndpointAddress(VALID_ENDPOINT)
         .setTaskHubName(VALID_TASKHUB)
         .setAllowInsecureCredentials(false);
@@ -172,7 +172,7 @@ describe("DurableTaskSchedulerOptions", () => {
     });
 
     it("should create credentials when allowInsecure is true", () => {
-      const options = new DurableTaskSchedulerOptions()
+      const options = new DurableTaskAzureManagedOptions()
         .setEndpointAddress(VALID_ENDPOINT)
         .setTaskHubName(VALID_TASKHUB)
         .setAllowInsecureCredentials(true);
@@ -185,7 +185,7 @@ describe("DurableTaskSchedulerOptions", () => {
 
   describe("createMetadataGenerator", () => {
     it("should create a metadata generator function", () => {
-      const options = new DurableTaskSchedulerOptions()
+      const options = new DurableTaskAzureManagedOptions()
         .setEndpointAddress(VALID_ENDPOINT)
         .setTaskHubName(VALID_TASKHUB);
 
@@ -195,7 +195,7 @@ describe("DurableTaskSchedulerOptions", () => {
     });
 
     it("should include task hub name in metadata", (done) => {
-      const options = new DurableTaskSchedulerOptions()
+      const options = new DurableTaskAzureManagedOptions()
         .setEndpointAddress(VALID_ENDPOINT)
         .setTaskHubName(VALID_TASKHUB);
 
@@ -211,7 +211,7 @@ describe("DurableTaskSchedulerOptions", () => {
 
     it("should include authorization header when credential is set", (done) => {
       const mockCredential = new MockTokenCredential();
-      const options = new DurableTaskSchedulerOptions()
+      const options = new DurableTaskAzureManagedOptions()
         .setEndpointAddress(VALID_ENDPOINT)
         .setTaskHubName(VALID_TASKHUB)
         .setCredential(mockCredential);

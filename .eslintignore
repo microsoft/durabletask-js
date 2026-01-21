@@ -7,3 +7,5 @@ dist
 coverage
 # don't lint proto files and output
 proto
+# don't lint packages (they have their own config)
+packages

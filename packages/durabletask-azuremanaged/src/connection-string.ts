@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 /**
- * Supported authentication types for Durable Task Scheduler connection strings.
+ * Supported authentication types for Azure-managed Durable Task connection strings.
  */
 export type AuthenticationType =
   | "DefaultAzure"
@@ -16,14 +16,14 @@ export type AuthenticationType =
   | "None";
 
 /**
- * Represents the constituent parts of a connection string for a Durable Task Scheduler service.
+ * Represents the constituent parts of a connection string for an Azure-managed Durable Task service.
  */
-export class DurableTaskSchedulerConnectionString {
+export class DurableTaskAzureManagedConnectionString {
   private properties: Map<string, string>;
 
   /**
-   * Creates a new instance of DurableTaskSchedulerConnectionString.
-   * @param connectionString A connection string for a Durable Task Scheduler service.
+   * Creates a new instance of DurableTaskAzureManagedConnectionString.
+   * @param connectionString A connection string for an Azure-managed Durable Task service.
    * @throws Error if the connection string is invalid or missing required properties.
    */
   constructor(connectionString: string) {

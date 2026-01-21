@@ -1,0 +1,38 @@
+{
+  "name": "@microsoft/durabletask-azuremanaged",
+  "version": "0.1.0-alpha.1",
+  "description": "Azure-managed Durable Task Scheduler support for the Durable Task JavaScript SDK",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest --runInBand --detectOpenHandles",
+    "test:unit": "jest test/unit --runInBand --detectOpenHandles",
+    "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
+    "pretty": "prettier --list-different \"**/*.{ts,tsx,js,jsx,json,md}\"",
+    "pretty-fix": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/microsoft/durabletask-js.git"
+  },
+  "keywords": [
+    "durabletask",
+    "azure",
+    "orchestration",
+    "workflow"
+  ],
+  "author": "Microsoft",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/microsoft/durabletask-js/issues"
+  },
+  "homepage": "https://github.com/microsoft/durabletask-js/tree/main/packages/durabletask-azuremanaged#readme",
+  "dependencies": {
+    "@azure/identity": "^4.0.0",
+    "@grpc/grpc-js": "^1.8.14"
+  },
+  "peerDependencies": {
+    "@microsoft/durabletask-js": ">=0.1.0-alpha.2"
+  }
+}

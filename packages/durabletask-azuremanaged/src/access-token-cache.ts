@@ -5,7 +5,7 @@ import { AccessToken, TokenCredential, GetTokenOptions } from "@azure/identity";
 
 /**
  * Caches access tokens for Azure authentication.
- * This class is used by both client and worker components to authenticate with Azure-managed Durable Task Scheduler.
+ * This class is used by both client and worker components to authenticate with Azure-managed Durable Task services.
  */
 export class AccessTokenCache {
   private readonly credential: TokenCredential;

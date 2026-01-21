@@ -3,14 +3,14 @@
 
 import { TokenCredential } from "@azure/identity";
 import * as grpc from "@grpc/grpc-js";
-import { DurableTaskSchedulerConnectionString } from "./connection-string";
+import { DurableTaskAzureManagedConnectionString } from "./connection-string";
 import { AccessTokenCache } from "./access-token-cache";
 import { getCredentialFromAuthenticationType } from "./credential-factory";
 
 /**
- * Options for configuring the Durable Task Scheduler.
+ * Options for configuring the Azure-managed Durable Task service.
  */
-export class DurableTaskSchedulerOptions {
+export class DurableTaskAzureManagedOptions {
   private _endpointAddress: string = "";
   private _taskHubName: string = "";
   private _credential: TokenCredential | null = null;
@@ -19,31 +19,31 @@ export class DurableTaskSchedulerOptions {
   private _tokenRefreshMargin: number = 5 * 60 * 1000; // 5 minutes in milliseconds
 
   /**
-   * Creates a new instance of DurableTaskSchedulerOptions.
+   * Creates a new instance of DurableTaskAzureManagedOptions.
    */
   constructor() {}
 
   /**
-   * Creates a new instance of DurableTaskSchedulerOptions from a connection string.
+   * Creates a new instance of DurableTaskAzureManagedOptions from a connection string.
    *
    * @param connectionString The connection string to parse.
-   * @returns A new DurableTaskSchedulerOptions object.
+   * @returns A new DurableTaskAzureManagedOptions object.
    */
-  static fromConnectionString(connectionString: string): DurableTaskSchedulerOptions {
-    const parsedConnectionString = new DurableTaskSchedulerConnectionString(connectionString);
-    return DurableTaskSchedulerOptions.fromParsedConnectionString(parsedConnectionString);
+  static fromConnectionString(connectionString: string): DurableTaskAzureManagedOptions {
+    const parsedConnectionString = new DurableTaskAzureManagedConnectionString(connectionString);
+    return DurableTaskAzureManagedOptions.fromParsedConnectionString(parsedConnectionString);
   }
 
   /**
-   * Creates a new instance of DurableTaskSchedulerOptions from a parsed connection string.
+   * Creates a new instance of DurableTaskAzureManagedOptions from a parsed connection string.
    *
    * @param connectionString The parsed connection string.
-   * @returns A new DurableTaskSchedulerOptions object.
+   * @returns A new DurableTaskAzureManagedOptions object.
    */
   static fromParsedConnectionString(
-    connectionString: DurableTaskSchedulerConnectionString,
-  ): DurableTaskSchedulerOptions {
-    const options = new DurableTaskSchedulerOptions();
+    connectionString: DurableTaskAzureManagedConnectionString,
+  ): DurableTaskAzureManagedOptions {
+    const options = new DurableTaskAzureManagedOptions();
     options.setEndpointAddress(connectionString.getEndpoint());
     options.setTaskHubName(connectionString.getTaskHubName());
 
@@ -69,7 +69,7 @@ export class DurableTaskSchedulerOptions {
    * @param endpointAddress The endpoint address.
    * @returns This options object.
    */
-  setEndpointAddress(endpointAddress: string): DurableTaskSchedulerOptions {
+  setEndpointAddress(endpointAddress: string): DurableTaskAzureManagedOptions {
     this._endpointAddress = endpointAddress;
     return this;
   }
@@ -89,7 +89,7 @@ export class DurableTaskSchedulerOptions {
    * @param taskHubName The task hub name.
    * @returns This options object.
    */
-  setTaskHubName(taskHubName: string): DurableTaskSchedulerOptions {
+  setTaskHubName(taskHubName: string): DurableTaskAzureManagedOptions {
     this._taskHubName = taskHubName;
     return this;
   }
@@ -109,7 +109,7 @@ export class DurableTaskSchedulerOptions {
    * @param credential The credential.
    * @returns This options object.
    */
-  setCredential(credential: TokenCredential | null): DurableTaskSchedulerOptions {
+  setCredential(credential: TokenCredential | null): DurableTaskAzureManagedOptions {
     this._credential = credential;
     return this;
   }
@@ -129,7 +129,7 @@ export class DurableTaskSchedulerOptions {
    * @param resourceId The resource ID.
    * @returns This options object.
    */
-  setResourceId(resourceId: string): DurableTaskSchedulerOptions {
+  setResourceId(resourceId: string): DurableTaskAzureManagedOptions {
     this._resourceId = resourceId;
     return this;
   }
@@ -149,7 +149,7 @@ export class DurableTaskSchedulerOptions {
    * @param allowInsecureCredentials True to allow insecure credentials.
    * @returns This options object.
    */
-  setAllowInsecureCredentials(allowInsecureCredentials: boolean): DurableTaskSchedulerOptions {
+  setAllowInsecureCredentials(allowInsecureCredentials: boolean): DurableTaskAzureManagedOptions {
     this._allowInsecureCredentials = allowInsecureCredentials;
     return this;
   }
@@ -169,7 +169,7 @@ export class DurableTaskSchedulerOptions {
    * @param tokenRefreshMargin The token refresh margin in milliseconds.
    * @returns This options object.
    */
-  setTokenRefreshMargin(tokenRefreshMargin: number): DurableTaskSchedulerOptions {
+  setTokenRefreshMargin(tokenRefreshMargin: number): DurableTaskAzureManagedOptions {
     this._tokenRefreshMargin = tokenRefreshMargin;
     return this;
   }

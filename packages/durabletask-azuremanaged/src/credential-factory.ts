@@ -1,8 +1,18 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { TokenCredential } from "@azure/identity";
-import { DurableTaskSchedulerConnectionString, AuthenticationType } from "./connection-string";
+import {
+  TokenCredential,
+  DefaultAzureCredential,
+  ManagedIdentityCredential,
+  WorkloadIdentityCredential,
+  EnvironmentCredential,
+  AzureCliCredential,
+  AzurePowerShellCredential,
+  VisualStudioCodeCredential,
+  InteractiveBrowserCredential,
+} from "@azure/identity";
+import { DurableTaskAzureManagedConnectionString, AuthenticationType } from "./connection-string";
 
 /**
  * Creates a TokenCredential based on the authentication type specified in the connection string.
@@ -12,37 +22,20 @@ import { DurableTaskSchedulerConnectionString, AuthenticationType } from "./conn
  * @throws Error if the connection string contains an unsupported authentication type.
  */
 export function getCredentialFromAuthenticationType(
-  connectionString: DurableTaskSchedulerConnectionString,
+  connectionString: DurableTaskAzureManagedConnectionString,
 ): TokenCredential | null {
   const authType = connectionString.getAuthentication().toLowerCase().trim() as Lowercase<AuthenticationType>;
 
-  // Dynamically import @azure/identity to handle cases where it may not be installed
-  // This allows the package to work without the dependency if not using Azure authentication
-  let azureIdentity: typeof import("@azure/identity");
-
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    azureIdentity = require("@azure/identity");
-  } catch {
-    if (authType !== "none") {
-      throw new Error(
-        `Azure authentication type "${authType}" requires the @azure/identity package. ` +
-          `Please install it with: npm install @azure/identity`,
-      );
-    }
-    return null;
-  }
-
   switch (authType) {
     case "defaultazure":
-      return new azureIdentity.DefaultAzureCredential();
+      return new DefaultAzureCredential();
 
     case "managedidentity": {
       const clientId = connectionString.getClientId();
       if (clientId) {
-        return new azureIdentity.ManagedIdentityCredential({ clientId });
+        return new ManagedIdentityCredential({ clientId });
       }
-      return new azureIdentity.ManagedIdentityCredential();
+      return new ManagedIdentityCredential();
     }
 
     case "workloadidentity": {
@@ -73,23 +66,23 @@ export function getCredentialFromAuthenticationType(
         options.additionallyAllowedTenants = additionallyAllowedTenants;
       }
 
-      return new azureIdentity.WorkloadIdentityCredential(options);
+      return new WorkloadIdentityCredential(options);
     }
 
     case "environment":
-      return new azureIdentity.EnvironmentCredential();
+      return new EnvironmentCredential();
 
     case "azurecli":
-      return new azureIdentity.AzureCliCredential();
+      return new AzureCliCredential();
 
     case "azurepowershell":
-      return new azureIdentity.AzurePowerShellCredential();
+      return new AzurePowerShellCredential();
 
     case "visualstudiocode":
-      return new azureIdentity.VisualStudioCodeCredential();
+      return new VisualStudioCodeCredential();
 
     case "interactivebrowser":
-      return new azureIdentity.InteractiveBrowserCredential({});
+      return new InteractiveBrowserCredential({});
 
     case "none":
       return null;

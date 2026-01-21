@@ -1,14 +1,14 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { DurableTaskSchedulerConnectionString } from "../../../src/scheduler/connection-string";
+import { DurableTaskAzureManagedConnectionString } from "../../src/connection-string";
 
-describe("DurableTaskSchedulerConnectionString", () => {
+describe("DurableTaskAzureManagedConnectionString", () => {
   const VALID_CONNECTION_STRING = "Endpoint=https://example.com;Authentication=ManagedIdentity;TaskHub=myTaskHub";
 
   describe("constructor", () => {
     it("should parse valid connection string", () => {
-      const connectionString = new DurableTaskSchedulerConnectionString(VALID_CONNECTION_STRING);
+      const connectionString = new DurableTaskAzureManagedConnectionString(VALID_CONNECTION_STRING);
 
       expect(connectionString.getEndpoint()).toBe("https://example.com");
       expect(connectionString.getAuthentication()).toBe("ManagedIdentity");
@@ -19,7 +19,7 @@ describe("DurableTaskSchedulerConnectionString", () => {
       const connectionStringWithSpaces =
         "Endpoint = https://example.com ; Authentication = ManagedIdentity ; TaskHub = myTaskHub";
 
-      const connectionString = new DurableTaskSchedulerConnectionString(connectionStringWithSpaces);
+      const connectionString = new DurableTaskAzureManagedConnectionString(connectionStringWithSpaces);
 
       expect(connectionString.getEndpoint()).toBe("https://example.com");
       expect(connectionString.getAuthentication()).toBe("ManagedIdentity");
@@ -27,17 +27,19 @@ describe("DurableTaskSchedulerConnectionString", () => {
     });
 
     it("should throw for null connection string", () => {
-      expect(() => new DurableTaskSchedulerConnectionString(null as unknown as string)).toThrow(
+      expect(() => new DurableTaskAzureManagedConnectionString(null as unknown as string)).toThrow(
         "connectionString must not be null or empty",
       );
     });
 
     it("should throw for empty connection string", () => {
-      expect(() => new DurableTaskSchedulerConnectionString("")).toThrow("connectionString must not be null or empty");
+      expect(() => new DurableTaskAzureManagedConnectionString("")).toThrow(
+        "connectionString must not be null or empty",
+      );
     });
 
     it("should throw for whitespace-only connection string", () => {
-      expect(() => new DurableTaskSchedulerConnectionString("   ")).toThrow(
+      expect(() => new DurableTaskAzureManagedConnectionString("   ")).toThrow(
         "connectionString must not be null or empty",
       );
     });
@@ -45,7 +47,7 @@ describe("DurableTaskSchedulerConnectionString", () => {
     it("should throw when missing required Endpoint property", () => {
       const missingEndpoint = "Authentication=ManagedIdentity;TaskHub=myTaskHub";
 
-      expect(() => new DurableTaskSchedulerConnectionString(missingEndpoint)).toThrow(
+      expect(() => new DurableTaskAzureManagedConnectionString(missingEndpoint)).toThrow(
         "The connection string must contain a Endpoint property",
       );
     });
@@ -53,7 +55,7 @@ describe("DurableTaskSchedulerConnectionString", () => {
     it("should throw when missing required Authentication property", () => {
       const missingAuthentication = "Endpoint=https://example.com;TaskHub=myTaskHub";
 
-      expect(() => new DurableTaskSchedulerConnectionString(missingAuthentication)).toThrow(
+      expect(() => new DurableTaskAzureManagedConnectionString(missingAuthentication)).toThrow(
         "The connection string must contain a Authentication property",
       );
     });
@@ -61,7 +63,7 @@ describe("DurableTaskSchedulerConnectionString", () => {
     it("should throw when missing required TaskHub property", () => {
       const missingTaskHub = "Endpoint=https://example.com;Authentication=ManagedIdentity";
 
-      expect(() => new DurableTaskSchedulerConnectionString(missingTaskHub)).toThrow(
+      expect(() => new DurableTaskAzureManagedConnectionString(missingTaskHub)).toThrow(
         "The connection string must contain a TaskHub property",
       );
     });
@@ -72,7 +74,7 @@ describe("DurableTaskSchedulerConnectionString", () => {
       const connectionStringWithTenants =
         VALID_CONNECTION_STRING + ";AdditionallyAllowedTenants=tenant1,tenant2,tenant3";
 
-      const connectionString = new DurableTaskSchedulerConnectionString(connectionStringWithTenants);
+      const connectionString = new DurableTaskAzureManagedConnectionString(connectionStringWithTenants);
       const tenants = connectionString.getAdditionallyAllowedTenants();
 
       expect(tenants).not.toBeNull();
@@ -81,7 +83,7 @@ describe("DurableTaskSchedulerConnectionString", () => {
     });
 
     it("should return undefined when property not present", () => {
-      const connectionString = new DurableTaskSchedulerConnectionString(VALID_CONNECTION_STRING);
+      const connectionString = new DurableTaskAzureManagedConnectionString(VALID_CONNECTION_STRING);
 
       expect(connectionString.getAdditionallyAllowedTenants()).toBeUndefined();
     });
@@ -91,13 +93,13 @@ describe("DurableTaskSchedulerConnectionString", () => {
     it("should return correct value when present", () => {
       const connectionStringWithClientId = VALID_CONNECTION_STRING + ";ClientID=my-client-id";
 
-      const connectionString = new DurableTaskSchedulerConnectionString(connectionStringWithClientId);
+      const connectionString = new DurableTaskAzureManagedConnectionString(connectionStringWithClientId);
 
       expect(connectionString.getClientId()).toBe("my-client-id");
     });
 
     it("should return undefined when not present", () => {
-      const connectionString = new DurableTaskSchedulerConnectionString(VALID_CONNECTION_STRING);
+      const connectionString = new DurableTaskAzureManagedConnectionString(VALID_CONNECTION_STRING);
 
       expect(connectionString.getClientId()).toBeUndefined();
     });
@@ -107,13 +109,13 @@ describe("DurableTaskSchedulerConnectionString", () => {
     it("should return correct value when present", () => {
       const connectionStringWithTenantId = VALID_CONNECTION_STRING + ";TenantId=my-tenant-id";
 
-      const connectionString = new DurableTaskSchedulerConnectionString(connectionStringWithTenantId);
+      const connectionString = new DurableTaskAzureManagedConnectionString(connectionStringWithTenantId);
 
       expect(connectionString.getTenantId()).toBe("my-tenant-id");
     });
 
     it("should return undefined when not present", () => {
-      const connectionString = new DurableTaskSchedulerConnectionString(VALID_CONNECTION_STRING);
+      const connectionString = new DurableTaskAzureManagedConnectionString(VALID_CONNECTION_STRING);
 
       expect(connectionString.getTenantId()).toBeUndefined();
     });
@@ -123,13 +125,13 @@ describe("DurableTaskSchedulerConnectionString", () => {
     it("should return correct value when present", () => {
       const connectionStringWithTokenFilePath = VALID_CONNECTION_STRING + ";TokenFilePath=/path/to/token";
 
-      const connectionString = new DurableTaskSchedulerConnectionString(connectionStringWithTokenFilePath);
+      const connectionString = new DurableTaskAzureManagedConnectionString(connectionStringWithTokenFilePath);
 
       expect(connectionString.getTokenFilePath()).toBe("/path/to/token");
     });
 
     it("should return undefined when not present", () => {
-      const connectionString = new DurableTaskSchedulerConnectionString(VALID_CONNECTION_STRING);
+      const connectionString = new DurableTaskAzureManagedConnectionString(VALID_CONNECTION_STRING);
 
       expect(connectionString.getTokenFilePath()).toBeUndefined();
     });
@@ -152,7 +154,7 @@ describe("DurableTaskSchedulerConnectionString", () => {
       it(`should accept ${authType} authentication type`, () => {
         const connectionStringWithAuthType = `Endpoint=https://example.com;Authentication=${authType};TaskHub=myTaskHub`;
 
-        const connectionString = new DurableTaskSchedulerConnectionString(connectionStringWithAuthType);
+        const connectionString = new DurableTaskAzureManagedConnectionString(connectionStringWithAuthType);
 
         expect(connectionString.getAuthentication()).toBe(authType);
       });
