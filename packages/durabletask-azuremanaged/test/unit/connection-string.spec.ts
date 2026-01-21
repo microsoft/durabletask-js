@@ -48,7 +48,7 @@ describe("DurableTaskAzureManagedConnectionString", () => {
       const missingEndpoint = "Authentication=ManagedIdentity;TaskHub=myTaskHub";
 
       expect(() => new DurableTaskAzureManagedConnectionString(missingEndpoint)).toThrow(
-        "The connection string must contain a Endpoint property",
+        "The connection string must contain an Endpoint property",
       );
     });
 
@@ -56,7 +56,7 @@ describe("DurableTaskAzureManagedConnectionString", () => {
       const missingAuthentication = "Endpoint=https://example.com;TaskHub=myTaskHub";
 
       expect(() => new DurableTaskAzureManagedConnectionString(missingAuthentication)).toThrow(
-        "The connection string must contain a Authentication property",
+        "The connection string must contain an Authentication property",
       );
     });
 

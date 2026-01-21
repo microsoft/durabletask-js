@@ -107,7 +107,8 @@ export class DurableTaskAzureManagedConnectionString {
   private getRequiredValue(name: string): string {
     const value = this.getValue(name);
     if (!value || value === "") {
-      throw new Error(`The connection string must contain a ${name} property`);
+      const article = /^[aeiou]/i.test(name) ? "an" : "a";
+      throw new Error(`The connection string must contain ${article} ${name} property`);
     }
     return value;
   }
