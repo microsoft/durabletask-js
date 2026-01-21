@@ -7,5 +7,3 @@ dist
 coverage
 # don't lint proto files and output
 proto
-# don't lint extensions (they have their own config)
-extensions
