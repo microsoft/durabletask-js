@@ -19,12 +19,12 @@ import { createAzureManagedClient, createAzureManagedWorkerBuilder } from "@micr
 
 // Create a client
 const client = createAzureManagedClient(
-  "Endpoint=https://myservice.durabletask.io;Authentication=DefaultAzure;TaskHub=myTaskHub"
+  "Endpoint=https://myservice.durabletask.io;Authentication=DefaultAzure;TaskHub=myTaskHub",
 );
 
 // Create a worker
 const worker = createAzureManagedWorkerBuilder(
-  "Endpoint=https://myservice.durabletask.io;Authentication=DefaultAzure;TaskHub=myTaskHub"
+  "Endpoint=https://myservice.durabletask.io;Authentication=DefaultAzure;TaskHub=myTaskHub",
 )
   .addOrchestrator(myOrchestrator)
   .addActivity(myActivity)

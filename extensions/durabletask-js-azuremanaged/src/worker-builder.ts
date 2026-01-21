@@ -63,7 +63,7 @@ export class AzureManagedTaskHubGrpcWorker extends TaskHubGrpcWorker {
         this._azureManagedStub = azureManagedStub;
       }
 
-      override get stub(): any {
+      get stub(): any {
         return this._azureManagedStub;
       }
     }

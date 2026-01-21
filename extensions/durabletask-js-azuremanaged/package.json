@@ -4,23 +4,40 @@
   "description": "Azure-managed Durable Task Scheduler support for the Durable Task JavaScript SDK",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
   "scripts": {
-    "build": "tsc",
+    "clean": "node -e \"require('fs').rmSync('dist', {recursive:true, force:true})\"",
+    "build": "npm run clean && tsc",
     "test": "jest --runInBand --detectOpenHandles",
     "test:unit": "jest test/unit --runInBand --detectOpenHandles",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
     "pretty": "prettier --list-different \"**/*.{ts,tsx,js,jsx,json,md}\"",
-    "pretty-fix": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\""
+    "pretty-fix": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
+    "prepublishOnly": "npm run build && npm run test && npm run lint"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/microsoft/durabletask-js.git"
+    "url": "git+https://github.com/microsoft/durabletask-js.git",
+    "directory": "extensions/durabletask-js-azuremanaged"
   },
   "keywords": [
     "durabletask",
     "azure",
     "orchestration",
-    "workflow"
+    "workflow",
+    "durable-task-scheduler",
+    "dts"
   ],
   "author": "Microsoft",
   "license": "MIT",
@@ -28,11 +45,25 @@
     "url": "https://github.com/microsoft/durabletask-js/issues"
   },
   "homepage": "https://github.com/microsoft/durabletask-js/tree/main/extensions/durabletask-js-azuremanaged#readme",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "dependencies": {
     "@azure/identity": "^4.0.0",
     "@grpc/grpc-js": "^1.8.14"
   },
   "peerDependencies": {
     "@microsoft/durabletask-js": ">=0.1.0-alpha.2"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.1",
+    "@types/node": "^18.16.1",
+    "@typescript-eslint/eslint-plugin": "^5.1.0",
+    "@typescript-eslint/parser": "^5.1.0",
+    "eslint": "^8.1.0",
+    "eslint-plugin-header": "^3.1.1",
+    "jest": "^29.5.0",
+    "ts-jest": "^29.1.0",
+    "typescript": "^5.0.4"
   }
 }

@@ -35,3 +35,38 @@ In some cases, the sample may require command-line parameters or user inputs. In
 
 - [Activity sequence](./activity-sequence.ts): Orchestration that schedules three activity calls in a sequence.
 - [Fan-out/fan-in](./fanout-fanin.ts): Orchestration that schedules a dynamic number of activity calls in parallel, waits for all of them to complete, and then performs an aggregation on the results.
+- [Azure Managed DTS](./azure-managed-dts.ts): Demonstrates integration with Azure Managed Durable Task Scheduler (DTS) using the portable SDK with Azure authentication.
+
+## Running the Azure Managed DTS example
+
+The Azure Managed DTS example requires an Azure Durable Task Scheduler endpoint. You can configure it using a `.env` file (recommended) or environment variables.
+
+### Option 1: Using a .env file (recommended)
+
+Create a `.env` file in the `examples` directory with your configuration:
+
+```env
+# Using connection string
+AZURE_DTS_CONNECTION_STRING=Endpoint=https://myservice.durabletask.io;Authentication=DefaultAzure;TaskHub=myTaskHub
+
+# Or using explicit parameters (uses DefaultAzureCredential)
+# AZURE_DTS_ENDPOINT=https://myservice.durabletask.io
+# AZURE_DTS_TASKHUB=myTaskHub
+```
+
+Then run the example:
+
+```sh
+npm run example ./examples/azure-managed-dts.ts
+```
+
+> **Note**: The `.env` file is ignored by git to prevent accidental credential exposure.
+
+### Option 2: Using environment variables directly
+
+```sh
+export AZURE_DTS_CONNECTION_STRING="Endpoint=https://myservice.durabletask.io;Authentication=DefaultAzure;TaskHub=myTaskHub"
+npm run example ./examples/azure-managed-dts.ts
+```
+
+When using explicit parameters (`AZURE_DTS_ENDPOINT` and `AZURE_DTS_TASKHUB`), the example uses `DefaultAzureCredential` for authentication. Make sure you are logged in via Azure CLI (`az login`) or have appropriate credentials configured.

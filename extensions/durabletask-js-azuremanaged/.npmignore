@@ -1,0 +1,16 @@
+# Ignore test files
+test/
+*.spec.ts
+
+# Ignore config files
+.eslintrc.json
+.prettierrc
+jest.config.js
+tsconfig.json
+
+# Ignore source (dist is published instead)
+src/
+
+# Ignore misc
+.gitignore
+*.tgz
