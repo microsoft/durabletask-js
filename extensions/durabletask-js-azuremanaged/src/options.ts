@@ -114,10 +114,7 @@ abstract class DurableTaskAzureManagedOptionsBase {
   protected createMetadataGeneratorInternal(
     callerType: string,
     workerId?: string,
-  ): (
-    params: { service_url: string },
-    callback: (error: Error | null, metadata?: grpc.Metadata) => void,
-  ) => void {
+  ): (params: { service_url: string }, callback: (error: Error | null, metadata?: grpc.Metadata) => void) => void {
     // Create token cache only if credential is not null
     let tokenCache: AccessTokenCache | null = null;
     if (this._credential) {

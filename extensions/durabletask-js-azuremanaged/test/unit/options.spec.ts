@@ -1,10 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import {
-  DurableTaskAzureManagedClientOptions,
-  DurableTaskAzureManagedWorkerOptions,
-} from "../../src/options";
+import { DurableTaskAzureManagedClientOptions, DurableTaskAzureManagedWorkerOptions } from "../../src/options";
 import { TokenCredential, AccessToken, GetTokenOptions } from "@azure/identity";
 
 // Mock TokenCredential for testing

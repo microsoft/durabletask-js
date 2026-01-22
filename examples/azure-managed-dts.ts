@@ -8,7 +8,7 @@
 // Load environment variables from .env file (recommended for local development)
 import * as dotenv from "dotenv";
 import * as path from "path";
-dotenv.config({ path: path.join(__dirname, '.env') });
+dotenv.config({ path: path.join(__dirname, ".env") });
 
 import { DefaultAzureCredential } from "@azure/identity";
 import {
@@ -31,10 +31,14 @@ import { Task } from "../src/task/task";
 
   // Validate configuration
   if (!connectionString && (!endpoint || !taskHubName)) {
-    console.error("Error: Either AZURE_DTS_CONNECTION_STRING or both AZURE_DTS_ENDPOINT and AZURE_DTS_TASKHUB must be set.");
+    console.error(
+      "Error: Either AZURE_DTS_CONNECTION_STRING or both AZURE_DTS_ENDPOINT and AZURE_DTS_TASKHUB must be set.",
+    );
     console.log("\nUsage:");
     console.log("  Option 1: Create a .env file in the examples directory (recommended):");
-    console.log("    AZURE_DTS_CONNECTION_STRING=Endpoint=https://myservice.durabletask.io;Authentication=DefaultAzure;TaskHub=myTaskHub");
+    console.log(
+      "    AZURE_DTS_CONNECTION_STRING=Endpoint=https://myservice.durabletask.io;Authentication=DefaultAzure;TaskHub=myTaskHub",
+    );
     console.log("    or");
     console.log("    AZURE_DTS_ENDPOINT=https://myservice.durabletask.io");
     console.log("    AZURE_DTS_TASKHUB=myTaskHub");

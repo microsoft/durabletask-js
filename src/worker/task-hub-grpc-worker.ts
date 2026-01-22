@@ -120,12 +120,7 @@ export class TaskHubGrpcWorker {
       throw new Error("The worker is already running.");
     }
 
-    const client = new GrpcClient(
-      this._hostAddress,
-      this._grpcChannelOptions,
-      this._tls,
-      this._grpcChannelCredentials,
-    );
+    const client = new GrpcClient(this._hostAddress, this._grpcChannelOptions, this._tls, this._grpcChannelCredentials);
     this._stub = client.stub;
 
     // do not await so it runs in the background

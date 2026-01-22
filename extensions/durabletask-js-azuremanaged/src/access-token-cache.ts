@@ -38,8 +38,7 @@ export class AccessTokenCache {
     if (
       this.cachedToken === null ||
       this.cachedToken.expiresOnTimestamp < nowWithMargin ||
-      (this.cachedToken.refreshAfterTimestamp !== undefined &&
-        this.cachedToken.refreshAfterTimestamp < nowWithMargin)
+      (this.cachedToken.refreshAfterTimestamp !== undefined && this.cachedToken.refreshAfterTimestamp < nowWithMargin)
     ) {
       const token = await this.credential.getToken(this.scopes, options);
       if (!token) {

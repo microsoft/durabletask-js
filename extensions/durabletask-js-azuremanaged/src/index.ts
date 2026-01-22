@@ -3,10 +3,7 @@
 
 export { DurableTaskAzureManagedConnectionString } from "./connection-string";
 export { AccessTokenCache } from "./access-token-cache";
-export {
-  DurableTaskAzureManagedClientOptions,
-  DurableTaskAzureManagedWorkerOptions,
-} from "./options";
+export { DurableTaskAzureManagedClientOptions, DurableTaskAzureManagedWorkerOptions } from "./options";
 export { getCredentialFromAuthenticationType } from "./credential-factory";
 export { getUserAgent } from "./user-agent";
 export {
@@ -18,11 +15,5 @@ export {
   DEFAULT_MAX_BACKOFF_MS,
   DEFAULT_BACKOFF_MULTIPLIER,
 } from "./retry-policy";
-export {
-  DurableTaskAzureManagedClientBuilder,
-  createAzureManagedClient,
-} from "./client-builder";
-export {
-  DurableTaskAzureManagedWorkerBuilder,
-  createAzureManagedWorkerBuilder,
-} from "./worker-builder";
+export { DurableTaskAzureManagedClientBuilder, createAzureManagedClient } from "./client-builder";
+export { DurableTaskAzureManagedWorkerBuilder, createAzureManagedWorkerBuilder } from "./worker-builder";
