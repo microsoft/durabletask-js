@@ -162,6 +162,18 @@ export class DurableTaskAzureManagedWorkerBuilder {
   }
 
   /**
+   * Sets the worker ID used to identify this worker instance.
+   * Default value is: hostname,pid,uniqueId
+   *
+   * @param workerId The worker ID.
+   * @returns This builder instance.
+   */
+  workerId(workerId: string): DurableTaskAzureManagedWorkerBuilder {
+    this._options.setWorkerId(workerId);
+    return this;
+  }
+
+  /**
    * Sets whether insecure credentials are allowed.
    *
    * @param allowInsecure True to allow insecure credentials.

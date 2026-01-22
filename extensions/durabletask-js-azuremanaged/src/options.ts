@@ -3,9 +3,22 @@
 
 import { TokenCredential } from "@azure/identity";
 import * as grpc from "@grpc/grpc-js";
+import * as os from "os";
+import * as crypto from "crypto";
 import { DurableTaskAzureManagedConnectionString } from "./connection-string";
 import { AccessTokenCache } from "./access-token-cache";
 import { getCredentialFromAuthenticationType } from "./credential-factory";
+
+/**
+ * Generates a default worker ID in the format: hostname,pid,uniqueId
+ * This matches the .NET format: {MachineName},{ProcessId},{Guid}
+ */
+function generateDefaultWorkerId(): string {
+  const hostname = os.hostname();
+  const pid = process.pid;
+  const uniqueId = crypto.randomUUID().replace(/-/g, "");
+  return `${hostname},${pid},${uniqueId}`;
+}
 
 /**
  * Options for configuring the Azure-managed Durable Task service.
@@ -17,6 +30,7 @@ export class DurableTaskAzureManagedOptions {
   private _resourceId: string = "https://durabletask.io";
   private _allowInsecureCredentials: boolean = false;
   private _tokenRefreshMargin: number = 5 * 60 * 1000; // 5 minutes in milliseconds
+  private _workerId: string = generateDefaultWorkerId();
 
   /**
    * Creates a new instance of DurableTaskAzureManagedOptions.
@@ -175,6 +189,26 @@ export class DurableTaskAzureManagedOptions {
   }
 
   /**
+   * Gets the worker ID used to identify the worker instance.
+   *
+   * @returns The worker ID.
+   */
+  getWorkerId(): string {
+    return this._workerId;
+  }
+
+  /**
+   * Sets the worker ID used to identify the worker instance.
+   *
+   * @param workerId The worker ID.
+   * @returns This options object.
+   */
+  setWorkerId(workerId: string): DurableTaskAzureManagedOptions {
+    this._workerId = workerId;
+    return this;
+  }
+
+  /**
    * Creates a gRPC channel metadata generator that includes the authorization header and task hub name.
    *
    * @returns A configured metadata generator function.
@@ -191,10 +225,12 @@ export class DurableTaskAzureManagedOptions {
     }
 
     const taskHubName = this._taskHubName;
+    const workerId = this._workerId;
 
     return (_params: { service_url: string }, callback: (error: Error | null, metadata?: grpc.Metadata) => void) => {
       const metadata = new grpc.Metadata();
       metadata.set("taskhub", taskHubName);
+      metadata.set("workerid", workerId);
 
       if (tokenCache) {
         tokenCache
