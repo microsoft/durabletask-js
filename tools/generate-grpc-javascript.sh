@@ -29,11 +29,10 @@ generateGrpc() {
         --grpc_out="grpc_js:$PATH_PROTO_OUT" \
         ${PROTO_FILE_PATH_ABSOLUTE}
 
-    PATH_PROTO_FILE_GENERATED="${PROTO_FILE_PATH_RELATIVE}/${PROTO_FILE_NAME_NO_PROTO}_pb2.py"
-    PATH_PROTO_FILE_GENERATED_GRPC="${PROTO_FILE_PATH_RELATIVE}/${PROTO_FILE_NAME_NO_PROTO}_pb2_grpc.py"
-
-    echo "- Generated '${PATH_PROTO_FILE_GENERATED}'"
-    echo "- Generated '${PATH_PROTO_FILE_GENERATED_GRPC}'"
+    echo "- Generated '${PATH_PROTO_OUT}/${PROTO_FILE_NAME_NO_PROTO}_pb.js'"
+    echo "- Generated '${PATH_PROTO_OUT}/${PROTO_FILE_NAME_NO_PROTO}_pb.d.ts'"
+    echo "- Generated '${PATH_PROTO_OUT}/${PROTO_FILE_NAME_NO_PROTO}_grpc_pb.js'"
+    echo "- Generated '${PATH_PROTO_OUT}/${PROTO_FILE_NAME_NO_PROTO}_grpc_pb.d.ts'"
 }
 
 fail_trap() {
@@ -60,8 +59,8 @@ fi
 
 echo "Checking output directory $PATH_PROTO_OUT"
 if [ ! -d "$PATH_PROTO_OUT" ]; then
-    echo "Output directory does not exist: $PATH_PROTO_OUT"
-    exit 1
+    echo "Output directory does not exist, creating: $PATH_PROTO_OUT"
+    mkdir -p "$PATH_PROTO_OUT"
 fi
 
 # Ensure grpc-tools has been installed by npm (check local node_modules)
@@ -76,9 +75,6 @@ fi
 
 # # We output proto files in the dir proto/
 # PATH_PROTO_OUT=$PATH_PROTO_OUT
-
-echo "Creating output directory $PATH_PROTO_OUT"
-mkdir -p $PATH_PROTO_OUT
 
 echo "=============================================="
 

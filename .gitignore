@@ -146,6 +146,10 @@ build/
 # version file is auto-generated
 src/version.ts
 
+# Generated proto bindings - regenerated at build time from internal/durabletask-protobuf/
+# Following .NET's pattern of not committing generated protobuf code
+src/proto/
+
 ### vscode ###
 .vscode
 !.vscode/settings.json
