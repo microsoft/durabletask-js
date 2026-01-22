@@ -2,22 +2,22 @@
   "name": "@microsoft/durabletask-js-azuremanaged",
   "version": "0.1.0-alpha.1",
   "description": "Azure-managed Durable Task Scheduler support for the Durable Task JavaScript SDK",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./build/index.js",
+  "types": "./build/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "require": "./dist/index.js",
-      "import": "./dist/index.js"
+      "types": "./build/index.d.ts",
+      "require": "./build/index.js",
+      "import": "./build/index.js"
     }
   },
   "files": [
-    "dist",
+    "build",
     "LICENSE",
     "README.md"
   ],
   "scripts": {
-    "clean": "node -e \"require('fs').rmSync('dist', {recursive:true, force:true})\"",
+    "clean": "node -e \"require('fs').rmSync('build', {recursive:true, force:true})\"",
     "build": "npm run clean && tsc",
     "test": "jest --runInBand --detectOpenHandles",
     "test:unit": "jest test/unit --runInBand --detectOpenHandles",
