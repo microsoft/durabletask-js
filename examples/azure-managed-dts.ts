@@ -7,13 +7,14 @@
 
 // Load environment variables from .env file (recommended for local development)
 import * as dotenv from "dotenv";
-dotenv.config();
+import * as path from "path";
+dotenv.config({ path: path.join(__dirname, '.env') });
 
 import { DefaultAzureCredential } from "@azure/identity";
 import {
   createAzureManagedClient,
   createAzureManagedWorkerBuilder,
-} from "../extensions/durabletask-js-azuremanaged/src";
+} from "../extensions/durabletask-js-azuremanaged/dist";
 import { ActivityContext } from "../src/task/context/activity-context";
 import { OrchestrationContext } from "../src/task/context/orchestration-context";
 import { TOrchestrator } from "../src/types/orchestrator.type";

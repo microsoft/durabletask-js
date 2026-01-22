@@ -2,6 +2,7 @@
   "name": "@microsoft/durabletask-js",
   "version": "0.1.0-alpha.2",
   "description": "A Durable Task Javascript SDK compatible with Dapr Workflow and its underlying Durable Task engine",
+  "main": "./build/index.js",
   "types": "./build/index.d.ts",
   "scripts": {
     "test": "jest --runInBand --detectOpenHandles",
@@ -38,6 +39,7 @@
   },
   "homepage": "https://github.com/microsoft/durabletask-js#readme",
   "devDependencies": {
+    "@azure/identity": "^4.13.0",
     "@swc/core": "^1.3.55",
     "@swc/helpers": "^0.5.1",
     "@types/body-parser": "^1.19.1",
@@ -48,6 +50,7 @@
     "@types/uuid": "^8.3.1",
     "@typescript-eslint/eslint-plugin": "^5.1.0",
     "@typescript-eslint/parser": "^5.1.0",
+    "dotenv": "^17.2.3",
     "eslint": "^8.1.0",
     "eslint-config-prettier": "^8.5.0",
     "eslint-plugin-header": "^3.1.1",
