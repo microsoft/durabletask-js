@@ -133,8 +133,6 @@ export class DurableTaskAzureManagedClientBuilder {
     const channelCredentials = this._options.createChannelCredentials();
 
     const defaultOptions: grpc.ChannelOptions = {
-      "grpc.max_receive_message_length": -1,
-      "grpc.max_send_message_length": -1,
       "grpc.primary_user_agent": "durabletask-js-azuremanaged",
       "grpc.enable_retries": 1,
       "grpc.service_config": this._options.getServiceConfig(),
