@@ -4,6 +4,7 @@
 import { TokenCredential } from "@azure/identity";
 import * as grpc from "@grpc/grpc-js";
 import { DurableTaskAzureManagedOptions } from "./options";
+import { ClientRetryOptions } from "./retry-policy";
 import { TaskHubGrpcClient } from "@microsoft/durabletask-js";
 
 /**
@@ -129,6 +130,17 @@ export class DurableTaskAzureManagedClientBuilder {
   }
 
   /**
+   * Sets the retry options for gRPC calls.
+   *
+   * @param options The retry options.
+   * @returns This builder instance.
+   */
+  retryOptions(options: ClientRetryOptions): DurableTaskAzureManagedClientBuilder {
+    this._options.setRetryOptions(options);
+    return this;
+  }
+
+  /**
    * Builds and returns a configured TaskHubGrpcClient.
    *
    * @returns A new configured TaskHubGrpcClient instance.
@@ -141,6 +153,8 @@ export class DurableTaskAzureManagedClientBuilder {
       "grpc.max_receive_message_length": -1,
       "grpc.max_send_message_length": -1,
       "grpc.primary_user_agent": "durabletask-js-azuremanaged",
+      "grpc.enable_retries": 1,
+      "grpc.service_config": this._options.getServiceConfig(),
     };
 
     const combinedOptions = {

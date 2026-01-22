@@ -9,6 +9,7 @@ import { DurableTaskAzureManagedConnectionString } from "./connection-string";
 import { AccessTokenCache } from "./access-token-cache";
 import { getCredentialFromAuthenticationType } from "./credential-factory";
 import { getUserAgent } from "./user-agent";
+import { ClientRetryOptions, createServiceConfig, DEFAULT_SERVICE_CONFIG } from "./retry-policy";
 
 /**
  * Generates a default worker ID in the format: hostname,pid,uniqueId
@@ -32,6 +33,7 @@ export class DurableTaskAzureManagedOptions {
   private _allowInsecureCredentials: boolean = false;
   private _tokenRefreshMargin: number = 5 * 60 * 1000; // 5 minutes in milliseconds
   private _workerId: string = generateDefaultWorkerId();
+  private _retryOptions: ClientRetryOptions | undefined = undefined;
 
   /**
    * Creates a new instance of DurableTaskAzureManagedOptions.
@@ -207,6 +209,38 @@ export class DurableTaskAzureManagedOptions {
   setWorkerId(workerId: string): DurableTaskAzureManagedOptions {
     this._workerId = workerId;
     return this;
+  }
+
+  /**
+   * Gets the retry options for gRPC calls.
+   *
+   * @returns The retry options, or undefined if using defaults.
+   */
+  getRetryOptions(): ClientRetryOptions | undefined {
+    return this._retryOptions;
+  }
+
+  /**
+   * Sets the retry options for gRPC calls.
+   *
+   * @param retryOptions The retry options.
+   * @returns This options object.
+   */
+  setRetryOptions(retryOptions: ClientRetryOptions): DurableTaskAzureManagedOptions {
+    this._retryOptions = retryOptions;
+    return this;
+  }
+
+  /**
+   * Gets the gRPC service config JSON string with retry policy.
+   *
+   * @returns The service config JSON string.
+   */
+  getServiceConfig(): string {
+    if (this._retryOptions) {
+      return createServiceConfig(this._retryOptions);
+    }
+    return DEFAULT_SERVICE_CONFIG;
   }
 
   /**
