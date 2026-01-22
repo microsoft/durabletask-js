@@ -8,23 +8,6 @@ import { ClientRetryOptions } from "./retry-policy";
 import { TaskHubGrpcClient } from "@microsoft/durabletask-js";
 
 /**
- * A wrapper around TaskHubGrpcClient that provides Azure-managed-specific configuration.
- * This allows the gRPC client to be created with Azure-managed credentials and options.
- *
- * Note: This class uses type assertions to set the internal stub property since the
- * parent class doesn't provide a protected setter. This is intentional to maintain
- * backward compatibility while enabling Azure-managed-specific authentication.
- */
-export class AzureManagedTaskHubGrpcClient extends TaskHubGrpcClient {
-  constructor(stub: grpc.Client) {
-    super();
-    // Set the internal stub directly since the parent class doesn't provide a setter
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (this as any)._stub = stub;
-  }
-}
-
-/**
  * Builder for creating DurableTaskClient instances that connect to Azure-managed Durable Task service.
  * This class provides various methods to create and configure clients using either connection strings or explicit parameters.
  */
@@ -162,11 +145,8 @@ export class DurableTaskAzureManagedClientBuilder {
       ...this._grpcChannelOptions,
     };
 
-    // Dynamically require the proto stubs from the main package
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const stubs = require("@microsoft/durabletask-js/dist/proto/orchestrator_service_grpc_pb");
-    const stub = new stubs.TaskHubSidecarServiceClient(hostAddress, channelCredentials, combinedOptions);
-    return new AzureManagedTaskHubGrpcClient(stub);
+    // Use the core TaskHubGrpcClient with custom credentials (no inheritance needed)
+    return new TaskHubGrpcClient(hostAddress, combinedOptions, true, channelCredentials);
   }
 }
 

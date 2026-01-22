@@ -22,8 +22,21 @@ import * as grpc from "@grpc/grpc-js";
 export class TaskHubGrpcClient {
   private _stub: stubs.TaskHubSidecarServiceClient;
 
-  constructor(hostAddress?: string, option?: grpc.ChannelOptions, useTLS?: boolean) {
-    this._stub = new GrpcClient(hostAddress, option, useTLS).stub;
+  /**
+   * Creates a new TaskHubGrpcClient instance.
+   *
+   * @param hostAddress The host address to connect to. Defaults to "localhost:4001".
+   * @param options gRPC channel options.
+   * @param useTLS Whether to use TLS. Defaults to false.
+   * @param credentials Optional pre-configured channel credentials. If provided, useTLS is ignored.
+   */
+  constructor(
+    hostAddress?: string,
+    options?: grpc.ChannelOptions,
+    useTLS?: boolean,
+    credentials?: grpc.ChannelCredentials,
+  ) {
+    this._stub = new GrpcClient(hostAddress, options, useTLS, credentials).stub;
   }
 
   async stop(): Promise<void> {

@@ -14,70 +14,6 @@ type TInput = any;
 type TOutput = any;
 
 /**
- * A wrapper around TaskHubGrpcWorker that provides Azure-managed-specific configuration.
- * This allows the gRPC worker to be created with Azure-managed credentials and options.
- */
-export class AzureManagedTaskHubGrpcWorker extends TaskHubGrpcWorker {
-  private _azureManagedHostAddress: string;
-  private _azureManagedCredentials: grpc.ChannelCredentials;
-  private _azureManagedChannelOptions: grpc.ChannelOptions;
-
-  constructor(hostAddress: string, credentials: grpc.ChannelCredentials, channelOptions: grpc.ChannelOptions) {
-    super();
-    this._azureManagedHostAddress = hostAddress;
-    this._azureManagedCredentials = credentials;
-    this._azureManagedChannelOptions = channelOptions;
-  }
-
-  /**
-   * Overrides the parent start method to use Azure-managed-specific configuration.
-   */
-  override async start(): Promise<void> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const self = this as any;
-
-    if (self._isRunning) {
-      throw new Error("The worker is already running.");
-    }
-
-    // Dynamically require the proto stubs from the main package
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const stubs = require("@microsoft/durabletask-js/dist/proto/orchestrator_service_grpc_pb");
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { GrpcClient } = require("@microsoft/durabletask-js/dist/client/client-grpc");
-
-    // Create the gRPC client with Azure-managed-specific configuration
-    const stub = new stubs.TaskHubSidecarServiceClient(
-      this._azureManagedHostAddress,
-      this._azureManagedCredentials,
-      this._azureManagedChannelOptions,
-    );
-
-    self._stub = stub;
-
-    // Create a GrpcClient-compatible adapter
-    class AzureManagedGrpcClientAdapter extends GrpcClient {
-      private readonly _azureManagedStub: any;
-
-      constructor(azureManagedStub: any) {
-        super("localhost:4001", {}, false);
-        this._azureManagedStub = azureManagedStub;
-      }
-
-      get stub(): any {
-        return this._azureManagedStub;
-      }
-    }
-
-    const clientAdapter = new AzureManagedGrpcClientAdapter(stub);
-
-    // Call the internal worker method
-    self.internalRunWorker(clientAdapter);
-    self._isRunning = true;
-  }
-}
-
-/**
  * Builder for creating DurableTaskWorker instances that connect to Azure-managed Durable Task service.
  * This class provides various methods to create and configure workers using either connection strings or explicit parameters.
  */
@@ -275,7 +211,8 @@ export class DurableTaskAzureManagedWorkerBuilder {
       ...this._grpcChannelOptions,
     };
 
-    const worker = new AzureManagedTaskHubGrpcWorker(hostAddress, channelCredentials, combinedOptions);
+    // Use the core TaskHubGrpcWorker with custom credentials (no inheritance needed)
+    const worker = new TaskHubGrpcWorker(hostAddress, combinedOptions, true, channelCredentials);
 
     // Register all orchestrators
     for (const { name, fn } of this._orchestrators) {

@@ -20,11 +20,9 @@ export {
 } from "./retry-policy";
 export {
   DurableTaskAzureManagedClientBuilder,
-  AzureManagedTaskHubGrpcClient,
   createAzureManagedClient,
 } from "./client-builder";
 export {
   DurableTaskAzureManagedWorkerBuilder,
-  AzureManagedTaskHubGrpcWorker,
   createAzureManagedWorkerBuilder,
 } from "./worker-builder";

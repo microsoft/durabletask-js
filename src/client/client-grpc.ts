@@ -8,12 +8,27 @@ export class GrpcClient {
   private readonly _hostAddress: string;
   private readonly _tls: boolean;
   private readonly _options: grpc.ChannelOptions;
+  private readonly _credentials?: grpc.ChannelCredentials;
   private _stub: stubs.TaskHubSidecarServiceClient;
 
-  constructor(hostAddress: string = "localhost:4001", options: grpc.ChannelOptions = {}, useTLS: boolean = false) {
+  /**
+   * Creates a new GrpcClient instance.
+   *
+   * @param hostAddress The host address to connect to. Defaults to "localhost:4001".
+   * @param options gRPC channel options.
+   * @param useTLS Whether to use TLS. Defaults to false.
+   * @param credentials Optional pre-configured channel credentials. If provided, useTLS is ignored.
+   */
+  constructor(
+    hostAddress: string = "localhost:4001",
+    options: grpc.ChannelOptions = {},
+    useTLS: boolean = false,
+    credentials?: grpc.ChannelCredentials,
+  ) {
     this._hostAddress = hostAddress;
     this._tls = useTLS;
     this._options = this._generateChannelOptions(options);
+    this._credentials = credentials;
     this._stub = this._generateClient();
   }
 
@@ -22,7 +37,7 @@ export class GrpcClient {
   }
 
   _generateClient(): stubs.TaskHubSidecarServiceClient {
-    const channelCreds = this._generateCredentials();
+    const channelCreds = this._credentials ?? this._generateCredentials();
     return new stubs.TaskHubSidecarServiceClient(this._hostAddress, channelCreds, this._options);
   }
 

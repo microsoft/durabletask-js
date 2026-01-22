@@ -23,15 +23,30 @@ export class TaskHubGrpcWorker {
   private _hostAddress?: string;
   private _tls?: boolean;
   private _grpcChannelOptions?: grpc.ChannelOptions;
+  private _grpcChannelCredentials?: grpc.ChannelCredentials;
   private _isRunning: boolean;
   private _stopWorker: boolean;
   private _stub: stubs.TaskHubSidecarServiceClient | null;
 
-  constructor(hostAddress?: string, options?: grpc.ChannelOptions, useTLS?: boolean) {
+  /**
+   * Creates a new TaskHubGrpcWorker instance.
+   *
+   * @param hostAddress The host address to connect to. Defaults to "localhost:4001".
+   * @param options gRPC channel options.
+   * @param useTLS Whether to use TLS. Defaults to false.
+   * @param credentials Optional pre-configured channel credentials. If provided, useTLS is ignored.
+   */
+  constructor(
+    hostAddress?: string,
+    options?: grpc.ChannelOptions,
+    useTLS?: boolean,
+    credentials?: grpc.ChannelCredentials,
+  ) {
     this._registry = new Registry();
     this._hostAddress = hostAddress;
     this._tls = useTLS;
     this._grpcChannelOptions = options;
+    this._grpcChannelCredentials = credentials;
     this._responseStream = null;
     this._isRunning = false;
     this._stopWorker = false;
@@ -105,7 +120,12 @@ export class TaskHubGrpcWorker {
       throw new Error("The worker is already running.");
     }
 
-    const client = new GrpcClient(this._hostAddress, this._grpcChannelOptions, this._tls);
+    const client = new GrpcClient(
+      this._hostAddress,
+      this._grpcChannelOptions,
+      this._tls,
+      this._grpcChannelCredentials,
+    );
     this._stub = client.stub;
 
     // do not await so it runs in the background
