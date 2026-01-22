@@ -35,7 +35,12 @@ export class AccessTokenCache {
   async getToken(options?: GetTokenOptions): Promise<AccessToken> {
     const nowWithMargin = Date.now() + this.margin;
 
-    if (this.cachedToken === null || this.cachedToken.expiresOnTimestamp < nowWithMargin) {
+    if (
+      this.cachedToken === null ||
+      this.cachedToken.expiresOnTimestamp < nowWithMargin ||
+      (this.cachedToken.refreshAfterTimestamp !== undefined &&
+        this.cachedToken.refreshAfterTimestamp < nowWithMargin)
+    ) {
       const token = await this.credential.getToken(this.scopes, options);
       if (!token) {
         throw new Error("Failed to obtain access token from credential");

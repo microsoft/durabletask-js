@@ -2,20 +2,6 @@
 // Licensed under the MIT License.
 
 /**
- * Supported authentication types for Azure-managed Durable Task connection strings.
- */
-export type AuthenticationType =
-  | "DefaultAzure"
-  | "ManagedIdentity"
-  | "WorkloadIdentity"
-  | "Environment"
-  | "AzureCli"
-  | "AzurePowerShell"
-  | "VisualStudioCode"
-  | "InteractiveBrowser"
-  | "None";
-
-/**
  * Represents the constituent parts of a connection string for an Azure-managed Durable Task service.
  */
 export class DurableTaskAzureManagedConnectionString {
@@ -43,8 +29,8 @@ export class DurableTaskAzureManagedConnectionString {
    * Gets the authentication method specified in the connection string.
    * @returns The authentication method.
    */
-  getAuthentication(): AuthenticationType {
-    return this.getRequiredValue("Authentication") as AuthenticationType;
+  getAuthentication(): string {
+    return this.getRequiredValue("Authentication");
   }
 
   /**

@@ -12,7 +12,7 @@ import {
   VisualStudioCodeCredential,
   InteractiveBrowserCredential,
 } from "@azure/identity";
-import { DurableTaskAzureManagedConnectionString, AuthenticationType } from "./connection-string";
+import { DurableTaskAzureManagedConnectionString } from "./connection-string";
 
 /**
  * Creates a TokenCredential based on the authentication type specified in the connection string.
@@ -24,7 +24,7 @@ import { DurableTaskAzureManagedConnectionString, AuthenticationType } from "./c
 export function getCredentialFromAuthenticationType(
   connectionString: DurableTaskAzureManagedConnectionString,
 ): TokenCredential | null {
-  const authType = connectionString.getAuthentication().toLowerCase().trim() as Lowercase<AuthenticationType>;
+  const authType = connectionString.getAuthentication().toLowerCase().trim();
 
   switch (authType) {
     case "defaultazure":
