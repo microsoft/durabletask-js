@@ -177,6 +177,10 @@ export class TaskHubGrpcWorker {
       });
 
       stream.on("error", (err: Error) => {
+        // Ignore cancellation errors when the worker is being stopped intentionally
+        if (this._stopWorker) {
+          return;
+        }
         console.log("Stream error", err);
       });
     } catch (err) {

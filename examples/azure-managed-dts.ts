@@ -155,5 +155,6 @@ import { Task } from "../src/task/task";
       await client.stop();
     }
     console.log("Cleanup complete.");
+    process.exit(0);
   }
 })();
