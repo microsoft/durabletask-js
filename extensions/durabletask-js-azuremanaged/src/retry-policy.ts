@@ -56,6 +56,7 @@ export interface ClientRetryOptions {
 
 /**
  * Converts a gRPC status code to its string name for use in service config.
+ * Ref: https://grpc.io/docs/guides/status-codes/
  */
 function statusCodeToName(code: GrpcStatus): string {
   const statusNames: Record<number, string> = {
