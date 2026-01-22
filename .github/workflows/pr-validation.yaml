@@ -8,29 +8,22 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
-  build:
+  lint-and-unit-tests:
     runs-on: ubuntu-latest
 
     env:
-      NODE_VER: 16.14.0
-
-    services:
-      # docker run --name durabletask-sidecar -p 4001:4001 --env 'DURABLETASK_SIDECAR_LOGLEVEL=Debug' --rm cgillum/durabletask-sidecar:latest start --backend Emulator
-      durabletask-sidecar:
-        image: cgillum/durabletask-sidecar:latest
-        ports:
-          - 4001:4001
-        env:
-          DURABLETASK_SIDECAR_LOGLEVEL: Debug
-          DURABLETASK_STORAGE_PROVIDER: Emulator
+      NODE_VER: 18.x
 
     steps:
       - name: 📥 Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: ⚙️ NodeJS - Install
-        uses: actions/setup-node@v2
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VER }}
           registry-url: "https://registry.npmjs.org"
@@ -38,8 +31,43 @@ jobs:
       - name: ⚙️ Install dependencies
         run: npm install
 
-      - name: ✅ Run unit tests
-        run: npm test test/unit
+      - name: 🔍 Run linting
+        run: npm run lint
 
-      - name: ✅ Run e2e tests
-        run: ./scripts/test-e2e.sh
+      - name: ✅ Run unit tests
+        run: npm run test:unit
+
+  e2e-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["18.x", "20.x", "22.x"]
+    needs: lint-and-unit-tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: ⚙️ NodeJS - Install
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          registry-url: "https://registry.npmjs.org"
+
+      - name: ⚙️ Install dependencies
+        run: npm install
+
+      # Install Go SDK for durabletask-go sidecar
+      - name: 🔧 Install Go SDK
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
+      # Install and run the durabletask-go sidecar for running e2e tests
+      - name: ✅ Run E2E tests with durabletask-go sidecar
+        run: |
+          go install github.com/microsoft/durabletask-go@main
+          durabletask-go --port 4001 &
+          sleep 5  # Wait for sidecar to be ready
+          npm run test:e2e:internal

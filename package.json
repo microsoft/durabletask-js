@@ -10,6 +10,8 @@
     "test:e2e:internal": "jest test/e2e --runInBand --detectOpenHandles",
     "test:e2e": "./scripts/test-e2e.sh",
     "test:e2e:one": "jest test/e2e --runInBand --detectOpenHandles --testNamePattern",
+    "test:e2e:azuremanaged:internal": "jest test/e2e-azuremanaged --runInBand --detectOpenHandles",
+    "test:e2e:azuremanaged": "./scripts/test-e2e-azuremanaged.sh",
     "start": "ts-node --swc ./src/index.ts",
     "example": "ts-node --swc",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",

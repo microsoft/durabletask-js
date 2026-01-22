@@ -1,6 +1,19 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+/**
+ * E2E tests for Durable Task using durabletask-go sidecar.
+ *
+ * NOTE: These tests assume a sidecar process is running. Example command:
+ *       go install github.com/microsoft/durabletask-go@main
+ *       durabletask-go --port 4001
+ *
+ * Alternatively, you can use the Docker sidecar:
+ *       docker run --name durabletask-sidecar -p 4001:4001 \
+ *         --env 'DURABLETASK_SIDECAR_LOGLEVEL=Debug' \
+ *         cgillum/durabletask-sidecar:latest start --backend Emulator
+ */
+
 import { TaskHubGrpcClient } from "../../src/client/client";
 import { PurgeInstanceCriteria } from "../../src/orchestration/orchestration-purge-criteria";
 import { OrchestrationStatus } from "../../src/proto/orchestrator_service_pb";
