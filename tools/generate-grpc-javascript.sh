@@ -16,10 +16,11 @@ generateGrpc() {
 
     # Tools to be installed by npm (see package.json)
     PROTOC_GEN_TS_PATH="${PATH_ROOT}/node_modules/.bin/protoc-gen-ts"
-    PROTOC_GEN_GRPC_PATH=$(which grpc_tools_node_protoc_plugin)
+    PROTOC_GEN_GRPC_PATH="${PATH_ROOT}/node_modules/.bin/grpc_tools_node_protoc_plugin"
+    GRPC_TOOLS_PROTOC="${PATH_ROOT}/node_modules/.bin/grpc_tools_node_protoc"
 
     echo "Processing '$PROTO_FILE_PATH_ABSOLUTE'..."
-    protoc \
+    $GRPC_TOOLS_PROTOC \
         --proto_path=${PATH_PROTO_SRC} \
         --plugin="protoc-gen-ts=${PROTOC_GEN_TS_PATH}" \
         --plugin=protoc-gen-grpc=${PROTOC_GEN_GRPC_PATH} \
@@ -63,14 +64,14 @@ if [ ! -d "$PATH_PROTO_OUT" ]; then
     exit 1
 fi
 
-# Ensure grpc-tools has been installed by npm globally with npm list -g
+# Ensure grpc-tools has been installed by npm (check local node_modules)
 echo "Checking grpc-tools"
 
-if [ ! $(npm list -g | grep grpc-tools | wc -l) -gt 0  ]; then
-    echo "grpc-tools not installed. Installing..."
-    npm install -g grpc-tools
+if [ ! -f "${PATH_ROOT}/node_modules/.bin/grpc_tools_node_protoc" ]; then
+    echo "grpc-tools not installed. Please run 'npm install' first."
+    exit 1
 else
-    echo "grpc-tools already installed"
+    echo "grpc-tools found in node_modules"
 fi
 
 # # We output proto files in the dir proto/

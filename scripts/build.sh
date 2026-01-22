@@ -33,7 +33,7 @@ mkdir build/
 
 # Build Package
 echo "Building Library"
-npx tsc --outDir ./build/
+npx tsc
 
 # Prepare Publish
 echo "Preparing Publish"

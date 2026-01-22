@@ -6,10 +6,6 @@ import {
   DurableTaskAzureManagedWorkerOptions,
 } from "../../src/options";
 import { TokenCredential, AccessToken, GetTokenOptions } from "@azure/identity";
-import { Metadata } from "@grpc/grpc-js";
-
-// Callback type for metadata generator
-type MetadataCallback = (error: Error | null, metadata?: Metadata) => void;
 
 // Mock TokenCredential for testing
 class MockTokenCredential implements TokenCredential {
