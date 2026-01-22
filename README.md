@@ -145,29 +145,21 @@ See the [examples](./examples) directory for a list of sample orchestrations and
 
 ### Generating protobufs
 
-Protobuf definitions are stored in the [./submodules/durabletask-proto](./submodules/durabletask-proto) directory, which is a submodule. To update the submodule, run the following command from the project root:
+Protobuf definitions are downloaded from the [durabletask-protobuf](https://github.com/microsoft/durabletask-protobuf) repository. To download the latest proto files, run:
 
 ```sh
-git submodule update --init
+npm run download-proto
 ```
 
-Once the submodule is available, the corresponding source code can be regenerated using the following command from the project root:
+This will download the proto files to `internal/durabletask-protobuf/protos/`.
+
+Once the proto files are available, the corresponding TypeScript source code can be regenerated using the following command from the project root:
 
 ```sh
-npm install grpc_tools_node_protoc_ts --save-dev
-
-# generate js codes via grpc-tools
-grpc_tools_node_protoc \
---js_out=import_style=commonjs,binary:src/proto \
---grpc_out=grpc_js:src/proto \
---plugin=protoc-gen-grpc=`which grpc_tools_node_protoc_plugin` \
--I ./submodules/durabletask-protobuf/protos orchestrator_service.proto
-
-protoc \
---plugin=protoc-gen-ts=./node_modules/.bin/protoc-gen-ts \
---ts_out=grpc_js:src/proto \
--I ./submodules/durabletask-protobuf/protos orchestrator_service.proto
+./tools/generate-grpc-javascript.sh ./src/proto
 ```
+
+Note: You need `grpc-tools` installed globally (`npm install -g grpc-tools`).
 
 ### Running unit tests
 

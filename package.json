@@ -17,11 +17,12 @@
     "dev": "nodemon --watch './src/**/*.ts' --exec 'ts-node --swc' ./src/index.ts",
     "pretty": "prettier --list-different \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "pretty-fix": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
+    "download-proto": "./scripts/download-proto.sh",
     "prebuild": "./scripts/prebuild.sh",
-    "build": "npm install && npm run lint && npm run pretty && ./scripts/build.sh",
+    "build": "npm install && npm run download-proto && npm run lint && npm run pretty && ./scripts/build.sh",
     "build:extensions": "npm run build:azuremanaged",
-    "build:azuremanaged": "cd extensions/durabletask-js-azuremanaged && npm install && npm run build",
-    "test:azuremanaged": "cd extensions/durabletask-js-azuremanaged && npm test",
+    "build:ext:azuremanaged": "cd extensions/durabletask-js-azuremanaged && npm install && npm run build",
+    "test:ext:azuremanaged": "cd extensions/durabletask-js-azuremanaged && npm test",
     "build:all": "npm run build && npm run build:extensions"
   },
   "engines": {
