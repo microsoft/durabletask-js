@@ -11,7 +11,6 @@ jobs:
                 sbomBuildComponentPath: "$(Build.SourcesDirectory)/node_modules"
       steps:
           - checkout: self
-            submodules: true
           - task: NodeTool@0
             inputs:
                 versionSpec: 20.x
