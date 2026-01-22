@@ -386,10 +386,3 @@ export class DurableTaskAzureManagedWorkerOptions extends DurableTaskAzureManage
     return this.createChannelCredentialsInternal("DurableTaskWorker", this._workerId);
   }
 }
-
-/**
- * @deprecated Use DurableTaskAzureManagedClientOptions or DurableTaskAzureManagedWorkerOptions instead.
- * This alias is kept for backward compatibility. It maps to WorkerOptions to maintain the original behavior
- * where workerId was always sent.
- */
-export { DurableTaskAzureManagedWorkerOptions as DurableTaskAzureManagedOptions };

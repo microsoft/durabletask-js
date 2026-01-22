@@ -1,15 +1,3 @@
-## Unreleased
-
-### New
-
-- Add new `@microsoft/durabletask-js-azuremanaged` package for Azure-managed Durable Task support ([#XX](https://github.com/microsoft/durabletask-js/pull/XX))
-  - `DurableTaskAzureManagedConnectionString` for parsing connection strings
-  - `DurableTaskAzureManagedOptions` for client/worker configuration
-  - `DurableTaskAzureManagedClientBuilder` for creating Azure-managed-connected clients
-  - `DurableTaskAzureManagedWorkerBuilder` for creating Azure-managed-connected workers
-  - `createAzureManagedClient` and `createAzureManagedWorkerBuilder` helper functions
-  - Support for Azure authentication via `@azure/identity`
-
 ## v0.1.0-alpha.2
 
 ### New

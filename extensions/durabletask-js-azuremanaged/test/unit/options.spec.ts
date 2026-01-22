@@ -4,7 +4,6 @@
 import {
   DurableTaskAzureManagedClientOptions,
   DurableTaskAzureManagedWorkerOptions,
-  DurableTaskAzureManagedOptions,
 } from "../../src/options";
 import { TokenCredential, AccessToken, GetTokenOptions } from "@azure/identity";
 import { Metadata } from "@grpc/grpc-js";
@@ -22,7 +21,7 @@ class MockTokenCredential implements TokenCredential {
   }
 }
 
-describe("DurableTaskAzureManagedOptions", () => {
+describe("Options", () => {
   const VALID_CONNECTION_STRING = "Endpoint=https://example.com;Authentication=None;TaskHub=myTaskHub";
   const VALID_ENDPOINT = "https://example.com";
   const VALID_TASKHUB = "myTaskHub";
@@ -324,17 +323,6 @@ describe("DurableTaskAzureManagedOptions", () => {
           done();
         });
       });
-    });
-  });
-
-  describe("Backward compatibility", () => {
-    it("should export DurableTaskAzureManagedOptions as alias for WorkerOptions", () => {
-      // DurableTaskAzureManagedOptions is aliased to WorkerOptions for backward compatibility
-      const options = new DurableTaskAzureManagedOptions();
-
-      // Should have workerId since it's now WorkerOptions
-      expect(options.getWorkerId).toBeDefined();
-      expect(typeof options.getWorkerId()).toBe("string");
     });
   });
 });

@@ -78,7 +78,8 @@ Endpoint=<endpoint>;Authentication=<auth-type>;TaskHub=<task-hub-name>[;ClientID
 ### Classes
 
 - `DurableTaskAzureManagedConnectionString` - Parses connection strings
-- `DurableTaskAzureManagedOptions` - Configuration options
+- `DurableTaskAzureManagedClientOptions` - Client configuration
+- `DurableTaskAzureManagedWorkerOptions` - Worker configuration
 - `DurableTaskAzureManagedClientBuilder` - Builder for creating clients
 - `DurableTaskAzureManagedWorkerBuilder` - Builder for creating workers
 - `AzureManagedTaskHubGrpcClient` - Client implementation
