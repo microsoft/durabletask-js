@@ -3,8 +3,6 @@
 
 import { TokenCredential } from "@azure/identity";
 import * as grpc from "@grpc/grpc-js";
-import * as os from "os";
-import * as crypto from "crypto";
 import { DurableTaskAzureManagedConnectionString } from "./connection-string";
 import { AccessTokenCache } from "./access-token-cache";
 import { getCredentialFromAuthenticationType } from "./credential-factory";
@@ -12,300 +10,75 @@ import { getUserAgent } from "./user-agent";
 import { ClientRetryOptions, createServiceConfig, DEFAULT_SERVICE_CONFIG } from "./retry-policy";
 
 /**
- * Generates a default worker ID in the format: hostname,pid,uniqueId
- * This matches the .NET format: {MachineName},{ProcessId},{Guid}
+ * Base options for configuring the Azure-managed Durable Task service.
+ * Contains properties common to both client and worker configurations.
  */
-function generateDefaultWorkerId(): string {
-  const hostname = os.hostname();
-  const pid = process.pid;
-  const uniqueId = crypto.randomUUID().replace(/-/g, "");
-  return `${hostname},${pid},${uniqueId}`;
-}
-
-/**
- * Options for configuring the Azure-managed Durable Task service.
- */
-export class DurableTaskAzureManagedOptions {
-  private _endpointAddress: string = "";
-  private _taskHubName: string = "";
-  private _credential: TokenCredential | null = null;
-  private _resourceId: string = "https://durabletask.io";
-  private _allowInsecureCredentials: boolean = false;
-  private _tokenRefreshMargin: number = 5 * 60 * 1000; // 5 minutes in milliseconds
-  private _workerId: string = generateDefaultWorkerId();
-  private _retryOptions: ClientRetryOptions | undefined = undefined;
-
-  /**
-   * Creates a new instance of DurableTaskAzureManagedOptions.
-   */
-  constructor() {}
-
-  /**
-   * Creates a new instance of DurableTaskAzureManagedOptions from a connection string.
-   *
-   * @param connectionString The connection string to parse.
-   * @returns A new DurableTaskAzureManagedOptions object.
-   */
-  static fromConnectionString(connectionString: string): DurableTaskAzureManagedOptions {
-    const parsedConnectionString = new DurableTaskAzureManagedConnectionString(connectionString);
-    return DurableTaskAzureManagedOptions.fromParsedConnectionString(parsedConnectionString);
-  }
-
-  /**
-   * Creates a new instance of DurableTaskAzureManagedOptions from a parsed connection string.
-   *
-   * @param connectionString The parsed connection string.
-   * @returns A new DurableTaskAzureManagedOptions object.
-   */
-  static fromParsedConnectionString(
-    connectionString: DurableTaskAzureManagedConnectionString,
-  ): DurableTaskAzureManagedOptions {
-    const options = new DurableTaskAzureManagedOptions();
-    options.setEndpointAddress(connectionString.getEndpoint());
-    options.setTaskHubName(connectionString.getTaskHubName());
-
-    const credential = getCredentialFromAuthenticationType(connectionString);
-    options.setCredential(credential);
-    options.setAllowInsecureCredentials(credential === null);
-
-    return options;
-  }
+abstract class DurableTaskAzureManagedOptionsBase {
+  protected _endpointAddress: string = "";
+  protected _taskHubName: string = "";
+  protected _credential: TokenCredential | null = null;
+  protected _resourceId: string = "https://durabletask.io";
+  protected _allowInsecureCredentials: boolean = false;
+  protected _tokenRefreshMargin: number = 5 * 60 * 1000; // 5 minutes in milliseconds
+  protected _retryOptions: ClientRetryOptions | undefined = undefined;
 
   /**
    * Gets the endpoint address.
-   *
-   * @returns The endpoint address.
    */
   getEndpointAddress(): string {
     return this._endpointAddress;
   }
 
   /**
-   * Sets the endpoint address.
-   *
-   * @param endpointAddress The endpoint address.
-   * @returns This options object.
-   */
-  setEndpointAddress(endpointAddress: string): DurableTaskAzureManagedOptions {
-    this._endpointAddress = endpointAddress;
-    return this;
-  }
-
-  /**
    * Gets the task hub name.
-   *
-   * @returns The task hub name.
    */
   getTaskHubName(): string {
     return this._taskHubName;
   }
 
   /**
-   * Sets the task hub name.
-   *
-   * @param taskHubName The task hub name.
-   * @returns This options object.
-   */
-  setTaskHubName(taskHubName: string): DurableTaskAzureManagedOptions {
-    this._taskHubName = taskHubName;
-    return this;
-  }
-
-  /**
    * Gets the credential used for authentication.
-   *
-   * @returns The credential.
    */
   getCredential(): TokenCredential | null {
     return this._credential;
   }
 
   /**
-   * Sets the credential used for authentication.
-   *
-   * @param credential The credential.
-   * @returns This options object.
-   */
-  setCredential(credential: TokenCredential | null): DurableTaskAzureManagedOptions {
-    this._credential = credential;
-    return this;
-  }
-
-  /**
    * Gets the resource ID.
-   *
-   * @returns The resource ID.
    */
   getResourceId(): string {
     return this._resourceId;
   }
 
   /**
-   * Sets the resource ID.
-   *
-   * @param resourceId The resource ID.
-   * @returns This options object.
-   */
-  setResourceId(resourceId: string): DurableTaskAzureManagedOptions {
-    this._resourceId = resourceId;
-    return this;
-  }
-
-  /**
    * Gets whether insecure credentials are allowed.
-   *
-   * @returns True if insecure credentials are allowed.
    */
   isAllowInsecureCredentials(): boolean {
     return this._allowInsecureCredentials;
   }
 
   /**
-   * Sets whether insecure credentials are allowed.
-   *
-   * @param allowInsecureCredentials True to allow insecure credentials.
-   * @returns This options object.
-   */
-  setAllowInsecureCredentials(allowInsecureCredentials: boolean): DurableTaskAzureManagedOptions {
-    this._allowInsecureCredentials = allowInsecureCredentials;
-    return this;
-  }
-
-  /**
    * Gets the token refresh margin in milliseconds.
-   *
-   * @returns The token refresh margin in milliseconds.
    */
   getTokenRefreshMargin(): number {
     return this._tokenRefreshMargin;
   }
 
   /**
-   * Sets the token refresh margin in milliseconds.
-   *
-   * @param tokenRefreshMargin The token refresh margin in milliseconds.
-   * @returns This options object.
-   */
-  setTokenRefreshMargin(tokenRefreshMargin: number): DurableTaskAzureManagedOptions {
-    this._tokenRefreshMargin = tokenRefreshMargin;
-    return this;
-  }
-
-  /**
-   * Gets the worker ID used to identify the worker instance.
-   *
-   * @returns The worker ID.
-   */
-  getWorkerId(): string {
-    return this._workerId;
-  }
-
-  /**
-   * Sets the worker ID used to identify the worker instance.
-   *
-   * @param workerId The worker ID.
-   * @returns This options object.
-   */
-  setWorkerId(workerId: string): DurableTaskAzureManagedOptions {
-    this._workerId = workerId;
-    return this;
-  }
-
-  /**
    * Gets the retry options for gRPC calls.
-   *
-   * @returns The retry options, or undefined if using defaults.
    */
   getRetryOptions(): ClientRetryOptions | undefined {
     return this._retryOptions;
   }
 
   /**
-   * Sets the retry options for gRPC calls.
-   *
-   * @param retryOptions The retry options.
-   * @returns This options object.
-   */
-  setRetryOptions(retryOptions: ClientRetryOptions): DurableTaskAzureManagedOptions {
-    this._retryOptions = retryOptions;
-    return this;
-  }
-
-  /**
    * Gets the gRPC service config JSON string with retry policy.
-   *
-   * @returns The service config JSON string.
    */
   getServiceConfig(): string {
     if (this._retryOptions) {
       return createServiceConfig(this._retryOptions);
     }
     return DEFAULT_SERVICE_CONFIG;
-  }
-
-  /**
-   * Creates a gRPC channel metadata generator that includes the authorization header and task hub name.
-   *
-   * @param callerType The type of caller (e.g., "DurableTaskClient" or "DurableTaskWorker").
-   * @returns A configured metadata generator function.
-   */
-  createMetadataGenerator(callerType: string = "DurableTaskWorker"): (
-    params: { service_url: string },
-    callback: (error: Error | null, metadata?: grpc.Metadata) => void,
-  ) => void {
-    // Create token cache only if credential is not null
-    let tokenCache: AccessTokenCache | null = null;
-    if (this._credential) {
-      const scope = this._resourceId + "/.default";
-      tokenCache = new AccessTokenCache(this._credential, scope, this._tokenRefreshMargin);
-    }
-
-    const taskHubName = this._taskHubName;
-    const workerId = this._workerId;
-    const userAgent = getUserAgent(callerType);
-
-    return (_params: { service_url: string }, callback: (error: Error | null, metadata?: grpc.Metadata) => void) => {
-      const metadata = new grpc.Metadata();
-      metadata.set("taskhub", taskHubName);
-      metadata.set("x-user-agent", userAgent);
-      metadata.set("workerid", workerId);
-
-      if (tokenCache) {
-        tokenCache
-          .getToken()
-          .then((token) => {
-            metadata.set("Authorization", `Bearer ${token.token}`);
-            callback(null, metadata);
-          })
-          .catch((error) => {
-            callback(error);
-          });
-      } else {
-        callback(null, metadata);
-      }
-    };
-  }
-
-  /**
-   * Creates gRPC channel credentials based on the configured options.
-   *
-   * @param callerType The type of caller (e.g., "DurableTaskClient" or "DurableTaskWorker").
-   * @returns The configured gRPC channel credentials.
-   */
-  createChannelCredentials(callerType: string = "DurableTaskWorker"): grpc.ChannelCredentials {
-    if (this._allowInsecureCredentials) {
-      // Insecure credentials can't be composed with call credentials in gRPC
-      // For local development/testing without credentials, just return insecure credentials
-      return grpc.ChannelCredentials.createInsecure();
-    }
-
-    const channelCredentials = grpc.ChannelCredentials.createSsl();
-
-    // Add call credentials for metadata injection (only for secure connections)
-    const metadataGenerator = this.createMetadataGenerator(callerType);
-    const callCredentials = grpc.credentials.createFromMetadataGenerator(metadataGenerator);
-
-    return channelCredentials.compose(callCredentials);
   }
 
   /**
@@ -332,4 +105,291 @@ export class DurableTaskAzureManagedOptions {
       throw new Error(`Invalid endpoint URL: ${endpoint}`);
     }
   }
+
+  /**
+   * Creates a gRPC channel metadata generator.
+   * @param callerType The type of caller for user-agent header.
+   * @param workerId Optional worker ID (only for workers).
+   */
+  protected createMetadataGeneratorInternal(
+    callerType: string,
+    workerId?: string,
+  ): (
+    params: { service_url: string },
+    callback: (error: Error | null, metadata?: grpc.Metadata) => void,
+  ) => void {
+    // Create token cache only if credential is not null
+    let tokenCache: AccessTokenCache | null = null;
+    if (this._credential) {
+      const scope = this._resourceId + "/.default";
+      tokenCache = new AccessTokenCache(this._credential, scope, this._tokenRefreshMargin);
+    }
+
+    const taskHubName = this._taskHubName;
+    const userAgent = getUserAgent(callerType);
+
+    return (_params: { service_url: string }, callback: (error: Error | null, metadata?: grpc.Metadata) => void) => {
+      const metadata = new grpc.Metadata();
+      metadata.set("taskhub", taskHubName);
+      metadata.set("x-user-agent", userAgent);
+
+      // Only add workerid for workers
+      if (workerId) {
+        metadata.set("workerid", workerId);
+      }
+
+      if (tokenCache) {
+        tokenCache
+          .getToken()
+          .then((token) => {
+            metadata.set("Authorization", `Bearer ${token.token}`);
+            callback(null, metadata);
+          })
+          .catch((error) => {
+            callback(error);
+          });
+      } else {
+        callback(null, metadata);
+      }
+    };
+  }
+
+  /**
+   * Creates gRPC channel credentials based on the configured options.
+   * @param callerType The type of caller.
+   * @param workerId Optional worker ID (only for workers).
+   */
+  protected createChannelCredentialsInternal(callerType: string, workerId?: string): grpc.ChannelCredentials {
+    if (this._allowInsecureCredentials) {
+      return grpc.ChannelCredentials.createInsecure();
+    }
+
+    const channelCredentials = grpc.ChannelCredentials.createSsl();
+    const metadataGenerator = this.createMetadataGeneratorInternal(callerType, workerId);
+    const callCredentials = grpc.credentials.createFromMetadataGenerator(metadataGenerator);
+
+    return channelCredentials.compose(callCredentials);
+  }
+
+  /**
+   * Configures base options from a parsed connection string.
+   */
+  protected configureFromConnectionString(connectionString: DurableTaskAzureManagedConnectionString): void {
+    this._endpointAddress = connectionString.getEndpoint();
+    this._taskHubName = connectionString.getTaskHubName();
+
+    const credential = getCredentialFromAuthenticationType(connectionString);
+    this._credential = credential;
+    this._allowInsecureCredentials = credential === null;
+  }
 }
+
+/**
+ * Options for configuring the Azure-managed Durable Task client.
+ */
+export class DurableTaskAzureManagedClientOptions extends DurableTaskAzureManagedOptionsBase {
+  /**
+   * Creates a new instance of DurableTaskAzureManagedClientOptions.
+   */
+  constructor() {
+    super();
+  }
+
+  /**
+   * Creates a new instance from a connection string.
+   */
+  static fromConnectionString(connectionString: string): DurableTaskAzureManagedClientOptions {
+    const parsedConnectionString = new DurableTaskAzureManagedConnectionString(connectionString);
+    return DurableTaskAzureManagedClientOptions.fromParsedConnectionString(parsedConnectionString);
+  }
+
+  /**
+   * Creates a new instance from a parsed connection string.
+   */
+  static fromParsedConnectionString(
+    connectionString: DurableTaskAzureManagedConnectionString,
+  ): DurableTaskAzureManagedClientOptions {
+    const options = new DurableTaskAzureManagedClientOptions();
+    options.configureFromConnectionString(connectionString);
+    return options;
+  }
+
+  setEndpointAddress(endpointAddress: string): DurableTaskAzureManagedClientOptions {
+    this._endpointAddress = endpointAddress;
+    return this;
+  }
+
+  setTaskHubName(taskHubName: string): DurableTaskAzureManagedClientOptions {
+    this._taskHubName = taskHubName;
+    return this;
+  }
+
+  setCredential(credential: TokenCredential | null): DurableTaskAzureManagedClientOptions {
+    this._credential = credential;
+    return this;
+  }
+
+  setResourceId(resourceId: string): DurableTaskAzureManagedClientOptions {
+    this._resourceId = resourceId;
+    return this;
+  }
+
+  setAllowInsecureCredentials(allowInsecureCredentials: boolean): DurableTaskAzureManagedClientOptions {
+    this._allowInsecureCredentials = allowInsecureCredentials;
+    return this;
+  }
+
+  setTokenRefreshMargin(tokenRefreshMargin: number): DurableTaskAzureManagedClientOptions {
+    this._tokenRefreshMargin = tokenRefreshMargin;
+    return this;
+  }
+
+  setRetryOptions(retryOptions: ClientRetryOptions): DurableTaskAzureManagedClientOptions {
+    this._retryOptions = retryOptions;
+    return this;
+  }
+
+  /**
+   * Creates a gRPC channel metadata generator.
+   * Does NOT include workerid header (client only).
+   */
+  createMetadataGenerator(): (
+    params: { service_url: string },
+    callback: (error: Error | null, metadata?: grpc.Metadata) => void,
+  ) => void {
+    return this.createMetadataGeneratorInternal("DurableTaskClient");
+  }
+
+  /**
+   * Creates gRPC channel credentials for the client.
+   * Does NOT include workerid header.
+   */
+  createChannelCredentials(): grpc.ChannelCredentials {
+    return this.createChannelCredentialsInternal("DurableTaskClient");
+  }
+}
+
+/**
+ * Options for configuring the Azure-managed Durable Task worker.
+ */
+export class DurableTaskAzureManagedWorkerOptions extends DurableTaskAzureManagedOptionsBase {
+  private _workerId: string;
+
+  /**
+   * Creates a new instance of DurableTaskAzureManagedWorkerOptions.
+   */
+  constructor() {
+    super();
+    this._workerId = DurableTaskAzureManagedWorkerOptions.generateDefaultWorkerId();
+  }
+
+  /**
+   * Generates a default worker ID in the format: hostname,pid,uniqueId
+   * This matches the .NET format: {MachineName},{ProcessId},{Guid}
+   */
+  private static generateDefaultWorkerId(): string {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const os = require("os");
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const crypto = require("crypto");
+    const hostname = os.hostname();
+    const pid = process.pid;
+    const uniqueId = crypto.randomUUID().replace(/-/g, "");
+    return `${hostname},${pid},${uniqueId}`;
+  }
+
+  /**
+   * Creates a new instance from a connection string.
+   */
+  static fromConnectionString(connectionString: string): DurableTaskAzureManagedWorkerOptions {
+    const parsedConnectionString = new DurableTaskAzureManagedConnectionString(connectionString);
+    return DurableTaskAzureManagedWorkerOptions.fromParsedConnectionString(parsedConnectionString);
+  }
+
+  /**
+   * Creates a new instance from a parsed connection string.
+   */
+  static fromParsedConnectionString(
+    connectionString: DurableTaskAzureManagedConnectionString,
+  ): DurableTaskAzureManagedWorkerOptions {
+    const options = new DurableTaskAzureManagedWorkerOptions();
+    options.configureFromConnectionString(connectionString);
+    return options;
+  }
+
+  /**
+   * Gets the worker ID used to identify the worker instance.
+   */
+  getWorkerId(): string {
+    return this._workerId;
+  }
+
+  setEndpointAddress(endpointAddress: string): DurableTaskAzureManagedWorkerOptions {
+    this._endpointAddress = endpointAddress;
+    return this;
+  }
+
+  setTaskHubName(taskHubName: string): DurableTaskAzureManagedWorkerOptions {
+    this._taskHubName = taskHubName;
+    return this;
+  }
+
+  setCredential(credential: TokenCredential | null): DurableTaskAzureManagedWorkerOptions {
+    this._credential = credential;
+    return this;
+  }
+
+  setResourceId(resourceId: string): DurableTaskAzureManagedWorkerOptions {
+    this._resourceId = resourceId;
+    return this;
+  }
+
+  setAllowInsecureCredentials(allowInsecureCredentials: boolean): DurableTaskAzureManagedWorkerOptions {
+    this._allowInsecureCredentials = allowInsecureCredentials;
+    return this;
+  }
+
+  setTokenRefreshMargin(tokenRefreshMargin: number): DurableTaskAzureManagedWorkerOptions {
+    this._tokenRefreshMargin = tokenRefreshMargin;
+    return this;
+  }
+
+  setRetryOptions(retryOptions: ClientRetryOptions): DurableTaskAzureManagedWorkerOptions {
+    this._retryOptions = retryOptions;
+    return this;
+  }
+
+  /**
+   * Sets the worker ID used to identify the worker instance.
+   */
+  setWorkerId(workerId: string): DurableTaskAzureManagedWorkerOptions {
+    this._workerId = workerId;
+    return this;
+  }
+
+  /**
+   * Creates a gRPC channel metadata generator.
+   * Includes workerid header (worker only).
+   */
+  createMetadataGenerator(): (
+    params: { service_url: string },
+    callback: (error: Error | null, metadata?: grpc.Metadata) => void,
+  ) => void {
+    return this.createMetadataGeneratorInternal("DurableTaskWorker", this._workerId);
+  }
+
+  /**
+   * Creates gRPC channel credentials for the worker.
+   * Includes workerid header.
+   */
+  createChannelCredentials(): grpc.ChannelCredentials {
+    return this.createChannelCredentialsInternal("DurableTaskWorker", this._workerId);
+  }
+}
+
+/**
+ * @deprecated Use DurableTaskAzureManagedClientOptions or DurableTaskAzureManagedWorkerOptions instead.
+ * This alias is kept for backward compatibility. It maps to WorkerOptions to maintain the original behavior
+ * where workerId was always sent.
+ */
+export { DurableTaskAzureManagedWorkerOptions as DurableTaskAzureManagedOptions };

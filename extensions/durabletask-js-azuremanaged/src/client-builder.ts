@@ -3,7 +3,7 @@
 
 import { TokenCredential } from "@azure/identity";
 import * as grpc from "@grpc/grpc-js";
-import { DurableTaskAzureManagedOptions } from "./options";
+import { DurableTaskAzureManagedClientOptions } from "./options";
 import { ClientRetryOptions } from "./retry-policy";
 import { TaskHubGrpcClient } from "@microsoft/durabletask-js";
 
@@ -29,14 +29,14 @@ export class AzureManagedTaskHubGrpcClient extends TaskHubGrpcClient {
  * This class provides various methods to create and configure clients using either connection strings or explicit parameters.
  */
 export class DurableTaskAzureManagedClientBuilder {
-  private _options: DurableTaskAzureManagedOptions;
+  private _options: DurableTaskAzureManagedClientOptions;
   private _grpcChannelOptions: grpc.ChannelOptions = {};
 
   /**
    * Creates a new instance of DurableTaskAzureManagedClientBuilder.
    */
   constructor() {
-    this._options = new DurableTaskAzureManagedOptions();
+    this._options = new DurableTaskAzureManagedClientOptions();
   }
 
   /**
@@ -51,7 +51,7 @@ export class DurableTaskAzureManagedClientBuilder {
       throw new Error("connectionString must not be null or empty");
     }
 
-    this._options = DurableTaskAzureManagedOptions.fromConnectionString(connectionString);
+    this._options = DurableTaskAzureManagedClientOptions.fromConnectionString(connectionString);
     return this;
   }
 
@@ -147,7 +147,7 @@ export class DurableTaskAzureManagedClientBuilder {
    */
   build(): TaskHubGrpcClient {
     const hostAddress = this._options.getHostAddress();
-    const channelCredentials = this._options.createChannelCredentials("DurableTaskClient");
+    const channelCredentials = this._options.createChannelCredentials();
 
     const defaultOptions: grpc.ChannelOptions = {
       "grpc.max_receive_message_length": -1,

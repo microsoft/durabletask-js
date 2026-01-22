@@ -3,7 +3,12 @@
 
 export { DurableTaskAzureManagedConnectionString } from "./connection-string";
 export { AccessTokenCache } from "./access-token-cache";
-export { DurableTaskAzureManagedOptions } from "./options";
+export {
+  DurableTaskAzureManagedClientOptions,
+  DurableTaskAzureManagedWorkerOptions,
+  /** @deprecated Use DurableTaskAzureManagedClientOptions or DurableTaskAzureManagedWorkerOptions instead */
+  DurableTaskAzureManagedOptions,
+} from "./options";
 export { getCredentialFromAuthenticationType } from "./credential-factory";
 export { getUserAgent } from "./user-agent";
 export {

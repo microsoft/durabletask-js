@@ -3,7 +3,7 @@
 
 import { TokenCredential } from "@azure/identity";
 import * as grpc from "@grpc/grpc-js";
-import { DurableTaskAzureManagedOptions } from "./options";
+import { DurableTaskAzureManagedWorkerOptions } from "./options";
 import { ClientRetryOptions } from "./retry-policy";
 import { TaskHubGrpcWorker } from "@microsoft/durabletask-js";
 
@@ -82,7 +82,7 @@ export class AzureManagedTaskHubGrpcWorker extends TaskHubGrpcWorker {
  * This class provides various methods to create and configure workers using either connection strings or explicit parameters.
  */
 export class DurableTaskAzureManagedWorkerBuilder {
-  private _options: DurableTaskAzureManagedOptions;
+  private _options: DurableTaskAzureManagedWorkerOptions;
   private _grpcChannelOptions: grpc.ChannelOptions = {};
   private _orchestrators: { name?: string; fn: TOrchestrator }[] = [];
   private _activities: { name?: string; fn: TActivity<TInput, TOutput> }[] = [];
@@ -91,7 +91,7 @@ export class DurableTaskAzureManagedWorkerBuilder {
    * Creates a new instance of DurableTaskAzureManagedWorkerBuilder.
    */
   constructor() {
-    this._options = new DurableTaskAzureManagedOptions();
+    this._options = new DurableTaskAzureManagedWorkerOptions();
   }
 
   /**
@@ -106,7 +106,7 @@ export class DurableTaskAzureManagedWorkerBuilder {
       throw new Error("connectionString must not be null or empty");
     }
 
-    this._options = DurableTaskAzureManagedOptions.fromConnectionString(connectionString);
+    this._options = DurableTaskAzureManagedWorkerOptions.fromConnectionString(connectionString);
     return this;
   }
 
@@ -260,7 +260,7 @@ export class DurableTaskAzureManagedWorkerBuilder {
    */
   build(): TaskHubGrpcWorker {
     const hostAddress = this._options.getHostAddress();
-    const channelCredentials = this._options.createChannelCredentials("DurableTaskWorker");
+    const channelCredentials = this._options.createChannelCredentials();
 
     const defaultOptions: grpc.ChannelOptions = {
       "grpc.max_receive_message_length": -1,
