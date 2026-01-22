@@ -354,11 +354,6 @@ export class DurableTaskAzureManagedWorkerOptions extends DurableTaskAzureManage
     return this;
   }
 
-  setRetryOptions(retryOptions: ClientRetryOptions): DurableTaskAzureManagedWorkerOptions {
-    this._retryOptions = retryOptions;
-    return this;
-  }
-
   /**
    * Sets the worker ID used to identify the worker instance.
    */

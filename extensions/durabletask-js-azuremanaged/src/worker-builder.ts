@@ -4,7 +4,6 @@
 import { TokenCredential } from "@azure/identity";
 import * as grpc from "@grpc/grpc-js";
 import { DurableTaskAzureManagedWorkerOptions } from "./options";
-import { ClientRetryOptions } from "./retry-policy";
 import { TaskHubGrpcWorker } from "@microsoft/durabletask-js";
 
 // Types for orchestrator and activity functions
@@ -129,17 +128,6 @@ export class DurableTaskAzureManagedWorkerBuilder {
    */
   grpcChannelOptions(options: grpc.ChannelOptions): DurableTaskAzureManagedWorkerBuilder {
     this._grpcChannelOptions = options;
-    return this;
-  }
-
-  /**
-   * Sets the retry options for gRPC calls.
-   *
-   * @param options The retry options.
-   * @returns This builder instance.
-   */
-  retryOptions(options: ClientRetryOptions): DurableTaskAzureManagedWorkerBuilder {
-    this._options.setRetryOptions(options);
     return this;
   }
 
