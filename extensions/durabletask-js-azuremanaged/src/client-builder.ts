@@ -135,7 +135,7 @@ export class DurableTaskAzureManagedClientBuilder {
    */
   build(): TaskHubGrpcClient {
     const hostAddress = this._options.getHostAddress();
-    const channelCredentials = this._options.createChannelCredentials();
+    const channelCredentials = this._options.createChannelCredentials("DurableTaskClient");
 
     const defaultOptions: grpc.ChannelOptions = {
       "grpc.max_receive_message_length": -1,

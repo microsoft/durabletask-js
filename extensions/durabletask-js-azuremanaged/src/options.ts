@@ -8,6 +8,7 @@ import * as crypto from "crypto";
 import { DurableTaskAzureManagedConnectionString } from "./connection-string";
 import { AccessTokenCache } from "./access-token-cache";
 import { getCredentialFromAuthenticationType } from "./credential-factory";
+import { getUserAgent } from "./user-agent";
 
 /**
  * Generates a default worker ID in the format: hostname,pid,uniqueId
@@ -211,9 +212,10 @@ export class DurableTaskAzureManagedOptions {
   /**
    * Creates a gRPC channel metadata generator that includes the authorization header and task hub name.
    *
+   * @param callerType The type of caller (e.g., "DurableTaskClient" or "DurableTaskWorker").
    * @returns A configured metadata generator function.
    */
-  createMetadataGenerator(): (
+  createMetadataGenerator(callerType: string = "DurableTaskWorker"): (
     params: { service_url: string },
     callback: (error: Error | null, metadata?: grpc.Metadata) => void,
   ) => void {
@@ -226,10 +228,12 @@ export class DurableTaskAzureManagedOptions {
 
     const taskHubName = this._taskHubName;
     const workerId = this._workerId;
+    const userAgent = getUserAgent(callerType);
 
     return (_params: { service_url: string }, callback: (error: Error | null, metadata?: grpc.Metadata) => void) => {
       const metadata = new grpc.Metadata();
       metadata.set("taskhub", taskHubName);
+      metadata.set("x-user-agent", userAgent);
       metadata.set("workerid", workerId);
 
       if (tokenCache) {
@@ -251,9 +255,10 @@ export class DurableTaskAzureManagedOptions {
   /**
    * Creates gRPC channel credentials based on the configured options.
    *
+   * @param callerType The type of caller (e.g., "DurableTaskClient" or "DurableTaskWorker").
    * @returns The configured gRPC channel credentials.
    */
-  createChannelCredentials(): grpc.ChannelCredentials {
+  createChannelCredentials(callerType: string = "DurableTaskWorker"): grpc.ChannelCredentials {
     if (this._allowInsecureCredentials) {
       // Insecure credentials can't be composed with call credentials in gRPC
       // For local development/testing without credentials, just return insecure credentials
@@ -263,7 +268,7 @@ export class DurableTaskAzureManagedOptions {
     const channelCredentials = grpc.ChannelCredentials.createSsl();
 
     // Add call credentials for metadata injection (only for secure connections)
-    const metadataGenerator = this.createMetadataGenerator();
+    const metadataGenerator = this.createMetadataGenerator(callerType);
     const callCredentials = grpc.credentials.createFromMetadataGenerator(metadataGenerator);
 
     return channelCredentials.compose(callCredentials);

@@ -248,7 +248,7 @@ export class DurableTaskAzureManagedWorkerBuilder {
    */
   build(): TaskHubGrpcWorker {
     const hostAddress = this._options.getHostAddress();
-    const channelCredentials = this._options.createChannelCredentials();
+    const channelCredentials = this._options.createChannelCredentials("DurableTaskWorker");
 
     const defaultOptions: grpc.ChannelOptions = {
       "grpc.max_receive_message_length": -1,
