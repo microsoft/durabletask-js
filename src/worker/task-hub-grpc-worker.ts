@@ -143,18 +143,21 @@ export class TaskHubGrpcWorker {
 
       // Wait for a work item to be received
       stream.on("data", (workItem: pb.WorkItem) => {
+        const completionToken = workItem.getCompletiontoken();
         if (workItem.hasOrchestratorrequest()) {
           console.log(
             `Received "Orchestrator Request" work item with instance id '${workItem
               ?.getOrchestratorrequest()
               ?.getInstanceid()}'`,
           );
-          this._executeOrchestrator(workItem.getOrchestratorrequest() as any, client.stub);
+          this._executeOrchestrator(workItem.getOrchestratorrequest() as any, completionToken, client.stub);
         } else if (workItem.hasActivityrequest()) {
           console.log(`Received "Activity Request" work item`);
-          this._executeActivity(workItem.getActivityrequest() as any, client.stub);
+          this._executeActivity(workItem.getActivityrequest() as any, completionToken, client.stub);
+        } else if (workItem.hasHealthping()) {
+          // Health ping - no-op, just a keep-alive message from the server
         } else {
-          console.log(`Received unknown work item`);
+          console.log(`Received unknown type of work item `);
         }
       });
 
@@ -220,6 +223,7 @@ export class TaskHubGrpcWorker {
    */
   private async _executeOrchestrator(
     req: pb.OrchestratorRequest,
+    completionToken: string,
     stub: stubs.TaskHubSidecarServiceClient,
   ): Promise<void> {
     const instanceId = req.getInstanceid();
@@ -236,6 +240,7 @@ export class TaskHubGrpcWorker {
 
       res = new pb.OrchestratorResponse();
       res.setInstanceid(req.getInstanceid());
+      res.setCompletiontoken(completionToken);
       res.setActionsList(actions);
     } catch (e: any) {
       console.error(e);
@@ -253,6 +258,7 @@ export class TaskHubGrpcWorker {
 
       res = new pb.OrchestratorResponse();
       res.setInstanceid(req.getInstanceid());
+      res.setCompletiontoken(completionToken);
       res.setActionsList(actions);
     }
 
@@ -267,7 +273,11 @@ export class TaskHubGrpcWorker {
   /**
    *
    */
-  private async _executeActivity(req: pb.ActivityRequest, stub: stubs.TaskHubSidecarServiceClient): Promise<void> {
+  private async _executeActivity(
+    req: pb.ActivityRequest,
+    completionToken: string,
+    stub: stubs.TaskHubSidecarServiceClient,
+  ): Promise<void> {
     const instanceId = req.getOrchestrationinstance()?.getInstanceid();
 
     if (!instanceId) {
@@ -291,6 +301,7 @@ export class TaskHubGrpcWorker {
       res = new pb.ActivityResponse();
       res.setInstanceid(instanceId);
       res.setTaskid(req.getTaskid());
+      res.setCompletiontoken(completionToken);
       res.setResult(s);
     } catch (e: any) {
       console.error(e);
@@ -300,6 +311,7 @@ export class TaskHubGrpcWorker {
 
       res = new pb.ActivityResponse();
       res.setTaskid(req.getTaskid());
+      res.setCompletiontoken(completionToken);
       res.setFailuredetails(failureDetails);
     }
 
