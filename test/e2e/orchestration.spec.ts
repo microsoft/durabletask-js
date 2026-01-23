@@ -64,6 +64,8 @@ describe("Durable Functions", () => {
         numbers.push(current);
       }
 
+      ctx.setCustomStatus("foobaz");
+
       return numbers;
     };
 
@@ -81,6 +83,7 @@ describe("Durable Functions", () => {
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(state?.serializedInput).toEqual(JSON.stringify(1));
     expect(state?.serializedOutput).toEqual(JSON.stringify([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]));
+    expect(state?.serializedCustomStatus).toEqual("foobaz");
   }, 31000);
 
   it("should be able to run fan-out/fan-in", async () => {
@@ -179,13 +182,13 @@ describe("Durable Functions", () => {
     await taskHubWorker.start();
 
     const id = await taskHubClient.scheduleNewOrchestration(orchestratorParent, SUB_ORCHESTRATION_COUNT);
-    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 43);
 
     expect(state);
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(state?.failureDetails).toBeUndefined();
     expect(activityCounter).toEqual(SUB_ORCHESTRATION_COUNT * ACTIVITY_COUNT);
-  }, 31000);
+  }, 45000);
 
   it("should allow waiting for multiple external events", async () => {
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {

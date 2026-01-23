@@ -86,4 +86,11 @@ export abstract class OrchestrationContext {
    * @param saveEvents {boolean} A flag indicating whether to add any unprocessed external events in the new orchestration history.
    */
   abstract continueAsNew(newInput: any, saveEvents: boolean): void;
+
+  /**
+   * Sets the custom status
+   *
+   * @param status {string} The new custom status
+   */
+  abstract setCustomStatus(status: string): void;
 }

@@ -28,6 +28,8 @@ import { TaskHubGrpcWorker } from "../src/worker/task-hub-grpc-worker";
     const result3 = yield ctx.callActivity(hello, "London");
     cities.push(result3);
 
+    ctx.setCustomStatus("sequence done");
+
     return cities;
   };
 

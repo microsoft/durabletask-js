@@ -27,6 +27,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   _pendingEvents: Record<string, CompletableTask<any>[]>;
   _newInput?: any;
   _saveEvents: any;
+  _customStatus: string;
 
   constructor(instanceId: string) {
     super();
@@ -45,6 +46,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     this._pendingEvents = {};
     this._newInput = undefined;
     this._saveEvents = false;
+    this._customStatus = "";
   }
 
   get instanceId(): string {
@@ -329,5 +331,9 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     }
 
     this.setContinuedAsNew(newInput, saveEvents);
+  }
+
+  setCustomStatus(status: string) {
+    this._customStatus = status;
   }
 }
