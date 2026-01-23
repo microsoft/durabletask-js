@@ -1,5 +1,5 @@
 PATH_ROOT=$(readlink -f $(dirname $0))/..
-PATH_PROTO_SRC=$(readlink -f $(dirname $0))/../internal/durabletask-protobuf/protos
+PATH_PROTO_SRC=$(readlink -f $(dirname $0))/../internal/protocol/protos
 PATH_PROTO_OUT=$(readlink -f $1)
 
 echo "=============================================="

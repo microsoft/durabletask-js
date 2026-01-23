@@ -1,0 +1,51 @@
+{
+  "name": "@microsoft/durabletask-js",
+  "version": "0.1.0-alpha.2",
+  "description": "A Durable Task Javascript SDK compatible with Dapr Workflow and its underlying Durable Task engine",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('dist', {recursive:true, force:true})\"",
+    "copy-proto": "node -e \"require('fs').cpSync('src/proto', 'dist/proto', {recursive:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json && npm run copy-proto",
+    "test": "jest --runInBand --detectOpenHandles",
+    "test:unit": "jest test/unit --runInBand --detectOpenHandles"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/microsoft/durabletask-js.git",
+    "directory": "packages/durabletask-js"
+  },
+  "keywords": [
+    "durabletask",
+    "orchestration",
+    "workflow",
+    "durable"
+  ],
+  "author": "Microsoft",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/microsoft/durabletask-js/issues"
+  },
+  "homepage": "https://github.com/microsoft/durabletask-js#readme",
+  "dependencies": {
+    "@grpc/grpc-js": "^1.14.3",
+    "google-protobuf": "^3.21.2"
+  },
+  "devDependencies": {
+    "@types/google-protobuf": "^3.15.6",
+    "@types/jest": "^29.5.1",
+    "@types/node": "^18.16.1",
+    "jest": "^29.5.0",
+    "ts-jest": "^29.1.0",
+    "typescript": "^5.0.4"
+  }
+}

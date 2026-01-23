@@ -2,23 +2,23 @@
   "name": "@microsoft/durabletask-js-azuremanaged",
   "version": "0.1.0-alpha.1",
   "description": "Azure-managed Durable Task Scheduler support for the Durable Task JavaScript SDK",
-  "main": "./build/index.js",
-  "types": "./build/index.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./build/index.d.ts",
-      "require": "./build/index.js",
-      "import": "./build/index.js"
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "import": "./dist/index.js"
     }
   },
   "files": [
-    "build",
+    "dist",
     "LICENSE",
     "README.md"
   ],
   "scripts": {
-    "clean": "node -e \"require('fs').rmSync('build', {recursive:true, force:true})\"",
-    "build": "npm run clean && tsc",
+    "clean": "node -e \"require('fs').rmSync('dist', {recursive:true, force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
     "test": "jest --runInBand --detectOpenHandles",
     "test:unit": "jest test/unit --runInBand --detectOpenHandles",
     "prepublishOnly": "npm run build && npm run test"
@@ -26,7 +26,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/microsoft/durabletask-js.git",
-    "directory": "extensions/durabletask-js-azuremanaged"
+    "directory": "packages/durabletask-js-azuremanaged"
   },
   "keywords": [
     "durabletask",
@@ -46,10 +46,10 @@
     "node": ">=22.0.0"
   },
   "dependencies": {
-    "@azure/identity": "^4.0.0",
-    "@grpc/grpc-js": "^1.8.14"
+    "@azure/identity": "^4.0.0"
   },
   "peerDependencies": {
+    "@grpc/grpc-js": "^1.8.14",
     "@microsoft/durabletask-js": ">=0.1.0-alpha.2"
   },
   "devDependencies": {

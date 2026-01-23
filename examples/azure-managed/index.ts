@@ -14,12 +14,12 @@ import { DefaultAzureCredential } from "@azure/identity";
 import {
   createAzureManagedClient,
   createAzureManagedWorkerBuilder,
-} from "../extensions/durabletask-js-azuremanaged/build";
-import { ActivityContext } from "../src/task/context/activity-context";
-import { OrchestrationContext } from "../src/task/context/orchestration-context";
-import { TOrchestrator } from "../src/types/orchestrator.type";
-import { whenAll } from "../src/task";
-import { Task } from "../src/task/task";
+} from "@microsoft/durabletask-js-azuremanaged";
+import { ActivityContext } from "@microsoft/durabletask-js/dist/task/context/activity-context";
+import { OrchestrationContext } from "@microsoft/durabletask-js/dist/task/context/orchestration-context";
+import { TOrchestrator } from "@microsoft/durabletask-js/dist/types/orchestrator.type";
+import { whenAll } from "@microsoft/durabletask-js/dist/task";
+import { Task } from "@microsoft/durabletask-js/dist/task/task";
 
 // Wrap the entire code in an immediately-invoked async function
 (async () => {
