@@ -1,16 +1,20 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { TaskHubGrpcClient } from "../../src/client/client";
-import { PurgeInstanceCriteria } from "../../src/orchestration/orchestration-purge-criteria";
-import { OrchestrationStatus } from "../../src/proto/orchestrator_service_pb";
-import { OrchestrationStatus as RuntimeStatus } from "../../src/orchestration/enum/orchestration-status.enum";
-import { getName, whenAll, whenAny } from "../../src/task";
-import { ActivityContext } from "../../src/task/context/activity-context";
-import { OrchestrationContext } from "../../src/task/context/orchestration-context";
-import { Task } from "../../src/task/task";
-import { TOrchestrator } from "../../src/types/orchestrator.type";
-import { TaskHubGrpcWorker } from "../../src/worker/task-hub-grpc-worker";
+import {
+  TaskHubGrpcClient,
+  TaskHubGrpcWorker,
+  PurgeInstanceCriteria,
+  ProtoOrchestrationStatus as OrchestrationStatus,
+  OrchestrationStatus as RuntimeStatus,
+  getName,
+  whenAll,
+  whenAny,
+  ActivityContext,
+  OrchestrationContext,
+  Task,
+  TOrchestrator,
+} from "@microsoft/durabletask-js";
 
 describe("Durable Functions", () => {
   let taskHubClient: TaskHubGrpcClient;
@@ -421,7 +425,8 @@ describe("Durable Functions", () => {
     taskHubWorker.addActivity(plusOne);
     await taskHubWorker.start();
 
-    const startTime = new Date(Date.now());
+    // Set startTime slightly in the past to account for clock drift
+    const startTime = new Date(Date.now() - 1000);
     const id = await taskHubClient.scheduleNewOrchestration(orchestrator, 1);
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
@@ -477,6 +482,9 @@ describe("Durable Functions", () => {
     const runtimeStatuses: RuntimeStatus[] = [];
     runtimeStatuses.push(RuntimeStatus.TERMINATED);
     runtimeStatuses.push(RuntimeStatus.COMPLETED);
+
+    // Add a small delay to ensure the orchestrations are fully persisted
+    await new Promise((resolve) => setTimeout(resolve, 1000));
 
     criteria.setCreatedTimeTo(new Date(Date.now()));
     criteria.setRuntimeStatusList(runtimeStatuses);
