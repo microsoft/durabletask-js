@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      NODE_VER: 16.14.0
+      NODE_VER: 22
 
     services:
       # docker run --name durabletask-sidecar -p 4001:4001 --env 'DURABLETASK_SIDECAR_LOGLEVEL=Debug' --rm cgillum/durabletask-sidecar:latest start --backend Emulator
@@ -27,10 +27,10 @@ jobs:
 
     steps:
       - name: 📥 Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: ⚙️ NodeJS - Install
-        uses: actions/setup-node@v2
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VER }}
           registry-url: "https://registry.npmjs.org"
@@ -38,8 +38,11 @@ jobs:
       - name: ⚙️ Install dependencies
         run: npm install
 
+      - name: 🔨 Build packages
+        run: npm run build
+
       - name: ✅ Run unit tests
-        run: npm test test/unit
+        run: npm run test:unit
 
       - name: ✅ Run e2e tests
-        run: ./scripts/test-e2e.sh
+        run: npm run test:e2e
