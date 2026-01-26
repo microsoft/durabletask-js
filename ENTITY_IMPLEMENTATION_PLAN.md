@@ -542,13 +542,27 @@ interface SignalEntityOptions {
 - `TaskEntityState.setState.null.deletesState` - verify deletion semantics
 
 ### Success criteria:
-- [ ] All worker-side entity types defined
-- [ ] Types align with dotnet abstractions
-- [ ] State null/undefined deletion semantic is documented
+- [x] All worker-side entity types defined
+- [x] Types align with dotnet abstractions
+- [x] State null/undefined deletion semantic is documented
 
 ### Verification checklist:
-- [ ] Verify interface definitions match dotnet method signatures
-- [ ] Verify SignalEntityOptions has signalTime property
+- [x] Verify interface definitions match dotnet method signatures
+- [x] Verify SignalEntityOptions has signalTime property
+
+**STATUS: ✅ COMPLETE** (January 26, 2026)
+- Implementation:
+  - `packages/durabletask-js/src/entities/signal-entity-options.ts` - SignalEntityOptions, CallEntityOptions
+  - `packages/durabletask-js/src/entities/task-entity-state.ts` - TaskEntityState interface and factory
+  - `packages/durabletask-js/src/entities/task-entity-context.ts` - TaskEntityContext, StartOrchestrationOptions, EntityAction
+  - `packages/durabletask-js/src/entities/task-entity-operation.ts` - TaskEntityOperation interface and factory
+- Tests:
+  - `packages/durabletask-js/test/signal-entity-options.spec.ts` (5 tests passing)
+  - `packages/durabletask-js/test/task-entity-state.spec.ts` (28 tests passing)
+  - `packages/durabletask-js/test/task-entity-context.spec.ts` (35 tests passing)
+  - `packages/durabletask-js/test/task-entity-operation.spec.ts` (28 tests passing)
+- Export: Added to `packages/durabletask-js/src/index.ts`
+- Total entity tests: 162 passing
 
 ---
 

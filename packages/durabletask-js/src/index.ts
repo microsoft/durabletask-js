@@ -26,8 +26,10 @@ export { TActivity } from "./types/activity.type";
 export { TInput } from "./types/input.type";
 export { TOutput } from "./types/output.type";
 
-// Entity types
+// Entity types - Core identity (Step 1)
 export { EntityInstanceId } from "./entities/entity-instance-id";
+
+// Entity types - Client-side types (Step 2)
 export {
   EntityMetadata,
   createEntityMetadata,
@@ -43,3 +45,9 @@ export {
   CleanEntityStorageResult,
   defaultCleanEntityStorageRequest,
 } from "./entities/clean-entity-storage";
+
+// Entity types - Worker-side operation types (Step 3)
+export { SignalEntityOptions, CallEntityOptions } from "./entities/signal-entity-options";
+export { TaskEntityState } from "./entities/task-entity-state";
+export { TaskEntityContext, StartOrchestrationOptions } from "./entities/task-entity-context";
+export { TaskEntityOperation } from "./entities/task-entity-operation";
