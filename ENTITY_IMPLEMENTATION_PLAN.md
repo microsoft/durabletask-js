@@ -474,13 +474,25 @@ interface CleanEntityStorageResult {
 - `EntityMetadata.state.throwsWhenNotIncluded` - verify state access behavior
 
 ### Success criteria:
-- [ ] All client-side entity types defined
-- [ ] Query prefix normalization matches dotnet behavior
-- [ ] Types are JSON-serializable
+- [x] All client-side entity types defined
+- [x] Query prefix normalization matches dotnet behavior
+- [x] Types are JSON-serializable
 
 ### Verification checklist:
-- [ ] Create EntityQuery with mixed-case prefix, verify normalization
-- [ ] Verify EntityMetadata can hold various state types
+- [x] Create EntityQuery with mixed-case prefix, verify normalization
+- [x] Verify EntityMetadata can hold various state types
+
+**STATUS: ✅ COMPLETE** (January 26, 2026)
+- Implementation: 
+  - `packages/durabletask-js/src/entities/entity-metadata.ts`
+  - `packages/durabletask-js/src/entities/entity-query.ts`
+  - `packages/durabletask-js/src/entities/clean-entity-storage.ts`
+  - `packages/durabletask-js/src/entities/index.ts`
+- Tests: 
+  - `packages/durabletask-js/test/entity-metadata.spec.ts` (16 tests passing)
+  - `packages/durabletask-js/test/entity-query.spec.ts` (17 tests passing)
+  - `packages/durabletask-js/test/clean-entity-storage.spec.ts` (tests passing)
+- Export: Added to `packages/durabletask-js/src/index.ts`
 
 ---
 

@@ -28,3 +28,18 @@ export { TOutput } from "./types/output.type";
 
 // Entity types
 export { EntityInstanceId } from "./entities/entity-instance-id";
+export {
+  EntityMetadata,
+  createEntityMetadata,
+  createEntityMetadataWithoutState,
+} from "./entities/entity-metadata";
+export {
+  EntityQuery,
+  normalizeInstanceIdPrefix,
+  createEntityQuery,
+} from "./entities/entity-query";
+export {
+  CleanEntityStorageRequest,
+  CleanEntityStorageResult,
+  defaultCleanEntityStorageRequest,
+} from "./entities/clean-entity-storage";
