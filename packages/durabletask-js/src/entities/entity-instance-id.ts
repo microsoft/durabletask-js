@@ -109,6 +109,16 @@ export class EntityInstanceId {
   }
 
   /**
+   * Returns the JSON representation of this entity ID.
+   * This is called automatically by JSON.stringify() to produce a compact string representation.
+   *
+   * @returns The entity ID as a string in the format `@{name}@{key}`.
+   */
+  toJSON(): string {
+    return this.toString();
+  }
+
+  /**
    * Checks equality with another EntityInstanceId.
    *
    * @param other - The other EntityInstanceId to compare with.

@@ -186,4 +186,29 @@ describe("EntityInstanceId", () => {
       expect(parsed.equals(original)).toBe(true);
     });
   });
+
+  describe("toJSON", () => {
+    it("should serialize to compact string with JSON.stringify", () => {
+      const entityId = new EntityInstanceId("counter", "user-123");
+      const json = JSON.stringify(entityId);
+      expect(json).toBe('"@counter@user-123"');
+    });
+
+    it("should serialize correctly when nested in object", () => {
+      const obj = {
+        id: new EntityInstanceId("counter", "user-123"),
+        value: 42,
+      };
+      const json = JSON.stringify(obj);
+      expect(json).toBe('{"id":"@counter@user-123","value":42}');
+    });
+
+    it("should roundtrip through JSON serialization", () => {
+      const original = new EntityInstanceId("MyEntity", "key-456");
+      const json = JSON.stringify(original);
+      const parsed = EntityInstanceId.fromString(JSON.parse(json));
+
+      expect(parsed.equals(original)).toBe(true);
+    });
+  });
 });
