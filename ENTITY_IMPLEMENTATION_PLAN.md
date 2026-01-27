@@ -664,16 +664,31 @@ class EntityExecutor {
 - `EntityExecutor.executeBatch.returnsCorrectResults` - verify result per operation
 
 ### Success criteria:
-- [ ] Batch execution runs all operations
-- [ ] State is checkpointed before each operation
-- [ ] State is rolled back on exception
-- [ ] Actions (signals, orchestrations) are rolled back on exception
-- [ ] Results contain success or failure per operation
+- [x] Batch execution runs all operations
+- [x] State is checkpointed before each operation
+- [x] State is rolled back on exception
+- [x] Actions (signals, orchestrations) are rolled back on exception
+- [x] Results contain success or failure per operation
 
 ### Verification checklist:
-- [ ] Execute batch with 3 operations, verify all run and results returned
-- [ ] Execute batch where op 2 throws, verify op 1 state persisted, op 2 rolled back, op 3 runs
-- [ ] Execute batch with signal in op that fails, verify signal not in actions
+- [x] Execute batch with 3 operations, verify all run and results returned
+- [x] Execute batch where op 2 throws, verify op 1 state persisted, op 2 rolled back, op 3 runs
+- [x] Execute batch with signal in op that fails, verify signal not in actions
+
+**STATUS: ✅ COMPLETE** (January 26, 2026)
+- Implementation:
+  - `packages/durabletask-js/src/worker/entity-executor.ts` - EntityExecutor class with:
+    - `StateManager` - internal class implementing TaskEntityState with commit/rollback via deep clone
+    - `ContextManager` - internal class implementing TaskEntityContext with action collection and rollback
+    - `OperationManager` - internal class implementing TaskEntityOperation
+    - `executeBatch()` method matching dotnet TaskEntityShim.ExecuteOperationBatchAsync
+  - Proto conversion: EntityBatchRequest → ITaskEntity.run() → EntityBatchResult
+  - Transactional semantics: State and actions are checkpointed before each operation, rolled back on failure
+- Tests:
+  - `packages/durabletask-js/test/entity-executor.spec.ts` (13 tests passing)
+  - Covers: single/multiple operations, state persistence, error handling/rollback, action collection, timing info
+- Export: Added `EntityExecutor`, `EntityAction` to `packages/durabletask-js/src/index.ts`
+- Total entity tests: 142 passing
 
 ---
 

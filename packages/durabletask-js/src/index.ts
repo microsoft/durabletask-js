@@ -54,3 +54,6 @@ export { TaskEntityOperation } from "./entities/task-entity-operation";
 
 // Entity interface and base class (Step 4)
 export { ITaskEntity, EntityFactory, TaskEntity } from "./entities/task-entity";
+
+// Entity executor and state management (Step 5)
+export { TaskEntityShim, EntityAction } from "./worker/entity-executor";
