@@ -4,6 +4,7 @@
 import { TActivity } from "../../types/activity.type";
 import { TOrchestrator } from "../../types/orchestrator.type";
 import { Task } from "../task";
+import { OrchestrationEntityFeature } from "../../entities/orchestration-entity-feature";
 
 export abstract class OrchestrationContext {
   /**
@@ -36,6 +37,19 @@ export abstract class OrchestrationContext {
    * @returns {boolean} `true` if the orchestrator function is replaying from history; otherwise, `false`.
    */
   abstract get isReplaying(): boolean;
+
+  /**
+   * Gets the entity feature for interacting with durable entities.
+   *
+   * @returns {OrchestrationEntityFeature} The entity feature for signaling entities.
+   *
+   * @remarks
+   * Use this property to signal entities from within an orchestration.
+   * Signaling is a one-way (fire-and-forget) operation.
+   *
+   * Dotnet reference: TaskOrchestrationContext.Entities
+   */
+  abstract get entities(): OrchestrationEntityFeature;
 
   /**
    * Create a timer task that will fire at a specified time.

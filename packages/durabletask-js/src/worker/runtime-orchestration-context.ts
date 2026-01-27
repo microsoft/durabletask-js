@@ -10,6 +10,9 @@ import { TActivity } from "../types/activity.type";
 import { TOrchestrator } from "../types/orchestrator.type";
 import { Task } from "../task/task";
 import { StopIterationError } from "./exception/stop-iteration-error";
+import { OrchestrationEntityFeature } from "../entities/orchestration-entity-feature";
+import { EntityInstanceId } from "../entities/entity-instance-id";
+import { SignalEntityOptions } from "../entities/signal-entity-options";
 
 export class RuntimeOrchestrationContext extends OrchestrationContext {
   _generator?: Generator<Task<any>, any, any>;
@@ -27,6 +30,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   _pendingEvents: Record<string, CompletableTask<any>[]>;
   _newInput?: any;
   _saveEvents: any;
+  _entityFeature: RuntimeOrchestrationEntityFeature;
 
   constructor(instanceId: string) {
     super();
@@ -45,6 +49,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     this._pendingEvents = {};
     this._newInput = undefined;
     this._saveEvents = false;
+    this._entityFeature = new RuntimeOrchestrationEntityFeature(this);
   }
 
   get instanceId(): string {
@@ -57,6 +62,10 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
 
   get isReplaying(): boolean {
     return this._isReplaying;
+  }
+
+  get entities(): OrchestrationEntityFeature {
+    return this._entityFeature;
   }
 
   /**
@@ -329,5 +338,76 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     }
 
     this.setContinuedAsNew(newInput, saveEvents);
+  }
+
+  /**
+   * Generates a deterministic GUID for entity operations.
+   *
+   * @remarks
+   * This is used for generating request IDs that are deterministically replayable.
+   * Uses the instance ID and sequence number to create a unique, reproducible ID.
+   *
+   * Dotnet reference: TaskOrchestrationContextWrapper.NewGuid()
+   */
+  newGuid(): string {
+    const id = this.nextSequenceNumber();
+    // Create a deterministic GUID based on instance ID and sequence number
+    // Format: instanceId:sequenceNumber (hex padded to 8 digits)
+    const suffix = id.toString(16).padStart(8, "0");
+    return `${this._instanceId}:${suffix}`;
+  }
+}
+
+/**
+ * Implementation of OrchestrationEntityFeature for signaling entities from orchestrations.
+ *
+ * @remarks
+ * This class provides the entity feature for the RuntimeOrchestrationContext.
+ * It allows orchestrations to signal entities with one-way messages.
+ *
+ * Dotnet reference: TaskOrchestrationEntityContext
+ */
+class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
+  private readonly context: RuntimeOrchestrationContext;
+
+  constructor(context: RuntimeOrchestrationContext) {
+    this.context = context;
+  }
+
+  /**
+   * Signals an operation on an entity without waiting for a response.
+   *
+   * @param id - The target entity instance ID.
+   * @param operationName - The name of the operation to invoke.
+   * @param input - Optional input to pass to the operation.
+   * @param options - Optional signal options (e.g., scheduled time).
+   *
+   * @remarks
+   * This creates a SendEntityMessageAction with an EntityOperationSignaledEvent.
+   * The orchestration does not wait for the entity to process the operation.
+   *
+   * Dotnet reference: TaskOrchestrationEntityContext.SignalEntityAsync
+   */
+  signalEntity(
+    id: EntityInstanceId,
+    operationName: string,
+    input?: unknown,
+    options?: SignalEntityOptions,
+  ): void {
+    const actionId = this.context.nextSequenceNumber();
+    const requestId = this.context.newGuid();
+    const encodedInput = input !== undefined ? JSON.stringify(input) : undefined;
+    const instanceIdString = id.toString();
+
+    const action = ph.newSendEntityMessageSignalAction(
+      actionId,
+      instanceIdString,
+      operationName,
+      requestId,
+      encodedInput,
+      options?.signalTime,
+    );
+
+    this.context._pendingActions[action.getId()] = action;
   }
 }

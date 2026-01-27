@@ -333,3 +333,51 @@ export function getOrchestrationStatusStr(status: number): string {
 
   return "UNKNOWN";
 }
+
+/**
+ * Creates a SendEntityMessageAction for signaling an entity (one-way, fire-and-forget).
+ *
+ * @param id - The action ID (sequence number).
+ * @param instanceId - The target entity instance ID string (format: @name@key).
+ * @param operationName - The name of the operation to invoke.
+ * @param requestId - A unique request ID for this signal.
+ * @param encodedInput - Optional JSON-encoded input for the operation.
+ * @param scheduledTime - Optional scheduled time for delayed delivery.
+ * @returns The OrchestratorAction containing the SendEntityMessageAction.
+ *
+ * @remarks
+ * This creates an EntityOperationSignaledEvent which is a one-way message.
+ * The orchestration does not wait for a response.
+ *
+ * Dotnet reference: TaskOrchestrationEntityContext.SendOperationMessage (oneWay=true)
+ */
+export function newSendEntityMessageSignalAction(
+  id: number,
+  instanceId: string,
+  operationName: string,
+  requestId: string,
+  encodedInput?: string,
+  scheduledTime?: Date,
+): pb.OrchestratorAction {
+  const signalEvent = new pb.EntityOperationSignaledEvent();
+  signalEvent.setRequestid(requestId);
+  signalEvent.setOperation(operationName);
+  signalEvent.setInput(getStringValue(encodedInput));
+  signalEvent.setTargetinstanceid(getStringValue(instanceId));
+
+  if (scheduledTime) {
+    const ts = new Timestamp();
+    ts.fromDate(scheduledTime);
+    signalEvent.setScheduledtime(ts);
+  }
+
+  const sendEntityMessage = new pb.SendEntityMessageAction();
+  sendEntityMessage.setEntityoperationsignaled(signalEvent);
+
+  const action = new pb.OrchestratorAction();
+  action.setId(id);
+  action.setSendentitymessage(sendEntityMessage);
+
+  return action;
+}
+

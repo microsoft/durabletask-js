@@ -57,3 +57,6 @@ export { ITaskEntity, EntityFactory, TaskEntity } from "./entities/task-entity";
 
 // Entity executor and state management (Step 5)
 export { TaskEntityShim, EntityAction } from "./worker/entity-executor";
+
+// Orchestration entity feature (Step 7)
+export { OrchestrationEntityFeature } from "./entities/orchestration-entity-feature";
