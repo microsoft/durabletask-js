@@ -15,6 +15,9 @@ import { Empty } from "google-protobuf/google/protobuf/empty_pb";
 import * as pbh from "../utils/pb-helper.util";
 import { OrchestrationExecutor } from "./orchestration-executor";
 import { ActivityExecutor } from "./activity-executor";
+import { TaskEntityShim } from "./entity-executor";
+import { EntityInstanceId } from "../entities/entity-instance-id";
+import { EntityFactory } from "../entities/task-entity";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 
 export class TaskHubGrpcWorker {
@@ -112,6 +115,46 @@ export class TaskHubGrpcWorker {
   }
 
   /**
+   * Registers an entity with the worker.
+   *
+   * @param factory - Factory function that creates entity instances.
+   * @returns The registered entity name (normalized to lowercase).
+   *
+   * @remarks
+   * Entity names are derived from the factory function name and normalized to lowercase.
+   *
+   * Dotnet reference: src/Worker/Core/DurableTaskFactory.cs
+   */
+  addEntity(factory: EntityFactory): string {
+    if (this._isRunning) {
+      throw new Error("Cannot add entity while worker is running.");
+    }
+
+    return this._registry.addEntity(factory);
+  }
+
+  /**
+   * Registers a named entity with the worker.
+   *
+   * @param name - The name to register the entity under.
+   * @param factory - Factory function that creates entity instances.
+   * @returns The registered entity name (normalized to lowercase).
+   *
+   * @remarks
+   * Entity names are normalized to lowercase for case-insensitive matching.
+   *
+   * Dotnet reference: src/Worker/Core/DurableTaskFactory.cs
+   */
+  addNamedEntity(name: string, factory: EntityFactory): string {
+    if (this._isRunning) {
+      throw new Error("Cannot add entity while worker is running.");
+    }
+
+    this._registry.addNamedEntity(name, factory);
+    return name.toLowerCase();
+  }
+
+  /**
    * In node.js we don't require a new thread as we have a main event loop
    * Therefore, we open the stream and simply listen through the eventemitter behind the scenes
    */
@@ -154,6 +197,10 @@ export class TaskHubGrpcWorker {
         } else if (workItem.hasActivityrequest()) {
           console.log(`Received "Activity Request" work item`);
           this._executeActivity(workItem.getActivityrequest() as any, completionToken, client.stub);
+        } else if (workItem.hasEntityrequest()) {
+          const entityRequest = workItem.getEntityrequest() as pb.EntityBatchRequest;
+          console.log(`Received "Entity Request" work item for entity '${entityRequest.getInstanceid()}'`);
+          this._executeEntity(entityRequest, completionToken, client.stub);
         } else if (workItem.hasHealthping()) {
           // Health ping - no-op, just a keep-alive message from the server
         } else {
@@ -328,6 +375,149 @@ export class TaskHubGrpcWorker {
           e?.message
         }`,
       );
+    }
+  }
+
+  /**
+   * Executes an entity batch request.
+   *
+   * @param req - The entity batch request from the sidecar.
+   * @param completionToken - The completion token for the work item.
+   * @param stub - The gRPC stub for completing the task.
+   *
+   * @remarks
+   * This method mirrors dotnet's OnRunEntityBatchAsync in GrpcDurableTaskWorker.Processor.cs.
+   * It looks up the entity by name, creates a TaskEntityShim, executes the batch,
+   * and sends the result back to the sidecar.
+   *
+   * Dotnet reference: src/Worker/Grpc/GrpcDurableTaskWorker.Processor.cs lines 852-915
+   */
+  private async _executeEntity(
+    req: pb.EntityBatchRequest,
+    completionToken: string,
+    stub: stubs.TaskHubSidecarServiceClient,
+  ): Promise<void> {
+    const instanceIdString = req.getInstanceid();
+
+    if (!instanceIdString) {
+      throw new Error("Entity request does not contain an instance id");
+    }
+
+    // Parse the entity instance ID (format: @name@key)
+    // Dotnet reference: src/Worker/Grpc/GrpcDurableTaskWorker.Processor.cs lines 858-861
+    let entityId: EntityInstanceId;
+    try {
+      entityId = EntityInstanceId.fromString(instanceIdString);
+    } catch (e: any) {
+      console.error(`Failed to parse entity instance id '${instanceIdString}': ${e.message}`);
+      // Return error result for all operations
+      const batchResult = this._createEntityNotFoundResult(
+        req,
+        completionToken,
+        `Invalid entity instance id format: '${instanceIdString}'`,
+      );
+      await this._sendEntityResult(batchResult, stub);
+      return;
+    }
+
+    let batchResult: pb.EntityBatchResult;
+
+    try {
+      // Look up the entity factory by name
+      // Dotnet reference: src/Worker/Grpc/GrpcDurableTaskWorker.Processor.cs lines 869-870
+      const factory = this._registry.getEntity(entityId.name);
+
+      if (factory) {
+        // Create the entity instance and execute the batch
+        // Dotnet reference: src/Worker/Grpc/GrpcDurableTaskWorker.Processor.cs lines 873-875
+        const entity = factory();
+        const shim = new TaskEntityShim(entity, entityId);
+        batchResult = await shim.executeAsync(req);
+        batchResult.setCompletiontoken(completionToken);
+      } else {
+        // Entity not found - return error result for all operations
+        // Dotnet reference: src/Worker/Grpc/GrpcDurableTaskWorker.Processor.cs lines 877-894
+        console.log(`No entity named '${entityId.name}' was found.`);
+        batchResult = this._createEntityNotFoundResult(
+          req,
+          completionToken,
+          `No entity task named '${entityId.name}' was found.`,
+        );
+      }
+    } catch (e: any) {
+      // Framework-level error - return result with failure details
+      // This will cause the batch to be abandoned and retried
+      // Dotnet reference: src/Worker/Grpc/GrpcDurableTaskWorker.Processor.cs lines 896-903
+      console.error(e);
+      console.log(`An error occurred while trying to execute entity '${entityId.name}': ${e.message}`);
+
+      const failureDetails = pbh.newFailureDetails(e);
+
+      batchResult = new pb.EntityBatchResult();
+      batchResult.setCompletiontoken(completionToken);
+      batchResult.setFailuredetails(failureDetails);
+    }
+
+    await this._sendEntityResult(batchResult, stub);
+  }
+
+  /**
+   * Creates an EntityBatchResult for when an entity is not found.
+   *
+   * @remarks
+   * Returns a non-retriable error for each operation in the batch.
+   * Dotnet reference: src/Worker/Grpc/GrpcDurableTaskWorker.Processor.cs lines 877-894
+   */
+  private _createEntityNotFoundResult(
+    req: pb.EntityBatchRequest,
+    completionToken: string,
+    errorMessage: string,
+  ): pb.EntityBatchResult {
+    const batchResult = new pb.EntityBatchResult();
+    batchResult.setCompletiontoken(completionToken);
+
+    // State is unmodified - return the original state
+    const originalState = req.getEntitystate();
+    if (originalState) {
+      batchResult.setEntitystate(originalState);
+    }
+
+    // Create a failure result for each operation in the batch
+    const operations = req.getOperationsList();
+    const results: pb.OperationResult[] = [];
+
+    for (let i = 0; i < operations.length; i++) {
+      const result = new pb.OperationResult();
+      const failure = new pb.OperationResultFailure();
+      const failureDetails = new pb.TaskFailureDetails();
+
+      failureDetails.setErrortype("EntityTaskNotFound");
+      failureDetails.setErrormessage(errorMessage);
+      failureDetails.setIsnonretriable(true);
+
+      failure.setFailuredetails(failureDetails);
+      result.setFailure(failure);
+      results.push(result);
+    }
+
+    batchResult.setResultsList(results);
+    batchResult.setActionsList([]);
+
+    return batchResult;
+  }
+
+  /**
+   * Sends the entity batch result to the sidecar.
+   */
+  private async _sendEntityResult(
+    batchResult: pb.EntityBatchResult,
+    stub: stubs.TaskHubSidecarServiceClient,
+  ): Promise<void> {
+    try {
+      const stubCompleteEntityTask = promisify(stub.completeEntityTask.bind(stub));
+      await stubCompleteEntityTask(batchResult);
+    } catch (e: any) {
+      console.error(`Failed to deliver entity response to sidecar: ${e?.message}`);
     }
   }
 }
