@@ -18,6 +18,10 @@ import { OrchestratorNotRegisteredError } from "./exception/orchestrator-not-reg
 import { StopIterationError } from "./exception/stop-iteration-error";
 import { Registry } from "./registry";
 import { RuntimeOrchestrationContext } from "./runtime-orchestration-context";
+import {
+  EntityOperationFailedException,
+  createTaskFailureDetails,
+} from "../entities/entity-operation-failed-exception";
 
 export class OrchestrationExecutor {
   _generator?: TOrchestrator;
@@ -455,6 +459,84 @@ export class OrchestrationExecutor {
           ctx.setComplete(encodedOutput, pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED, true);
           break;
         }
+        case pb.HistoryEvent.EventtypeCase.ENTITYOPERATIONCOMPLETED:
+          {
+            const completedEvent = event.getEntityoperationcompleted();
+            const requestId = completedEvent?.getRequestid();
+
+            if (!requestId) {
+              console.warn(`${ctx._instanceId}: Ignoring EntityOperationCompletedEvent with no requestId`);
+              return;
+            }
+
+            // Find the pending entity call by requestId
+            const pendingCall = ctx._entityFeature.pendingEntityCalls.get(requestId);
+            if (!pendingCall) {
+              // This could happen during replay or if the call was already processed
+              if (!ctx._isReplaying) {
+                console.warn(
+                  `${ctx._instanceId}: Ignoring unexpected EntityOperationCompletedEvent with requestId = ${requestId}`,
+                );
+              }
+              return;
+            }
+
+            // Remove from pending calls
+            ctx._entityFeature.pendingEntityCalls.delete(requestId);
+
+            // Parse the result and complete the task
+            let result;
+            if (!isEmpty(completedEvent?.getOutput())) {
+              result = JSON.parse(completedEvent?.getOutput()?.getValue() || "null");
+            }
+
+            pendingCall.task.complete(result);
+            await ctx.resume();
+          }
+          break;
+        case pb.HistoryEvent.EventtypeCase.ENTITYOPERATIONFAILED:
+          {
+            const failedEvent = event.getEntityoperationfailed();
+            const requestId = failedEvent?.getRequestid();
+
+            if (!requestId) {
+              console.warn(`${ctx._instanceId}: Ignoring EntityOperationFailedEvent with no requestId`);
+              return;
+            }
+
+            // Find the pending entity call by requestId
+            const pendingCall = ctx._entityFeature.pendingEntityCalls.get(requestId);
+            if (!pendingCall) {
+              // This could happen during replay or if the call was already processed
+              if (!ctx._isReplaying) {
+                console.warn(
+                  `${ctx._instanceId}: Ignoring unexpected EntityOperationFailedEvent with requestId = ${requestId}`,
+                );
+              }
+              return;
+            }
+
+            // Remove from pending calls
+            ctx._entityFeature.pendingEntityCalls.delete(requestId);
+
+            // Convert failure details and throw EntityOperationFailedException
+            const failureDetails = createTaskFailureDetails(failedEvent?.getFailuredetails());
+            if (!failureDetails) {
+              pendingCall.task.fail(
+                `Entity operation '${pendingCall.operationName}' failed with unknown error`,
+              );
+            } else {
+              const exception = new EntityOperationFailedException(
+                pendingCall.entityId,
+                pendingCall.operationName,
+                failureDetails,
+              );
+              pendingCall.task.fail(exception.message, failedEvent?.getFailuredetails());
+            }
+
+            await ctx.resume();
+          }
+          break;
         default:
           console.info(`Unknown history event type: ${eventTypeName} (value: ${eventType}), skipping...`);
         // throw new OrchestrationStateError(`Unknown history event type: ${eventTypeName} (value: ${eventType})`);

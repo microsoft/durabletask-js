@@ -12,7 +12,7 @@ import { Task } from "../task/task";
 import { StopIterationError } from "./exception/stop-iteration-error";
 import { OrchestrationEntityFeature } from "../entities/orchestration-entity-feature";
 import { EntityInstanceId } from "../entities/entity-instance-id";
-import { SignalEntityOptions } from "../entities/signal-entity-options";
+import { SignalEntityOptions, CallEntityOptions } from "../entities/signal-entity-options";
 
 export class RuntimeOrchestrationContext extends OrchestrationContext {
   _generator?: Generator<Task<any>, any, any>;
@@ -359,19 +359,76 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
 }
 
 /**
- * Implementation of OrchestrationEntityFeature for signaling entities from orchestrations.
+ * Implementation of OrchestrationEntityFeature for interacting with entities from orchestrations.
  *
  * @remarks
  * This class provides the entity feature for the RuntimeOrchestrationContext.
- * It allows orchestrations to signal entities with one-way messages.
+ * It allows orchestrations to call entities (request/response) and signal entities (one-way).
  *
  * Dotnet reference: TaskOrchestrationEntityContext
  */
 class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
   private readonly context: RuntimeOrchestrationContext;
+  /**
+   * Tracks pending entity calls by requestId.
+   * Used to correlate responses (EntityOperationCompleted/Failed) with the original call.
+   */
+  readonly pendingEntityCalls: Map<
+    string,
+    { task: CompletableTask<any>; entityId: EntityInstanceId; operationName: string }
+  >;
 
   constructor(context: RuntimeOrchestrationContext) {
     this.context = context;
+    this.pendingEntityCalls = new Map();
+  }
+
+  /**
+   * Calls an operation on an entity and waits for it to complete.
+   *
+   * @param id - The target entity instance ID.
+   * @param operationName - The name of the operation to invoke.
+   * @param input - Optional input to pass to the operation.
+   * @param options - Optional call options.
+   * @returns A task that completes when the entity operation finishes.
+   *
+   * @remarks
+   * This creates a SendEntityMessageAction with an EntityOperationCalledEvent.
+   * The orchestration waits for EntityOperationCompletedEvent or EntityOperationFailedEvent.
+   *
+   * Dotnet reference: TaskOrchestrationEntityContext.CallEntityAsync
+   */
+  callEntity<TResult = void>(
+    id: EntityInstanceId,
+    operationName: string,
+    input?: unknown,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    options?: CallEntityOptions,
+  ): Task<TResult> {
+    const actionId = this.context.nextSequenceNumber();
+    const requestId = this.context.newGuid();
+    const encodedInput = input !== undefined ? JSON.stringify(input) : undefined;
+    const instanceIdString = id.toString();
+    const parentInstanceId = this.context.instanceId;
+
+    const action = ph.newSendEntityMessageCallAction(
+      actionId,
+      instanceIdString,
+      operationName,
+      requestId,
+      parentInstanceId,
+      encodedInput,
+    );
+
+    this.context._pendingActions[action.getId()] = action;
+
+    // Create a completable task that will be completed when the response arrives
+    const task = new CompletableTask<TResult>();
+
+    // Track this pending call so we can correlate the response by requestId
+    this.pendingEntityCalls.set(requestId, { task, entityId: id, operationName });
+
+    return task;
   }
 
   /**

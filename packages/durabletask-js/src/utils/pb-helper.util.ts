@@ -381,3 +381,54 @@ export function newSendEntityMessageSignalAction(
   return action;
 }
 
+/**
+ * Creates a SendEntityMessageAction for calling an entity (request/response).
+ *
+ * @param id - The action ID (sequence number).
+ * @param instanceId - The target entity instance ID string (format: @name@key).
+ * @param operationName - The name of the operation to invoke.
+ * @param requestId - A unique request ID for this call (used to correlate the response).
+ * @param parentInstanceId - The orchestration instance ID making the call.
+ * @param encodedInput - Optional JSON-encoded input for the operation.
+ * @param scheduledTime - Optional scheduled time for delayed delivery.
+ * @returns The OrchestratorAction containing the SendEntityMessageAction.
+ *
+ * @remarks
+ * This creates an EntityOperationCalledEvent which expects a response.
+ * The orchestration waits for EntityOperationCompletedEvent or EntityOperationFailedEvent
+ * with a matching requestId.
+ *
+ * Dotnet reference: TaskOrchestrationEntityContext.SendOperationMessage (oneWay=false)
+ */
+export function newSendEntityMessageCallAction(
+  id: number,
+  instanceId: string,
+  operationName: string,
+  requestId: string,
+  parentInstanceId: string,
+  encodedInput?: string,
+  scheduledTime?: Date,
+): pb.OrchestratorAction {
+  const callEvent = new pb.EntityOperationCalledEvent();
+  callEvent.setRequestid(requestId);
+  callEvent.setOperation(operationName);
+  callEvent.setInput(getStringValue(encodedInput));
+  callEvent.setTargetinstanceid(getStringValue(instanceId));
+  callEvent.setParentinstanceid(getStringValue(parentInstanceId));
+
+  if (scheduledTime) {
+    const ts = new Timestamp();
+    ts.fromDate(scheduledTime);
+    callEvent.setScheduledtime(ts);
+  }
+
+  const sendEntityMessage = new pb.SendEntityMessageAction();
+  sendEntityMessage.setEntityoperationcalled(callEvent);
+
+  const action = new pb.OrchestratorAction();
+  action.setId(id);
+  action.setSendentitymessage(sendEntityMessage);
+
+  return action;
+}
+

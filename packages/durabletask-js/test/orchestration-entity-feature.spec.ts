@@ -195,4 +195,122 @@ describe("RuntimeOrchestrationContext", () => {
       expect(guids1).toEqual(guids2);
     });
   });
+
+  describe("callEntity", () => {
+    it("should create a SendEntityMessageAction with called event", () => {
+      // Arrange
+      const ctx = new RuntimeOrchestrationContext("test-instance");
+      const entityId = new EntityInstanceId("counter", "my-counter");
+
+      // Act
+      const task = ctx.entities.callEntity<number>(entityId, "get");
+
+      // Assert
+      expect(task).toBeDefined();
+      const actions = Object.values(ctx._pendingActions);
+      expect(actions.length).toBe(1);
+
+      const action = actions[0];
+      expect(action.getId()).toBe(1);
+      expect(action.hasSendentitymessage()).toBe(true);
+
+      const sendEntityMessage = action.getSendentitymessage()!;
+      expect(sendEntityMessage.hasEntityoperationcalled()).toBe(true);
+
+      const callEvent = sendEntityMessage.getEntityoperationcalled()!;
+      expect(callEvent.getOperation()).toBe("get");
+      expect(callEvent.getTargetinstanceid()?.getValue()).toBe("@counter@my-counter");
+      expect(callEvent.getParentinstanceid()?.getValue()).toBe("test-instance");
+      expect(callEvent.getRequestid()).toBeDefined();
+    });
+
+    it("should include input when provided", () => {
+      // Arrange
+      const ctx = new RuntimeOrchestrationContext("test-instance");
+      const entityId = new EntityInstanceId("counter", "my-counter");
+
+      // Act
+      ctx.entities.callEntity(entityId, "add", 42);
+
+      // Assert
+      const actions = Object.values(ctx._pendingActions);
+      const callEvent = actions[0].getSendentitymessage()!.getEntityoperationcalled()!;
+      expect(callEvent.getInput()?.getValue()).toBe("42");
+    });
+
+    it("should handle complex object input", () => {
+      // Arrange
+      const ctx = new RuntimeOrchestrationContext("test-instance");
+      const entityId = new EntityInstanceId("user", "user123");
+      const input = { name: "John", age: 30 };
+
+      // Act
+      ctx.entities.callEntity(entityId, "update", input);
+
+      // Assert
+      const actions = Object.values(ctx._pendingActions);
+      const callEvent = actions[0].getSendentitymessage()!.getEntityoperationcalled()!;
+      expect(callEvent.getInput()?.getValue()).toBe(JSON.stringify(input));
+    });
+
+    it("should return an incomplete task", () => {
+      // Arrange
+      const ctx = new RuntimeOrchestrationContext("test-instance");
+      const entityId = new EntityInstanceId("counter", "my-counter");
+
+      // Act
+      const task = ctx.entities.callEntity<number>(entityId, "get");
+
+      // Assert
+      expect(task.isComplete).toBe(false);
+      expect(task.isFailed).toBe(false);
+    });
+
+    it("should track pending entity calls by requestId", () => {
+      // Arrange
+      const ctx = new RuntimeOrchestrationContext("test-instance");
+      const entityId = new EntityInstanceId("counter", "my-counter");
+
+      // Act
+      ctx.entities.callEntity<number>(entityId, "get");
+
+      // Assert
+      expect(ctx._entityFeature.pendingEntityCalls.size).toBe(1);
+      const [requestId, callInfo] = [...ctx._entityFeature.pendingEntityCalls.entries()][0];
+      expect(requestId).toBeDefined();
+      expect(callInfo.entityId).toBe(entityId);
+      expect(callInfo.operationName).toBe("get");
+      expect(callInfo.task).toBeDefined();
+    });
+
+    it("should generate unique request IDs for multiple calls", () => {
+      // Arrange
+      const ctx = new RuntimeOrchestrationContext("test-instance");
+      const entityId = new EntityInstanceId("counter", "my-counter");
+
+      // Act
+      ctx.entities.callEntity(entityId, "get");
+      ctx.entities.callEntity(entityId, "get");
+      ctx.entities.callEntity(entityId, "get");
+
+      // Assert
+      expect(ctx._entityFeature.pendingEntityCalls.size).toBe(3);
+      const requestIds = [...ctx._entityFeature.pendingEntityCalls.keys()];
+      expect(new Set(requestIds).size).toBe(3);
+    });
+
+    it("should not set scheduled time (not supported for calls)", () => {
+      // Arrange
+      const ctx = new RuntimeOrchestrationContext("test-instance");
+      const entityId = new EntityInstanceId("counter", "my-counter");
+
+      // Act - calls don't support scheduled time, unlike signals
+      ctx.entities.callEntity(entityId, "get");
+
+      // Assert
+      const actions = Object.values(ctx._pendingActions);
+      const callEvent = actions[0].getSendentitymessage()!.getEntityoperationcalled()!;
+      expect(callEvent.hasScheduledtime()).toBe(false);
+    });
+  });
 });
