@@ -603,15 +603,31 @@ abstract class TaskEntity<TState> implements ITaskEntity {
 - `TaskEntity.dispatch.handlesAsyncMethods` - verify Promise handling
 
 ### Success criteria:
-- [ ] Entity interface defined
-- [ ] Operation dispatch works for simple cases
-- [ ] Case-insensitive method matching
-- [ ] Implicit delete operation supported
+- [x] Entity interface defined
+- [x] Operation dispatch works for simple cases
+- [x] Case-insensitive method matching
+- [x] Implicit delete operation supported
 
 ### Verification checklist:
-- [ ] Create entity with Add method, dispatch "add" and "ADD" operations
-- [ ] Dispatch "delete" without explicit delete method, verify state cleared
-- [ ] Dispatch unknown operation, verify error thrown
+- [x] Create entity with Add method, dispatch "add" and "ADD" operations
+- [x] Dispatch "delete" without explicit delete method, verify state cleared
+- [x] Dispatch unknown operation, verify error thrown
+
+**STATUS: ✅ COMPLETE** (January 26, 2026)
+- Implementation:
+  - `packages/durabletask-js/src/entities/task-entity.ts` - ITaskEntity interface, EntityFactory type, TaskEntity<TState> base class
+- Tests:
+  - `packages/durabletask-js/test/task-entity.spec.ts` (19 tests passing)
+- Features:
+  - Case-insensitive method dispatch
+  - Automatic state hydration and persistence
+  - initializeState() for default state
+  - Implicit "delete" operation
+  - Async method support
+  - Context access within entity methods
+  - Custom delete override support
+- Export: Added to `packages/durabletask-js/src/index.ts`
+- Total entity tests: 129 passing
 
 ---
 

@@ -51,3 +51,6 @@ export { SignalEntityOptions, CallEntityOptions } from "./entities/signal-entity
 export { TaskEntityState } from "./entities/task-entity-state";
 export { TaskEntityContext, StartOrchestrationOptions } from "./entities/task-entity-context";
 export { TaskEntityOperation } from "./entities/task-entity-operation";
+
+// Entity interface and base class (Step 4)
+export { ITaskEntity, EntityFactory, TaskEntity } from "./entities/task-entity";
