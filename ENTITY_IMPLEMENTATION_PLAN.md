@@ -771,7 +771,7 @@ interface OrchestrationEntityFeature {
 
 ---
 
-## Step 8: Orchestration Entity Feature (CallEntity)
+## Step 8: Orchestration Entity Feature (CallEntity) ✅ COMPLETED
 
 ### Dotnet source requirements:
 - `TaskOrchestrationEntityFeature.CallEntityAsync` -> [TaskOrchestrationEntityFeature.cs](src/Abstractions/Entities/TaskOrchestrationEntityFeature.cs) L15-35
@@ -781,13 +781,24 @@ interface OrchestrationEntityFeature {
 - EntityOperationFailedException -> [EntityOperationFailedException.cs](src/Abstractions/Entities/EntityOperationFailedException.cs)
 
 ### JS work items (no code yet):
-- Implement `callEntity<T>` in RuntimeOrchestrationContext
-- Generate deterministic request ID (using existing NewGuid pattern)
-- Create SendEntityMessageAction with EntityOperationCalledEvent
-- Wait for external event with request ID
-- Handle EntityOperationCompletedEvent in orchestration executor
-- Handle EntityOperationFailedEvent, throw EntityOperationFailedException
-- Create `entity-operation-failed-exception.ts`
+- ~~Implement `callEntity<T>` in RuntimeOrchestrationContext~~ ✅
+- ~~Generate deterministic request ID (using existing NewGuid pattern)~~ ✅
+- ~~Create SendEntityMessageAction with EntityOperationCalledEvent~~ ✅
+- ~~Wait for external event with request ID~~ ✅
+- ~~Handle EntityOperationCompletedEvent in orchestration executor~~ ✅
+- ~~Handle EntityOperationFailedEvent, throw EntityOperationFailedException~~ ✅
+- ~~Create `entity-operation-failed-exception.ts`~~ ✅
+
+### Files created/modified:
+- `src/entities/entity-operation-failed-exception.ts` - NEW: TaskFailureDetails, EntityOperationFailedException
+- `src/entities/orchestration-entity-feature.ts` - MODIFIED: Added callEntity<TResult>() method
+- `src/utils/pb-helper.util.ts` - MODIFIED: Added newSendEntityMessageCallAction()
+- `src/worker/runtime-orchestration-context.ts` - MODIFIED: Implemented callEntity in RuntimeOrchestrationEntityFeature
+- `src/worker/orchestration-executor.ts` - MODIFIED: Added ENTITYOPERATIONCOMPLETED and ENTITYOPERATIONFAILED handlers
+- `src/entities/index.ts` - MODIFIED: Exported new types
+- `test/orchestration-entity-feature.spec.ts` - MODIFIED: Added 7 callEntity tests
+- `test/entity-operation-events.spec.ts` - NEW: 6 tests for entity operation event handling
+- `test/entity-operation-failed-exception.spec.ts` - NEW: 9 tests for exception class
 
 ### Expected API surface change:
 ```typescript
@@ -809,46 +820,51 @@ class EntityOperationFailedException extends Error {
 - `EntityOperationFailedException.containsDetails` - verify exception properties
 
 ### Success criteria:
-- [ ] `callEntity` method available on orchestration context
-- [ ] Request ID is deterministic (replays produce same ID)
-- [ ] Task completes when response event received
-- [ ] Exception thrown for failed operations
+- [x] `callEntity` method available on orchestration context
+- [x] Request ID is deterministic (replays produce same ID)
+- [x] Task completes when response event received
+- [x] Exception thrown for failed operations
 
 ### Verification checklist:
-- [ ] Call entity, verify action created with parentInstanceId
-- [ ] Simulate success response, verify task completes with result
-- [ ] Simulate failure response, verify exception thrown with details
+- [x] Call entity, verify action created with parentInstanceId
+- [x] Simulate success response, verify task completes with result
+- [x] Simulate failure response, verify exception thrown with details
 
 ---
 
-## Step 9: Entity Response Event Handling in Orchestration Executor
+## Step 9: Entity Response Event Handling in Orchestration Executor ✅ COMPLETED
+
+Note: Step 9 was implemented as part of Step 8 since they are tightly coupled.
 
 ### Dotnet source requirements:
 - EntityOperationCompletedEvent handling -> [EntityConversions.cs](src/Shared/Grpc/EntityConversions.cs) L176-187
 - EntityOperationFailedEvent handling -> [EntityConversions.cs](src/Shared/Grpc/EntityConversions.cs) L200-220
 - Event correlation by requestId -> Response name matches requestId
 
-### JS work items (no code yet):
-- Add case for EntityOperationCompletedEvent in orchestration executor
-- Add case for EntityOperationFailedEvent in orchestration executor
-- Extract requestId from event, correlate with pending task
-- Complete or fail the task accordingly
+### JS work items:
+- ~~Add case for EntityOperationCompletedEvent in orchestration executor~~ ✅
+- ~~Add case for EntityOperationFailedEvent in orchestration executor~~ ✅
+- ~~Extract requestId from event, correlate with pending task~~ ✅
+- ~~Complete or fail the task accordingly~~ ✅
+
+### Files modified:
+- `src/worker/orchestration-executor.ts` - Added ENTITYOPERATIONCOMPLETED and ENTITYOPERATIONFAILED cases
 
 ### Expected API surface change:
 None - internal changes only
 
 ### Tests to add (names and intent):
-- `OrchestrationExecutor.entityOperationCompleted.completesTask` - verify task completion
-- `OrchestrationExecutor.entityOperationFailed.failsTask` - verify task failure
+- ~~`OrchestrationExecutor.entityOperationCompleted.completesTask` - verify task completion~~ ✅
+- ~~`OrchestrationExecutor.entityOperationFailed.failsTask` - verify task failure~~ ✅
 
 ### Success criteria:
-- [ ] EntityOperationCompletedEvent is handled
-- [ ] EntityOperationFailedEvent is handled
-- [ ] Pending tasks are completed correctly
+- [x] EntityOperationCompletedEvent is handled
+- [x] EntityOperationFailedEvent is handled
+- [x] Pending tasks are completed correctly
 
 ### Verification checklist:
-- [ ] Process orchestrator request with EntityOperationCompletedEvent, verify task completed
-- [ ] Process orchestrator request with EntityOperationFailedEvent, verify task failed
+- [x] Process orchestrator request with EntityOperationCompletedEvent, verify task completed
+- [x] Process orchestrator request with EntityOperationFailedEvent, verify task failed
 
 ---
 
@@ -883,14 +899,26 @@ getEntities<T>(query?: EntityQuery): AsyncIterable<EntityMetadata<T>>;
 - `EntityClient.getEntities.paginates` - verify pagination
 
 ### Success criteria:
-- [ ] All client entity methods implemented
-- [ ] Proto conversion is correct
-- [ ] Pagination works for queries
+- [x] All client entity methods implemented
+- [x] Proto conversion is correct
+- [x] Pagination works for queries
+- [x] cleanEntityStorage method implemented
 
 ### Verification checklist:
-- [ ] Call signalEntity, verify SignalEntityRequest sent
-- [ ] Call getEntity, verify response converted to EntityMetadata
-- [ ] Call getEntities with page size, verify multiple pages fetched
+- [x] Call signalEntity, verify SignalEntityRequest sent
+- [x] Call getEntity, verify response converted to EntityMetadata
+- [x] Call getEntities with page size, verify multiple pages fetched
+- [x] Call cleanEntityStorage, verify request/response handling
+
+**STATUS: ✅ COMPLETE** (January 27, 2026)
+- Implementation: `packages/durabletask-js/src/client/client.ts`
+  - `signalEntity(id, operationName, input?, options?)` - sends SignalEntityRequest RPC
+  - `getEntity<T>(id, includeState?)` - returns EntityMetadata or undefined
+  - `getEntities<T>(query?)` - AsyncGenerator for paginated query with auto-continuation
+  - `cleanEntityStorage(request?, continueUntilComplete?)` - cleans empty entities and orphaned locks
+- Proto conversion helper: `convertEntityMetadata<T>()` in client.ts
+- Tests: `packages/durabletask-js/test/entity-client.spec.ts` (18 tests passing)
+- Total tests: 239 passing
 
 ---
 
