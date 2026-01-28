@@ -8,6 +8,11 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "moduleResolution": "node"
+    "moduleResolution": "node",
+    "baseUrl": ".",
+    "paths": {
+      "@microsoft/durabletask-js": ["packages/durabletask-js/src/index.ts"],
+      "@microsoft/durabletask-js-azuremanaged": ["packages/durabletask-js-azuremanaged/src/index.ts"]
+    }
   }
 }
