@@ -185,6 +185,7 @@ export class DurableTaskAzureManagedWorkerBuilder {
   build(): TaskHubGrpcWorker {
     const hostAddress = this._options.getHostAddress();
     const channelCredentials = this._options.createChannelCredentials();
+    const metadataGenerator = this._options.createMetadataGenerator();
 
     const defaultOptions: grpc.ChannelOptions = {
       "grpc.primary_user_agent": "durabletask-js-azuremanaged",
@@ -197,8 +198,10 @@ export class DurableTaskAzureManagedWorkerBuilder {
       ...this._grpcChannelOptions,
     };
 
-    // Use the core TaskHubGrpcWorker with custom credentials (no inheritance needed)
-    const worker = new TaskHubGrpcWorker(hostAddress, combinedOptions, true, channelCredentials);
+    // Use the core TaskHubGrpcWorker with custom credentials and metadata generator
+    // For insecure connections, metadata is passed via the metadataGenerator parameter
+    // For secure connections, metadata is included in the channel credentials
+    const worker = new TaskHubGrpcWorker(hostAddress, combinedOptions, true, channelCredentials, metadataGenerator);
 
     // Register all orchestrators
     for (const { name, fn } of this._orchestrators) {

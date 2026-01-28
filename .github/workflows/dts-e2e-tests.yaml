@@ -1,0 +1,56 @@
+name: 🧪 DTS Emulator E2E Tests
+
+# This workflow runs E2E tests against the Durable Task Scheduler (DTS) emulator.
+# It mirrors the Python testing setup at durabletask-python for Azure-managed tests.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  dts-e2e-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["22.x", "24.x"]
+    env:
+      EMULATOR_VERSION: "latest"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐳 Pull Docker image
+        run: docker pull mcr.microsoft.com/dts/dts-emulator:$EMULATOR_VERSION
+
+      - name: 🚀 Run Docker container
+        run: |
+          docker run --name dtsemulator -d -p 8080:8080 mcr.microsoft.com/dts/dts-emulator:$EMULATOR_VERSION
+
+      - name: ⏳ Wait for container to be ready
+        run: sleep 10  # Adjust if your service needs more time to start
+
+      - name: 🔧 Set environment variables
+        run: |
+          echo "TASKHUB=default" >> $GITHUB_ENV
+          echo "ENDPOINT=localhost:8080" >> $GITHUB_ENV
+
+      - name: ⚙️ NodeJS - Install
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          registry-url: "https://registry.npmjs.org"
+
+      - name: ⚙️ Install dependencies
+        run: npm install
+
+      - name: ✅ Run E2E tests against DTS emulator
+        run: npm run test:e2e:azuremanaged:internal

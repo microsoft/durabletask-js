@@ -131,6 +131,7 @@ export class DurableTaskAzureManagedClientBuilder {
   build(): TaskHubGrpcClient {
     const hostAddress = this._options.getHostAddress();
     const channelCredentials = this._options.createChannelCredentials();
+    const metadataGenerator = this._options.createMetadataGenerator();
 
     const defaultOptions: grpc.ChannelOptions = {
       "grpc.primary_user_agent": "durabletask-js-azuremanaged",
@@ -143,8 +144,10 @@ export class DurableTaskAzureManagedClientBuilder {
       ...this._grpcChannelOptions,
     };
 
-    // Use the core TaskHubGrpcClient with custom credentials (no inheritance needed)
-    return new TaskHubGrpcClient(hostAddress, combinedOptions, true, channelCredentials);
+    // Use the core TaskHubGrpcClient with custom credentials and metadata generator
+    // For insecure connections, metadata is passed via the metadataGenerator parameter
+    // For secure connections, metadata is included in the channel credentials
+    return new TaskHubGrpcClient(hostAddress, combinedOptions, true, channelCredentials, metadataGenerator);
   }
 }
 
