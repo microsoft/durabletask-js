@@ -30,8 +30,12 @@ export { TaskEntityOperation } from "./task-entity-operation";
 // Entity interface and base class (Step 4)
 export { ITaskEntity, EntityFactory, TaskEntity } from "./task-entity";
 
-// Orchestration entity feature (Step 7, 8)
-export { OrchestrationEntityFeature } from "./orchestration-entity-feature";
+// Orchestration entity feature (Step 7, 8, 11)
+export {
+  OrchestrationEntityFeature,
+  CriticalSectionInfo,
+  LockHandle,
+} from "./orchestration-entity-feature";
 export {
   EntityOperationFailedException,
   TaskFailureDetails,

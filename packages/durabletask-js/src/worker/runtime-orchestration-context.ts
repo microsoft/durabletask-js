@@ -10,7 +10,11 @@ import { TActivity } from "../types/activity.type";
 import { TOrchestrator } from "../types/orchestrator.type";
 import { Task } from "../task/task";
 import { StopIterationError } from "./exception/stop-iteration-error";
-import { OrchestrationEntityFeature } from "../entities/orchestration-entity-feature";
+import {
+  OrchestrationEntityFeature,
+  CriticalSectionInfo,
+  LockHandle,
+} from "../entities/orchestration-entity-feature";
 import { EntityInstanceId } from "../entities/entity-instance-id";
 import { SignalEntityOptions, CallEntityOptions } from "../entities/signal-entity-options";
 
@@ -21,6 +25,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   _isComplete: boolean;
   _result: any;
   _pendingActions: Record<number, pb.OrchestratorAction>;
+  _commitActions: pb.OrchestratorAction[]; // Actions that should always be included (e.g., unlock messages)
   _pendingTasks: Record<number, CompletableTask<any>>;
   _sequenceNumber: any;
   _currentUtcDatetime: any;
@@ -40,6 +45,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     this._isComplete = false;
     this._result = undefined;
     this._pendingActions = {};
+    this._commitActions = [];
     this._pendingTasks = {};
     this._sequenceNumber = 0;
     this._currentUtcDatetime = new Date(1000, 0, 1);
@@ -221,7 +227,8 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
       return [action];
     }
 
-    return Object.values(this._pendingActions);
+    // Include both commit actions and pending actions
+    return [...this._commitActions, ...Object.values(this._pendingActions)];
   }
 
   nextSequenceNumber(): number {
@@ -363,7 +370,8 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
  *
  * @remarks
  * This class provides the entity feature for the RuntimeOrchestrationContext.
- * It allows orchestrations to call entities (request/response) and signal entities (one-way).
+ * It allows orchestrations to call entities (request/response), signal entities (one-way),
+ * and acquire locks on entities for critical sections.
  *
  * Dotnet reference: TaskOrchestrationEntityContext
  */
@@ -378,9 +386,52 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
     { task: CompletableTask<any>; entityId: EntityInstanceId; operationName: string }
   >;
 
+  /**
+   * Tracks pending lock acquisitions by criticalSectionId.
+   * Used to correlate EntityLockGranted events with the original lock request.
+   */
+  readonly pendingLockRequests: Map<
+    string,
+    { task: CompletableTask<LockHandle>; lockSet: EntityInstanceId[] }
+  >;
+
+  /**
+   * Current critical section state. Null if not in a critical section.
+   */
+  private criticalSection: {
+    id: string;
+    lockedEntities: EntityInstanceId[];
+    availableEntities: Set<string>; // Entity IDs available for calls (not currently in a call)
+  } | null = null;
+
+  /**
+   * Whether a lock acquisition is pending (lock request sent but not yet granted).
+   * This is used to prevent calling entities before the lock is granted.
+   *
+   * Dotnet reference: OrchestrationEntityContext.lockAcquisitionPending
+   */
+  private lockAcquisitionPending = false;
+
   constructor(context: RuntimeOrchestrationContext) {
     this.context = context;
     this.pendingEntityCalls = new Map();
+    this.pendingLockRequests = new Map();
+    this.criticalSection = null;
+    this.lockAcquisitionPending = false;
+  }
+
+  /**
+   * Whether this orchestration is currently inside a critical section.
+   */
+  get isInsideCriticalSection(): boolean {
+    return this.criticalSection !== null;
+  }
+
+  /**
+   * The ID of the current critical section, or undefined if not in a critical section.
+   */
+  get currentCriticalSectionId(): string | undefined {
+    return this.criticalSection?.id;
   }
 
   /**
@@ -405,6 +456,35 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     options?: CallEntityOptions,
   ): Task<TResult> {
+    // Validate the transition if in a critical section
+    if (this.criticalSection) {
+      // Check if lock acquisition is still pending
+      if (this.lockAcquisitionPending) {
+        throw new Error(
+          "Must await the completion of the lock request prior to calling any entity.",
+        );
+      }
+
+      const entityIdStr = id.toString();
+      if (!this.criticalSection.availableEntities.has(entityIdStr)) {
+        // Check if this entity is even in the lock set
+        const isLocked = this.criticalSection.lockedEntities.some(
+          (e) => e.toString() === entityIdStr,
+        );
+        if (isLocked) {
+          throw new Error(
+            "Must not call an entity from a critical section while a prior call to the same entity is still pending.",
+          );
+        } else {
+          throw new Error(
+            "Must not call an entity from a critical section if it is not one of the locked entities.",
+          );
+        }
+      }
+      // Mark entity as unavailable until call completes
+      this.criticalSection.availableEntities.delete(entityIdStr);
+    }
+
     const actionId = this.context.nextSequenceNumber();
     const requestId = this.context.newGuid();
     const encodedInput = input !== undefined ? JSON.stringify(input) : undefined;
@@ -432,6 +512,18 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
   }
 
   /**
+   * Called after an entity call within a critical section completes.
+   * Makes the entity available for calls again.
+   *
+   * Dotnet reference: OrchestrationEntityContext.RecoverLockAfterCall
+   */
+  recoverLockAfterCall(entityId: EntityInstanceId): void {
+    if (this.criticalSection) {
+      this.criticalSection.availableEntities.add(entityId.toString());
+    }
+  }
+
+  /**
    * Signals an operation on an entity without waiting for a response.
    *
    * @param id - The target entity instance ID.
@@ -451,6 +543,17 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
     input?: unknown,
     options?: SignalEntityOptions,
   ): void {
+    // Validate: cannot signal a locked entity from within a critical section
+    if (this.criticalSection) {
+      const entityIdStr = id.toString();
+      const isLocked = this.criticalSection.lockedEntities.some(
+        (e) => e.toString() === entityIdStr,
+      );
+      if (isLocked) {
+        throw new Error("Must not signal a locked entity from a critical section.");
+      }
+    }
+
     const actionId = this.context.nextSequenceNumber();
     const requestId = this.context.newGuid();
     const encodedInput = input !== undefined ? JSON.stringify(input) : undefined;
@@ -466,5 +569,186 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
     );
 
     this.context._pendingActions[action.getId()] = action;
+  }
+
+  /**
+   * Acquires locks on one or more entities for a critical section.
+   *
+   * @param entityIds - The entities to lock.
+   * @returns A task that completes when all locks are acquired, with a handle to release the locks.
+   *
+   * @remarks
+   * Entities are sorted before lock acquisition to prevent deadlocks.
+   * Duplicates are removed automatically.
+   *
+   * Dotnet reference: TaskOrchestrationEntityContext.LockEntitiesAsync
+   */
+  lockEntities(...entityIds: EntityInstanceId[]): Task<LockHandle> {
+    if (entityIds.length === 0) {
+      throw new Error("The list of entities to lock must not be empty.");
+    }
+
+    if (this.criticalSection) {
+      throw new Error("Must not enter another critical section from within a critical section.");
+    }
+
+    // Sort entities for deterministic ordering (prevents deadlocks)
+    // Use the string representation for consistent ordering
+    const sortedEntities = [...entityIds].sort((a, b) => a.toString().localeCompare(b.toString()));
+
+    // Remove duplicates
+    const uniqueEntities: EntityInstanceId[] = [];
+    for (const entity of sortedEntities) {
+      const entityStr = entity.toString();
+      if (
+        uniqueEntities.length === 0 ||
+        uniqueEntities[uniqueEntities.length - 1].toString() !== entityStr
+      ) {
+        uniqueEntities.push(entity);
+      }
+    }
+
+    const actionId = this.context.nextSequenceNumber();
+    const criticalSectionId = this.context.newGuid();
+    const lockSet = uniqueEntities.map((e) => e.toString());
+    const parentInstanceId = this.context.instanceId;
+
+    const action = ph.newSendEntityMessageLockAction(
+      actionId,
+      criticalSectionId,
+      lockSet,
+      parentInstanceId,
+    );
+
+    this.context._pendingActions[action.getId()] = action;
+
+    // Initialize critical section state (availableEntities is empty until lock is granted)
+    this.criticalSection = {
+      id: criticalSectionId,
+      lockedEntities: uniqueEntities,
+      availableEntities: new Set<string>(), // Empty until lock is granted
+    };
+
+    // Mark that we're waiting for the lock to be granted
+    this.lockAcquisitionPending = true;
+
+    // Create a completable task that will be completed when the lock is granted
+    const task = new CompletableTask<LockHandle>();
+
+    // Track this pending lock request
+    this.pendingLockRequests.set(criticalSectionId, { task, lockSet: uniqueEntities });
+
+    return task;
+  }
+
+  /**
+   * Called when EntityLockGrantedEvent is received.
+   * Completes the pending lock request and returns the lock handle.
+   */
+  completeLockAcquisition(criticalSectionId: string): void {
+    const pendingRequest = this.pendingLockRequests.get(criticalSectionId);
+    if (pendingRequest) {
+      this.pendingLockRequests.delete(criticalSectionId);
+
+      // Now that lock is granted, populate availableEntities and clear pending flag
+      // Dotnet reference: OrchestrationEntityContext.CompleteAcquire
+      if (this.criticalSection) {
+        this.criticalSection.availableEntities = new Set(
+          pendingRequest.lockSet.map((e) => e.toString()),
+        );
+      }
+      this.lockAcquisitionPending = false;
+
+      // Create the lock releaser
+      const lockHandle = new EntityLockReleaser(this.context, this, criticalSectionId);
+      pendingRequest.task.complete(lockHandle);
+    }
+  }
+
+  /**
+   * Checks whether the orchestration is currently inside a critical section.
+   *
+   * @returns Information about the current critical section state.
+   *
+   * Dotnet reference: TaskOrchestrationEntityContext.InCriticalSection
+   */
+  isInCriticalSection(): CriticalSectionInfo {
+    if (this.criticalSection) {
+      return {
+        inSection: true,
+        lockedEntities: [...this.criticalSection.lockedEntities],
+      };
+    } else {
+      return {
+        inSection: false,
+      };
+    }
+  }
+
+  /**
+   * Exits the critical section, releasing all locks.
+   *
+   * @param criticalSectionId - Optional: only exit if the ID matches.
+   *
+   * Dotnet reference: TaskOrchestrationEntityContext.ExitCriticalSection
+   */
+  exitCriticalSection(criticalSectionId?: string): void {
+    if (!this.criticalSection) {
+      return;
+    }
+
+    if (criticalSectionId && criticalSectionId !== this.criticalSection.id) {
+      return;
+    }
+
+    // Send unlock messages to all locked entities
+    // Use _commitActions so they aren't cleared when the orchestration completes
+    for (const entity of this.criticalSection.lockedEntities) {
+      const actionId = this.context.nextSequenceNumber();
+      const action = ph.newSendEntityMessageUnlockAction(
+        actionId,
+        this.criticalSection.id,
+        entity.toString(),
+        this.context.instanceId,
+      );
+      this.context._commitActions.push(action);
+    }
+
+    // Clear critical section state
+    this.criticalSection = null;
+  }
+}
+
+/**
+ * Lock releaser that exits the critical section when released.
+ *
+ * Dotnet reference: TaskOrchestrationEntityContext.LockReleaser
+ */
+class EntityLockReleaser implements LockHandle {
+  private readonly context: RuntimeOrchestrationContext;
+  private readonly entityFeature: RuntimeOrchestrationEntityFeature;
+  private readonly criticalSectionId: string;
+  private released = false;
+
+  constructor(
+    context: RuntimeOrchestrationContext,
+    entityFeature: RuntimeOrchestrationEntityFeature,
+    criticalSectionId: string,
+  ) {
+    this.context = context;
+    this.entityFeature = entityFeature;
+    this.criticalSectionId = criticalSectionId;
+  }
+
+  /**
+   * Releases all entity locks held by this lock handle.
+   */
+  release(): void {
+    if (this.released) {
+      return; // Already released
+    }
+
+    this.released = true;
+    this.entityFeature.exitCriticalSection(this.criticalSectionId);
   }
 }

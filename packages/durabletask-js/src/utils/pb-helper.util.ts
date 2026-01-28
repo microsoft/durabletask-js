@@ -432,3 +432,77 @@ export function newSendEntityMessageCallAction(
   return action;
 }
 
+/**
+ * Creates a SendEntityMessageAction for requesting entity locks.
+ *
+ * @param id - The action ID (sequence number).
+ * @param criticalSectionId - A unique ID for this critical section (used to correlate lock grant).
+ * @param lockSet - Array of entity instance ID strings (format: @name@key) to lock, in sorted order.
+ * @param parentInstanceId - The orchestration instance ID requesting the locks.
+ * @returns The OrchestratorAction containing the SendEntityMessageAction.
+ *
+ * @remarks
+ * This creates an EntityLockRequestedEvent which is sent to the first entity in the lock set.
+ * The entity framework will forward the lock request to subsequent entities.
+ * The orchestration waits for EntityLockGrantedEvent with a matching criticalSectionId.
+ *
+ * Dotnet reference: OrchestrationEntityContext.EmitAcquireMessage
+ */
+export function newSendEntityMessageLockAction(
+  id: number,
+  criticalSectionId: string,
+  lockSet: string[],
+  parentInstanceId: string,
+): pb.OrchestratorAction {
+  const lockEvent = new pb.EntityLockRequestedEvent();
+  lockEvent.setCriticalsectionid(criticalSectionId);
+  lockEvent.setLocksetList(lockSet);
+  lockEvent.setPosition(0);
+  lockEvent.setParentinstanceid(getStringValue(parentInstanceId));
+
+  const sendEntityMessage = new pb.SendEntityMessageAction();
+  sendEntityMessage.setEntitylockrequested(lockEvent);
+
+  const action = new pb.OrchestratorAction();
+  action.setId(id);
+  action.setSendentitymessage(sendEntityMessage);
+
+  return action;
+}
+
+/**
+ * Creates a SendEntityMessageAction for releasing entity locks.
+ *
+ * @param id - The action ID (sequence number).
+ * @param criticalSectionId - The ID of the critical section to release.
+ * @param targetInstanceId - The entity instance ID string to send the unlock to.
+ * @param parentInstanceId - The orchestration instance ID releasing the lock.
+ * @returns The OrchestratorAction containing the SendEntityMessageAction.
+ *
+ * @remarks
+ * This creates an EntityUnlockSentEvent to release a lock held by the orchestration.
+ * One unlock event should be sent to each entity in the lock set.
+ *
+ * Dotnet reference: OrchestrationEntityContext.EmitLockReleaseMessages
+ */
+export function newSendEntityMessageUnlockAction(
+  id: number,
+  criticalSectionId: string,
+  targetInstanceId: string,
+  parentInstanceId: string,
+): pb.OrchestratorAction {
+  const unlockEvent = new pb.EntityUnlockSentEvent();
+  unlockEvent.setCriticalsectionid(criticalSectionId);
+  unlockEvent.setTargetinstanceid(getStringValue(targetInstanceId));
+  unlockEvent.setParentinstanceid(getStringValue(parentInstanceId));
+
+  const sendEntityMessage = new pb.SendEntityMessageAction();
+  sendEntityMessage.setEntityunlocksent(unlockEvent);
+
+  const action = new pb.OrchestratorAction();
+  action.setId(id);
+  action.setSendentitymessage(sendEntityMessage);
+
+  return action;
+}
+

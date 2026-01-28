@@ -6,12 +6,45 @@ import { EntityInstanceId } from "./entity-instance-id";
 import { CallEntityOptions, SignalEntityOptions } from "./signal-entity-options";
 
 /**
+ * Result of checking if currently in a critical section.
+ */
+export interface CriticalSectionInfo {
+  /**
+   * Whether the orchestration is currently inside a critical section.
+   */
+  inSection: boolean;
+
+  /**
+   * The entities that are locked in the current critical section.
+   * Only populated when inSection is true.
+   */
+  lockedEntities?: EntityInstanceId[];
+}
+
+/**
+ * A disposable object that releases entity locks when disposed.
+ *
+ * @remarks
+ * Use this to release locks acquired via `lockEntities`.
+ * Typically used in a try/finally block to ensure locks are released.
+ *
+ * Dotnet reference: IAsyncDisposable returned by LockEntitiesAsync
+ */
+export interface LockHandle {
+  /**
+   * Releases all entity locks held by this lock handle.
+   */
+  release(): void;
+}
+
+/**
  * Feature for interacting with durable entities from an orchestration.
  *
  * @remarks
  * This feature provides methods to call and signal entities from within an orchestration.
  * - `callEntity` waits for a response from the entity.
  * - `signalEntity` is a one-way (fire-and-forget) operation that doesn't wait for a response.
+ * - `lockEntities` acquires locks on multiple entities for critical sections.
  *
  * Dotnet reference: src/Abstractions/Entities/TaskOrchestrationEntityFeature.cs
  */
@@ -62,4 +95,37 @@ export interface OrchestrationEntityFeature {
     input?: unknown,
     options?: SignalEntityOptions,
   ): void;
+
+  /**
+   * Acquires locks on one or more entities for a critical section.
+   *
+   * @param entityIds - The entities to lock. Order doesn't matter; they will be sorted internally.
+   * @returns A task that completes when all locks are acquired, with a handle to release the locks.
+   *
+   * @remarks
+   * This method acquires exclusive locks on all specified entities, ensuring that no other
+   * orchestration can access them until the locks are released. Locks are acquired in a
+   * globally consistent order (sorted by entity ID) to prevent deadlocks.
+   *
+   * Use the returned LockHandle to release the locks when the critical section is complete.
+   * It's recommended to release locks in a finally block to ensure they're always released.
+   *
+   * While holding locks:
+   * - You can call (but not signal) the locked entities
+   * - You cannot call sub-orchestrations
+   * - You cannot acquire additional locks (no nested critical sections)
+   *
+   * Dotnet reference: TaskOrchestrationEntityFeature.LockEntitiesAsync
+   */
+  lockEntities(...entityIds: EntityInstanceId[]): Task<LockHandle>;
+
+  /**
+   * Checks whether the orchestration is currently inside a critical section.
+   *
+   * @returns Information about the current critical section state.
+   *
+   * @remarks
+   * Dotnet reference: TaskOrchestrationEntityFeature.InCriticalSection
+   */
+  isInCriticalSection(): CriticalSectionInfo;
 }

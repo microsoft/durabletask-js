@@ -484,6 +484,9 @@ export class OrchestrationExecutor {
             // Remove from pending calls
             ctx._entityFeature.pendingEntityCalls.delete(requestId);
 
+            // If in a critical section, recover the lock for this entity
+            ctx._entityFeature.recoverLockAfterCall(pendingCall.entityId);
+
             // Parse the result and complete the task
             let result;
             if (!isEmpty(completedEvent?.getOutput())) {
@@ -519,6 +522,9 @@ export class OrchestrationExecutor {
             // Remove from pending calls
             ctx._entityFeature.pendingEntityCalls.delete(requestId);
 
+            // If in a critical section, recover the lock for this entity
+            ctx._entityFeature.recoverLockAfterCall(pendingCall.entityId);
+
             // Convert failure details and throw EntityOperationFailedException
             const failureDetails = createTaskFailureDetails(failedEvent?.getFailuredetails());
             if (!failureDetails) {
@@ -534,6 +540,33 @@ export class OrchestrationExecutor {
               pendingCall.task.fail(exception.message, failedEvent?.getFailuredetails());
             }
 
+            await ctx.resume();
+          }
+          break;
+        case pb.HistoryEvent.EventtypeCase.ENTITYLOCKGRANTED:
+          {
+            const lockGrantedEvent = event.getEntitylockgranted();
+            const criticalSectionId = lockGrantedEvent?.getCriticalsectionid();
+
+            if (!criticalSectionId) {
+              console.warn(`${ctx._instanceId}: Ignoring EntityLockGrantedEvent with no criticalSectionId`);
+              return;
+            }
+
+            // Find the pending lock request by criticalSectionId
+            const pendingRequest = ctx._entityFeature.pendingLockRequests.get(criticalSectionId);
+            if (!pendingRequest) {
+              // This could happen during replay or if the lock was already acquired
+              if (!ctx._isReplaying) {
+                console.warn(
+                  `${ctx._instanceId}: Ignoring unexpected EntityLockGrantedEvent with criticalSectionId = ${criticalSectionId}`,
+                );
+              }
+              return;
+            }
+
+            // Complete the lock acquisition
+            ctx._entityFeature.completeLockAcquisition(criticalSectionId);
             await ctx.resume();
           }
           break;
