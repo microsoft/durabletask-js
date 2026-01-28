@@ -2,7 +2,7 @@
 module.exports = {
   preset: "ts-jest",
   testEnvironment: "node",
-  testMatch: ["**/tests/**/*.spec.ts"],
+  testMatch: ["**/tests/**/*.spec.ts", "**/test/**/*.spec.ts"],
   moduleFileExtensions: ["ts", "tsx", "js", "jsx", "json", "node"],
   moduleNameMapper: {
     "^@microsoft/durabletask-js$": "<rootDir>/packages/durabletask-js/src/index.ts",
