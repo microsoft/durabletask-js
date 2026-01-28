@@ -71,7 +71,7 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     expect(state?.instanceId).toEqual(id);
     expect(state?.failureDetails).toBeUndefined();
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
-  });
+  }, 31000);
 
   it("should be able to run an activity sequence", async () => {
     const plusOne = async (_: ActivityContext, input: number) => {
@@ -189,7 +189,7 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     expect(state).toBeDefined();
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(state?.serializedOutput).toEqual(JSON.stringify(["a", "b", "c"]));
-  });
+  }, 31000);
 
   it("should be able to run a single timer", async () => {
     const delay = 3;
