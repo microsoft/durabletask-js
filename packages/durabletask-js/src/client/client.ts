@@ -29,9 +29,6 @@ import {
 
 import { callWithMetadata, MetadataGenerator } from "../utils/grpc-helper.util";
 
-// Re-export MetadataGenerator for backward compatibility
-export { MetadataGenerator } from "../utils/grpc-helper.util";
-
 export class TaskHubGrpcClient {
   private _stub: stubs.TaskHubSidecarServiceClient;
   private _metadataGenerator?: MetadataGenerator;
