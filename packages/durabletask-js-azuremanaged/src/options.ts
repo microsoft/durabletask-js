@@ -152,7 +152,7 @@ abstract class DurableTaskAzureManagedOptionsBase {
    * rather than being composed into the channel credentials. This ensures consistent behavior
    * across both secure and insecure connections.
    */
-  protected createChannelCredentialsInternal(callerType: string, workerId?: string): grpc.ChannelCredentials {
+  protected createChannelCredentialsInternal(_callerType: string, _workerId?: string): grpc.ChannelCredentials {
     if (this._allowInsecureCredentials) {
       return grpc.ChannelCredentials.createInsecure();
     }

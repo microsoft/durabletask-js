@@ -25,14 +25,17 @@ export function callWithMetadata<TReq, TRes>(
   req: TReq,
   metadataGenerator?: MetadataGenerator,
 ): Promise<TRes> {
-  return new Promise(async (resolve, reject) => {
-    const metadata = metadataGenerator ? await metadataGenerator() : new grpc.Metadata();
-    method(req, metadata, (error, response) => {
-      if (error) {
-        reject(error);
-      } else {
-        resolve(response);
-      }
-    });
+  return new Promise((resolve, reject) => {
+    const executeCall = async () => {
+      const metadata = metadataGenerator ? await metadataGenerator() : new grpc.Metadata();
+      method(req, metadata, (error, response) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve(response);
+        }
+      });
+    };
+    executeCall().catch(reject);
   });
 }
