@@ -12,14 +12,17 @@
  *   - TASKHUB: The task hub name (default: default)
  */
 
-import { TaskHubGrpcClient } from "../../src/client/client";
-import { OrchestrationStatus } from "../../src/proto/orchestrator_service_pb";
-import { getName, whenAll } from "../../src/task";
-import { ActivityContext } from "../../src/task/context/activity-context";
-import { OrchestrationContext } from "../../src/task/context/orchestration-context";
-import { Task } from "../../src/task/task";
-import { TOrchestrator } from "../../src/types/orchestrator.type";
-import { TaskHubGrpcWorker } from "../../src/worker/task-hub-grpc-worker";
+import {
+  TaskHubGrpcClient,
+  TaskHubGrpcWorker,
+  ProtoOrchestrationStatus as OrchestrationStatus,
+  getName,
+  whenAll,
+  ActivityContext,
+  OrchestrationContext,
+  Task,
+  TOrchestrator,
+} from "@microsoft/durabletask-js";
 
 // Read environment variables
 const endpoint = process.env.ENDPOINT || "localhost:8080";
