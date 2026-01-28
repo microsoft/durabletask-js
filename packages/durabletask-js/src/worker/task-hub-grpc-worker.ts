@@ -10,9 +10,9 @@ import { TInput } from "../types/input.type";
 import { TOrchestrator } from "../types/orchestrator.type";
 import { TOutput } from "../types/output.type";
 import { GrpcClient } from "../client/client-grpc";
-import { promisify } from "util";
 import { Empty } from "google-protobuf/google/protobuf/empty_pb";
 import * as pbh from "../utils/pb-helper.util";
+import { callWithMetadata, MetadataGenerator } from "../utils/grpc-helper.util";
 import { OrchestrationExecutor } from "./orchestration-executor";
 import { ActivityExecutor } from "./activity-executor";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
@@ -24,6 +24,7 @@ export class TaskHubGrpcWorker {
   private _tls?: boolean;
   private _grpcChannelOptions?: grpc.ChannelOptions;
   private _grpcChannelCredentials?: grpc.ChannelCredentials;
+  private _metadataGenerator?: MetadataGenerator;
   private _isRunning: boolean;
   private _stopWorker: boolean;
   private _stub: stubs.TaskHubSidecarServiceClient | null;
@@ -35,22 +36,35 @@ export class TaskHubGrpcWorker {
    * @param options gRPC channel options.
    * @param useTLS Whether to use TLS. Defaults to false.
    * @param credentials Optional pre-configured channel credentials. If provided, useTLS is ignored.
+   * @param metadataGenerator Optional function to generate per-call metadata (for taskhub, auth tokens, etc.).
    */
   constructor(
     hostAddress?: string,
     options?: grpc.ChannelOptions,
     useTLS?: boolean,
     credentials?: grpc.ChannelCredentials,
+    metadataGenerator?: MetadataGenerator,
   ) {
     this._registry = new Registry();
     this._hostAddress = hostAddress;
     this._tls = useTLS;
     this._grpcChannelOptions = options;
     this._grpcChannelCredentials = credentials;
+    this._metadataGenerator = metadataGenerator;
     this._responseStream = null;
     this._isRunning = false;
     this._stopWorker = false;
     this._stub = null;
+  }
+
+  /**
+   * Helper to get metadata for gRPC calls.
+   */
+  private async _getMetadata(): Promise<grpc.Metadata> {
+    if (this._metadataGenerator) {
+      return await this._metadataGenerator();
+    }
+    return new grpc.Metadata();
   }
 
   /**
@@ -132,11 +146,11 @@ export class TaskHubGrpcWorker {
   async internalRunWorker(client: GrpcClient, isRetry: boolean = false): Promise<void> {
     try {
       // send a "Hello" message to the sidecar to ensure that it's listening
-      const prom = promisify(client.stub.hello.bind(client.stub));
-      await prom(new Empty());
+      await callWithMetadata(client.stub.hello.bind(client.stub), new Empty(), this._metadataGenerator);
 
-      // Stream work items from the sidecar
-      const stream = client.stub.getWorkItems(new pb.GetWorkItemsRequest());
+      // Stream work items from the sidecar (pass metadata for insecure connections)
+      const metadata = await this._getMetadata();
+      const stream = client.stub.getWorkItems(new pb.GetWorkItemsRequest(), metadata);
       this._responseStream = stream;
 
       console.log(`Successfully connected to ${this._hostAddress}. Waiting for work items...`);
@@ -267,8 +281,7 @@ export class TaskHubGrpcWorker {
     }
 
     try {
-      const stubCompleteOrchestratorTask = promisify(stub.completeOrchestratorTask.bind(stub));
-      await stubCompleteOrchestratorTask(res);
+      await callWithMetadata(stub.completeOrchestratorTask.bind(stub), res, this._metadataGenerator);
     } catch (e: any) {
       console.error(`An error occurred while trying to complete instance '${req.getInstanceid()}': ${e?.message}`);
     }
@@ -320,8 +333,7 @@ export class TaskHubGrpcWorker {
     }
 
     try {
-      const stubCompleteActivityTask = promisify(stub.completeActivityTask.bind(stub));
-      await stubCompleteActivityTask(res);
+      await callWithMetadata(stub.completeActivityTask.bind(stub), res, this._metadataGenerator);
     } catch (e: any) {
       console.error(
         `Failed to deliver activity response for '${req.getName()}#${req.getTaskid()}' of orchestration ID '${instanceId}' to sidecar: ${

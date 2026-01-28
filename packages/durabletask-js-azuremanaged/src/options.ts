@@ -114,7 +114,7 @@ abstract class DurableTaskAzureManagedOptionsBase {
   protected createMetadataGeneratorInternal(
     callerType: string,
     workerId?: string,
-  ): (params: { service_url: string }, callback: (error: Error | null, metadata?: grpc.Metadata) => void) => void {
+  ): () => Promise<grpc.Metadata> {
     // Create token cache only if credential is not null
     let tokenCache: AccessTokenCache | null = null;
     if (this._credential) {
@@ -125,7 +125,7 @@ abstract class DurableTaskAzureManagedOptionsBase {
     const taskHubName = this._taskHubName;
     const userAgent = getUserAgent(callerType);
 
-    return (_params: { service_url: string }, callback: (error: Error | null, metadata?: grpc.Metadata) => void) => {
+    return async (): Promise<grpc.Metadata> => {
       const metadata = new grpc.Metadata();
       metadata.set("taskhub", taskHubName);
       metadata.set("x-user-agent", userAgent);
@@ -136,36 +136,30 @@ abstract class DurableTaskAzureManagedOptionsBase {
       }
 
       if (tokenCache) {
-        tokenCache
-          .getToken()
-          .then((token) => {
-            metadata.set("Authorization", `Bearer ${token.token}`);
-            callback(null, metadata);
-          })
-          .catch((error) => {
-            callback(error);
-          });
-      } else {
-        callback(null, metadata);
+        const token = await tokenCache.getToken();
+        metadata.set("Authorization", `Bearer ${token.token}`);
       }
+
+      return metadata;
     };
   }
 
   /**
    * Creates gRPC channel credentials based on the configured options.
-   * @param callerType The type of caller.
-   * @param workerId Optional worker ID (only for workers).
+   * For insecure connections, returns insecure credentials.
+   * For secure connections, returns SSL credentials.
+   * Note: Metadata (taskhub, auth token, etc.) is passed per-call via the metadataGenerator
+   * rather than being composed into the channel credentials. This ensures consistent behavior
+   * across both secure and insecure connections.
    */
-  protected createChannelCredentialsInternal(callerType: string, workerId?: string): grpc.ChannelCredentials {
+  protected createChannelCredentialsInternal(_callerType: string, _workerId?: string): grpc.ChannelCredentials {
     if (this._allowInsecureCredentials) {
       return grpc.ChannelCredentials.createInsecure();
     }
 
-    const channelCredentials = grpc.ChannelCredentials.createSsl();
-    const metadataGenerator = this.createMetadataGeneratorInternal(callerType, workerId);
-    const callCredentials = grpc.credentials.createFromMetadataGenerator(metadataGenerator);
-
-    return channelCredentials.compose(callCredentials);
+    // For secure connections, use SSL credentials
+    // Metadata is passed per-call via the client/worker's metadataGenerator parameter
+    return grpc.ChannelCredentials.createSsl();
   }
 
   /**
@@ -247,19 +241,19 @@ export class DurableTaskAzureManagedClientOptions extends DurableTaskAzureManage
   }
 
   /**
-   * Creates a gRPC channel metadata generator.
+   * Creates a gRPC channel metadata generator for per-call metadata.
    * Does NOT include workerid header (client only).
+   * This is used for insecure connections where metadata can't be added via channel credentials.
    */
-  createMetadataGenerator(): (
-    params: { service_url: string },
-    callback: (error: Error | null, metadata?: grpc.Metadata) => void,
-  ) => void {
+  createMetadataGenerator(): () => Promise<grpc.Metadata> {
     return this.createMetadataGeneratorInternal("DurableTaskClient");
   }
 
   /**
    * Creates gRPC channel credentials for the client.
    * Does NOT include workerid header.
+   * For insecure connections, returns just insecure credentials (use createMetadataGenerator for metadata).
+   * For secure connections, returns SSL credentials composed with call credentials.
    */
   createChannelCredentials(): grpc.ChannelCredentials {
     return this.createChannelCredentialsInternal("DurableTaskClient");
@@ -360,19 +354,19 @@ export class DurableTaskAzureManagedWorkerOptions extends DurableTaskAzureManage
   }
 
   /**
-   * Creates a gRPC channel metadata generator.
+   * Creates a gRPC channel metadata generator for per-call metadata.
    * Includes workerid header (worker only).
+   * This is used for insecure connections where metadata can't be added via channel credentials.
    */
-  createMetadataGenerator(): (
-    params: { service_url: string },
-    callback: (error: Error | null, metadata?: grpc.Metadata) => void,
-  ) => void {
+  createMetadataGenerator(): () => Promise<grpc.Metadata> {
     return this.createMetadataGeneratorInternal("DurableTaskWorker", this._workerId);
   }
 
   /**
    * Creates gRPC channel credentials for the worker.
    * Includes workerid header.
+   * For insecure connections, returns just insecure credentials (use createMetadataGenerator for metadata).
+   * For secure connections, returns SSL credentials composed with call credentials.
    */
   createChannelCredentials(): grpc.ChannelCredentials {
     return this.createChannelCredentialsInternal("DurableTaskWorker", this._workerId);

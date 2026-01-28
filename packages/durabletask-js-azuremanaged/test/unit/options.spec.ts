@@ -195,22 +195,19 @@ describe("Options", () => {
         expect(typeof generator).toBe("function");
       });
 
-      it("should include task hub name in metadata", (done) => {
+      it("should include task hub name in metadata", async () => {
         const options = new DurableTaskAzureManagedClientOptions()
           .setEndpointAddress(VALID_ENDPOINT)
           .setTaskHubName(VALID_TASKHUB);
 
         const generator = options.createMetadataGenerator();
 
-        generator({ service_url: "https://example.com" }, (error, metadata) => {
-          expect(error).toBeNull();
-          expect(metadata).toBeDefined();
-          expect(metadata?.get("taskhub")).toContain(VALID_TASKHUB);
-          done();
-        });
+        const metadata = await generator();
+        expect(metadata).toBeDefined();
+        expect(metadata?.get("taskhub")).toContain(VALID_TASKHUB);
       });
 
-      it("should include authorization header when credential is set", (done) => {
+      it("should include authorization header when credential is set", async () => {
         const mockCredential = new MockTokenCredential();
         const options = new DurableTaskAzureManagedClientOptions()
           .setEndpointAddress(VALID_ENDPOINT)
@@ -219,30 +216,24 @@ describe("Options", () => {
 
         const generator = options.createMetadataGenerator();
 
-        generator({ service_url: "https://example.com" }, (error, metadata) => {
-          expect(error).toBeNull();
-          expect(metadata).toBeDefined();
-          const authHeader = metadata?.get("Authorization");
-          expect(authHeader).toBeDefined();
-          expect(authHeader?.[0]).toContain("Bearer");
-          done();
-        });
+        const metadata = await generator();
+        expect(metadata).toBeDefined();
+        const authHeader = metadata?.get("Authorization");
+        expect(authHeader).toBeDefined();
+        expect(authHeader?.[0]).toContain("Bearer");
       });
 
-      it("should NOT include workerid header in metadata (client only)", (done) => {
+      it("should NOT include workerid header in metadata (client only)", async () => {
         const options = new DurableTaskAzureManagedClientOptions()
           .setEndpointAddress(VALID_ENDPOINT)
           .setTaskHubName(VALID_TASKHUB);
 
         const generator = options.createMetadataGenerator();
 
-        generator({ service_url: "https://example.com" }, (error, metadata) => {
-          expect(error).toBeNull();
-          expect(metadata).toBeDefined();
-          // Client should NOT have workerid header
-          expect(metadata?.get("workerid")).toEqual([]);
-          done();
-        });
+        const metadata = await generator();
+        expect(metadata).toBeDefined();
+        // Client should NOT have workerid header
+        expect(metadata?.get("workerid")).toEqual([]);
       });
     });
   });
@@ -284,7 +275,7 @@ describe("Options", () => {
     });
 
     describe("createMetadataGenerator", () => {
-      it("should include workerid header in metadata", (done) => {
+      it("should include workerid header in metadata", async () => {
         const options = new DurableTaskAzureManagedWorkerOptions()
           .setEndpointAddress(VALID_ENDPOINT)
           .setTaskHubName(VALID_TASKHUB)
@@ -292,29 +283,23 @@ describe("Options", () => {
 
         const generator = options.createMetadataGenerator();
 
-        generator({ service_url: "https://example.com" }, (error, metadata) => {
-          expect(error).toBeNull();
-          expect(metadata).toBeDefined();
-          expect(metadata?.get("workerid")).toContain("test-worker");
-          done();
-        });
+        const metadata = await generator();
+        expect(metadata).toBeDefined();
+        expect(metadata?.get("workerid")).toContain("test-worker");
       });
 
-      it("should include x-user-agent header with DurableTaskWorker", (done) => {
+      it("should include x-user-agent header with DurableTaskWorker", async () => {
         const options = new DurableTaskAzureManagedWorkerOptions()
           .setEndpointAddress(VALID_ENDPOINT)
           .setTaskHubName(VALID_TASKHUB);
 
         const generator = options.createMetadataGenerator();
 
-        generator({ service_url: "https://example.com" }, (error, metadata) => {
-          expect(error).toBeNull();
-          expect(metadata).toBeDefined();
-          const userAgentHeader = metadata?.get("x-user-agent");
-          expect(userAgentHeader).toBeDefined();
-          expect(userAgentHeader?.[0]).toContain("DurableTaskWorker");
-          done();
-        });
+        const metadata = await generator();
+        expect(metadata).toBeDefined();
+        const userAgentHeader = metadata?.get("x-user-agent");
+        expect(userAgentHeader).toBeDefined();
+        expect(userAgentHeader?.[0]).toContain("DurableTaskWorker");
       });
     });
   });

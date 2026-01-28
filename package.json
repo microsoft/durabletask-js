@@ -15,6 +15,8 @@
     "test:e2e": "./scripts/test-e2e.sh",
     "test:e2e:internal": "jest tests/e2e --runInBand --detectOpenHandles",
     "test:e2e:one": "jest tests/e2e --runInBand --detectOpenHandles --testNamePattern",
+    "test:e2e:azuremanaged:internal": "jest test/e2e-azuremanaged --runInBand --detectOpenHandles",
+    "test:e2e:azuremanaged": "./scripts/test-e2e-azuremanaged.sh",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
     "pretty": "prettier --list-different \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "pretty-fix": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",

@@ -1,4 +1,13 @@
 #!/bin/bash
+# Script to run E2E tests against the durabletask-sidecar.
+#
+# This script uses the cgillum/durabletask-sidecar Docker container for local testing.
+# In CI/CD, we use durabletask-go sidecar instead (similar to Python SDK testing approach).
+#
+# NOTE: To run tests similar to the Python SDK setup:
+#       go install github.com/microsoft/durabletask-go@main
+#       durabletask-go --port 4001
+
 # Start the sidecar if it is not running yet
 if [ ! "$(docker ps -q -f name=durabletask-sidecar)" ]; then
     if [ "$(docker ps -aq -f status=exited -f name=durabletask-sidecar)" ]; then

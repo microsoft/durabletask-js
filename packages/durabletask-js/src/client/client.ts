@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+import * as grpc from "@grpc/grpc-js";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 import { Timestamp } from "google-protobuf/google/protobuf/timestamp_pb";
 import * as pb from "../proto/orchestrator_service_pb";
@@ -9,7 +10,6 @@ import { TOrchestrator } from "../types/orchestrator.type";
 import { TInput } from "../types/input.type";
 import { getName } from "../task";
 import { randomUUID } from "crypto";
-import { promisify } from "util";
 import { newOrchestrationState } from "../orchestration";
 import { OrchestrationState } from "../orchestration/orchestration-state";
 import { GrpcClient } from "./client-grpc";
@@ -17,10 +17,14 @@ import { OrchestrationStatus, toProtobuf } from "../orchestration/enum/orchestra
 import { TimeoutError } from "../exception/timeout-error";
 import { PurgeResult } from "../orchestration/orchestration-purge-result";
 import { PurgeInstanceCriteria } from "../orchestration/orchestration-purge-criteria";
-import * as grpc from "@grpc/grpc-js";
+import { callWithMetadata, MetadataGenerator } from "../utils/grpc-helper.util";
+
+// Re-export MetadataGenerator for backward compatibility
+export { MetadataGenerator } from "../utils/grpc-helper.util";
 
 export class TaskHubGrpcClient {
   private _stub: stubs.TaskHubSidecarServiceClient;
+  private _metadataGenerator?: MetadataGenerator;
 
   /**
    * Creates a new TaskHubGrpcClient instance.
@@ -29,14 +33,17 @@ export class TaskHubGrpcClient {
    * @param options gRPC channel options.
    * @param useTLS Whether to use TLS. Defaults to false.
    * @param credentials Optional pre-configured channel credentials. If provided, useTLS is ignored.
+   * @param metadataGenerator Optional function to generate per-call metadata (for taskhub, auth tokens, etc.).
    */
   constructor(
     hostAddress?: string,
     options?: grpc.ChannelOptions,
     useTLS?: boolean,
     credentials?: grpc.ChannelCredentials,
+    metadataGenerator?: MetadataGenerator,
   ) {
     this._stub = new GrpcClient(hostAddress, options, useTLS, credentials).stub;
+    this._metadataGenerator = metadataGenerator;
   }
 
   async stop(): Promise<void> {
@@ -80,8 +87,11 @@ export class TaskHubGrpcClient {
 
     console.log(`Starting new ${name} instance with ID = ${req.getInstanceid()}`);
 
-    const prom = promisify(this._stub.startInstance.bind(this._stub));
-    const res = (await prom(req)) as pb.CreateInstanceResponse;
+    const res = await callWithMetadata<pb.CreateInstanceRequest, pb.CreateInstanceResponse>(
+      this._stub.startInstance.bind(this._stub),
+      req,
+      this._metadataGenerator,
+    );
 
     return res.getInstanceid();
   }
@@ -104,8 +114,11 @@ export class TaskHubGrpcClient {
     req.setInstanceid(instanceId);
     req.setGetinputsandoutputs(fetchPayloads);
 
-    const prom = promisify(this._stub.getInstance.bind(this._stub));
-    const res = (await prom(req)) as pb.GetInstanceResponse;
+    const res = await callWithMetadata<pb.GetInstanceRequest, pb.GetInstanceResponse>(
+      this._stub.getInstance.bind(this._stub),
+      req,
+      this._metadataGenerator,
+    );
 
     return newOrchestrationState(req.getInstanceid(), res);
   }
@@ -136,11 +149,15 @@ export class TaskHubGrpcClient {
     req.setGetinputsandoutputs(fetchPayloads);
 
     try {
-      const prom = promisify(this._stub.waitForInstanceStart.bind(this._stub));
+      const callPromise = callWithMetadata<pb.GetInstanceRequest, pb.GetInstanceResponse>(
+        this._stub.waitForInstanceStart.bind(this._stub),
+        req,
+        this._metadataGenerator,
+      );
 
       // Execute the request and wait for the first response or timeout
       const res = (await Promise.race([
-        prom(req),
+        callPromise,
         new Promise((_, reject) => setTimeout(() => reject(new TimeoutError()), timeout * 1000)),
       ])) as pb.GetInstanceResponse;
 
@@ -180,11 +197,15 @@ export class TaskHubGrpcClient {
     try {
       console.info(`Waiting ${timeout} seconds for instance ${instanceId} to complete...`);
 
-      const prom = promisify(this._stub.waitForInstanceCompletion.bind(this._stub));
+      const callPromise = callWithMetadata<pb.GetInstanceRequest, pb.GetInstanceResponse>(
+        this._stub.waitForInstanceCompletion.bind(this._stub),
+        req,
+        this._metadataGenerator,
+      );
 
       // Execute the request and wait for the first response or timeout
       const res = (await Promise.race([
-        prom(req),
+        callPromise,
         new Promise((_, reject) => setTimeout(() => reject(new TimeoutError()), timeout * 1000)),
       ])) as pb.GetInstanceResponse;
 
@@ -234,8 +255,11 @@ export class TaskHubGrpcClient {
 
     console.log(`Raising event '${eventName}' for instance '${instanceId}'`);
 
-    const prom = promisify(this._stub.raiseEvent.bind(this._stub));
-    await prom(req);
+    await callWithMetadata<pb.RaiseEventRequest, pb.RaiseEventResponse>(
+      this._stub.raiseEvent.bind(this._stub),
+      req,
+      this._metadataGenerator,
+    );
   }
 
   /**
@@ -255,8 +279,11 @@ export class TaskHubGrpcClient {
 
     console.log(`Terminating '${instanceId}'`);
 
-    const prom = promisify(this._stub.terminateInstance.bind(this._stub));
-    await prom(req);
+    await callWithMetadata<pb.TerminateRequest, pb.TerminateResponse>(
+      this._stub.terminateInstance.bind(this._stub),
+      req,
+      this._metadataGenerator,
+    );
   }
 
   async suspendOrchestration(instanceId: string): Promise<void> {
@@ -265,8 +292,11 @@ export class TaskHubGrpcClient {
 
     console.log(`Suspending '${instanceId}'`);
 
-    const prom = promisify(this._stub.suspendInstance.bind(this._stub));
-    await prom(req);
+    await callWithMetadata<pb.SuspendRequest, pb.SuspendResponse>(
+      this._stub.suspendInstance.bind(this._stub),
+      req,
+      this._metadataGenerator,
+    );
   }
 
   async resumeOrchestration(instanceId: string): Promise<void> {
@@ -275,8 +305,11 @@ export class TaskHubGrpcClient {
 
     console.log(`Resuming '${instanceId}'`);
 
-    const prom = promisify(this._stub.resumeInstance.bind(this._stub));
-    await prom(req);
+    await callWithMetadata<pb.ResumeRequest, pb.ResumeResponse>(
+      this._stub.resumeInstance.bind(this._stub),
+      req,
+      this._metadataGenerator,
+    );
   }
 
   /**
@@ -305,8 +338,11 @@ export class TaskHubGrpcClient {
 
       console.log(`Purging Instance '${instanceId}'`);
 
-      const prom = promisify(this._stub.purgeInstances.bind(this._stub));
-      res = (await prom(req)) as pb.PurgeInstancesResponse;
+      res = await callWithMetadata<pb.PurgeInstancesRequest, pb.PurgeInstancesResponse>(
+        this._stub.purgeInstances.bind(this._stub),
+        req,
+        this._metadataGenerator,
+      );
     } else {
       const purgeInstanceCriteria = value;
       const req = new pb.PurgeInstancesRequest();
@@ -332,10 +368,14 @@ export class TaskHubGrpcClient {
 
       console.log("Purging Instance using purging criteria");
 
-      const prom = promisify(this._stub.purgeInstances.bind(this._stub));
+      const callPromise = callWithMetadata<pb.PurgeInstancesRequest, pb.PurgeInstancesResponse>(
+        this._stub.purgeInstances.bind(this._stub),
+        req,
+        this._metadataGenerator,
+      );
       // Execute the request and wait for the first response or timeout
       res = (await Promise.race([
-        prom(req),
+        callPromise,
         new Promise((_, reject) => setTimeout(() => reject(new TimeoutError()), timeout)),
       ])) as pb.PurgeInstancesResponse;
     }
