@@ -12,10 +12,10 @@ import { TOutput } from "../types/output.type";
 import { GrpcClient } from "../client/client-grpc";
 import { Empty } from "google-protobuf/google/protobuf/empty_pb";
 import * as pbh from "../utils/pb-helper.util";
+import { callWithMetadata, MetadataGenerator } from "../utils/grpc-helper.util";
 import { OrchestrationExecutor } from "./orchestration-executor";
 import { ActivityExecutor } from "./activity-executor";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
-import { MetadataGenerator } from "../client/client";
 
 export class TaskHubGrpcWorker {
   private _responseStream: grpc.ClientReadableStream<pb.WorkItem> | null;
@@ -65,29 +65,6 @@ export class TaskHubGrpcWorker {
       return await this._metadataGenerator();
     }
     return new grpc.Metadata();
-  }
-
-  /**
-   * Helper to promisify a gRPC unary call with metadata support.
-   */
-  private _callWithMetadata<TReq, TRes>(
-    method: (
-      req: TReq,
-      metadata: grpc.Metadata,
-      callback: (error: grpc.ServiceError | null, response: TRes) => void,
-    ) => grpc.ClientUnaryCall,
-    req: TReq,
-  ): Promise<TRes> {
-    return new Promise(async (resolve, reject) => {
-      const metadata = await this._getMetadata();
-      method(req, metadata, (error, response) => {
-        if (error) {
-          reject(error);
-        } else {
-          resolve(response);
-        }
-      });
-    });
   }
 
   /**
@@ -169,7 +146,7 @@ export class TaskHubGrpcWorker {
   async internalRunWorker(client: GrpcClient, isRetry: boolean = false): Promise<void> {
     try {
       // send a "Hello" message to the sidecar to ensure that it's listening
-      await this._callWithMetadata(client.stub.hello.bind(client.stub), new Empty());
+      await callWithMetadata(client.stub.hello.bind(client.stub), new Empty(), this._metadataGenerator);
 
       // Stream work items from the sidecar (pass metadata for insecure connections)
       const metadata = await this._getMetadata();
@@ -304,7 +281,7 @@ export class TaskHubGrpcWorker {
     }
 
     try {
-      await this._callWithMetadata(stub.completeOrchestratorTask.bind(stub), res);
+      await callWithMetadata(stub.completeOrchestratorTask.bind(stub), res, this._metadataGenerator);
     } catch (e: any) {
       console.error(`An error occurred while trying to complete instance '${req.getInstanceid()}': ${e?.message}`);
     }
@@ -356,7 +333,7 @@ export class TaskHubGrpcWorker {
     }
 
     try {
-      await this._callWithMetadata(stub.completeActivityTask.bind(stub), res);
+      await callWithMetadata(stub.completeActivityTask.bind(stub), res, this._metadataGenerator);
     } catch (e: any) {
       console.error(
         `Failed to deliver activity response for '${req.getName()}#${req.getTaskid()}' of orchestration ID '${instanceId}' to sidecar: ${
