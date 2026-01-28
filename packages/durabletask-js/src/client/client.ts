@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+import { promisify } from "util";
 import * as grpc from "@grpc/grpc-js";
 import { StringValue, Int32Value } from "google-protobuf/google/protobuf/wrappers_pb";
 import { Timestamp } from "google-protobuf/google/protobuf/timestamp_pb";
@@ -563,8 +564,8 @@ export class TaskHubGrpcClient {
 
     do {
       const protoReq = new pb.CleanEntityStorageRequest();
-      protoReq.setRemoveemptyentities(req.removeEmptyEntities);
-      protoReq.setReleaseorphanedlocks(req.releaseOrphanedLocks);
+      protoReq.setRemoveemptyentities(req.removeEmptyEntities ?? true);
+      protoReq.setReleaseorphanedlocks(req.releaseOrphanedLocks ?? true);
 
       if (continuationToken) {
         const token = new StringValue();
