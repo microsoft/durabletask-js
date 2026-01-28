@@ -18,8 +18,8 @@
 set -e
 
 BRANCH=${1:-main}
-PROTO_DIR="internal/durabletask-protobuf/protos"
-COMMIT_HASH_FILE="internal/durabletask-protobuf/PROTO_SOURCE_COMMIT_HASH"
+PROTO_DIR="internal/protocol/protos"
+COMMIT_HASH_FILE="internal/protocol/SOURCE_COMMIT"
 
 echo "====================================================="
 echo "========== Download Proto Files ====================="

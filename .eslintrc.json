@@ -8,7 +8,7 @@
     "amd": true,
     "node": true
   },
-  "ignorePatterns": ["src/version.ts", "jest.config.js"],
+  "ignorePatterns": ["src/version.ts", "jest.config.js", "dist"],
   "rules": {
     "@typescript-eslint/ban-ts-comment": "off",
     "@typescript-eslint/no-explicit-any": "off",

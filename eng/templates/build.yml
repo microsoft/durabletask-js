@@ -15,6 +15,8 @@ jobs:
             inputs:
                 versionSpec: 20.x
             displayName: "Install Node.js"
+          
+          # Build main package
           - script: npm ci
             displayName: "npm ci"
           - script: npm run prebuild
@@ -25,9 +27,29 @@ jobs:
             displayName: "npm prune --production" # so that only production dependencies are included in SBOM
           - script: npm pack build/
             displayName: "pack npm package"
+          
+          # Build azure-managed extension package
+          - script: |
+              cd extensions/durabletask-js-azuremanaged
+              npm ci
+              npm run build
+              npm run test
+              npm prune --production
+            displayName: "Build azure-managed extension"
+          - script: |
+              cd extensions/durabletask-js-azuremanaged
+              npm pack
+            displayName: "pack azure-managed extension"
+          
           - task: CopyFiles@2
             displayName: "Copy package to staging"
             inputs:
                 SourceFolder: $(System.DefaultWorkingDirectory)
+                Contents: "*.tgz"
+                TargetFolder: $(Build.ArtifactStagingDirectory)/buildoutputs
+          - task: CopyFiles@2
+            displayName: "Copy azure-managed extension to staging"
+            inputs:
+                SourceFolder: $(System.DefaultWorkingDirectory)/extensions/durabletask-js-azuremanaged
                 Contents: "*.tgz"
                 TargetFolder: $(Build.ArtifactStagingDirectory)/buildoutputs
