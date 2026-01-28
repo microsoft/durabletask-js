@@ -3,7 +3,6 @@
 
 import { RuntimeOrchestrationContext } from "../src/worker/runtime-orchestration-context";
 import { EntityInstanceId } from "../src/entities/entity-instance-id";
-import * as pb from "../src/proto/orchestrator_service_pb";
 
 describe("RuntimeOrchestrationContext", () => {
   describe("entities property", () => {

@@ -1,9 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { TaskEntityShim, EntityAction } from "../src/worker/entity-executor";
-import { ITaskEntity, TaskEntity } from "../src/entities/task-entity";
-import { TaskEntityOperation } from "../src/entities/task-entity-operation";
+import { TaskEntityShim } from "../src/worker/entity-executor";
+import { TaskEntity } from "../src/entities/task-entity";
 import { EntityInstanceId } from "../src/entities/entity-instance-id";
 import * as pb from "../src/proto/orchestrator_service_pb";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";

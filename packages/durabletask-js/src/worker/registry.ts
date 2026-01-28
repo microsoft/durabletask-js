@@ -5,7 +5,7 @@ import { TActivity } from "../types/activity.type";
 import { TInput } from "../types/input.type";
 import { TOrchestrator } from "../types/orchestrator.type";
 import { TOutput } from "../types/output.type";
-import { ITaskEntity, EntityFactory } from "../entities/task-entity";
+import { EntityFactory } from "../entities/task-entity";
 
 /**
  * Registry for orchestrators, activities, and entities.

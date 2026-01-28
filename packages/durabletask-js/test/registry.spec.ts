@@ -23,7 +23,7 @@ class CounterEntity extends TaskEntity<number> {
 /**
  * Simple functional entity for testing.
  */
-function simpleEntity(): ITaskEntity {
+function _simpleEntity(): ITaskEntity {
   return {
     run(operation: TaskEntityOperation): unknown {
       return operation.name;

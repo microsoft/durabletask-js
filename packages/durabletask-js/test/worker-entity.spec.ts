@@ -122,6 +122,7 @@ describe("TaskHubGrpcWorker", () => {
       // Arrange
       const worker = new TaskHubGrpcWorker("localhost:4001");
 
+      // eslint-disable-next-line require-yield
       const orchestrator = function* testOrchestrator(): any {
         return "done";
       };

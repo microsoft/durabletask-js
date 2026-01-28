@@ -222,6 +222,7 @@ describe("Entity Locking (Critical Sections)", () => {
       const registry = new Registry();
       let criticalSectionInfo: any = null;
 
+      // eslint-disable-next-line require-yield
       registry.addOrchestrator(async function* testOrchestration(ctx: any) {
         criticalSectionInfo = ctx.entities.isInCriticalSection();
         return "done";

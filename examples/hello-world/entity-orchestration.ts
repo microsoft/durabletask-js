@@ -189,6 +189,7 @@ interface NotifyInput {
  *
  * Uses signalEntity which is fire-and-forget (doesn't wait for response).
  */
+// eslint-disable-next-line require-yield
 const notifyOrchestration: TOrchestrator = async function* (
   ctx: OrchestrationContext,
   input: NotifyInput,

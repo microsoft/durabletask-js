@@ -28,6 +28,7 @@ export interface SignalEntityOptions {
  *
  * Dotnet reference: src/Abstractions/Entities/CallEntityOptions.cs - CallEntityOptions
  */
+// eslint-disable-next-line @typescript-eslint/no-empty-interface
 export interface CallEntityOptions {
   // No call options at the moment. Keeping this interface so we can ship with options in the API.
   // This will allow us to easily add them later without adjusting API surface.

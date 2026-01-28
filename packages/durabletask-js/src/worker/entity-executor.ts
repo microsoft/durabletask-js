@@ -41,16 +41,6 @@ export type EntityAction =
       requestTime: Date;         // Captured at signal time (like dotnet)
     };
 
-/**
- * Result of a single operation execution.
- */
-interface OperationExecutionResult {
-  success: boolean;
-  result?: unknown;
-  error?: Error;
-  startTime: Date;
-  endTime: Date;
-}
 
 /**
  * Internal state management with checkpoint/rollback support.

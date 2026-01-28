@@ -3,8 +3,6 @@
 
 import { EntityInstanceId } from "../src/entities/entity-instance-id";
 import { EntityQuery } from "../src/entities/entity-query";
-import { SignalEntityOptions } from "../src/entities/signal-entity-options";
-import { CleanEntityStorageRequest } from "../src/entities/clean-entity-storage";
 import * as pb from "../src/proto/orchestrator_service_pb";
 import { Timestamp } from "google-protobuf/google/protobuf/timestamp_pb";
 import { StringValue, Int32Value } from "google-protobuf/google/protobuf/wrappers_pb";
