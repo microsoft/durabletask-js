@@ -23,7 +23,6 @@ import { TaskHubGrpcWorker } from "../../src/worker/task-hub-grpc-worker";
 
 // Read environment variables
 const endpoint = process.env.ENDPOINT || "localhost:8080";
-const _taskHub = process.env.TASKHUB || "default";
 
 describe("Durable Task Scheduler (DTS) E2E Tests", () => {
   let taskHubClient: TaskHubGrpcClient;
@@ -169,9 +168,9 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
 
     // Send events to the client immediately
     const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
-    taskHubClient.raiseOrchestrationEvent(id, "A", "a");
-    taskHubClient.raiseOrchestrationEvent(id, "B", "b");
-    taskHubClient.raiseOrchestrationEvent(id, "C", "c");
+    await taskHubClient.raiseOrchestrationEvent(id, "A", "a");
+    await taskHubClient.raiseOrchestrationEvent(id, "B", "b");
+    await taskHubClient.raiseOrchestrationEvent(id, "C", "c");
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
     expect(state).toBeDefined();
