@@ -157,14 +157,16 @@ abstract class DurableTaskAzureManagedOptionsBase {
    * @param workerId Optional worker ID (only for workers).
    */
   protected createChannelCredentialsInternal(callerType: string, workerId?: string): grpc.ChannelCredentials {
-    if (this._allowInsecureCredentials) {
-      return grpc.ChannelCredentials.createInsecure();
-    }
-
-    const channelCredentials = grpc.ChannelCredentials.createSsl();
     const metadataGenerator = this.createMetadataGeneratorInternal(callerType, workerId);
     const callCredentials = grpc.credentials.createFromMetadataGenerator(metadataGenerator);
 
+    if (this._allowInsecureCredentials) {
+      // For insecure connections (e.g., emulator), we still need to add metadata
+      const insecureCredentials = grpc.ChannelCredentials.createInsecure();
+      return insecureCredentials.compose(callCredentials);
+    }
+
+    const channelCredentials = grpc.ChannelCredentials.createSsl();
     return channelCredentials.compose(callCredentials);
   }
 
