@@ -23,18 +23,28 @@ import {
   Task,
   TOrchestrator,
 } from "@microsoft/durabletask-js";
+import {
+  DurableTaskAzureManagedClientBuilder,
+  DurableTaskAzureManagedWorkerBuilder,
+} from "@microsoft/durabletask-js-azuremanaged";
 
 // Read environment variables
 const endpoint = process.env.ENDPOINT || "localhost:8080";
+const taskHub = process.env.TASKHUB || "default";
 
 describe("Durable Task Scheduler (DTS) E2E Tests", () => {
   let taskHubClient: TaskHubGrpcClient;
   let taskHubWorker: TaskHubGrpcWorker;
 
   beforeEach(async () => {
-    // Start a worker, which will connect to the DTS emulator in a background thread
-    taskHubWorker = new TaskHubGrpcWorker(endpoint);
-    taskHubClient = new TaskHubGrpcClient(endpoint);
+    // Create client and worker using the Azure-managed builders with taskhub metadata
+    taskHubClient = new DurableTaskAzureManagedClientBuilder()
+      .endpoint(endpoint, taskHub, null) // null credential for emulator (no auth)
+      .build();
+
+    taskHubWorker = new DurableTaskAzureManagedWorkerBuilder()
+      .endpoint(endpoint, taskHub, null) // null credential for emulator (no auth)
+      .build();
   });
 
   afterEach(async () => {
