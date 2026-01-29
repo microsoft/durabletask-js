@@ -138,8 +138,57 @@ class CoordinatorEntity extends TaskEntity<{ messages: string[] }> {
     this.context?.signalEntity(counterId, "add", args.amount);
   }
 
+  // Start a new orchestration from within the entity
+  startOrchestration(args: { orchestrationName: string; input: unknown }): string {
+    return this.context?.scheduleNewOrchestration(args.orchestrationName, args.input) ?? "";
+  }
+
   protected initializeState(): { messages: string[] } {
     return { messages: [] };
+  }
+}
+
+/**
+ * Entity with async operations and edge case testing.
+ */
+class AsyncEntity extends TaskEntity<{ value: number; log: string[] }> {
+  // Operation with no input
+  ping(): string {
+    this.state.log.push("ping");
+    return "pong";
+  }
+
+  // Async operation using Promise
+  async asyncAdd(amount: number): Promise<number> {
+    // Simulate async work
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    this.state.value += amount;
+    this.state.log.push(`asyncAdd:${amount}`);
+    return this.state.value;
+  }
+
+  // Operation with nested complex input
+  processNested(args: { data: { nested: { value: number } }; meta: { tag: string } }): string {
+    this.state.value = args.data.nested.value;
+    this.state.log.push(`nested:${args.meta.tag}`);
+    return `processed:${args.data.nested.value}:${args.meta.tag}`;
+  }
+
+  getValue(): number {
+    return this.state.value;
+  }
+
+  getLog(): string[] {
+    return [...this.state.log];
+  }
+
+  // Operation that throws an error
+  failOperation(): void {
+    throw new Error("This operation intentionally fails");
+  }
+
+  protected initializeState(): { value: number; log: string[] } {
+    return { value: 0, log: [] };
   }
 }
 
@@ -1122,6 +1171,276 @@ describe("Durable Entities E2E Tests (DTS)", () => {
       const output = state?.serializedOutput ? JSON.parse(state.serializedOutput) : null;
       expect(output).toBe("completed");
     }, 120000);
+  });
+
+  describe("Operation Edge Cases", () => {
+    it("should handle operation with no input", async () => {
+      // Arrange
+      const entityId = new EntityInstanceId("AsyncEntity", `no-input-${Date.now()}`);
+
+      const noInputOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        // Call operation that takes no parameters
+        const result: string = yield ctx.entities.callEntity(entityId, "ping");
+        const log: string[] = yield ctx.entities.callEntity(entityId, "getLog");
+        return { result, log };
+      };
+
+      taskHubWorker.addNamedEntity("AsyncEntity", () => new AsyncEntity());
+      taskHubWorker.addOrchestrator(noInputOrchestrator);
+      await taskHubWorker.start();
+
+      // Act
+      const instanceId = await taskHubClient.scheduleNewOrchestration(noInputOrchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(instanceId, undefined, 60);
+
+      // Assert
+      expect(state?.runtimeStatus).toBe(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      const output = state?.serializedOutput ? JSON.parse(state.serializedOutput) : null;
+      expect(output?.result).toBe("pong");
+      expect(output?.log).toContain("ping");
+    }, 90000);
+
+    it("should handle operation name case insensitivity", async () => {
+      // Arrange
+      const entityId = new EntityInstanceId("CounterEntity", `case-test-${Date.now()}`);
+      taskHubWorker.addNamedEntity("CounterEntity", () => new CounterEntity());
+      await taskHubWorker.start();
+
+      // Act - Use different case variations for the same operation
+      await taskHubClient.signalEntity(entityId, "add", 10); // lowercase
+      await taskHubClient.signalEntity(entityId, "Add", 5); // Capitalized
+      await taskHubClient.signalEntity(entityId, "ADD", 3); // UPPERCASE
+
+      await sleep(3000);
+
+      // Assert - All operations should work regardless of case
+      const metadata = await taskHubClient.getEntity<{ count: number }>(entityId);
+      expect(metadata?.state?.count).toBe(18); // 10 + 5 + 3
+    }, 30000);
+
+    it("should handle complex nested input", async () => {
+      // Arrange
+      const entityId = new EntityInstanceId("AsyncEntity", `nested-input-${Date.now()}`);
+
+      const nestedInputOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        const result: string = yield ctx.entities.callEntity(entityId, "processNested", {
+          data: { nested: { value: 42 } },
+          meta: { tag: "test-tag" },
+        });
+        const value: number = yield ctx.entities.callEntity(entityId, "getValue");
+        return { result, value };
+      };
+
+      taskHubWorker.addNamedEntity("AsyncEntity", () => new AsyncEntity());
+      taskHubWorker.addOrchestrator(nestedInputOrchestrator);
+      await taskHubWorker.start();
+
+      // Act
+      const instanceId = await taskHubClient.scheduleNewOrchestration(nestedInputOrchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(instanceId, undefined, 60);
+
+      // Assert
+      expect(state?.runtimeStatus).toBe(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      const output = state?.serializedOutput ? JSON.parse(state.serializedOutput) : null;
+      expect(output?.result).toBe("processed:42:test-tag");
+      expect(output?.value).toBe(42);
+    }, 90000);
+  });
+
+  describe("Async Entity Operations", () => {
+    it("should handle async entity operation that returns Promise", async () => {
+      // Arrange
+      const entityId = new EntityInstanceId("AsyncEntity", `async-op-${Date.now()}`);
+
+      const asyncOpOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        const result1: number = yield ctx.entities.callEntity(entityId, "asyncAdd", 10);
+        const result2: number = yield ctx.entities.callEntity(entityId, "asyncAdd", 20);
+        const log: string[] = yield ctx.entities.callEntity(entityId, "getLog");
+        return { result1, result2, log };
+      };
+
+      taskHubWorker.addNamedEntity("AsyncEntity", () => new AsyncEntity());
+      taskHubWorker.addOrchestrator(asyncOpOrchestrator);
+      await taskHubWorker.start();
+
+      // Act
+      const instanceId = await taskHubClient.scheduleNewOrchestration(asyncOpOrchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(instanceId, undefined, 60);
+
+      // Assert
+      expect(state?.runtimeStatus).toBe(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      const output = state?.serializedOutput ? JSON.parse(state.serializedOutput) : null;
+      expect(output?.result1).toBe(10);
+      expect(output?.result2).toBe(30); // 10 + 20
+      expect(output?.log).toEqual(["asyncAdd:10", "asyncAdd:20"]);
+    }, 90000);
+  });
+
+  describe("Entity Instance ID Edge Cases", () => {
+    it("should handle entity key with special characters", async () => {
+      // Arrange - Keys with various special characters
+      const key = `special-chars-${Date.now()}-test_key`;
+      const entityId = new EntityInstanceId("CounterEntity", key);
+      taskHubWorker.addNamedEntity("CounterEntity", () => new CounterEntity());
+      await taskHubWorker.start();
+
+      // Act
+      await taskHubClient.signalEntity(entityId, "add", 100);
+      await sleep(2000);
+
+      // Assert
+      const metadata = await taskHubClient.getEntity<{ count: number }>(entityId);
+      expect(metadata?.state?.count).toBe(100);
+      expect(metadata?.id.key).toBe(key);
+    }, 30000);
+
+    it("should handle long entity key within limits", async () => {
+      // Arrange - Long key that stays within 100 char total instance ID limit
+      // Entity instance ID format: @entityname@key, so key needs to account for prefix
+      const key = `k-${Date.now()}-${"a".repeat(50)}`;
+      const entityId = new EntityInstanceId("CounterEntity", key);
+      taskHubWorker.addNamedEntity("CounterEntity", () => new CounterEntity());
+      await taskHubWorker.start();
+
+      // Act
+      await taskHubClient.signalEntity(entityId, "add", 50);
+      await sleep(2000);
+
+      // Assert
+      const metadata = await taskHubClient.getEntity<{ count: number }>(entityId);
+      expect(metadata?.state?.count).toBe(50);
+    }, 30000);
+
+    it("should reject entity key that exceeds length limit", async () => {
+      // Arrange - Key that makes total instance ID exceed 100 chars
+      const key = `too-long-${Date.now()}-${"a".repeat(100)}`;
+      const entityId = new EntityInstanceId("CounterEntity", key);
+      taskHubWorker.addNamedEntity("CounterEntity", () => new CounterEntity());
+      await taskHubWorker.start();
+
+      // Act & Assert - Should throw an error for overly long instance ID
+      await expect(
+        taskHubClient.signalEntity(entityId, "add", 50)
+      ).rejects.toThrow(/INVALID_ARGUMENT|length/i);
+    }, 30000);
+  });
+
+  describe("Entity Starting Orchestration", () => {
+    it("should allow entity to schedule a new orchestration", async () => {
+      // Arrange
+      const coordinatorId = new EntityInstanceId("CoordinatorEntity", `start-orch-${Date.now()}`);
+      let orchestrationStarted = false;
+
+      // Simple orchestration that will be started by the entity
+      const targetOrchestrator: TOrchestrator = async function* (
+        ctx: OrchestrationContext,
+        input: { message: string }
+      ): any {
+        orchestrationStarted = true;
+        return `Received: ${input.message}`;
+      };
+
+      // Orchestration that triggers entity to start another orchestration
+      const triggerOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        // Call the entity to start an orchestration
+        yield ctx.entities.callEntity(coordinatorId, "startOrchestration", {
+          orchestrationName: "targetOrchestrator",
+          input: { message: "Hello from entity" },
+        });
+
+        // Wait a bit for the started orchestration to complete
+        const fireAt = new Date(ctx.currentUtcDateTime.getTime() + 2000);
+        yield ctx.createTimer(fireAt);
+
+        return "trigger completed";
+      };
+
+      taskHubWorker.addNamedEntity("CoordinatorEntity", () => new CoordinatorEntity());
+      taskHubWorker.addOrchestrator(triggerOrchestrator);
+      taskHubWorker.addNamedOrchestrator("targetOrchestrator", targetOrchestrator);
+      await taskHubWorker.start();
+
+      // Act
+      const instanceId = await taskHubClient.scheduleNewOrchestration(triggerOrchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(instanceId, undefined, 90);
+
+      // Assert
+      expect(state?.runtimeStatus).toBe(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    }, 120000);
+  });
+
+  describe("Operation Ordering (FIFO)", () => {
+    it("should process operations in order (FIFO)", async () => {
+      // Arrange
+      const entityId = new EntityInstanceId("AsyncEntity", `fifo-${Date.now()}`);
+      taskHubWorker.addNamedEntity("AsyncEntity", () => new AsyncEntity());
+      await taskHubWorker.start();
+
+      // Act - Send numbered operations rapidly
+      for (let i = 1; i <= 10; i++) {
+        await taskHubClient.signalEntity(entityId, "asyncAdd", i);
+      }
+
+      // Wait for all to be processed
+      await sleep(5000);
+
+      // Assert - Check the log shows operations in order
+      const metadata = await taskHubClient.getEntity<{ value: number; log: string[] }>(entityId);
+      expect(metadata?.state?.value).toBe(55); // 1+2+3+4+5+6+7+8+9+10
+
+      // Log should be in order
+      const expectedLog = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => `asyncAdd:${n}`);
+      expect(metadata?.state?.log).toEqual(expectedLog);
+    }, 60000);
+  });
+
+  describe("Error Handling in Entity Operations", () => {
+    it("should handle entity operation failure gracefully", async () => {
+      // Arrange
+      const entityId = new EntityInstanceId("AsyncEntity", `fail-op-${Date.now()}`);
+      taskHubWorker.addNamedEntity("AsyncEntity", () => new AsyncEntity());
+      await taskHubWorker.start();
+
+      // Act - Signal an operation that throws (signals are fire-and-forget)
+      await taskHubClient.signalEntity(entityId, "failOperation");
+      await sleep(2000);
+
+      // Also do a successful operation
+      await taskHubClient.signalEntity(entityId, "ping");
+      await sleep(2000);
+
+      // Assert - Entity should still work after failed operation
+      const metadata = await taskHubClient.getEntity<{ value: number; log: string[] }>(entityId);
+      // The ping operation should have succeeded
+      expect(metadata?.state?.log).toContain("ping");
+    }, 30000);
+  });
+
+  describe("Scheduled Signal Delivery", () => {
+    it("should deliver signal at scheduled time", async () => {
+      // Arrange
+      const entityId = new EntityInstanceId("CounterEntity", `scheduled-${Date.now()}`);
+      taskHubWorker.addNamedEntity("CounterEntity", () => new CounterEntity());
+      await taskHubWorker.start();
+
+      // Act - Schedule a signal for 2 seconds in the future
+      const scheduledTime = new Date(Date.now() + 2000);
+      await taskHubClient.signalEntity(entityId, "add", 100, { signalTime: scheduledTime });
+
+      // Check immediately - signal should not be processed yet
+      await sleep(500);
+      let metadata = await taskHubClient.getEntity<{ count: number }>(entityId);
+      // Entity may not exist yet or count is 0
+      const immediateCount = metadata?.state?.count ?? 0;
+
+      // Wait past the scheduled time
+      await sleep(3000);
+
+      // Assert - Now the signal should be processed
+      metadata = await taskHubClient.getEntity<{ count: number }>(entityId);
+      expect(metadata?.state?.count).toBe(100);
+      expect(immediateCount).toBeLessThan(100); // Verify it wasn't processed immediately
+    }, 30000);
   });
 });
 
