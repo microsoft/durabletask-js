@@ -2,12 +2,17 @@
 // Licensed under the MIT License.
 
 /**
- * E2E tests for Durable Task Scheduler (DTS) emulator.
+ * E2E tests for Durable Task Scheduler (DTS).
  *
- * NOTE: These tests assume the DTS emulator is running. Example command:
- *       docker run -i -p 8080:8080 -d mcr.microsoft.com/dts/dts-emulator:latest
+ * These tests can run against either:
+ * 1. DTS Emulator (default) - No authentication required
+ *    docker run -i -p 8080:8080 -d mcr.microsoft.com/dts/dts-emulator:latest
+ *
+ * 2. Real DTS Scheduler - Requires connection string with authentication
  *
  * Environment variables:
+ *   - AZURE_DTS_CONNECTION_STRING: Connection string for real DTS (takes precedence)
+ *     Example: Endpoint=https://your-scheduler.eastus.durabletask.io;Authentication=DefaultAzure;TaskHub=your-taskhub
  *   - ENDPOINT: The endpoint for the DTS emulator (default: localhost:8080)
  *   - TASKHUB: The task hub name (default: default)
  */
@@ -29,6 +34,8 @@ import {
 } from "@microsoft/durabletask-js-azuremanaged";
 
 // Read environment variables
+// Connection string takes precedence over endpoint/taskHub for real DTS
+const connectionString = process.env.AZURE_DTS_CONNECTION_STRING;
 const endpoint = process.env.ENDPOINT || "localhost:8080";
 const taskHub = process.env.TASKHUB || "default";
 
@@ -37,14 +44,25 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
   let taskHubWorker: TaskHubGrpcWorker;
 
   beforeEach(async () => {
-    // Create client and worker using the Azure-managed builders with taskhub metadata
-    taskHubClient = new DurableTaskAzureManagedClientBuilder()
-      .endpoint(endpoint, taskHub, null) // null credential for emulator (no auth)
-      .build();
+    // Create client and worker using the Azure-managed builders
+    // Use connection string for real DTS, or endpoint for emulator
+    if (connectionString) {
+      taskHubClient = new DurableTaskAzureManagedClientBuilder()
+        .connectionString(connectionString)
+        .build();
 
-    taskHubWorker = new DurableTaskAzureManagedWorkerBuilder()
-      .endpoint(endpoint, taskHub, null) // null credential for emulator (no auth)
-      .build();
+      taskHubWorker = new DurableTaskAzureManagedWorkerBuilder()
+        .connectionString(connectionString)
+        .build();
+    } else {
+      taskHubClient = new DurableTaskAzureManagedClientBuilder()
+        .endpoint(endpoint, taskHub, null) // null credential for emulator (no auth)
+        .build();
+
+      taskHubWorker = new DurableTaskAzureManagedWorkerBuilder()
+        .endpoint(endpoint, taskHub, null) // null credential for emulator (no auth)
+        .build();
+    }
   });
 
   afterEach(async () => {

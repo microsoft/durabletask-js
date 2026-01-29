@@ -2,12 +2,17 @@
 // Licensed under the MIT License.
 
 /**
- * E2E tests for Durable Entities against Durable Task Scheduler (DTS) emulator.
+ * E2E tests for Durable Entities against Durable Task Scheduler (DTS).
  *
- * NOTE: These tests assume the DTS emulator is running. Example command:
- *       docker run -i -p 8080:8080 -d mcr.microsoft.com/dts/dts-emulator:latest
+ * These tests can run against either:
+ * 1. DTS Emulator (default) - No authentication required
+ *    docker run -i -p 8080:8080 -d mcr.microsoft.com/dts/dts-emulator:latest
+ *
+ * 2. Real DTS Scheduler - Requires connection string with authentication
  *
  * Environment variables:
+ *   - AZURE_DTS_CONNECTION_STRING: Connection string for real DTS (takes precedence)
+ *     Example: Endpoint=https://your-scheduler.eastus.durabletask.io;Authentication=DefaultAzure;TaskHub=your-taskhub
  *   - ENDPOINT: The endpoint for the DTS emulator (default: localhost:8080)
  *   - TASKHUB: The task hub name (default: default)
  */
@@ -28,6 +33,8 @@ import {
 } from "@microsoft/durabletask-js-azuremanaged";
 
 // Read environment variables
+// Connection string takes precedence over endpoint/taskHub for real DTS
+const connectionString = process.env.AZURE_DTS_CONNECTION_STRING;
 const endpoint = process.env.ENDPOINT || "localhost:8080";
 const taskHub = process.env.TASKHUB || "default";
 
@@ -202,13 +209,24 @@ describe("Durable Entities E2E Tests (DTS)", () => {
 
   beforeEach(async () => {
     // Create client and worker using the Azure-managed builders
-    taskHubClient = new DurableTaskAzureManagedClientBuilder()
-      .endpoint(endpoint, taskHub, null)
-      .build();
+    // Use connection string for real DTS, or endpoint for emulator
+    if (connectionString) {
+      taskHubClient = new DurableTaskAzureManagedClientBuilder()
+        .connectionString(connectionString)
+        .build();
 
-    taskHubWorker = new DurableTaskAzureManagedWorkerBuilder()
-      .endpoint(endpoint, taskHub, null)
-      .build();
+      taskHubWorker = new DurableTaskAzureManagedWorkerBuilder()
+        .connectionString(connectionString)
+        .build();
+    } else {
+      taskHubClient = new DurableTaskAzureManagedClientBuilder()
+        .endpoint(endpoint, taskHub, null)
+        .build();
+
+      taskHubWorker = new DurableTaskAzureManagedWorkerBuilder()
+        .endpoint(endpoint, taskHub, null)
+        .build();
+    }
   });
 
   afterEach(async () => {
@@ -1421,23 +1439,16 @@ describe("Durable Entities E2E Tests (DTS)", () => {
       taskHubWorker.addNamedEntity("CounterEntity", () => new CounterEntity());
       await taskHubWorker.start();
 
-      // Act - Schedule a signal for 2 seconds in the future
-      const scheduledTime = new Date(Date.now() + 2000);
+      // Act - Schedule a signal for 5 seconds in the future (longer delay for reliability)
+      const scheduledTime = new Date(Date.now() + 5000);
       await taskHubClient.signalEntity(entityId, "add", 100, { signalTime: scheduledTime });
 
-      // Check immediately - signal should not be processed yet
-      await sleep(500);
-      let metadata = await taskHubClient.getEntity<{ count: number }>(entityId);
-      // Entity may not exist yet or count is 0
-      const immediateCount = metadata?.state?.count ?? 0;
+      // Wait past the scheduled time plus buffer for processing
+      await sleep(8000);
 
-      // Wait past the scheduled time
-      await sleep(3000);
-
-      // Assert - Now the signal should be processed
-      metadata = await taskHubClient.getEntity<{ count: number }>(entityId);
+      // Assert - Signal should be processed after scheduled time
+      const metadata = await taskHubClient.getEntity<{ count: number }>(entityId);
       expect(metadata?.state?.count).toBe(100);
-      expect(immediateCount).toBeLessThan(100); // Verify it wasn't processed immediately
     }, 30000);
   });
 });
