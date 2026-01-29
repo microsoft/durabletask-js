@@ -405,9 +405,6 @@ export class TaskHubGrpcClient {
    * @param operationName - The name of the operation to invoke.
    * @param input - Optional input data for the operation.
    * @param options - Optional signal options (e.g., scheduled time).
-   *
-   * @remarks
-   * Dotnet reference: DurableEntityClient.SignalEntityAsync
    */
   async signalEntity(
     id: EntityInstanceId,
@@ -451,9 +448,6 @@ export class TaskHubGrpcClient {
    * @param id - The ID of the entity to get.
    * @param includeState - Whether to include the entity's state in the response. Defaults to true.
    * @returns The entity metadata, or undefined if the entity does not exist.
-   *
-   * @remarks
-   * Dotnet reference: DurableEntityClient.GetEntityAsync
    */
   async getEntity<T = unknown>(
     id: EntityInstanceId,
@@ -491,7 +485,6 @@ export class TaskHubGrpcClient {
    *
    * @remarks
    * This method handles pagination automatically, fetching additional pages as needed.
-   * Dotnet reference: DurableEntityClient.GetAllEntitiesAsync
    */
   async *getEntities<T = unknown>(query?: EntityQuery): AsyncGenerator<EntityMetadata<T>, void, unknown> {
     let continuationToken: string | undefined = query?.continuationToken;
@@ -557,9 +550,6 @@ export class TaskHubGrpcClient {
    * @param request - The clean request specifying what to clean. Defaults to removing empty entities and releasing orphaned locks.
    * @param continueUntilComplete - Whether to continue until all cleaning is done, or return after one batch.
    * @returns The result of the clean operation.
-   *
-   * @remarks
-   * Dotnet reference: DurableEntityClient.CleanEntityStorageAsync
    */
   async cleanEntityStorage(
     request?: CleanEntityStorageRequest,

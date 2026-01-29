@@ -16,29 +16,26 @@ import { randomUUID } from "crypto";
  * Internal type representing actions collected during entity execution.
  *
  * @remarks
- * Aligns with dotnet's SendSignalOperationAction and StartNewOrchestrationOperationAction:
- * - Values are serialized immediately when action is created (not later)
- * - requestTime is captured at action creation time
- * - instanceId is converted to string immediately
- *
- * Dotnet reference: src/Worker/Core/Shims/TaskEntityShim.cs lines 178-220
+ * Values are serialized immediately when action is created (not later),
+ * requestTime is captured at action creation time, and instanceId is
+ * converted to string immediately.
  */
 export type EntityAction =
   | {
       type: "signalEntity";
-      instanceId: string;        // Converted from EntityInstanceId immediately (like dotnet)
-      name: string;              // operationName (renamed to match dotnet)
-      input: string | undefined; // Serialized immediately (like dotnet)
-      scheduledTime?: Date;      // options?.SignalTime
-      requestTime: Date;         // Captured at signal time (like dotnet)
+      instanceId: string;
+      name: string;
+      input: string | undefined;
+      scheduledTime?: Date;
+      requestTime: Date;
     }
   | {
       type: "scheduleOrchestration";
       instanceId: string;
       name: string;
-      input: string | undefined; // Serialized immediately (like dotnet)
-      scheduledTime?: Date;      // options?.StartAt
-      requestTime: Date;         // Captured at signal time (like dotnet)
+      input: string | undefined;
+      scheduledTime?: Date;
+      requestTime: Date;
     };
 
 
@@ -46,28 +43,24 @@ export type EntityAction =
  * Internal state management with checkpoint/rollback support.
  *
  * @remarks
- * This implementation mirrors dotnet's TaskEntityShim.StateShim:
- * - Stores state as serialized JSON string (not object) for cheap checkpoint
- * - Uses lazy deserialization with cached value
- * - Checkpoint is a simple string copy (O(1) vs O(n) deep clone)
- *
- * Dotnet reference: src/Worker/Core/Shims/TaskEntityShim.cs lines 256-298
+ * Stores state as serialized JSON string for cheap checkpoint,
+ * uses lazy deserialization with cached value, and checkpoint
+ * is a simple string copy (O(1) vs O(n) deep clone).
  */
 class StateShim implements TaskEntityState {
-  /** Serialized JSON string of the current state (like dotnet's `value`) */
+  /** Serialized JSON string of the current state */
   private serializedValue: string | undefined;
 
-  /** Lazy-deserialized object cache (like dotnet's `cachedValue`) */
+  /** Lazy-deserialized object cache */
   private cachedValue: unknown;
 
   /** Whether cachedValue is valid (needs re-parse after rollback) */
   private cacheValid: boolean;
 
-  /** Serialized JSON string checkpoint for rollback (like dotnet's `checkpointValue`) */
+  /** Serialized JSON string checkpoint for rollback */
   private checkpointValue: string | undefined;
 
   constructor() {
-    // Initially no state (like dotnet)
     this.serializedValue = undefined;
     this.cachedValue = undefined;
     this.cacheValid = false;
@@ -75,7 +68,6 @@ class StateShim implements TaskEntityState {
   }
 
   get hasState(): boolean {
-    // Like dotnet: HasState => this.value != null
     return this.serializedValue !== undefined && this.serializedValue !== null;
   }
 
@@ -95,7 +87,6 @@ class StateShim implements TaskEntityState {
   }
 
   setState(state: unknown): void {
-    // Serialize immediately (like dotnet)
     this.cachedValue = state;
     this.serializedValue = state !== undefined && state !== null ? JSON.stringify(state) : undefined;
     this.cacheValid = true;
@@ -145,8 +136,6 @@ class StateShim implements TaskEntityState {
 
 /**
  * Internal context management with checkpoint/rollback support for actions.
- *
- * Dotnet reference: src/Worker/Core/Shims/TaskEntityShim.cs lines 178-253
  */
 class ContextShim implements TaskEntityContext {
   private actions: EntityAction[] = [];
@@ -167,15 +156,13 @@ class ContextShim implements TaskEntityContext {
     input?: unknown,
     options?: SignalEntityOptions,
   ): void {
-    // Align with dotnet: serialize and capture values immediately
-    // Dotnet reference: src/Worker/Core/Shims/TaskEntityShim.cs lines 188-200
     this.actions.push({
       type: "signalEntity",
-      instanceId: id.toString(),                                        // Convert immediately like dotnet
+      instanceId: id.toString(),
       name: operationName,
-      input: input !== undefined ? JSON.stringify(input) : undefined,   // Serialize immediately like dotnet
+      input: input !== undefined ? JSON.stringify(input) : undefined,
       scheduledTime: options?.signalTime,
-      requestTime: new Date(),                                          // Capture now like dotnet
+      requestTime: new Date(),
     });
   }
 
@@ -184,16 +171,14 @@ class ContextShim implements TaskEntityContext {
     input?: unknown,
     options?: StartOrchestrationOptions,
   ): string {
-    // Align with dotnet: serialize and capture values immediately
-    // Dotnet reference: src/Worker/Core/Shims/TaskEntityShim.cs lines 202-217
     const instanceId = options?.instanceId ?? randomUUID();
     this.actions.push({
       type: "scheduleOrchestration",
       instanceId,
       name,
-      input: input !== undefined ? JSON.stringify(input) : undefined,   // Serialize immediately like dotnet
+      input: input !== undefined ? JSON.stringify(input) : undefined,
       scheduledTime: options?.startAt,
-      requestTime: new Date(),                                          // Capture now like dotnet
+      requestTime: new Date(),
     });
     return instanceId;
   }
@@ -230,8 +215,6 @@ class ContextShim implements TaskEntityContext {
 
 /**
  * Internal operation wrapper for each operation in the batch.
- *
- * Dotnet reference: src/Worker/Core/Shims/TaskEntityShim.cs lines 300-340
  */
 class OperationShim implements TaskEntityOperation {
   private readonly contextShim: ContextShim;
@@ -274,15 +257,13 @@ class OperationShim implements TaskEntityOperation {
  * Executes entity operations in batch with transactional semantics.
  *
  * @remarks
- * This class implements the same transactional behavior as TaskEntityShim in dotnet:
+ * This class implements transactional behavior:
  * - Entity is passed to constructor and stored as field
  * - Shims are created and reused across operations
  * - Each operation is executed independently
  * - State is checkpointed before each operation
  * - On exception, state and actions are rolled back for that operation
  * - Other operations in the batch continue to execute
- *
- * Dotnet reference: src/Worker/Core/Shims/TaskEntityShim.cs
  */
 export class TaskEntityShim {
   private readonly entity: ITaskEntity;
@@ -297,10 +278,6 @@ export class TaskEntityShim {
    *
    * @param entity - The entity to execute operations on.
    * @param entityId - The ID of the entity.
-   *
-   * @remarks
-   * Matches dotnet's TaskEntityShim constructor - no state parameter.
-   * State is set from EntityBatchRequest when executeAsync is called.
    */
   constructor(entity: ITaskEntity, entityId: EntityInstanceId) {
     this.entity = entity;
@@ -315,9 +292,6 @@ export class TaskEntityShim {
    *
    * @param request - The batch request containing operations.
    * @returns The batch result containing results for each operation.
-   *
-   * @remarks
-   * Matches dotnet's TaskEntityShim.RunAsync method signature.
    */
   async executeAsync(request: pb.EntityBatchRequest): Promise<pb.EntityBatchResult> {
     // Set the current state, and commit it so we can roll back to it later.
@@ -325,7 +299,6 @@ export class TaskEntityShim {
     // This means that if an operation throws an unhandled exception, all its effects are rolled back.
     // In particular, (1) the entity state is reverted to what it was prior to the operation, and
     // (2) all of the messages sent by the operation (e.g. if it started a new orchestrations) are discarded.
-    // Dotnet reference: TaskEntityShim.ExecuteOperationBatchAsync
     const requestState = this.getSerializedState(request.getEntitystate());
     if (requestState !== undefined) {
       this.stateShim.setSerializedState(requestState);
@@ -363,9 +336,6 @@ export class TaskEntityShim {
 
   /**
    * Executes a single operation with transactional semantics.
-   *
-   * @remarks
-   * Matches dotnet's TaskEntityShim.ExecuteOperationAsync method.
    */
   private async executeOperation(opRequest: pb.OperationRequest): Promise<pb.OperationResult> {
     const startTime = new Date();

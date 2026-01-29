@@ -461,7 +461,6 @@ export class OrchestrationExecutor {
         }
         // This history event confirms that the entity call was successfully scheduled.
         // Remove the action from the pending action list so we don't schedule it again.
-        // Dotnet reference: TaskOrchestrationExecutor processes EntityOperationCalledEvent in history
         case pb.HistoryEvent.EventtypeCase.ENTITYOPERATIONCALLED:
           {
             const eventId = event.getEventid();
@@ -481,7 +480,6 @@ export class OrchestrationExecutor {
           break;
         // This history event confirms that the entity signal was successfully scheduled.
         // Remove the action from the pending action list so we don't schedule it again.
-        // Dotnet reference: TaskOrchestrationExecutor processes EntityOperationSignaledEvent in history
         case pb.HistoryEvent.EventtypeCase.ENTITYOPERATIONSIGNALED:
           {
             const eventId = event.getEventid();

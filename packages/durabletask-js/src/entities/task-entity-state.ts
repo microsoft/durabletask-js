@@ -7,8 +7,6 @@
  * @remarks
  * This interface provides methods for getting and setting entity state during operation execution.
  * Setting state to null or undefined will delete the entity state.
- *
- * Dotnet reference: src/Abstractions/Entities/TaskEntityState.cs
  */
 export interface TaskEntityState {
   /**

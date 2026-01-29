@@ -28,8 +28,6 @@ export interface StartOrchestrationOptions {
  * @remarks
  * This context is available during entity operation execution and allows
  * the entity to interact with other entities and orchestrations.
- *
- * Dotnet reference: src/Abstractions/Entities/TaskEntityContext.cs
  */
 export interface TaskEntityContext {
   /**

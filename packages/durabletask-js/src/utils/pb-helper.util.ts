@@ -348,8 +348,6 @@ export function getOrchestrationStatusStr(status: number): string {
  * @remarks
  * This creates an EntityOperationSignaledEvent which is a one-way message.
  * The orchestration does not wait for a response.
- *
- * Dotnet reference: TaskOrchestrationEntityContext.SendOperationMessage (oneWay=true)
  */
 export function newSendEntityMessageSignalAction(
   id: number,
@@ -397,8 +395,6 @@ export function newSendEntityMessageSignalAction(
  * This creates an EntityOperationCalledEvent which expects a response.
  * The orchestration waits for EntityOperationCompletedEvent or EntityOperationFailedEvent
  * with a matching requestId.
- *
- * Dotnet reference: TaskOrchestrationEntityContext.SendOperationMessage (oneWay=false)
  */
 export function newSendEntityMessageCallAction(
   id: number,
@@ -445,8 +441,6 @@ export function newSendEntityMessageCallAction(
  * This creates an EntityLockRequestedEvent which is sent to the first entity in the lock set.
  * The entity framework will forward the lock request to subsequent entities.
  * The orchestration waits for EntityLockGrantedEvent with a matching criticalSectionId.
- *
- * Dotnet reference: OrchestrationEntityContext.EmitAcquireMessage
  */
 export function newSendEntityMessageLockAction(
   id: number,
@@ -482,8 +476,6 @@ export function newSendEntityMessageLockAction(
  * @remarks
  * This creates an EntityUnlockSentEvent to release a lock held by the orchestration.
  * One unlock event should be sent to each entity in the lock set.
- *
- * Dotnet reference: OrchestrationEntityContext.EmitLockReleaseMessages
  */
 export function newSendEntityMessageUnlockAction(
   id: number,

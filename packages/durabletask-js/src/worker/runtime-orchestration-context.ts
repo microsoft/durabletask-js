@@ -353,8 +353,6 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
    * @remarks
    * This is used for generating request IDs that are deterministically replayable.
    * Uses the instance ID and sequence number to create a unique, reproducible ID.
-   *
-   * Dotnet reference: TaskOrchestrationContextWrapper.NewGuid()
    */
   newGuid(): string {
     const id = this.nextSequenceNumber();
@@ -372,8 +370,6 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
  * This class provides the entity feature for the RuntimeOrchestrationContext.
  * It allows orchestrations to call entities (request/response), signal entities (one-way),
  * and acquire locks on entities for critical sections.
- *
- * Dotnet reference: TaskOrchestrationEntityContext
  */
 class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
   private readonly context: RuntimeOrchestrationContext;
@@ -407,8 +403,6 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
   /**
    * Whether a lock acquisition is pending (lock request sent but not yet granted).
    * This is used to prevent calling entities before the lock is granted.
-   *
-   * Dotnet reference: OrchestrationEntityContext.lockAcquisitionPending
    */
   private lockAcquisitionPending = false;
 
@@ -446,8 +440,6 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
    * @remarks
    * This creates a SendEntityMessageAction with an EntityOperationCalledEvent.
    * The orchestration waits for EntityOperationCompletedEvent or EntityOperationFailedEvent.
-   *
-   * Dotnet reference: TaskOrchestrationEntityContext.CallEntityAsync
    */
   callEntity<TResult = void>(
     id: EntityInstanceId,
@@ -514,8 +506,6 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
   /**
    * Called after an entity call within a critical section completes.
    * Makes the entity available for calls again.
-   *
-   * Dotnet reference: OrchestrationEntityContext.RecoverLockAfterCall
    */
   recoverLockAfterCall(entityId: EntityInstanceId): void {
     if (this.criticalSection) {
@@ -534,8 +524,6 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
    * @remarks
    * This creates a SendEntityMessageAction with an EntityOperationSignaledEvent.
    * The orchestration does not wait for the entity to process the operation.
-   *
-   * Dotnet reference: TaskOrchestrationEntityContext.SignalEntityAsync
    */
   signalEntity(
     id: EntityInstanceId,
@@ -580,8 +568,6 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
    * @remarks
    * Entities are sorted before lock acquisition to prevent deadlocks.
    * Duplicates are removed automatically.
-   *
-   * Dotnet reference: TaskOrchestrationEntityContext.LockEntitiesAsync
    */
   lockEntities(...entityIds: EntityInstanceId[]): Task<LockHandle> {
     if (entityIds.length === 0) {
@@ -651,7 +637,6 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
       this.pendingLockRequests.delete(criticalSectionId);
 
       // Now that lock is granted, populate availableEntities and clear pending flag
-      // Dotnet reference: OrchestrationEntityContext.CompleteAcquire
       if (this.criticalSection) {
         this.criticalSection.availableEntities = new Set(
           pendingRequest.lockSet.map((e) => e.toString()),
@@ -669,8 +654,6 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
    * Checks whether the orchestration is currently inside a critical section.
    *
    * @returns Information about the current critical section state.
-   *
-   * Dotnet reference: TaskOrchestrationEntityContext.InCriticalSection
    */
   isInCriticalSection(): CriticalSectionInfo {
     if (this.criticalSection) {
@@ -689,8 +672,6 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
    * Exits the critical section, releasing all locks.
    *
    * @param criticalSectionId - Optional: only exit if the ID matches.
-   *
-   * Dotnet reference: TaskOrchestrationEntityContext.ExitCriticalSection
    */
   exitCriticalSection(criticalSectionId?: string): void {
     if (!this.criticalSection) {
@@ -721,8 +702,6 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
 
 /**
  * Lock releaser that exits the critical section when released.
- *
- * Dotnet reference: TaskOrchestrationEntityContext.LockReleaser
  */
 class EntityLockReleaser implements LockHandle {
   private readonly context: RuntimeOrchestrationContext;

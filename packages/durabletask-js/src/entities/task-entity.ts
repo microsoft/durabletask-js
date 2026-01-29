@@ -10,8 +10,6 @@ import { TaskEntityOperation } from "./task-entity-operation";
  * @remarks
  * This is the core interface that all entities must implement.
  * The state of an entity can be retrieved and updated via the operation's state property.
- *
- * Dotnet reference: src/Abstractions/Entities/TaskEntity.cs - ITaskEntity
  */
 export interface ITaskEntity {
   /**
@@ -50,8 +48,6 @@ export type EntityFactory<T extends ITaskEntity = ITaskEntity> = () => T;
  * This class supports the `delete` operation implicitly. When `delete` is called and no
  * explicit delete method exists, the entity state is set to null (deleted).
  * To override this behavior, implement a `delete()` method on your entity.
- *
- * Dotnet reference: src/Abstractions/Entities/TaskEntity.cs - TaskEntity<TState>
  */
 export abstract class TaskEntity<TState> implements ITaskEntity {
   /**

@@ -136,8 +136,6 @@ export class TaskHubGrpcWorker {
    *
    * @remarks
    * Entity names are derived from the factory function name and normalized to lowercase.
-   *
-   * Dotnet reference: src/Worker/Core/DurableTaskFactory.cs
    */
   addEntity(factory: EntityFactory): string {
     if (this._isRunning) {
@@ -156,8 +154,6 @@ export class TaskHubGrpcWorker {
    *
    * @remarks
    * Entity names are normalized to lowercase for case-insensitive matching.
-   *
-   * Dotnet reference: src/Worker/Core/DurableTaskFactory.cs
    */
   addNamedEntity(name: string, factory: EntityFactory): string {
     if (this._isRunning) {
@@ -403,11 +399,8 @@ export class TaskHubGrpcWorker {
    * @param operationInfos - Optional V2 operation info list to include in the result.
    *
    * @remarks
-   * This method mirrors dotnet's OnRunEntityBatchAsync in GrpcDurableTaskWorker.Processor.cs.
-   * It looks up the entity by name, creates a TaskEntityShim, executes the batch,
+   * This method looks up the entity by name, creates a TaskEntityShim, executes the batch,
    * and sends the result back to the sidecar.
-   *
-   * Dotnet reference: src/Worker/Grpc/GrpcDurableTaskWorker.Processor.cs lines 852-915
    */
   private async _executeEntity(
     req: pb.EntityBatchRequest,
@@ -422,7 +415,6 @@ export class TaskHubGrpcWorker {
     }
 
     // Parse the entity instance ID (format: @name@key)
-    // Dotnet reference: src/Worker/Grpc/GrpcDurableTaskWorker.Processor.cs lines 858-861
     let entityId: EntityInstanceId;
     try {
       entityId = EntityInstanceId.fromString(instanceIdString);
@@ -442,19 +434,16 @@ export class TaskHubGrpcWorker {
 
     try {
       // Look up the entity factory by name
-      // Dotnet reference: src/Worker/Grpc/GrpcDurableTaskWorker.Processor.cs lines 869-870
       const factory = this._registry.getEntity(entityId.name);
 
       if (factory) {
         // Create the entity instance and execute the batch
-        // Dotnet reference: src/Worker/Grpc/GrpcDurableTaskWorker.Processor.cs lines 873-875
         const entity = factory();
         const shim = new TaskEntityShim(entity, entityId);
         batchResult = await shim.executeAsync(req);
         batchResult.setCompletiontoken(completionToken);
       } else {
         // Entity not found - return error result for all operations
-        // Dotnet reference: src/Worker/Grpc/GrpcDurableTaskWorker.Processor.cs lines 877-894
         console.log(`No entity named '${entityId.name}' was found.`);
         batchResult = this._createEntityNotFoundResult(
           req,
@@ -465,7 +454,6 @@ export class TaskHubGrpcWorker {
     } catch (e: any) {
       // Framework-level error - return result with failure details
       // This will cause the batch to be abandoned and retried
-      // Dotnet reference: src/Worker/Grpc/GrpcDurableTaskWorker.Processor.cs lines 896-903
       console.error(e);
       console.log(`An error occurred while trying to execute entity '${entityId.name}': ${e.message}`);
 
@@ -477,7 +465,6 @@ export class TaskHubGrpcWorker {
     }
 
     // Add V2 operationInfos if provided (used by DTS backend)
-    // Dotnet reference: src/Worker/Grpc/ProtoUtils.cs ToEntityBatchResult
     if (operationInfos && operationInfos.length > 0) {
       // Take only as many operationInfos as there are results
       const resultsCount = batchResult.getResultsList().length;
@@ -499,8 +486,6 @@ export class TaskHubGrpcWorker {
    * This method handles the V2 entity request format which uses HistoryEvent
    * instead of OperationRequest. It converts the V2 format to V1 format
    * (EntityBatchRequest) and delegates to the existing execution logic.
-   *
-   * Dotnet reference: src/Worker/Grpc/ProtoUtils.cs ToEntityBatchRequest
    */
   private async _executeEntityV2(
     req: pb.EntityRequest,
@@ -594,7 +579,6 @@ export class TaskHubGrpcWorker {
    *
    * @remarks
    * Returns a non-retriable error for each operation in the batch.
-   * Dotnet reference: src/Worker/Grpc/GrpcDurableTaskWorker.Processor.cs lines 877-894
    */
   private _createEntityNotFoundResult(
     req: pb.EntityBatchRequest,

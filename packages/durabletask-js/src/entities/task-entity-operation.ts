@@ -13,8 +13,6 @@ import { TaskEntityState } from "./task-entity-state";
  * - The operation input (if any)
  * - The entity context (for signaling other entities, scheduling orchestrations)
  * - The entity state (for reading/writing persistent state)
- *
- * Dotnet reference: src/Abstractions/Entities/TaskEntityOperation.cs
  */
 export interface TaskEntityOperation {
   /**

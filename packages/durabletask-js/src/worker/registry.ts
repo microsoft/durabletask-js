@@ -12,10 +12,7 @@ import { EntityFactory } from "../entities/task-entity";
  *
  * @remarks
  * This class is used by the worker to look up task implementations by name.
- * Entity names are normalized to lowercase for case-insensitive matching,
- * consistent with dotnet's EntityInstanceId behavior.
- *
- * Dotnet reference: src/Worker/Core/DurableTaskFactory.cs
+ * Entity names are normalized to lowercase for case-insensitive matching.
  */
 export class Registry {
   private _orchestrators: Record<string, TOrchestrator>;
@@ -93,8 +90,6 @@ export class Registry {
    * @remarks
    * The entity name is derived from the factory function name.
    * Entity names are normalized to lowercase for case-insensitive matching.
-   *
-   * Dotnet reference: src/Worker/Core/DurableTaskFactory.cs
    */
   addEntity(factory: EntityFactory): string {
     if (!factory) {
@@ -115,8 +110,6 @@ export class Registry {
    * @remarks
    * Entity names are normalized to lowercase for case-insensitive matching,
    * consistent with EntityInstanceId's name normalization.
-   *
-   * Dotnet reference: src/Worker/Core/DurableTaskFactory.cs
    */
   addNamedEntity(name: string, factory: EntityFactory): void {
     if (!name) {
@@ -145,8 +138,6 @@ export class Registry {
    *
    * @remarks
    * The name is normalized to lowercase before lookup.
-   *
-   * Dotnet reference: src/Worker/Core/DurableTaskFactory.cs - TryCreateEntity
    */
   getEntity(name: string): EntityFactory | undefined {
     if (!name) {

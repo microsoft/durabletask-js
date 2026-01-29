@@ -46,8 +46,6 @@ export abstract class OrchestrationContext {
    * @remarks
    * Use this property to signal entities from within an orchestration.
    * Signaling is a one-way (fire-and-forget) operation.
-   *
-   * Dotnet reference: TaskOrchestrationContext.Entities
    */
   abstract get entities(): OrchestrationEntityFeature;
 

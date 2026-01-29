@@ -10,8 +10,6 @@ import * as pb from "../proto/orchestrator_service_pb";
  * @remarks
  * Contains structured information about an error that occurred during
  * entity operation execution, including error type, message, and stack trace.
- *
- * Dotnet reference: src/Abstractions/TaskFailureDetails.cs
  */
 export interface TaskFailureDetails {
   /**
@@ -60,8 +58,6 @@ export function createTaskFailureDetails(proto: pb.TaskFailureDetails | undefine
  * @remarks
  * Detailed information associated with a particular operation failure, including exception details,
  * can be found in the `failureDetails` property.
- *
- * Dotnet reference: src/Abstractions/Entities/EntityOperationFailedException.cs
  */
 export class EntityOperationFailedException extends Error {
   /**

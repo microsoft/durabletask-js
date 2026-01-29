@@ -7,8 +7,6 @@
  * @remarks
  * Signals are one-way (fire-and-forget) messages sent to entities.
  * The signalTime option allows scheduling a signal for future delivery.
- *
- * Dotnet reference: src/Abstractions/Entities/CallEntityOptions.cs - SignalEntityOptions
  */
 export interface SignalEntityOptions {
   /**
@@ -25,8 +23,6 @@ export interface SignalEntityOptions {
  * Currently empty, reserved for future extensibility.
  * Keeping this interface so we can ship with options in the API
  * and add properties later without breaking changes.
- *
- * Dotnet reference: src/Abstractions/Entities/CallEntityOptions.cs - CallEntityOptions
  */
 // eslint-disable-next-line @typescript-eslint/no-empty-interface
 export interface CallEntityOptions {

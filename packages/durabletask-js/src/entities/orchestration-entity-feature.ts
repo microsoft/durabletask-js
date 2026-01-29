@@ -27,8 +27,6 @@ export interface CriticalSectionInfo {
  * @remarks
  * Use this to release locks acquired via `lockEntities`.
  * Typically used in a try/finally block to ensure locks are released.
- *
- * Dotnet reference: IAsyncDisposable returned by LockEntitiesAsync
  */
 export interface LockHandle {
   /**
@@ -45,8 +43,6 @@ export interface LockHandle {
  * - `callEntity` waits for a response from the entity.
  * - `signalEntity` is a one-way (fire-and-forget) operation that doesn't wait for a response.
  * - `lockEntities` acquires locks on multiple entities for critical sections.
- *
- * Dotnet reference: src/Abstractions/Entities/TaskOrchestrationEntityFeature.cs
  */
 export interface OrchestrationEntityFeature {
   /**
@@ -64,8 +60,6 @@ export interface OrchestrationEntityFeature {
    * Unlike `signalEntity`, this method waits for the entity to process the operation
    * and returns the result. If the entity operation throws an exception, this method
    * will throw an `EntityOperationFailedException` containing the failure details.
-   *
-   * Dotnet reference: TaskOrchestrationEntityFeature.CallEntityAsync
    */
   callEntity<TResult = void>(
     id: EntityInstanceId,
@@ -86,8 +80,6 @@ export interface OrchestrationEntityFeature {
    * This is a fire-and-forget operation. The orchestration will not wait for
    * the entity operation to complete. Use `callEntity` if you need to wait
    * for a response.
-   *
-   * Dotnet reference: TaskOrchestrationEntityFeature.SignalEntityAsync
    */
   signalEntity(
     id: EntityInstanceId,
@@ -114,8 +106,6 @@ export interface OrchestrationEntityFeature {
    * - You can call (but not signal) the locked entities
    * - You cannot call sub-orchestrations
    * - You cannot acquire additional locks (no nested critical sections)
-   *
-   * Dotnet reference: TaskOrchestrationEntityFeature.LockEntitiesAsync
    */
   lockEntities(...entityIds: EntityInstanceId[]): Task<LockHandle>;
 
@@ -124,8 +114,6 @@ export interface OrchestrationEntityFeature {
    *
    * @returns Information about the current critical section state.
    *
-   * @remarks
-   * Dotnet reference: TaskOrchestrationEntityFeature.InCriticalSection
    */
   isInCriticalSection(): CriticalSectionInfo;
 }
