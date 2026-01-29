@@ -1134,7 +1134,6 @@ describe("Durable Entities E2E Tests (DTS)", () => {
     it("should show lockedBy in entity metadata during lock", async () => {
       // Arrange
       const entityId = new EntityInstanceId("CounterEntity", `locked-by-${Date.now()}`);
-      let lockingOrchestrationId: string | undefined;
 
       const slowLockOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
         const lockHandle: LockHandle = yield ctx.entities.lockEntities(entityId);
@@ -1157,7 +1156,7 @@ describe("Durable Entities E2E Tests (DTS)", () => {
       await taskHubWorker.start();
 
       // Act - Start orchestration that holds lock
-      lockingOrchestrationId = await taskHubClient.scheduleNewOrchestration(slowLockOrchestrator);
+      const lockingOrchestrationId = await taskHubClient.scheduleNewOrchestration(slowLockOrchestrator);
 
       // Wait a bit for lock to be acquired
       await sleep(2000);
@@ -1329,14 +1328,13 @@ describe("Durable Entities E2E Tests (DTS)", () => {
     it("should allow entity to schedule a new orchestration", async () => {
       // Arrange
       const coordinatorId = new EntityInstanceId("CoordinatorEntity", `start-orch-${Date.now()}`);
-      let orchestrationStarted = false;
-
       // Simple orchestration that will be started by the entity
       const targetOrchestrator: TOrchestrator = async function* (
-        ctx: OrchestrationContext,
+        _ctx: OrchestrationContext,
         input: { message: string }
       ): any {
-        orchestrationStarted = true;
+        // Generator must have at least one yield (even if not awaited)
+        yield Promise.resolve();
         return `Received: ${input.message}`;
       };
 
