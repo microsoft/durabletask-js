@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { promisify } from "util";
 import * as pb from "../proto/orchestrator_service_pb";
 import * as stubs from "../proto/orchestrator_service_grpc_pb";
 import * as grpc from "@grpc/grpc-js";
@@ -216,6 +215,10 @@ export class TaskHubGrpcWorker {
           const entityRequest = workItem.getEntityrequest() as pb.EntityBatchRequest;
           console.log(`Received "Entity Request" work item for entity '${entityRequest.getInstanceid()}'`);
           this._executeEntity(entityRequest, completionToken, client.stub);
+        } else if (workItem.hasEntityrequestv2()) {
+          const entityRequestV2 = workItem.getEntityrequestv2() as pb.EntityRequest;
+          console.log(`Received "Entity Request V2" work item for entity '${entityRequestV2.getInstanceid()}'`);
+          this._executeEntityV2(entityRequestV2, completionToken, client.stub);
         } else if (workItem.hasHealthping()) {
           // Health ping - no-op, just a keep-alive message from the server
         } else {
@@ -397,6 +400,7 @@ export class TaskHubGrpcWorker {
    * @param req - The entity batch request from the sidecar.
    * @param completionToken - The completion token for the work item.
    * @param stub - The gRPC stub for completing the task.
+   * @param operationInfos - Optional V2 operation info list to include in the result.
    *
    * @remarks
    * This method mirrors dotnet's OnRunEntityBatchAsync in GrpcDurableTaskWorker.Processor.cs.
@@ -409,6 +413,7 @@ export class TaskHubGrpcWorker {
     req: pb.EntityBatchRequest,
     completionToken: string,
     stub: stubs.TaskHubSidecarServiceClient,
+    operationInfos?: pb.OperationInfo[],
   ): Promise<void> {
     const instanceIdString = req.getInstanceid();
 
@@ -471,7 +476,117 @@ export class TaskHubGrpcWorker {
       batchResult.setFailuredetails(failureDetails);
     }
 
+    // Add V2 operationInfos if provided (used by DTS backend)
+    // Dotnet reference: src/Worker/Grpc/ProtoUtils.cs ToEntityBatchResult
+    if (operationInfos && operationInfos.length > 0) {
+      // Take only as many operationInfos as there are results
+      const resultsCount = batchResult.getResultsList().length;
+      const infosToInclude = operationInfos.slice(0, resultsCount || operationInfos.length);
+      batchResult.setOperationinfosList(infosToInclude);
+    }
+
     await this._sendEntityResult(batchResult, stub);
+  }
+
+  /**
+   * Executes an entity request (V2 format).
+   *
+   * @param req - The entity request (V2) from the sidecar.
+   * @param completionToken - The completion token for the work item.
+   * @param stub - The gRPC stub for completing the task.
+   *
+   * @remarks
+   * This method handles the V2 entity request format which uses HistoryEvent
+   * instead of OperationRequest. It converts the V2 format to V1 format
+   * (EntityBatchRequest) and delegates to the existing execution logic.
+   *
+   * Dotnet reference: src/Worker/Grpc/ProtoUtils.cs ToEntityBatchRequest
+   */
+  private async _executeEntityV2(
+    req: pb.EntityRequest,
+    completionToken: string,
+    stub: stubs.TaskHubSidecarServiceClient,
+  ): Promise<void> {
+    // Convert EntityRequest (V2) to EntityBatchRequest (V1) format
+    const batchRequest = new pb.EntityBatchRequest();
+    batchRequest.setInstanceid(req.getInstanceid());
+
+    // Copy entity state
+    const entityState = req.getEntitystate();
+    if (entityState) {
+      batchRequest.setEntitystate(entityState);
+    }
+
+    // Convert HistoryEvent operations to OperationRequest format
+    // Also build the operationInfos list for V2 responses
+    const historyEvents = req.getOperationrequestsList();
+    const operations: pb.OperationRequest[] = [];
+    const operationInfos: pb.OperationInfo[] = [];
+
+    for (const event of historyEvents) {
+      const eventType = event.getEventtypeCase();
+
+      if (eventType === pb.HistoryEvent.EventtypeCase.ENTITYOPERATIONSIGNALED) {
+        const signaled = event.getEntityoperationsignaled();
+        if (signaled) {
+          const opRequest = new pb.OperationRequest();
+          opRequest.setOperation(signaled.getOperation());
+          opRequest.setRequestid(signaled.getRequestid());
+          const input = signaled.getInput();
+          if (input) {
+            opRequest.setInput(input);
+          }
+          operations.push(opRequest);
+
+          // Build OperationInfo for signaled operations (no response destination)
+          const opInfo = new pb.OperationInfo();
+          opInfo.setRequestid(signaled.getRequestid());
+          // Signals don't send a response, so responseDestination is null
+          operationInfos.push(opInfo);
+        }
+      } else if (eventType === pb.HistoryEvent.EventtypeCase.ENTITYOPERATIONCALLED) {
+        const called = event.getEntityoperationcalled();
+        if (called) {
+          const opRequest = new pb.OperationRequest();
+          opRequest.setOperation(called.getOperation());
+          opRequest.setRequestid(called.getRequestid());
+          const input = called.getInput();
+          if (input) {
+            opRequest.setInput(input);
+          }
+          operations.push(opRequest);
+
+          // Build OperationInfo for called operations (with response destination)
+          const opInfo = new pb.OperationInfo();
+          opInfo.setRequestid(called.getRequestid());
+
+          // Called operations send responses to the parent orchestration
+          const parentInstanceId = called.getParentinstanceid();
+          const parentExecutionId = called.getParentexecutionid();
+          if (parentInstanceId || parentExecutionId) {
+            const responseDestination = new pb.OrchestrationInstance();
+            if (parentInstanceId) {
+              responseDestination.setInstanceid(parentInstanceId.getValue());
+            }
+            if (parentExecutionId) {
+              // executionId needs to be wrapped in a StringValue
+              const execIdValue = new StringValue();
+              execIdValue.setValue(parentExecutionId.getValue());
+              responseDestination.setExecutionid(execIdValue);
+            }
+            opInfo.setResponsedestination(responseDestination);
+          }
+          operationInfos.push(opInfo);
+        }
+      } else {
+        console.log(`Skipping unknown entity operation event type: ${eventType}`);
+      }
+    }
+
+    batchRequest.setOperationsList(operations);
+
+    // Delegate to the V1 execution logic with V2 operationInfos
+    await this._executeEntity(batchRequest, completionToken, stub, operationInfos);
   }
 
   /**
@@ -527,8 +642,7 @@ export class TaskHubGrpcWorker {
     stub: stubs.TaskHubSidecarServiceClient,
   ): Promise<void> {
     try {
-      const stubCompleteEntityTask = promisify(stub.completeEntityTask.bind(stub));
-      await stubCompleteEntityTask(batchResult);
+      await callWithMetadata(stub.completeEntityTask.bind(stub), batchResult, this._metadataGenerator);
     } catch (e: any) {
       console.error(`Failed to deliver entity response to sidecar: ${e?.message}`);
     }

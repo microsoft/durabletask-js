@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { promisify } from "util";
 import * as grpc from "@grpc/grpc-js";
 import { StringValue, Int32Value } from "google-protobuf/google/protobuf/wrappers_pb";
 import { Timestamp } from "google-protobuf/google/protobuf/timestamp_pb";
@@ -439,8 +438,11 @@ export class TaskHubGrpcClient {
 
     console.log(`Signaling entity '${id.toString()}' with operation '${operationName}'`);
 
-    const prom = promisify(this._stub.signalEntity.bind(this._stub));
-    await prom(req);
+    await callWithMetadata<pb.SignalEntityRequest, pb.SignalEntityResponse>(
+      this._stub.signalEntity.bind(this._stub),
+      req,
+      this._metadataGenerator,
+    );
   }
 
   /**
@@ -463,8 +465,11 @@ export class TaskHubGrpcClient {
 
     console.log(`Getting entity '${id.toString()}'`);
 
-    const prom = promisify(this._stub.getEntity.bind(this._stub));
-    const res = (await prom(req)) as pb.GetEntityResponse;
+    const res = await callWithMetadata<pb.GetEntityRequest, pb.GetEntityResponse>(
+      this._stub.getEntity.bind(this._stub),
+      req,
+      this._metadataGenerator,
+    );
 
     if (!res.getExists()) {
       return undefined;
@@ -531,8 +536,11 @@ export class TaskHubGrpcClient {
 
       req.setQuery(protoQuery);
 
-      const prom = promisify(this._stub.queryEntities.bind(this._stub));
-      const res = (await prom(req)) as pb.QueryEntitiesResponse;
+      const res = await callWithMetadata<pb.QueryEntitiesRequest, pb.QueryEntitiesResponse>(
+        this._stub.queryEntities.bind(this._stub),
+        req,
+        this._metadataGenerator,
+      );
 
       const entities = res.getEntitiesList();
       for (const protoMetadata of entities) {
@@ -573,8 +581,11 @@ export class TaskHubGrpcClient {
         protoReq.setContinuationtoken(token);
       }
 
-      const prom = promisify(this._stub.cleanEntityStorage.bind(this._stub));
-      const res = (await prom(protoReq)) as pb.CleanEntityStorageResponse;
+      const res = await callWithMetadata<pb.CleanEntityStorageRequest, pb.CleanEntityStorageResponse>(
+        this._stub.cleanEntityStorage.bind(this._stub),
+        protoReq,
+        this._metadataGenerator,
+      );
 
       continuationToken = res.getContinuationtoken()?.getValue();
       emptyEntitiesRemoved += res.getEmptyentitiesremoved();
