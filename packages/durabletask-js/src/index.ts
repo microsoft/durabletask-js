@@ -60,4 +60,8 @@ export { ITaskEntity, EntityFactory, TaskEntity } from "./entities/task-entity";
 export { TaskEntityShim, EntityAction } from "./worker/entity-executor";
 
 // Orchestration entity feature (Step 7)
-export { OrchestrationEntityFeature } from "./entities/orchestration-entity-feature";
+export {
+  OrchestrationEntityFeature,
+  LockHandle,
+  CriticalSectionInfo,
+} from "./entities/orchestration-entity-feature";
