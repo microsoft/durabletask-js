@@ -429,6 +429,280 @@ describe("Durable Entities E2E Tests (DTS)", () => {
       expect(counterMetadata?.state?.count).toBe(42);
     }, 30000);
   });
+
+  describe("Concurrent Entity Operations", () => {
+    it("should process rapid sequential signals in order", async () => {
+      // Arrange
+      const entityId = new EntityInstanceId("CounterEntity", `rapid-${Date.now()}`);
+      taskHubWorker.addNamedEntity("CounterEntity", () => new CounterEntity());
+      await taskHubWorker.start();
+
+      // Act - Send many signals rapidly
+      const signalCount = 20;
+      for (let i = 0; i < signalCount; i++) {
+        await taskHubClient.signalEntity(entityId, "add", 1);
+      }
+
+      // Wait for all signals to be processed
+      await sleep(5000);
+
+      // Assert - All signals should be processed exactly once
+      const metadata = await taskHubClient.getEntity<{ count: number }>(entityId);
+      expect(metadata?.state?.count).toBe(signalCount);
+    }, 60000);
+
+    it("should handle concurrent signals from multiple clients", async () => {
+      // Arrange
+      const entityId = new EntityInstanceId("CounterEntity", `concurrent-${Date.now()}`);
+      taskHubWorker.addNamedEntity("CounterEntity", () => new CounterEntity());
+      await taskHubWorker.start();
+
+      // Act - Send signals in parallel (simulate concurrent clients)
+      const promises = [];
+      for (let i = 0; i < 10; i++) {
+        promises.push(taskHubClient.signalEntity(entityId, "add", 5));
+      }
+      await Promise.all(promises);
+
+      // Wait for all signals to be processed
+      await sleep(3000);
+
+      // Assert - All signals should be processed
+      const metadata = await taskHubClient.getEntity<{ count: number }>(entityId);
+      expect(metadata?.state?.count).toBe(50); // 10 * 5
+    }, 30000);
+  });
+
+  describe("Entity Re-creation", () => {
+    it("should allow entity to be re-created after deletion", async () => {
+      // Arrange
+      const entityId = new EntityInstanceId("CounterEntity", `recreate-${Date.now()}`);
+      taskHubWorker.addNamedEntity("CounterEntity", () => new CounterEntity());
+      await taskHubWorker.start();
+
+      // Create and verify initial state
+      await taskHubClient.signalEntity(entityId, "add", 100);
+      await sleep(1500);
+      let metadata = await taskHubClient.getEntity<{ count: number }>(entityId);
+      expect(metadata?.state?.count).toBe(100);
+
+      // Delete the entity
+      await taskHubClient.signalEntity(entityId, "delete");
+      await sleep(2000);
+
+      // Verify deletion
+      metadata = await taskHubClient.getEntity<{ count: number }>(entityId);
+      expect(metadata === undefined || metadata.state === undefined).toBe(true);
+
+      // Re-create the entity with new state
+      await taskHubClient.signalEntity(entityId, "add", 50);
+      await sleep(1500);
+
+      // Assert - Entity should be re-created with fresh state
+      metadata = await taskHubClient.getEntity<{ count: number }>(entityId);
+      expect(metadata?.state?.count).toBe(50);
+    }, 45000);
+  });
+
+  describe("Entity with List State", () => {
+    it("should handle entity with array/list state", async () => {
+      // Arrange
+      const entityId = new EntityInstanceId("CoordinatorEntity", `messages-${Date.now()}`);
+      taskHubWorker.addNamedEntity("CoordinatorEntity", () => new CoordinatorEntity());
+      await taskHubWorker.start();
+
+      // Act - Add multiple messages
+      await taskHubClient.signalEntity(entityId, "sendMessage", "Hello");
+      await taskHubClient.signalEntity(entityId, "sendMessage", "World");
+      await taskHubClient.signalEntity(entityId, "sendMessage", "!");
+
+      await sleep(2000);
+
+      // Assert
+      const metadata = await taskHubClient.getEntity<{ messages: string[] }>(entityId);
+      expect(metadata?.state?.messages).toEqual(["Hello", "World", "!"]);
+    }, 30000);
+  });
+
+  describe("Multiple Orchestrations with Same Entity", () => {
+    it("should handle multiple orchestrations interacting with same entity", async () => {
+      // Arrange
+      const entityId = new EntityInstanceId("CounterEntity", `multi-orch-${Date.now()}`);
+
+      const incrementOrchestrator: TOrchestrator = async function* (
+        ctx: OrchestrationContext,
+        amount: number
+      ): any {
+        const result: number = yield ctx.entities.callEntity(entityId, "add", amount);
+        return result;
+      };
+
+      taskHubWorker.addNamedEntity("CounterEntity", () => new CounterEntity());
+      taskHubWorker.addOrchestrator(incrementOrchestrator);
+      await taskHubWorker.start();
+
+      // Act - Start multiple orchestrations that increment the same entity
+      const instanceId1 = await taskHubClient.scheduleNewOrchestration(incrementOrchestrator, 10);
+      const instanceId2 = await taskHubClient.scheduleNewOrchestration(incrementOrchestrator, 20);
+      const instanceId3 = await taskHubClient.scheduleNewOrchestration(incrementOrchestrator, 30);
+
+      // Wait for all to complete
+      const [state1, state2, state3] = await Promise.all([
+        taskHubClient.waitForOrchestrationCompletion(instanceId1, undefined, 60),
+        taskHubClient.waitForOrchestrationCompletion(instanceId2, undefined, 60),
+        taskHubClient.waitForOrchestrationCompletion(instanceId3, undefined, 60),
+      ]);
+
+      // Assert - All orchestrations completed
+      expect(state1?.runtimeStatus).toBe(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state2?.runtimeStatus).toBe(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state3?.runtimeStatus).toBe(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+
+      // Entity should have received all increments
+      const metadata = await taskHubClient.getEntity<{ count: number }>(entityId);
+      expect(metadata?.state?.count).toBe(60); // 10 + 20 + 30
+    }, 90000);
+  });
+
+  describe("Entity Reset Operation", () => {
+    it("should reset entity state to initial value", async () => {
+      // Arrange
+      const entityId = new EntityInstanceId("CounterEntity", `reset-${Date.now()}`);
+      taskHubWorker.addNamedEntity("CounterEntity", () => new CounterEntity());
+      await taskHubWorker.start();
+
+      // Build up some state
+      await taskHubClient.signalEntity(entityId, "add", 100);
+      await taskHubClient.signalEntity(entityId, "add", 50);
+      await sleep(1500);
+
+      let metadata = await taskHubClient.getEntity<{ count: number }>(entityId);
+      expect(metadata?.state?.count).toBe(150);
+
+      // Act - Reset the entity
+      await taskHubClient.signalEntity(entityId, "reset");
+      await sleep(1500);
+
+      // Assert - State should be reset to initial value
+      metadata = await taskHubClient.getEntity<{ count: number }>(entityId);
+      expect(metadata?.state?.count).toBe(0);
+    }, 30000);
+  });
+
+  describe("Entity Call with Response", () => {
+    it("should get response from entity call in orchestration", async () => {
+      // Arrange
+      const entityId = new EntityInstanceId("BankAccountEntity", `call-response-${Date.now()}`);
+
+      const bankOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        // Set owner and get response
+        yield ctx.entities.callEntity(entityId, "setOwner", "Bob");
+
+        // Deposit and get new balance
+        const balance1: number = yield ctx.entities.callEntity(entityId, "deposit", 500);
+
+        // Withdraw and get new balance
+        const balance2: number = yield ctx.entities.callEntity(entityId, "withdraw", 200);
+
+        // Get full state
+        const fullState: BankAccountState = yield ctx.entities.callEntity(entityId, "getFullState");
+
+        return { balance1, balance2, fullState };
+      };
+
+      taskHubWorker.addNamedEntity("BankAccountEntity", () => new BankAccountEntity());
+      taskHubWorker.addOrchestrator(bankOrchestrator);
+      await taskHubWorker.start();
+
+      // Act
+      const instanceId = await taskHubClient.scheduleNewOrchestration(bankOrchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(instanceId, undefined, 60);
+
+      // Assert
+      expect(state?.runtimeStatus).toBe(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      const output = state?.serializedOutput ? JSON.parse(state.serializedOutput) : null;
+      expect(output?.balance1).toBe(500);
+      expect(output?.balance2).toBe(300); // 500 - 200
+      expect(output?.fullState?.owner).toBe("Bob");
+      expect(output?.fullState?.balance).toBe(300);
+      expect(output?.fullState?.transactionCount).toBe(2);
+    }, 90000);
+  });
+
+  describe("Entity Mixed Operations", () => {
+    it("should handle mixed signals and calls to same entity", async () => {
+      // Arrange
+      const entityId = new EntityInstanceId("CounterEntity", `mixed-${Date.now()}`);
+
+      const mixedOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        // Signal (fire-and-forget)
+        ctx.entities.signalEntity(entityId, "add", 10);
+
+        // Wait a bit
+        const fireAt = new Date(ctx.currentUtcDateTime.getTime() + 1000);
+        yield ctx.createTimer(fireAt);
+
+        // Call (wait for response)
+        const value1: number = yield ctx.entities.callEntity(entityId, "add", 5);
+
+        // Signal again
+        ctx.entities.signalEntity(entityId, "add", 3);
+
+        // Wait
+        const fireAt2 = new Date(ctx.currentUtcDateTime.getTime() + 1000);
+        yield ctx.createTimer(fireAt2);
+
+        // Final call to get value
+        const finalValue: number = yield ctx.entities.callEntity(entityId, "get");
+
+        return { value1, finalValue };
+      };
+
+      taskHubWorker.addNamedEntity("CounterEntity", () => new CounterEntity());
+      taskHubWorker.addOrchestrator(mixedOrchestrator);
+      await taskHubWorker.start();
+
+      // Act
+      const instanceId = await taskHubClient.scheduleNewOrchestration(mixedOrchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(instanceId, undefined, 60);
+
+      // Assert
+      expect(state?.runtimeStatus).toBe(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      const output = state?.serializedOutput ? JSON.parse(state.serializedOutput) : null;
+      // value1 should be 15 (10 from signal + 5 from call)
+      expect(output?.value1).toBe(15);
+      // finalValue should be 18 (15 + 3 from second signal)
+      expect(output?.finalValue).toBe(18);
+    }, 90000);
+  });
+
+  describe("Entity Type Differentiation", () => {
+    it("should maintain separate state for different entity types with same key", async () => {
+      // Arrange
+      const key = `same-key-${Date.now()}`;
+      const counterId = new EntityInstanceId("CounterEntity", key);
+      const bankId = new EntityInstanceId("BankAccountEntity", key);
+
+      taskHubWorker.addNamedEntity("CounterEntity", () => new CounterEntity());
+      taskHubWorker.addNamedEntity("BankAccountEntity", () => new BankAccountEntity());
+      await taskHubWorker.start();
+
+      // Act - Operate on both entity types with the same key
+      await taskHubClient.signalEntity(counterId, "add", 100);
+      await taskHubClient.signalEntity(bankId, "deposit", 500);
+      await taskHubClient.signalEntity(counterId, "add", 50);
+      await taskHubClient.signalEntity(bankId, "withdraw", 200);
+
+      await sleep(3000);
+
+      // Assert - Each entity type should have its own independent state
+      const counterMetadata = await taskHubClient.getEntity<{ count: number }>(counterId);
+      const bankMetadata = await taskHubClient.getEntity<BankAccountState>(bankId);
+
+      expect(counterMetadata?.state?.count).toBe(150); // 100 + 50
+      expect(bankMetadata?.state?.balance).toBe(300); // 500 - 200
+    }, 30000);
+  });
 });
 
 // Helper function
