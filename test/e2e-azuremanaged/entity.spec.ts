@@ -132,9 +132,9 @@ class CoordinatorEntity extends TaskEntity<{ messages: string[] }> {
     return [...this.state.messages];
   }
 
-  signalCounter(counterKey: string, amount: number): void {
-    const counterId = new EntityInstanceId("CounterEntity", counterKey);
-    this.context?.signalEntity(counterId, "add", amount);
+  signalCounter(args: { counterKey: string; amount: number }): void {
+    const counterId = new EntityInstanceId("CounterEntity", args.counterKey);
+    this.context?.signalEntity(counterId, "add", args.amount);
   }
 
   protected initializeState(): { messages: string[] } {
@@ -419,7 +419,7 @@ describe("Durable Entities E2E Tests (DTS)", () => {
       await taskHubWorker.start();
 
       // Act - Signal the coordinator to signal the counter
-      await taskHubClient.signalEntity(coordinatorId, "signalCounter", [counterId.key, 42]);
+      await taskHubClient.signalEntity(coordinatorId, "signalCounter", { counterKey: counterId.key, amount: 42 });
 
       // Wait for the cascading signals to be processed
       await sleep(3000);
