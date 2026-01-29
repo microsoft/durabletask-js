@@ -117,6 +117,12 @@ export class OrchestrationExecutor {
               throw new OrchestratorNotRegisteredError(executionStartedEvent?.getName());
             }
 
+            // Set the execution ID from the orchestration instance
+            const executionId = executionStartedEvent?.getOrchestrationinstance()?.getExecutionid()?.getValue();
+            if (executionId) {
+              ctx._executionId = executionId;
+            }
+
             // Deserialize the input, if any
             let input = undefined;
 

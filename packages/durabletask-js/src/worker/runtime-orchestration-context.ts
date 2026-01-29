@@ -30,6 +30,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   _sequenceNumber: any;
   _currentUtcDatetime: any;
   _instanceId: string;
+  _executionId?: string;
   _completionStatus?: pb.OrchestrationStatus;
   _receivedEvents: Record<string, any[]>;
   _pendingEvents: Record<string, CompletableTask<any>[]>;
@@ -482,6 +483,7 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
     const encodedInput = input !== undefined ? JSON.stringify(input) : undefined;
     const instanceIdString = id.toString();
     const parentInstanceId = this.context.instanceId;
+    const parentExecutionId = this.context._executionId;
 
     const action = ph.newSendEntityMessageCallAction(
       actionId,
@@ -489,6 +491,7 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
       operationName,
       requestId,
       parentInstanceId,
+      parentExecutionId,
       encodedInput,
     );
 

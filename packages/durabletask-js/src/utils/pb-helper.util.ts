@@ -402,6 +402,7 @@ export function newSendEntityMessageCallAction(
   operationName: string,
   requestId: string,
   parentInstanceId: string,
+  parentExecutionId?: string,
   encodedInput?: string,
   scheduledTime?: Date,
 ): pb.OrchestratorAction {
@@ -411,6 +412,7 @@ export function newSendEntityMessageCallAction(
   callEvent.setInput(getStringValue(encodedInput));
   callEvent.setTargetinstanceid(getStringValue(instanceId));
   callEvent.setParentinstanceid(getStringValue(parentInstanceId));
+  callEvent.setParentexecutionid(getStringValue(parentExecutionId));
 
   if (scheduledTime) {
     const ts = new Timestamp();
