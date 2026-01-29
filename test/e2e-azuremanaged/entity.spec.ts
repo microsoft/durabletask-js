@@ -452,6 +452,51 @@ describe("Durable Entities E2E Tests (DTS)", () => {
       const counts = results.map((r) => r.state.count).sort((a, b) => a - b);
       expect(counts).toEqual([10, 20, 30]);
     }, 60000);
+
+    it("should query entities page by page using byPage()", async () => {
+      // Arrange
+      const prefix = `page-query-${Date.now()}`;
+      const entityIds = [];
+      for (let i = 1; i <= 5; i++) {
+        entityIds.push(new EntityInstanceId("CounterEntity", `${prefix}-${i}`));
+      }
+
+      taskHubWorker.addNamedEntity("CounterEntity", () => new CounterEntity());
+      await taskHubWorker.start();
+
+      // Create entities
+      for (let i = 0; i < entityIds.length; i++) {
+        await taskHubClient.signalEntity(entityIds[i], "add", (i + 1) * 10);
+      }
+
+      // Wait for signals to be processed
+      await sleep(3000);
+
+      // Act - Query page by page with small page size
+      const allResults: Array<{ id: EntityInstanceId; state: { count: number } }> = [];
+      let pageCount = 0;
+
+      for await (const page of taskHubClient.getEntities<{ count: number }>({
+        instanceIdStartsWith: `@CounterEntity@${prefix}`,
+        includeState: true,
+        pageSize: 2, // Small page size to force multiple pages
+      }).byPage()) {
+        pageCount++;
+        for (const metadata of page.values) {
+          allResults.push({
+            id: metadata.id,
+            state: metadata.state!,
+          });
+        }
+      }
+
+      // Assert
+      expect(allResults.length).toBe(5);
+      const counts = allResults.map((r) => r.state.count).sort((a, b) => a - b);
+      expect(counts).toEqual([10, 20, 30, 40, 50]);
+      // With pageSize=2 and 5 entities, we should have at least 3 pages
+      expect(pageCount).toBeGreaterThanOrEqual(1);
+    }, 60000);
   });
 
   describe("Entity Deletion", () => {

@@ -5,6 +5,7 @@
 export { TaskHubGrpcClient } from "./client/client";
 export { MetadataGenerator } from "./utils/grpc-helper.util";
 export { TaskHubGrpcWorker } from "./worker/task-hub-grpc-worker";
+export { AsyncPageable, Page } from "./utils/async-pageable";
 
 // Contexts
 export { OrchestrationContext } from "./task/context/orchestration-context";

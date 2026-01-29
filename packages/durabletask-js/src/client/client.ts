@@ -28,6 +28,7 @@ import {
 } from "../entities/clean-entity-storage";
 
 import { callWithMetadata, MetadataGenerator } from "../utils/grpc-helper.util";
+import { AsyncPageable, Page } from "../utils/async-pageable";
 
 export class TaskHubGrpcClient {
   private _stub: stubs.TaskHubSidecarServiceClient;
@@ -481,16 +482,31 @@ export class TaskHubGrpcClient {
    * Queries for entities matching the specified filter criteria.
    *
    * @param query - Optional query filter. If not provided, returns all entities.
-   * @returns An async generator that yields entity metadata.
+   * @returns An AsyncPageable that can be iterated by items or by pages.
    *
    * @remarks
-   * This method handles pagination automatically, fetching additional pages as needed.
+   * This method handles pagination automatically when iterating by items.
+   * Use `.byPage()` to iterate page by page for more control.
+   *
+   * @example
+   * // Iterate by items
+   * for await (const entity of client.getEntities(query)) {
+   *   console.log(entity.id);
+   * }
+   *
+   * @example
+   * // Iterate by pages
+   * for await (const page of client.getEntities(query).byPage()) {
+   *   console.log(`Got ${page.values.length} items`);
+   *   for (const entity of page.values) {
+   *     console.log(entity.id);
+   *   }
+   * }
    */
-  async *getEntities<T = unknown>(query?: EntityQuery): AsyncGenerator<EntityMetadata<T>, void, unknown> {
-    let continuationToken: string | undefined = query?.continuationToken;
+  getEntities<T = unknown>(query?: EntityQuery): AsyncPageable<EntityMetadata<T>> {
     const includeState = query?.includeState ?? true;
 
-    do {
+    return AsyncPageable.create(async (continuationToken?: string): Promise<Page<EntityMetadata<T>>> => {
       const req = new pb.QueryEntitiesRequest();
       const protoQuery = new pb.EntityQuery();
 
@@ -521,9 +537,11 @@ export class TaskHubGrpcClient {
         protoQuery.setPagesize(pageSize);
       }
 
-      if (continuationToken) {
+      // Use provided continuation token or fall back to query's initial token
+      const tokenToUse = continuationToken ?? query?.continuationToken;
+      if (tokenToUse) {
         const token = new StringValue();
-        token.setValue(continuationToken);
+        token.setValue(tokenToUse);
         protoQuery.setContinuationtoken(token);
       }
 
@@ -536,12 +554,13 @@ export class TaskHubGrpcClient {
       );
 
       const entities = res.getEntitiesList();
-      for (const protoMetadata of entities) {
-        yield this.convertEntityMetadata<T>(protoMetadata, includeState);
-      }
+      const values = entities.map((protoMetadata) => this.convertEntityMetadata<T>(protoMetadata, includeState));
 
-      continuationToken = res.getContinuationtoken()?.getValue();
-    } while (continuationToken);
+      return {
+        values,
+        continuationToken: res.getContinuationtoken()?.getValue(),
+      };
+    });
   }
 
   /**
