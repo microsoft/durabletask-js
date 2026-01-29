@@ -60,6 +60,10 @@ class CounterEntity extends TaskEntity<{ count: number }> {
     return this.state.count;
   }
 
+  set(value: number): void {
+    this.state.count = value;
+  }
+
   reset(): void {
     this.state.count = 0;
   }
@@ -1098,6 +1102,7 @@ describe("Durable Entities E2E Tests (DTS)", () => {
 
     it("should serialize concurrent access from multiple orchestrations", async () => {
       // Arrange - Single entity that will be accessed by multiple orchestrations
+      // This test demonstrates read-modify-write pattern that would fail without locking
       const sharedEntityId = new EntityInstanceId("CounterEntity", `shared-lock-${Date.now()}`);
 
       const concurrentAccessOrchestrator: TOrchestrator = async function* (
@@ -1108,13 +1113,19 @@ describe("Durable Entities E2E Tests (DTS)", () => {
         const lockHandle: LockHandle = yield ctx.entities.lockEntities(sharedEntityId);
 
         try {
+          // Read current value
           const current: number = yield ctx.entities.callEntity(sharedEntityId, "get");
           
-          // Simulate some work with a small delay
+          // Simulate some work with a delay - without locking, another orchestration
+          // could read the same value and cause a lost update
           const fireAt = new Date(ctx.currentUtcDateTime.getTime() + 100);
           yield ctx.createTimer(fireAt);
           
-          const newValue: number = yield ctx.entities.callEntity(sharedEntityId, "add", amount);
+          // Write back the computed value (read + amount)
+          // This is a true read-modify-write: we explicitly set based on what we read
+          const newValue = current + amount;
+          yield ctx.entities.callEntity(sharedEntityId, "set", newValue);
+          
           return { before: current, after: newValue, added: amount };
         } finally {
           lockHandle.release();
@@ -1159,8 +1170,8 @@ describe("Durable Entities E2E Tests (DTS)", () => {
         try {
           yield ctx.entities.callEntity(entityId, "add", 100);
           
-          // Hold the lock for a while so we can check metadata
-          const fireAt = new Date(ctx.currentUtcDateTime.getTime() + 3000);
+          // Hold the lock for a while so we can check metadata from outside
+          const fireAt = new Date(ctx.currentUtcDateTime.getTime() + 5000);
           yield ctx.createTimer(fireAt);
           
           return "completed";
@@ -1176,17 +1187,25 @@ describe("Durable Entities E2E Tests (DTS)", () => {
       // Act - Start orchestration that holds lock
       const lockingOrchestrationId = await taskHubClient.scheduleNewOrchestration(slowLockOrchestrator);
 
-      // Wait a bit for lock to be acquired
-      await sleep(2000);
+      // Wait for lock to be acquired and entity operation to complete
+      await sleep(3000);
 
-      // Check entity metadata - Note: lockedBy may not be visible through getEntity depending on implementation
-      // This test verifies the API works correctly
+      // Check entity metadata while lock is held
+      const metadataDuringLock = await taskHubClient.getEntity<{ count: number }>(entityId);
+      
+      // Verify lockedBy is set to the orchestration holding the lock
+      expect(metadataDuringLock).toBeDefined();
+      expect(metadataDuringLock?.lockedBy).toBe(lockingOrchestrationId);
+
+      // Wait for orchestration to complete
       const state = await taskHubClient.waitForOrchestrationCompletion(lockingOrchestrationId, undefined, 90);
 
-      // Assert
+      // Assert orchestration completed
       expect(state?.runtimeStatus).toBe(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
-      const output = state?.serializedOutput ? JSON.parse(state.serializedOutput) : null;
-      expect(output).toBe("completed");
+
+      // After lock release, lockedBy should be undefined
+      const metadataAfterRelease = await taskHubClient.getEntity<{ count: number }>(entityId);
+      expect(metadataAfterRelease?.lockedBy).toBeUndefined();
     }, 120000);
   });
 
@@ -1348,27 +1367,28 @@ describe("Durable Entities E2E Tests (DTS)", () => {
       const coordinatorId = new EntityInstanceId("CoordinatorEntity", `start-orch-${Date.now()}`);
       // Simple orchestration that will be started by the entity
       const targetOrchestrator: TOrchestrator = async function* (
-        _ctx: OrchestrationContext,
+        ctx: OrchestrationContext,
         input: { message: string }
       ): any {
-        // Generator must have at least one yield (even if not awaited)
-        yield Promise.resolve();
+        // Use a minimal timer as a proper durable operation
+        const fireAt = new Date(ctx.currentUtcDateTime.getTime() + 100);
+        yield ctx.createTimer(fireAt);
         return `Received: ${input.message}`;
       };
 
       // Orchestration that triggers entity to start another orchestration
       const triggerOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
-        // Call the entity to start an orchestration
-        yield ctx.entities.callEntity(coordinatorId, "startOrchestration", {
+        // Call the entity to start an orchestration and get the instance ID back
+        const startedInstanceId: string = yield ctx.entities.callEntity(coordinatorId, "startOrchestration", {
           orchestrationName: "targetOrchestrator",
           input: { message: "Hello from entity" },
         });
 
         // Wait a bit for the started orchestration to complete
-        const fireAt = new Date(ctx.currentUtcDateTime.getTime() + 2000);
+        const fireAt = new Date(ctx.currentUtcDateTime.getTime() + 3000);
         yield ctx.createTimer(fireAt);
 
-        return "trigger completed";
+        return { triggerResult: "completed", startedInstanceId };
       };
 
       taskHubWorker.addNamedEntity("CoordinatorEntity", () => new CoordinatorEntity());
@@ -1380,8 +1400,22 @@ describe("Durable Entities E2E Tests (DTS)", () => {
       const instanceId = await taskHubClient.scheduleNewOrchestration(triggerOrchestrator);
       const state = await taskHubClient.waitForOrchestrationCompletion(instanceId, undefined, 90);
 
-      // Assert
+      // Assert - Trigger orchestration completed
       expect(state?.runtimeStatus).toBe(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      const triggerOutput = state?.serializedOutput ? JSON.parse(state.serializedOutput) : null;
+      expect(triggerOutput?.triggerResult).toBe("completed");
+      expect(triggerOutput?.startedInstanceId).toBeDefined();
+
+      // Verify the target orchestration actually ran and completed with correct output
+      // Use longer timeout since the entity-scheduled orchestration may take time to start
+      const targetState = await taskHubClient.waitForOrchestrationCompletion(
+        triggerOutput.startedInstanceId,
+        undefined,
+        60
+      );
+      expect(targetState?.runtimeStatus).toBe(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      const targetOutput = targetState?.serializedOutput ? JSON.parse(targetState.serializedOutput) : null;
+      expect(targetOutput).toBe("Received: Hello from entity");
     }, 120000);
   });
 
@@ -1433,22 +1467,29 @@ describe("Durable Entities E2E Tests (DTS)", () => {
   });
 
   describe("Scheduled Signal Delivery", () => {
-    it("should deliver signal at scheduled time", async () => {
+    it("should deliver signal at scheduled time but not before", async () => {
       // Arrange
       const entityId = new EntityInstanceId("CounterEntity", `scheduled-${Date.now()}`);
       taskHubWorker.addNamedEntity("CounterEntity", () => new CounterEntity());
       await taskHubWorker.start();
 
-      // Act - Schedule a signal for 5 seconds in the future (longer delay for reliability)
-      const scheduledTime = new Date(Date.now() + 5000);
+      // Act - Schedule a signal for 8 seconds in the future
+      const scheduledTime = new Date(Date.now() + 8000);
       await taskHubClient.signalEntity(entityId, "add", 100, { signalTime: scheduledTime });
+
+      // Verify signal is NOT processed before scheduled time (check at 3 seconds)
+      await sleep(3000);
+      const metadataBeforeScheduledTime = await taskHubClient.getEntity<{ count: number }>(entityId);
+      // Entity should either not exist or have count = 0 (not 100)
+      const countBefore = metadataBeforeScheduledTime?.state?.count ?? 0;
+      expect(countBefore).toBe(0);
 
       // Wait past the scheduled time plus buffer for processing
       await sleep(8000);
 
       // Assert - Signal should be processed after scheduled time
-      const metadata = await taskHubClient.getEntity<{ count: number }>(entityId);
-      expect(metadata?.state?.count).toBe(100);
+      const metadataAfterScheduledTime = await taskHubClient.getEntity<{ count: number }>(entityId);
+      expect(metadataAfterScheduledTime?.state?.count).toBe(100);
     }, 30000);
   });
 });
