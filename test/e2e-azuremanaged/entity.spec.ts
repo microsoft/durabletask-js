@@ -1509,6 +1509,29 @@ describe("Durable Entities E2E Tests (DTS)", () => {
       // The ping operation should have succeeded
       expect(metadata?.state?.log).toContain("ping");
     }, 30000);
+
+    it("should fail orchestration when entity call throws an unhandled exception", async () => {
+      // Arrange - orchestration that calls an entity operation which throws
+      const entityId = new EntityInstanceId("AsyncEntity", `fail-call-${Date.now()}`);
+
+      taskHubWorker.addNamedEntity("AsyncEntity", () => new AsyncEntity());
+      taskHubWorker.addNamedOrchestrator("CallFailingEntity", async function* (ctx): AsyncGenerator<any, any, any> {
+        // This call should throw because failOperation throws an error in the entity
+        const result = yield ctx.entities.callEntity(entityId, "failOperation");
+        return result;
+      });
+      await taskHubWorker.start();
+
+      // Act - Start the orchestration
+      const instanceId = await taskHubClient.scheduleNewOrchestration("CallFailingEntity");
+
+      // Wait for orchestration to complete
+      const state = await taskHubClient.waitForOrchestrationCompletion(instanceId, undefined, 60);
+
+      // Assert - Orchestration should be failed
+      expect(state?.runtimeStatus).toBe(OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+      expect(state?.failureDetails?.message).toContain("This operation intentionally fails");
+    }, 60000);
   });
 
   describe("Scheduled Signal Delivery", () => {
