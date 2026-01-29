@@ -459,6 +459,46 @@ export class OrchestrationExecutor {
           ctx.setComplete(encodedOutput, pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED, true);
           break;
         }
+        // This history event confirms that the entity call was successfully scheduled.
+        // Remove the action from the pending action list so we don't schedule it again.
+        // Dotnet reference: TaskOrchestrationExecutor processes EntityOperationCalledEvent in history
+        case pb.HistoryEvent.EventtypeCase.ENTITYOPERATIONCALLED:
+          {
+            const eventId = event.getEventid();
+            const action = ctx._pendingActions[eventId];
+            delete ctx._pendingActions[eventId];
+
+            const isSendEntityMessageAction = action?.hasSendentitymessage();
+
+            if (!action) {
+              throw getNonDeterminismError(eventId, "callEntity");
+            } else if (!isSendEntityMessageAction) {
+              throw getWrongActionTypeError(eventId, "callEntity", action);
+            } else if (!action.getSendentitymessage()?.hasEntityoperationcalled()) {
+              throw getWrongActionTypeError(eventId, "callEntity (EntityOperationCalled)", action);
+            }
+          }
+          break;
+        // This history event confirms that the entity signal was successfully scheduled.
+        // Remove the action from the pending action list so we don't schedule it again.
+        // Dotnet reference: TaskOrchestrationExecutor processes EntityOperationSignaledEvent in history
+        case pb.HistoryEvent.EventtypeCase.ENTITYOPERATIONSIGNALED:
+          {
+            const eventId = event.getEventid();
+            const action = ctx._pendingActions[eventId];
+            delete ctx._pendingActions[eventId];
+
+            const isSendEntityMessageAction = action?.hasSendentitymessage();
+
+            if (!action) {
+              throw getNonDeterminismError(eventId, "signalEntity");
+            } else if (!isSendEntityMessageAction) {
+              throw getWrongActionTypeError(eventId, "signalEntity", action);
+            } else if (!action.getSendentitymessage()?.hasEntityoperationsignaled()) {
+              throw getWrongActionTypeError(eventId, "signalEntity (EntityOperationSignaled)", action);
+            }
+          }
+          break;
         case pb.HistoryEvent.EventtypeCase.ENTITYOPERATIONCOMPLETED:
           {
             const completedEvent = event.getEntityoperationcompleted();
