@@ -12,6 +12,11 @@ export { ActivityContext } from "./task/context/activity-context";
 // Orchestration types and utilities
 export { PurgeInstanceCriteria } from "./orchestration/orchestration-purge-criteria";
 export { OrchestrationStatus } from "./orchestration/enum/orchestration-status.enum";
+export { OrchestrationState } from "./orchestration/orchestration-state";
+
+// Query types
+export { OrchestrationQuery, ListInstanceIdsOptions, DEFAULT_PAGE_SIZE } from "./orchestration/orchestration-query";
+export { Page, AsyncPageable, createAsyncPageable } from "./orchestration/page";
 
 // Proto types (for advanced usage)
 export { OrchestrationStatus as ProtoOrchestrationStatus } from "./proto/orchestrator_service_pb";
