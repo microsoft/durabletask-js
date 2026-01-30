@@ -606,8 +606,8 @@ export class TaskHubGrpcClient {
     const protoFailureDetails = protoState.getFailuredetails();
     if (protoFailureDetails) {
       failureDetails = new FailureDetails(
-        protoFailureDetails.getErrortype(),
         protoFailureDetails.getErrormessage(),
+        protoFailureDetails.getErrortype(),
         protoFailureDetails.getStacktrace()?.getValue(),
       );
     }
