@@ -84,7 +84,7 @@ class CounterEntity extends TaskEntity<CounterState> {
   const worker = new TaskHubGrpcWorker(grpcServerAddress);
 
   // Register the entity with the worker
-  worker.addEntity("Counter", () => new CounterEntity());
+  worker.addNamedEntity("Counter", () => new CounterEntity());
 
   try {
     await worker.start();
