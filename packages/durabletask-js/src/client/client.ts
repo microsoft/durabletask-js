@@ -614,7 +614,7 @@ export class TaskHubGrpcClient {
 
     return new OrchestrationState(
       instanceId,
-      name,
+      name ?? "",
       status,
       createdAt,
       lastUpdatedAt,
