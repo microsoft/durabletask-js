@@ -25,7 +25,6 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   _isComplete: boolean;
   _result: any;
   _pendingActions: Record<number, pb.OrchestratorAction>;
-  _commitActions: pb.OrchestratorAction[]; // Actions that should always be included (e.g., unlock messages)
   _pendingTasks: Record<number, CompletableTask<any>>;
   _sequenceNumber: any;
   _currentUtcDatetime: any;
@@ -46,7 +45,6 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     this._isComplete = false;
     this._result = undefined;
     this._pendingActions = {};
-    this._commitActions = [];
     this._pendingTasks = {};
     this._sequenceNumber = 0;
     this._currentUtcDatetime = new Date(1000, 0, 1);
@@ -154,7 +152,8 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
 
     this._isComplete = true;
     this._completionStatus = status;
-    this._pendingActions = {}; // Clear any pending actions
+    // Note: We don't clear _pendingActions here because we need to send any pending actions
+    // (e.g., entity unlock messages) along with the completion action.
 
     this._result = result;
 
@@ -176,7 +175,8 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
 
     this._isComplete = true;
     this._completionStatus = pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED;
-    this._pendingActions = {}; // Cancel any pending actions
+    // Note: We don't clear _pendingActions here because we need to send any pending actions
+    // (e.g., entity unlock messages) along with the failure action.
 
     const action = ph.newCompleteOrchestrationAction(
       this.nextSequenceNumber(),
@@ -193,7 +193,8 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     }
 
     this._isComplete = true;
-    this._pendingActions = {}; // Clear any pending actions
+    // Note: We don't clear _pendingActions here because we need to send any pending actions
+    // (e.g., entity unlock messages) along with the continue-as-new action.
     this._completionStatus = pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW;
     this._newInput = newInput;
     this._saveEvents = saveEvents;
@@ -228,8 +229,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
       return [action];
     }
 
-    // Include both commit actions and pending actions
-    return [...this._commitActions, ...Object.values(this._pendingActions)];
+    return Object.values(this._pendingActions);
   }
 
   nextSequenceNumber(): number {
@@ -686,7 +686,6 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
     }
 
     // Send unlock messages to all locked entities
-    // Use _commitActions so they aren't cleared when the orchestration completes
     for (const entity of this.criticalSection.lockedEntities) {
       const actionId = this.context.nextSequenceNumber();
       const action = ph.newSendEntityMessageUnlockAction(
@@ -695,7 +694,7 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
         entity.toString(),
         this.context.instanceId,
       );
-      this.context._commitActions.push(action);
+      this.context._pendingActions[action.getId()] = action;
     }
 
     // Clear critical section state
