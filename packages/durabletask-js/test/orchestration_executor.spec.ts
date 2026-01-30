@@ -865,7 +865,7 @@ describe("Orchestration Executor", () => {
 
       // Step 1: Start orchestration
       let executor = new OrchestrationExecutor(registry);
-      let allEvents = [
+      const allEvents = [
         newOrchestratorStartedEvent(startTime),
         newExecutionStartedEvent(name, TEST_INSTANCE_ID, JSON.stringify(21)),
       ];
@@ -931,7 +931,7 @@ describe("Orchestration Executor", () => {
 
       // Step 1: Start orchestration
       let executor = new OrchestrationExecutor(registry);
-      let allEvents = [
+      const allEvents = [
         newOrchestratorStartedEvent(startTime),
         newExecutionStartedEvent(name, TEST_INSTANCE_ID, JSON.stringify(21)),
       ];

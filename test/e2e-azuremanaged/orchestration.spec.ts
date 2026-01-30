@@ -399,9 +399,10 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
   it("should retry sub-orchestration and succeed after transient failures", async () => {
     let attemptCount = 0;
 
-    const flakySubOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: number): any {
+    const flakySubOrchestrator: TOrchestrator = async function* (_ctx: OrchestrationContext, input: number): any {
       attemptCount++;
       if (attemptCount < 2) {
+        yield; // Required for generator
         throw new Error(`Sub-orchestration transient failure on attempt ${attemptCount}`);
       }
       return input * 3;
@@ -435,8 +436,9 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
   it("should fail sub-orchestration after exhausting all retry attempts", async () => {
     let attemptCount = 0;
 
-    const alwaysFailsSubOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+    const alwaysFailsSubOrchestrator: TOrchestrator = async function* (_ctx: OrchestrationContext): any {
       attemptCount++;
+      yield; // Required for generator
       throw new Error(`Sub-orchestration permanent failure on attempt ${attemptCount}`);
     };
 
