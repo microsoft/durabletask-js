@@ -20,6 +20,7 @@ import { PurgeInstanceCriteria } from "../orchestration/orchestration-purge-crit
 import { callWithMetadata, MetadataGenerator } from "../utils/grpc-helper.util";
 import { OrchestrationQuery, ListInstanceIdsOptions, DEFAULT_PAGE_SIZE } from "../orchestration/orchestration-query";
 import { Page, AsyncPageable, createAsyncPageable } from "../orchestration/page";
+import { FailureDetails } from "../task/failure-details";
 
 // Re-export MetadataGenerator for backward compatibility
 export { MetadataGenerator } from "../utils/grpc-helper.util";
@@ -604,7 +605,6 @@ export class TaskHubGrpcClient {
     let failureDetails;
     const protoFailureDetails = protoState.getFailuredetails();
     if (protoFailureDetails) {
-      const { FailureDetails } = require("../task/failure-details");
       failureDetails = new FailureDetails(
         protoFailureDetails.getErrortype(),
         protoFailureDetails.getErrormessage(),

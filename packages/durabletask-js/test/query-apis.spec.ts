@@ -1,7 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { Page, createAsyncPageable, AsyncPageable } from "../src/orchestration/page";
+import { Page, createAsyncPageable } from "../src/orchestration/page";
+import { FailureDetails } from "../src/task/failure-details";
 import {
   OrchestrationQuery,
   ListInstanceIdsOptions,
@@ -379,7 +380,6 @@ describe("OrchestrationState", () => {
   });
 
   it("should correctly indicate failed status with failure details", () => {
-    const { FailureDetails } = require("../src/task/failure-details");
     const failureDetails = new FailureDetails("Error", "Something went wrong", "stack trace");
 
     const state = new OrchestrationState(
