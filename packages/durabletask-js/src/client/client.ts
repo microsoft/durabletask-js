@@ -585,8 +585,8 @@ export class TaskHubGrpcClient {
       return undefined;
     }
 
-    const createdAt = createdTimestamp ? new Date(createdTimestamp.toDate()) : new Date(0);
-    const lastUpdatedAt = lastUpdatedTimestamp ? new Date(lastUpdatedTimestamp.toDate()) : new Date(0);
+    const createdAt = createdTimestamp ? createdTimestamp.toDate() : new Date(0);
+    const lastUpdatedAt = lastUpdatedTimestamp ? lastUpdatedTimestamp.toDate() : new Date(0);
 
     // Map proto status to our status enum using the existing conversion function
     const status = fromProtobuf(runtimeStatus);
