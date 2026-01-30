@@ -110,8 +110,9 @@ describe("OrchestrationExecutor Entity Operation Events", () => {
 
       // Assert
       expect(callResult).toBe(42);
-      expect(actions2.length).toBe(1);
-      expect(actions2[0].hasCompleteorchestration()).toBe(true);
+      // Note: actions include previously-scheduled entity call (idempotent, has sequence number)
+      const completeAction = actions2.find((a) => a.hasCompleteorchestration());
+      expect(completeAction).toBeDefined();
     });
 
     it("should handle null result", async () => {
@@ -261,9 +262,10 @@ describe("OrchestrationExecutor Entity Operation Events", () => {
       const actions2 = await executor.execute("test-instance", oldEvents2, newEvents2);
 
       // Assert - orchestration should fail
-      expect(actions2.length).toBe(1);
-      expect(actions2[0].hasCompleteorchestration()).toBe(true);
-      const completeAction = actions2[0].getCompleteorchestration()!;
+      // Note: actions include previously-scheduled entity call (idempotent, has sequence number)
+      const completeActionWrapper = actions2.find((a) => a.hasCompleteorchestration());
+      expect(completeActionWrapper).toBeDefined();
+      const completeAction = completeActionWrapper!.getCompleteorchestration()!;
       expect(completeAction.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
     });
   });
@@ -319,9 +321,10 @@ describe("OrchestrationExecutor Entity Operation Events", () => {
       // Assert
       expect(result1).toBe(10);
       expect(result2).toBe(20);
-      expect(actions2.length).toBe(1);
-      expect(actions2[0].hasCompleteorchestration()).toBe(true);
-      expect(actions2[0].getCompleteorchestration()!.getResult()?.getValue()).toBe("30");
+      // Note: actions include previously-scheduled entity calls (idempotent, have sequence numbers)
+      const completeAction = actions2.find((a) => a.hasCompleteorchestration());
+      expect(completeAction).toBeDefined();
+      expect(completeAction!.getCompleteorchestration()!.getResult()?.getValue()).toBe("30");
     });
   });
 });
