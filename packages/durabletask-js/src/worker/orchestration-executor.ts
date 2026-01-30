@@ -18,6 +18,10 @@ import { OrchestratorNotRegisteredError } from "./exception/orchestrator-not-reg
 import { StopIterationError } from "./exception/stop-iteration-error";
 import { Registry } from "./registry";
 import { RuntimeOrchestrationContext } from "./runtime-orchestration-context";
+import {
+  EntityOperationFailedException,
+  createTaskFailureDetails,
+} from "../entities/entity-operation-failed-exception";
 
 export class OrchestrationExecutor {
   _generator?: TOrchestrator;
@@ -111,6 +115,12 @@ export class OrchestrationExecutor {
 
             if (!fn) {
               throw new OrchestratorNotRegisteredError(executionStartedEvent?.getName());
+            }
+
+            // Set the execution ID from the orchestration instance
+            const executionId = executionStartedEvent?.getOrchestrationinstance()?.getExecutionid()?.getValue();
+            if (executionId) {
+              ctx._executionId = executionId;
             }
 
             // Deserialize the input, if any
@@ -455,6 +465,155 @@ export class OrchestrationExecutor {
           ctx.setComplete(encodedOutput, pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED, true);
           break;
         }
+        // This history event confirms that the entity call was successfully scheduled.
+        // Remove the action from the pending action list so we don't schedule it again.
+        case pb.HistoryEvent.EventtypeCase.ENTITYOPERATIONCALLED:
+          {
+            const eventId = event.getEventid();
+            const action = ctx._pendingActions[eventId];
+            delete ctx._pendingActions[eventId];
+
+            const isSendEntityMessageAction = action?.hasSendentitymessage();
+
+            if (!action) {
+              throw getNonDeterminismError(eventId, "callEntity");
+            } else if (!isSendEntityMessageAction) {
+              throw getWrongActionTypeError(eventId, "callEntity", action);
+            } else if (!action.getSendentitymessage()?.hasEntityoperationcalled()) {
+              throw getWrongActionTypeError(eventId, "callEntity (EntityOperationCalled)", action);
+            }
+          }
+          break;
+        // This history event confirms that the entity signal was successfully scheduled.
+        // Remove the action from the pending action list so we don't schedule it again.
+        case pb.HistoryEvent.EventtypeCase.ENTITYOPERATIONSIGNALED:
+          {
+            const eventId = event.getEventid();
+            const action = ctx._pendingActions[eventId];
+            delete ctx._pendingActions[eventId];
+
+            const isSendEntityMessageAction = action?.hasSendentitymessage();
+
+            if (!action) {
+              throw getNonDeterminismError(eventId, "signalEntity");
+            } else if (!isSendEntityMessageAction) {
+              throw getWrongActionTypeError(eventId, "signalEntity", action);
+            } else if (!action.getSendentitymessage()?.hasEntityoperationsignaled()) {
+              throw getWrongActionTypeError(eventId, "signalEntity (EntityOperationSignaled)", action);
+            }
+          }
+          break;
+        case pb.HistoryEvent.EventtypeCase.ENTITYOPERATIONCOMPLETED:
+          {
+            const completedEvent = event.getEntityoperationcompleted();
+            const requestId = completedEvent?.getRequestid();
+
+            if (!requestId) {
+              console.warn(`${ctx._instanceId}: Ignoring EntityOperationCompletedEvent with no requestId`);
+              return;
+            }
+
+            // Find the pending entity call by requestId
+            const pendingCall = ctx._entityFeature.pendingEntityCalls.get(requestId);
+            if (!pendingCall) {
+              // This could happen during replay or if the call was already processed
+              if (!ctx._isReplaying) {
+                console.warn(
+                  `${ctx._instanceId}: Ignoring unexpected EntityOperationCompletedEvent with requestId = ${requestId}`,
+                );
+              }
+              return;
+            }
+
+            // Remove from pending calls
+            ctx._entityFeature.pendingEntityCalls.delete(requestId);
+
+            // If in a critical section, recover the lock for this entity
+            ctx._entityFeature.recoverLockAfterCall(pendingCall.entityId);
+
+            // Parse the result and complete the task
+            let result;
+            if (!isEmpty(completedEvent?.getOutput())) {
+              result = JSON.parse(completedEvent?.getOutput()?.getValue() || "null");
+            }
+
+            pendingCall.task.complete(result);
+            await ctx.resume();
+          }
+          break;
+        case pb.HistoryEvent.EventtypeCase.ENTITYOPERATIONFAILED:
+          {
+            const failedEvent = event.getEntityoperationfailed();
+            const requestId = failedEvent?.getRequestid();
+
+            if (!requestId) {
+              console.warn(`${ctx._instanceId}: Ignoring EntityOperationFailedEvent with no requestId`);
+              return;
+            }
+
+            // Find the pending entity call by requestId
+            const pendingCall = ctx._entityFeature.pendingEntityCalls.get(requestId);
+            if (!pendingCall) {
+              // This could happen during replay or if the call was already processed
+              if (!ctx._isReplaying) {
+                console.warn(
+                  `${ctx._instanceId}: Ignoring unexpected EntityOperationFailedEvent with requestId = ${requestId}`,
+                );
+              }
+              return;
+            }
+
+            // Remove from pending calls
+            ctx._entityFeature.pendingEntityCalls.delete(requestId);
+
+            // If in a critical section, recover the lock for this entity
+            ctx._entityFeature.recoverLockAfterCall(pendingCall.entityId);
+
+            // Convert failure details and throw EntityOperationFailedException
+            const failureDetails = createTaskFailureDetails(failedEvent?.getFailuredetails());
+            if (!failureDetails) {
+              pendingCall.task.fail(
+                `Entity operation '${pendingCall.operationName}' failed with unknown error`,
+              );
+            } else {
+              const exception = new EntityOperationFailedException(
+                pendingCall.entityId,
+                pendingCall.operationName,
+                failureDetails,
+              );
+              pendingCall.task.fail(exception.message, failedEvent?.getFailuredetails());
+            }
+
+            await ctx.resume();
+          }
+          break;
+        case pb.HistoryEvent.EventtypeCase.ENTITYLOCKGRANTED:
+          {
+            const lockGrantedEvent = event.getEntitylockgranted();
+            const criticalSectionId = lockGrantedEvent?.getCriticalsectionid();
+
+            if (!criticalSectionId) {
+              console.warn(`${ctx._instanceId}: Ignoring EntityLockGrantedEvent with no criticalSectionId`);
+              return;
+            }
+
+            // Find the pending lock request by criticalSectionId
+            const pendingRequest = ctx._entityFeature.pendingLockRequests.get(criticalSectionId);
+            if (!pendingRequest) {
+              // This could happen during replay or if the lock was already acquired
+              if (!ctx._isReplaying) {
+                console.warn(
+                  `${ctx._instanceId}: Ignoring unexpected EntityLockGrantedEvent with criticalSectionId = ${criticalSectionId}`,
+                );
+              }
+              return;
+            }
+
+            // Complete the lock acquisition
+            ctx._entityFeature.completeLockAcquisition(criticalSectionId);
+            await ctx.resume();
+          }
+          break;
         default:
           console.info(`Unknown history event type: ${eventTypeName} (value: ${eventType}), skipping...`);
         // throw new OrchestrationStateError(`Unknown history event type: ${eventTypeName} (value: ${eventType})`);

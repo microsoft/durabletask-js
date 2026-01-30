@@ -36,6 +36,8 @@ In some cases, the sample may require command-line parameters or user inputs. In
 - [Activity sequence](./activity-sequence.ts): Orchestration that schedules three activity calls in a sequence.
 - [Fan-out/fan-in](./fanout-fanin.ts): Orchestration that schedules a dynamic number of activity calls in parallel, waits for all of them to complete, and then performs an aggregation on the results.
 - [Azure Managed DTS](./azure-managed-dts.ts): Demonstrates integration with Azure Managed Durable Task Scheduler (DTS) using the portable SDK with Azure authentication.
+- [Entity Counter](./entity-counter.ts): A simple Counter entity demonstrating durable entities - defining entity state, operations, and accessing entities from a client.
+- [Entity Orchestration](./entity-orchestration.ts): Demonstrates calling and locking entities from orchestrations, including a bank transfer scenario with atomic cross-entity transactions.
 
 ## Running the Azure Managed DTS example
 
