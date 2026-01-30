@@ -140,11 +140,7 @@ export class RetryableTask<T> extends CompletableTask<T> {
 
     details = details ?? new pb.TaskFailureDetails();
 
-    // Create error message that includes task type and task ID
-    const taskTypeLabel = this._taskType === "activity" ? "Activity" : "Sub-orchestration";
-    const fullMessage = `${taskTypeLabel} task #${this._action.getId()} failed: ${message}`;
-
-    this._exception = new TaskFailedError(fullMessage, details);
+    this._exception = new TaskFailedError(message, details);
     this._isComplete = true;
 
     if (this._parent) {
