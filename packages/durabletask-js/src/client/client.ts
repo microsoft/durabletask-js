@@ -313,6 +313,60 @@ export class TaskHubGrpcClient {
   }
 
   /**
+   * Restarts an existing orchestration instance with its original input.
+   *
+   * This method allows you to restart a completed, failed, or terminated orchestration
+   * instance. The restarted orchestration will use the same input that was provided
+   * when the orchestration was originally started.
+   *
+   * @param instanceId - The unique ID of the orchestration instance to restart.
+   * @param restartWithNewInstanceId - If true, the restarted orchestration will be assigned
+   * a new instance ID. If false (default), the same instance ID will be reused.
+   * When reusing the same instance ID, the orchestration must be in a terminal state
+   * (Completed, Failed, or Terminated).
+   * @returns A Promise that resolves to the instance ID of the restarted orchestration.
+   * This will be the same as the input instanceId if restartWithNewInstanceId is false,
+   * or a new ID if restartWithNewInstanceId is true.
+   * @throws Error if the orchestration instance is not found.
+   * @throws Error if the orchestration cannot be restarted (e.g., it's still running
+   * and restartWithNewInstanceId is false).
+   */
+  async restartOrchestration(instanceId: string, restartWithNewInstanceId: boolean = false): Promise<string> {
+    if (!instanceId) {
+      throw new Error("instanceId cannot be null or empty");
+    }
+
+    const req = new pb.RestartInstanceRequest();
+    req.setInstanceid(instanceId);
+    req.setRestartwithnewinstanceid(restartWithNewInstanceId);
+
+    console.log(`Restarting '${instanceId}' with restartWithNewInstanceId=${restartWithNewInstanceId}`);
+
+    try {
+      const res = await callWithMetadata<pb.RestartInstanceRequest, pb.RestartInstanceResponse>(
+        this._stub.restartInstance.bind(this._stub),
+        req,
+        this._metadataGenerator,
+      );
+      return res.getInstanceid();
+    } catch (e) {
+      if (e instanceof Error && "code" in e) {
+        const grpcError = e as grpc.ServiceError;
+        if (grpcError.code === grpc.status.NOT_FOUND) {
+          throw new Error(`An orchestration with the instanceId '${instanceId}' was not found.`);
+        }
+        if (grpcError.code === grpc.status.FAILED_PRECONDITION) {
+          throw new Error(`An orchestration with the instanceId '${instanceId}' cannot be restarted.`);
+        }
+        if (grpcError.code === grpc.status.CANCELLED) {
+          throw new Error(`The restartOrchestration operation was canceled.`);
+        }
+      }
+      throw e;
+    }
+  }
+
+  /**
    * Purges orchestration instance metadata from the durable store.
    *
    * This method can be used to permanently delete orchestration metadata from the underlying storage provider,
