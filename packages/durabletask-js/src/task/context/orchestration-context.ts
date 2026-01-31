@@ -3,6 +3,7 @@
 
 import { TActivity } from "../../types/activity.type";
 import { TOrchestrator } from "../../types/orchestrator.type";
+import { TaskOptions, SubOrchestrationOptions } from "../options";
 import { Task } from "../task";
 
 export abstract class OrchestrationContext {
@@ -48,27 +49,31 @@ export abstract class OrchestrationContext {
   /**
    * Schedule an activity for execution.
    *
-   * @param {Orchestrator} orchestrator The sub-orchestrator function to call.
-   * @param {TInput} input The JSON-serializable input value for the sub-orchestrator function.
-   * @param {string} instanceId The ID to use for the sub-orchestration instance. If not provided, a new GUID will be used.
+   * @param {TActivity} activity The activity function to call.
+   * @param {TInput} input The JSON-serializable input value for the activity function.
+   * @param {TaskOptions} options Optional options to control the behavior of the activity execution, including retry policies.
    *
-   * @returns {Task<TOutput>} A Durable Task that completes when the sub-orchestrator function completes.
+   * @returns {Task<TOutput>} A Durable Task that completes when the activity function completes.
    */
-  abstract callActivity<TInput, TOutput>(activity: TActivity<TInput, TOutput> | string, input?: TInput): Task<TOutput>;
+  abstract callActivity<TInput, TOutput>(
+    activity: TActivity<TInput, TOutput> | string,
+    input?: TInput,
+    options?: TaskOptions,
+  ): Task<TOutput>;
 
   /**
    * Schedule sub-orchestrator function for execution.
    *
-   * @param orchestrator A reference to the orchestrator function call
+   * @param orchestrator A reference to the orchestrator function to call.
    * @param input The JSON-serializable input value for the orchestrator function.
-   * @param instanceId A unique ID to use for the sub-orchestration instance. If not provided, a new GUID will be used.
+   * @param options Optional options to control the behavior of the sub-orchestration, including retry policies and instance ID.
    *
    * @returns {Task<TOutput>} A Durable Task that completes when the sub-orchestrator function completes.
    */
   abstract callSubOrchestrator<TInput, TOutput>(
     orchestrator: TOrchestrator | string,
     input?: TInput,
-    instanceId?: string,
+    options?: SubOrchestrationOptions,
   ): Task<TOutput>;
 
   /**
