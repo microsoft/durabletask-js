@@ -3,6 +3,7 @@
   "compilerOptions": {
     "rootDir": "./src",
     "outDir": "./dist",
+    "baseUrl": ".",
     "paths": {
       "@microsoft/durabletask-js": ["../durabletask-js/dist/index"]
     }

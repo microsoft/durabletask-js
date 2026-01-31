@@ -151,24 +151,19 @@ export class TaskHubGrpcClient {
     req.setInstanceid(instanceId);
     req.setGetinputsandoutputs(fetchPayloads);
 
-    try {
-      const callPromise = callWithMetadata<pb.GetInstanceRequest, pb.GetInstanceResponse>(
-        this._stub.waitForInstanceStart.bind(this._stub),
-        req,
-        this._metadataGenerator,
-      );
+    const callPromise = callWithMetadata<pb.GetInstanceRequest, pb.GetInstanceResponse>(
+      this._stub.waitForInstanceStart.bind(this._stub),
+      req,
+      this._metadataGenerator,
+    );
 
-      // Execute the request and wait for the first response or timeout
-      const res = (await Promise.race([
-        callPromise,
-        new Promise((_, reject) => setTimeout(() => reject(new TimeoutError()), timeout * 1000)),
-      ])) as pb.GetInstanceResponse;
+    // Execute the request and wait for the first response or timeout
+    const res = (await Promise.race([
+      callPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new TimeoutError()), timeout * 1000)),
+    ])) as pb.GetInstanceResponse;
 
-      return newOrchestrationState(req.getInstanceid(), res);
-    } catch (e) {
-      console.log(e);
-      throw e;
-    }
+    return newOrchestrationState(req.getInstanceid(), res);
   }
 
   /**
@@ -197,43 +192,38 @@ export class TaskHubGrpcClient {
     req.setInstanceid(instanceId);
     req.setGetinputsandoutputs(fetchPayloads);
 
-    try {
-      console.info(`Waiting ${timeout} seconds for instance ${instanceId} to complete...`);
+    console.info(`Waiting ${timeout} seconds for instance ${instanceId} to complete...`);
 
-      const callPromise = callWithMetadata<pb.GetInstanceRequest, pb.GetInstanceResponse>(
-        this._stub.waitForInstanceCompletion.bind(this._stub),
-        req,
-        this._metadataGenerator,
-      );
+    const callPromise = callWithMetadata<pb.GetInstanceRequest, pb.GetInstanceResponse>(
+      this._stub.waitForInstanceCompletion.bind(this._stub),
+      req,
+      this._metadataGenerator,
+    );
 
-      // Execute the request and wait for the first response or timeout
-      const res = (await Promise.race([
-        callPromise,
-        new Promise((_, reject) => setTimeout(() => reject(new TimeoutError()), timeout * 1000)),
-      ])) as pb.GetInstanceResponse;
+    // Execute the request and wait for the first response or timeout
+    const res = (await Promise.race([
+      callPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new TimeoutError()), timeout * 1000)),
+    ])) as pb.GetInstanceResponse;
 
-      const state = newOrchestrationState(req.getInstanceid(), res);
+    const state = newOrchestrationState(req.getInstanceid(), res);
 
-      if (!state) {
-        return undefined;
-      }
-
-      let details;
-
-      if (state.runtimeStatus === OrchestrationStatus.FAILED && state.failureDetails) {
-        details = state.failureDetails;
-        console.info(`Instance ${instanceId} failed: [${details.errorType}] ${details.message}`);
-      } else if (state.runtimeStatus === OrchestrationStatus.TERMINATED) {
-        console.info(`Instance ${instanceId} was terminated`);
-      } else if (state.runtimeStatus === OrchestrationStatus.COMPLETED) {
-        console.info(`Instance ${instanceId} completed`);
-      }
-
-      return state;
-    } catch (e) {
-      console.log(e);
-      throw e;
+    if (!state) {
+      return undefined;
     }
+
+    let details;
+
+    if (state.runtimeStatus === OrchestrationStatus.FAILED && state.failureDetails) {
+      details = state.failureDetails;
+      console.info(`Instance ${instanceId} failed: [${details.errorType}] ${details.message}`);
+    } else if (state.runtimeStatus === OrchestrationStatus.TERMINATED) {
+      console.info(`Instance ${instanceId} was terminated`);
+    } else if (state.runtimeStatus === OrchestrationStatus.COMPLETED) {
+      console.info(`Instance ${instanceId} completed`);
+    }
+
+    return state;
   }
 
   /**
