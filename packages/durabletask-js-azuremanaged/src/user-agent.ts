@@ -18,7 +18,6 @@ let packageVersion: string = "unknown";
 function getPackageVersion(): string {
   if (packageVersion === "unknown") {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
       const pkg = require("../package.json");
       packageVersion = pkg.version ?? "unknown";
     } catch {

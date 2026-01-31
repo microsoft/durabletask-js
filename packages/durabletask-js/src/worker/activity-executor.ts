@@ -38,7 +38,7 @@ export class ActivityExecutor {
     // Return the output
     const encodedOutput = activityOutput ? JSON.stringify(activityOutput) : undefined;
     const chars = encodedOutput ? encodedOutput.length : 0;
-    console.log(`Activity ${name} completed with output ${encodedOutput} (${chars} chars)`);
+    console.log(`Activity ${name} completed (${chars} chars)`);
 
     return encodedOutput;
   }

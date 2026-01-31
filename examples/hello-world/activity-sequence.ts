@@ -1,11 +1,13 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { TaskHubGrpcClient } from "../src/client/client";
-import { ActivityContext } from "../src/task/context/activity-context";
-import { OrchestrationContext } from "../src/task/context/orchestration-context";
-import { TOrchestrator } from "../src/types/orchestrator.type";
-import { TaskHubGrpcWorker } from "../src/worker/task-hub-grpc-worker";
+import {
+  TaskHubGrpcClient,
+  TaskHubGrpcWorker,
+  ActivityContext,
+  OrchestrationContext,
+  TOrchestrator,
+} from "@microsoft/durabletask-js";
 
 // Wrap the entire code in an immediately-invoked async function
 (async () => {
