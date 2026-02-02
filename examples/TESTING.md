@@ -11,7 +11,7 @@ This guide explains how to test the entity examples (`entity-counter` and `entit
 ## Step 1: Start the DTS Emulator
 
 ```bash
-docker run -i -p 8080:8080 -d mcr.microsoft.com/dts/dts-emulator:latest
+docker run --name dts-emulator -i -p 8080:8080 -d --rm mcr.microsoft.com/dts/dts-emulator:latest
 ```
 
 Wait a few seconds for the emulator to be ready.

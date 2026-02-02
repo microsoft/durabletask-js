@@ -35,7 +35,7 @@ Examples require a Durable Task-compatible backend. Choose one:
 The DTS Emulator is ideal for local development and testing:
 
 ```bash
-docker run -i -p 8080:8080 -d mcr.microsoft.com/dts/dts-emulator:latest
+docker run --name dts-emulator -i -p 8080:8080 -d --rm mcr.microsoft.com/dts/dts-emulator:latest
 ```
 
 Most standalone examples can run against the emulator using:

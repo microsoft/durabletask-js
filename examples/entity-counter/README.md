@@ -21,7 +21,7 @@ You need a Durable Task-compatible backend. Choose one:
 ### Option 1: DTS Emulator (Recommended for testing)
 
 ```bash
-docker run -i -p 8080:8080 -d mcr.microsoft.com/dts/dts-emulator:latest
+docker run --name dts-emulator -i -p 8080:8080 -d --rm mcr.microsoft.com/dts/dts-emulator:latest
 ```
 
 ### Option 2: Local Sidecar
