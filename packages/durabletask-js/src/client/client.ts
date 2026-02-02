@@ -151,24 +151,19 @@ export class TaskHubGrpcClient {
     req.setInstanceid(instanceId);
     req.setGetinputsandoutputs(fetchPayloads);
 
-    try {
-      const callPromise = callWithMetadata<pb.GetInstanceRequest, pb.GetInstanceResponse>(
-        this._stub.waitForInstanceStart.bind(this._stub),
-        req,
-        this._metadataGenerator,
-      );
+    const callPromise = callWithMetadata<pb.GetInstanceRequest, pb.GetInstanceResponse>(
+      this._stub.waitForInstanceStart.bind(this._stub),
+      req,
+      this._metadataGenerator,
+    );
 
-      // Execute the request and wait for the first response or timeout
-      const res = (await Promise.race([
-        callPromise,
-        new Promise((_, reject) => setTimeout(() => reject(new TimeoutError()), timeout * 1000)),
-      ])) as pb.GetInstanceResponse;
+    // Execute the request and wait for the first response or timeout
+    const res = (await Promise.race([
+      callPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new TimeoutError()), timeout * 1000)),
+    ])) as pb.GetInstanceResponse;
 
-      return newOrchestrationState(req.getInstanceid(), res);
-    } catch (e) {
-      console.log(e);
-      throw e;
-    }
+    return newOrchestrationState(req.getInstanceid(), res);
   }
 
   /**
@@ -197,43 +192,38 @@ export class TaskHubGrpcClient {
     req.setInstanceid(instanceId);
     req.setGetinputsandoutputs(fetchPayloads);
 
-    try {
-      console.info(`Waiting ${timeout} seconds for instance ${instanceId} to complete...`);
+    console.info(`Waiting ${timeout} seconds for instance ${instanceId} to complete...`);
 
-      const callPromise = callWithMetadata<pb.GetInstanceRequest, pb.GetInstanceResponse>(
-        this._stub.waitForInstanceCompletion.bind(this._stub),
-        req,
-        this._metadataGenerator,
-      );
+    const callPromise = callWithMetadata<pb.GetInstanceRequest, pb.GetInstanceResponse>(
+      this._stub.waitForInstanceCompletion.bind(this._stub),
+      req,
+      this._metadataGenerator,
+    );
 
-      // Execute the request and wait for the first response or timeout
-      const res = (await Promise.race([
-        callPromise,
-        new Promise((_, reject) => setTimeout(() => reject(new TimeoutError()), timeout * 1000)),
-      ])) as pb.GetInstanceResponse;
+    // Execute the request and wait for the first response or timeout
+    const res = (await Promise.race([
+      callPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new TimeoutError()), timeout * 1000)),
+    ])) as pb.GetInstanceResponse;
 
-      const state = newOrchestrationState(req.getInstanceid(), res);
+    const state = newOrchestrationState(req.getInstanceid(), res);
 
-      if (!state) {
-        return undefined;
-      }
-
-      let details;
-
-      if (state.runtimeStatus === OrchestrationStatus.FAILED && state.failureDetails) {
-        details = state.failureDetails;
-        console.info(`Instance ${instanceId} failed: [${details.errorType}] ${details.message}`);
-      } else if (state.runtimeStatus === OrchestrationStatus.TERMINATED) {
-        console.info(`Instance ${instanceId} was terminated`);
-      } else if (state.runtimeStatus === OrchestrationStatus.COMPLETED) {
-        console.info(`Instance ${instanceId} completed`);
-      }
-
-      return state;
-    } catch (e) {
-      console.log(e);
-      throw e;
+    if (!state) {
+      return undefined;
     }
+
+    let details;
+
+    if (state.runtimeStatus === OrchestrationStatus.FAILED && state.failureDetails) {
+      details = state.failureDetails;
+      console.info(`Instance ${instanceId} failed: [${details.errorType}] ${details.message}`);
+    } else if (state.runtimeStatus === OrchestrationStatus.TERMINATED) {
+      console.info(`Instance ${instanceId} was terminated`);
+    } else if (state.runtimeStatus === OrchestrationStatus.COMPLETED) {
+      console.info(`Instance ${instanceId} completed`);
+    }
+
+    return state;
   }
 
   /**
@@ -367,6 +357,60 @@ export class TaskHubGrpcClient {
         }
         if (grpcError.code === grpc.status.CANCELLED) {
           throw new Error(`The rewind operation for '${instanceId}' was cancelled.`);
+        }
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Restarts an existing orchestration instance with its original input.
+   *
+   * This method allows you to restart a completed, failed, or terminated orchestration
+   * instance. The restarted orchestration will use the same input that was provided
+   * when the orchestration was originally started.
+   *
+   * @param instanceId - The unique ID of the orchestration instance to restart.
+   * @param restartWithNewInstanceId - If true, the restarted orchestration will be assigned
+   * a new instance ID. If false (default), the same instance ID will be reused.
+   * When reusing the same instance ID, the orchestration must be in a terminal state
+   * (Completed, Failed, or Terminated).
+   * @returns A Promise that resolves to the instance ID of the restarted orchestration.
+   * This will be the same as the input instanceId if restartWithNewInstanceId is false,
+   * or a new ID if restartWithNewInstanceId is true.
+   * @throws Error if the orchestration instance is not found.
+   * @throws Error if the orchestration cannot be restarted (e.g., it's still running
+   * and restartWithNewInstanceId is false).
+   */
+  async restartOrchestration(instanceId: string, restartWithNewInstanceId: boolean = false): Promise<string> {
+    if (!instanceId) {
+      throw new Error("instanceId cannot be null or empty");
+    }
+
+    const req = new pb.RestartInstanceRequest();
+    req.setInstanceid(instanceId);
+    req.setRestartwithnewinstanceid(restartWithNewInstanceId);
+
+    console.log(`Restarting '${instanceId}' with restartWithNewInstanceId=${restartWithNewInstanceId}`);
+
+    try {
+      const res = await callWithMetadata<pb.RestartInstanceRequest, pb.RestartInstanceResponse>(
+        this._stub.restartInstance.bind(this._stub),
+        req,
+        this._metadataGenerator,
+      );
+      return res.getInstanceid();
+    } catch (e) {
+      if (e instanceof Error && "code" in e) {
+        const grpcError = e as grpc.ServiceError;
+        if (grpcError.code === grpc.status.NOT_FOUND) {
+          throw new Error(`An orchestration with the instanceId '${instanceId}' was not found.`);
+        }
+        if (grpcError.code === grpc.status.FAILED_PRECONDITION) {
+          throw new Error(`An orchestration with the instanceId '${instanceId}' cannot be restarted.`);
+        }
+        if (grpcError.code === grpc.status.CANCELLED) {
+          throw new Error(`The restartOrchestration operation was canceled.`);
         }
       }
       throw e;

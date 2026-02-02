@@ -279,9 +279,7 @@ export class DurableTaskAzureManagedWorkerOptions extends DurableTaskAzureManage
    * This matches the .NET format: {MachineName},{ProcessId},{Guid}
    */
   private static generateDefaultWorkerId(): string {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const os = require("os");
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const crypto = require("crypto");
     const hostname = os.hostname();
     const pid = process.pid;
