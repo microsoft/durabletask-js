@@ -316,6 +316,64 @@ export class TaskHubGrpcClient {
   }
 
   /**
+   * Rewinds a failed orchestration instance to a previous state to allow it to retry from the point of failure.
+   *
+   * This method is used to "rewind" a failed orchestration back to its last known good state, allowing it
+   * to be replayed from that point. This is particularly useful for recovering from transient failures
+   * or for debugging purposes.
+   *
+   * Only orchestration instances in the `Failed` state can be rewound.
+   *
+   * @param instanceId - The unique identifier of the orchestration instance to rewind.
+   * @param reason - A reason string describing why the orchestration is being rewound.
+   * @throws {Error} If the orchestration instance is not found.
+   * @throws {Error} If the orchestration instance is in a state that does not allow rewinding.
+   * @throws {Error} If the rewind operation is not supported by the backend.
+   */
+  async rewindInstance(instanceId: string, reason: string): Promise<void> {
+    if (!instanceId) {
+      throw new Error("instanceId is required");
+    }
+
+    const req = new pb.RewindInstanceRequest();
+    req.setInstanceid(instanceId);
+
+    if (reason) {
+      const reasonValue = new StringValue();
+      reasonValue.setValue(reason);
+      req.setReason(reasonValue);
+    }
+
+    console.log(`Rewinding '${instanceId}' with reason: ${reason}`);
+
+    try {
+      await callWithMetadata<pb.RewindInstanceRequest, pb.RewindInstanceResponse>(
+        this._stub.rewindInstance.bind(this._stub),
+        req,
+        this._metadataGenerator,
+      );
+    } catch (e) {
+      // Handle gRPC errors and convert them to appropriate errors
+      if (e && typeof e === "object" && "code" in e) {
+        const grpcError = e as { code: number; details?: string };
+        if (grpcError.code === grpc.status.NOT_FOUND) {
+          throw new Error(`An orchestration with the instanceId '${instanceId}' was not found.`);
+        }
+        if (grpcError.code === grpc.status.FAILED_PRECONDITION) {
+          throw new Error(grpcError.details || `Cannot rewind orchestration '${instanceId}': it is in a state that does not allow rewinding.`);
+        }
+        if (grpcError.code === grpc.status.UNIMPLEMENTED) {
+          throw new Error(grpcError.details || `The rewind operation is not supported by the backend.`);
+        }
+        if (grpcError.code === grpc.status.CANCELLED) {
+          throw new Error(`The rewind operation for '${instanceId}' was cancelled.`);
+        }
+      }
+      throw e;
+    }
+  }
+
+  /**
    * Purges orchestration instance metadata from the durable store.
    *
    * This method can be used to permanently delete orchestration metadata from the underlying storage provider,
