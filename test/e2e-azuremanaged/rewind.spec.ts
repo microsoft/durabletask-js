@@ -33,6 +33,15 @@ const connectionString = process.env.AZURE_DTS_CONNECTION_STRING;
 const endpoint = process.env.ENDPOINT || "localhost:8080";
 const taskHub = process.env.TASKHUB || "default";
 
+/**
+ * Generates a unique instance ID with the given prefix.
+ * @param prefix - The prefix for the instance ID
+ * @returns A unique instance ID in the format: {prefix}-{timestamp}-{random}
+ */
+function generateUniqueInstanceId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+}
+
 function createClient(): TaskHubGrpcClient {
   const builder = new DurableTaskAzureManagedClientBuilder();
   if (connectionString) {
@@ -74,27 +83,28 @@ describe("Rewind Instance E2E Tests", () => {
   });
 
   describe("rewindInstance - positive cases", () => {
-    // Track execution attempt count for retry logic
-    let attemptCount = 0;
+    // Track execution attempt count per instance ID for isolation across orchestrations
+    const attemptCountByInstance = new Map<string, number>();
 
     // An orchestrator that fails on first attempt, succeeds on subsequent attempts
-    const failOnceOrchestrator: TOrchestrator = async (_ctx: OrchestrationContext, _input: number) => {
-      // Use input as a key to track attempts per instance
-      // After rewind, the orchestrator replays from the beginning
-      attemptCount++;
-      if (attemptCount === 1) {
+    const failOnceOrchestrator: TOrchestrator = async (ctx: OrchestrationContext, _input: number) => {
+      const instanceId = ctx.instanceId;
+      const currentAttempt = (attemptCountByInstance.get(instanceId) ?? 0) + 1;
+      attemptCountByInstance.set(instanceId, currentAttempt);
+
+      if (currentAttempt === 1) {
         throw new Error("First attempt failed!");
       }
-      return `Success on attempt ${attemptCount}`;
+      return `Success on attempt ${currentAttempt}`;
     };
 
     beforeEach(() => {
-      attemptCount = 0;
+      attemptCountByInstance.clear();
     });
 
     // Skip these tests if the backend doesn't support rewind (emulator returns UNIMPLEMENTED)
     it.skip("should rewind a failed orchestration instance (requires backend support)", async () => {
-      const instanceId = `rewind-test-${Date.now()}`;
+      const instanceId = generateUniqueInstanceId("rewind-test");
 
       taskHubWorker.addOrchestrator(failOnceOrchestrator);
       await startWorker();
@@ -120,7 +130,7 @@ describe("Rewind Instance E2E Tests", () => {
     });
 
     it.skip("should rewind a failed orchestration with a descriptive reason (requires backend support)", async () => {
-      const instanceId = `rewind-reason-${Date.now()}`;
+      const instanceId = generateUniqueInstanceId("rewind-reason");
       const rewindReason = "Rewinding due to transient network failure";
 
       taskHubWorker.addOrchestrator(failOnceOrchestrator);
@@ -153,7 +163,7 @@ describe("Rewind Instance E2E Tests", () => {
     };
 
     it("should throw an error when rewinding a non-existent instance (or if rewind is not supported)", async () => {
-      const nonExistentId = `non-existent-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+      const nonExistentId = generateUniqueInstanceId("non-existent");
 
       // No need to start worker for this test
       // Will throw either "not found" or "not supported" depending on backend
@@ -161,7 +171,7 @@ describe("Rewind Instance E2E Tests", () => {
     });
 
     it("should throw an error when rewinding a completed orchestration (or if rewind is not supported)", async () => {
-      const instanceId = `rewind-completed-${Date.now()}`;
+      const instanceId = generateUniqueInstanceId("rewind-completed");
 
       taskHubWorker.addOrchestrator(simpleOrchestrator);
       await startWorker();
@@ -176,7 +186,7 @@ describe("Rewind Instance E2E Tests", () => {
     });
 
     it.skip("should throw an error when rewinding a running orchestration (requires backend support)", async () => {
-      const instanceId = `rewind-running-${Date.now()}`;
+      const instanceId = generateUniqueInstanceId("rewind-running");
 
       taskHubWorker.addOrchestrator(waitingOrchestrator);
       await startWorker();
@@ -201,7 +211,7 @@ describe("Rewind Instance E2E Tests", () => {
     });
 
     it.skip("should throw an error when rewinding a terminated orchestration (requires backend support)", async () => {
-      const instanceId = `rewind-terminated-${Date.now()}`;
+      const instanceId = generateUniqueInstanceId("rewind-terminated");
 
       taskHubWorker.addOrchestrator(waitingOrchestrator);
       await startWorker();
