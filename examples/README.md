@@ -103,7 +103,7 @@ All entity examples are designed to work with the DTS emulator:
 
 1. Start the DTS emulator:
    ```bash
-   docker run -i -p 8080:8080 -d mcr.microsoft.com/dts/dts-emulator:latest
+   docker run --name dts-emulator -i -p 8080:8080 -d --rm mcr.microsoft.com/dts/dts-emulator:latest
    ```
 
 2. Run the example:
