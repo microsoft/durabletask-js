@@ -1,0 +1,17 @@
+{
+  "name": "entity-counter-example",
+  "version": "1.0.0",
+  "description": "Example demonstrating Durable Entities with a simple counter",
+  "private": true,
+  "scripts": {
+    "start": "ts-node --swc index.ts",
+    "start:emulator": "ENDPOINT=localhost:8080 TASKHUB=default ts-node --swc index.ts"
+  },
+  "dependencies": {
+    "@microsoft/durabletask-js": "workspace:*",
+    "@microsoft/durabletask-js-azuremanaged": "workspace:*"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
