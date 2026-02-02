@@ -254,12 +254,15 @@ export class TaskHubGrpcWorker {
 
     try {
       const executor = new OrchestrationExecutor(this._registry);
-      const actions = await executor.execute(req.getInstanceid(), req.getPasteventsList(), req.getNeweventsList());
+      const result = await executor.execute(req.getInstanceid(), req.getPasteventsList(), req.getNeweventsList());
 
       res = new pb.OrchestratorResponse();
       res.setInstanceid(req.getInstanceid());
       res.setCompletiontoken(completionToken);
-      res.setActionsList(actions);
+      res.setActionsList(result.actions);
+      if (result.customStatus !== undefined) {
+        res.setCustomstatus(pbh.getStringValue(result.customStatus));
+      }
     } catch (e: any) {
       console.error(e);
       console.log(`An error occurred while trying to execute instance '${req.getInstanceid()}': ${e.message}`);

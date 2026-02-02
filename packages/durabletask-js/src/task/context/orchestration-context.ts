@@ -86,4 +86,41 @@ export abstract class OrchestrationContext {
    * @param saveEvents {boolean} A flag indicating whether to add any unprocessed external events in the new orchestration history.
    */
   abstract continueAsNew(newInput: any, saveEvents: boolean): void;
+
+  /**
+   * Sets a custom status value for the current orchestration instance.
+   *
+   * The custom status value is serialized and stored in orchestration state and will
+   * be made available to the orchestration status query APIs. The serialized value
+   * must not exceed 16 KB of UTF-16 encoded text.
+   *
+   * @param {any} customStatus A JSON-serializable value to assign as the custom status, or `null`/`undefined` to clear it.
+   */
+  abstract setCustomStatus(customStatus: any): void;
+
+  /**
+   * Sends an event to another orchestration instance.
+   *
+   * The target orchestration can handle the sent event using the `waitForExternalEvent()` method.
+   * If the target orchestration doesn't exist or has completed, the event will be silently dropped.
+   *
+   * @param {string} instanceId The ID of the orchestration instance to send the event to.
+   * @param {string} eventName The name of the event. Event names are case-insensitive.
+   * @param {any} eventData The JSON-serializable payload of the event.
+   */
+  abstract sendEvent(instanceId: string, eventName: string, eventData?: any): void;
+
+  /**
+   * Creates a new UUID that is safe for replay within an orchestration.
+   *
+   * This method generates a deterministic UUID v5 using the algorithm from RFC 4122 §4.3.
+   * The name input used to generate this value is a combination of the orchestration instance ID,
+   * the current UTC datetime, and an internally managed sequence counter.
+   *
+   * Use this method instead of random UUID generators (like `crypto.randomUUID()`) to ensure
+   * deterministic execution during orchestration replay.
+   *
+   * @returns {string} A new deterministic UUID string.
+   */
+  abstract newGuid(): string;
 }
