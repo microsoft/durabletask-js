@@ -11,13 +11,28 @@
  *
  * Scenario: A bank transfer between two accounts (entities).
  * We use entity locking to ensure the transfer is atomic.
+ *
+ * This example can run against:
+ * 1. DTS Emulator (default with npm run start:emulator)
+ *    docker run --name dts-emulator -i -p 8080:8080 -d --rm mcr.microsoft.com/dts/dts-emulator:latest
+ * 2. Local sidecar (npm run start with localhost:4001)
  */
 
-import { TaskHubGrpcClient } from "../../packages/durabletask-js/src/client/client";
-import { TaskHubGrpcWorker } from "../../packages/durabletask-js/src/worker/task-hub-grpc-worker";
-import { OrchestrationContext } from "../../packages/durabletask-js/src/task/context/orchestration-context";
-import { TOrchestrator } from "../../packages/durabletask-js/src/types/orchestrator.type";
-import { TaskEntity, EntityInstanceId, LockHandle } from "../../packages/durabletask-js/src/entities";
+import {
+  TaskEntity,
+  EntityInstanceId,
+  LockHandle,
+  OrchestrationContext,
+  TOrchestrator,
+} from "@microsoft/durabletask-js";
+import {
+  DurableTaskAzureManagedClientBuilder,
+  DurableTaskAzureManagedWorkerBuilder,
+} from "@microsoft/durabletask-js-azuremanaged";
+
+// Read environment variables for DTS emulator or local sidecar
+const endpoint = process.env.ENDPOINT || "localhost:4001";
+const taskHub = process.env.TASKHUB || "default";
 
 // ============================================================================
 // Step 1: Define the BankAccount entity
@@ -125,7 +140,9 @@ const transferOrchestration: TOrchestrator = async function* (
     const criticalSectionInfo = ctx.entities.isInCriticalSection();
     if (!ctx.isReplaying) {
       console.log(`In critical section: ${criticalSectionInfo.inSection}`);
-      console.log(`Locked entities: ${criticalSectionInfo.lockedEntities?.map(e => e.toString()).join(", ")}`);
+      console.log(
+        `Locked entities: ${criticalSectionInfo.lockedEntities?.map((e) => e.toString()).join(", ")}`,
+      );
     }
 
     // ======================================================================
@@ -157,7 +174,11 @@ const transferOrchestration: TOrchestrator = async function* (
     // Perform the transfer (within critical section - atomic!)
     // ======================================================================
 
-    const newFromBalance: number = yield* ctx.entities.callEntity(fromEntity, "withdraw", input.amount);
+    const newFromBalance: number = yield* ctx.entities.callEntity(
+      fromEntity,
+      "withdraw",
+      input.amount,
+    );
     const newToBalance: number = yield* ctx.entities.callEntity(toEntity, "deposit", input.amount);
 
     return {
@@ -166,7 +187,6 @@ const transferOrchestration: TOrchestrator = async function* (
       toBalance: newToBalance,
       message: `Transferred ${input.amount} from ${input.fromAccount} to ${input.toAccount}`,
     } as TransferResult;
-
   } finally {
     // ======================================================================
     // Release the locks (always, even on error)
@@ -210,9 +230,20 @@ const notifyOrchestration: TOrchestrator = async function* (
 // ============================================================================
 
 (async () => {
-  const grpcServerAddress = "localhost:4001";
-  const client = new TaskHubGrpcClient(grpcServerAddress);
-  const worker = new TaskHubGrpcWorker(grpcServerAddress);
+  console.log(`Connecting to endpoint: ${endpoint}, taskHub: ${taskHub}`);
+
+  // Build client and worker for the DTS emulator or local sidecar
+  const client = new DurableTaskAzureManagedClientBuilder()
+    .endpoint(endpoint)
+    .taskHubName(taskHub)
+    .useGrpc()
+    .build();
+
+  const worker = new DurableTaskAzureManagedWorkerBuilder()
+    .endpoint(endpoint)
+    .taskHubName(taskHub)
+    .useGrpc()
+    .build();
 
   // Register entity and orchestrations
   worker.addEntity("BankAccount", () => new BankAccountEntity());
@@ -274,7 +305,6 @@ const notifyOrchestration: TOrchestrator = async function* (
     console.log("\n--- Cleaning up ---");
     await worker.stop();
     console.log("Worker stopped");
-
   } catch (error) {
     console.error("Error:", error);
     await worker.stop();

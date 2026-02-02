@@ -12,11 +12,22 @@
  * - Entity operations (add, get, reset)
  * - Signaling entities from a client (fire-and-forget)
  * - Getting entity state from a client
+ *
+ * This example can run against:
+ * 1. DTS Emulator (default with npm run start:emulator)
+ *    docker run --name dts-emulator -i -p 8080:8080 -d --rm mcr.microsoft.com/dts/dts-emulator:latest
+ * 2. Local sidecar (npm run start with localhost:4001)
  */
 
-import { TaskHubGrpcClient } from "../../packages/durabletask-js/src/client/client";
-import { TaskHubGrpcWorker } from "../../packages/durabletask-js/src/worker/task-hub-grpc-worker";
-import { TaskEntity, EntityInstanceId } from "../../packages/durabletask-js/src/entities";
+import { TaskEntity, EntityInstanceId } from "@microsoft/durabletask-js";
+import {
+  DurableTaskAzureManagedClientBuilder,
+  DurableTaskAzureManagedWorkerBuilder,
+} from "@microsoft/durabletask-js-azuremanaged";
+
+// Read environment variables for DTS emulator or local sidecar
+const endpoint = process.env.ENDPOINT || "localhost:4001";
+const taskHub = process.env.TASKHUB || "default";
 
 // ============================================================================
 // Step 1: Define the entity state type
@@ -79,9 +90,20 @@ class CounterEntity extends TaskEntity<CounterState> {
 // ============================================================================
 
 (async () => {
-  const grpcServerAddress = "localhost:4001";
-  const client = new TaskHubGrpcClient(grpcServerAddress);
-  const worker = new TaskHubGrpcWorker(grpcServerAddress);
+  console.log(`Connecting to endpoint: ${endpoint}, taskHub: ${taskHub}`);
+
+  // Build client and worker for the DTS emulator or local sidecar
+  const client = new DurableTaskAzureManagedClientBuilder()
+    .endpoint(endpoint)
+    .taskHubName(taskHub)
+    .useGrpc()
+    .build();
+
+  const worker = new DurableTaskAzureManagedWorkerBuilder()
+    .endpoint(endpoint)
+    .taskHubName(taskHub)
+    .useGrpc()
+    .build();
 
   // Register the entity with the worker
   worker.addNamedEntity("Counter", () => new CounterEntity());
@@ -149,7 +171,6 @@ class CounterEntity extends TaskEntity<CounterState> {
     console.log("\n--- Cleaning up ---");
     await worker.stop();
     console.log("Worker stopped");
-
   } catch (error) {
     console.error("Error:", error);
     await worker.stop();
