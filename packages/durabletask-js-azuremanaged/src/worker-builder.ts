@@ -4,13 +4,7 @@
 import { TokenCredential } from "@azure/identity";
 import * as grpc from "@grpc/grpc-js";
 import { DurableTaskAzureManagedWorkerOptions } from "./options";
-import { TaskHubGrpcWorker } from "@microsoft/durabletask-js";
-
-// Types for orchestrator and activity functions
-type TOrchestrator = (...args: any[]) => any;
-type TActivity<TInput, TOutput> = (ctx: any, input: TInput) => TOutput | Promise<TOutput>;
-type TInput = any;
-type TOutput = any;
+import { TaskHubGrpcWorker, TOrchestrator, TActivity, TInput, TOutput } from "@microsoft/durabletask-js";
 
 /**
  * Builder for creating DurableTaskWorker instances that connect to Azure-managed Durable Task service.

@@ -71,6 +71,7 @@ export class Registry {
     return this._activities[name];
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
   _getFunctionName(fn: Function): string {
     if (fn.name) {
       return fn.name;
