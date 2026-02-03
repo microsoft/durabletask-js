@@ -162,7 +162,7 @@ export class TaskHubGrpcWorker {
     this.internalRunWorker(client).catch((err) => {
       // Only log if the worker wasn't stopped intentionally
       if (!this._stopWorker) {
-        this._logger.error(`Worker error: ${err}`);
+        this._logger.error("Worker error:", err);
       }
     });
 
@@ -228,7 +228,7 @@ export class TaskHubGrpcWorker {
         // do not await
         this.internalRunWorker(newClient, true).catch((err) => {
           if (!this._stopWorker) {
-            this._logger.error(`Worker error: ${err}`);
+            this._logger.error("Worker error:", err);
           }
         });
       });
@@ -261,7 +261,7 @@ export class TaskHubGrpcWorker {
       this._stub = newClient.stub;
       this.internalRunWorker(newClient, true).catch((retryErr) => {
         if (!this._stopWorker) {
-          this._logger.error(`Worker error: ${retryErr}`);
+          this._logger.error("Worker error:", retryErr);
         }
       });
       return;
@@ -373,8 +373,10 @@ export class TaskHubGrpcWorker {
         res.setCustomstatus(pbh.getStringValue(result.customStatus));
       }
     } catch (e: any) {
-      this._logger.error(e);
-      this._logger.info(`An error occurred while trying to execute instance '${req.getInstanceid()}': ${e.message}`);
+      this._logger.error(
+        `An error occurred while trying to execute instance '${req.getInstanceid()}':`,
+        e,
+      );
 
       const failureDetails = pbh.newFailureDetails(e);
 
@@ -448,8 +450,7 @@ export class TaskHubGrpcWorker {
       res.setCompletiontoken(completionToken);
       res.setResult(s);
     } catch (e: any) {
-      this._logger.error(e);
-      this._logger.info(`An error occurred while trying to execute activity '${req.getName()}': ${e.message}`);
+      this._logger.error(`An error occurred while trying to execute activity '${req.getName()}':`, e);
 
       const failureDetails = pbh.newFailureDetails(e);
 
