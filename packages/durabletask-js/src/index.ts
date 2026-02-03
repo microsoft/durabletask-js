@@ -47,6 +47,13 @@ export {
   OrchestrationInstance,
   ParentInstanceInfo,
   TraceContext,
+  EntityOperationSignaledEvent,
+  EntityOperationCalledEvent,
+  EntityOperationCompletedEvent,
+  EntityOperationFailedEvent,
+  EntityLockRequestedEvent,
+  EntityLockGrantedEvent,
+  EntityUnlockSentEvent,
 } from "./orchestration/history-event";
 
 // Proto types (for advanced usage)
