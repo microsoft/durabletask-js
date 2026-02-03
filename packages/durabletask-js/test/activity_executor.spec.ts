@@ -3,9 +3,13 @@
 
 import { ActivityContext } from "../src/task/context/activity-context";
 import { TActivity } from "../src/types/activity.type";
+import { NoOpLogger } from "../src/types/logger.type";
 import { ActivityExecutor } from "../src/worker/activity-executor";
 import { ActivityNotRegisteredError } from "../src/worker/exception/activity-not-registered-error";
 import { Registry } from "../src/worker/registry";
+
+// Use NoOpLogger to suppress log output during tests
+const testLogger = new NoOpLogger();
 
 // const TEST_LOGGER = shared.get_logger();
 const TEST_INSTANCE_ID = "abc123";
@@ -42,11 +46,9 @@ describe("Activity Executor", () => {
     try {
       await executor.execute(TEST_INSTANCE_ID, "Bogus", TEST_TASK_ID, undefined);
     } catch (ex: any) {
-      console.log(ex);
       caughtException = ex;
     }
 
-    console.log(caughtException);
     expect(caughtException?.constructor?.name).toEqual(ActivityNotRegisteredError.name);
     expect(caughtException).not.toBeNull();
     expect(caughtException?.message).toMatch(/Bogus/);
@@ -57,6 +59,6 @@ describe("Activity Executor", () => {
 function getActivityExecutor(fn: TActivity<any, any>): [ActivityExecutor, string] {
   const registry = new Registry();
   const name = registry.addActivity(fn);
-  const executor = new ActivityExecutor(registry);
+  const executor = new ActivityExecutor(registry, testLogger);
   return [executor, name];
 }
