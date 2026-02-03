@@ -508,76 +508,76 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
 
   // // ==================== newGuid Tests ====================
 
-  // it("should generate deterministic GUIDs with newGuid", async () => {
-  //   const orchestrator: TOrchestrator = async (ctx: OrchestrationContext) => {
-  //     const guid1 = ctx.newGuid();
-  //     const guid2 = ctx.newGuid();
-  //     const guid3 = ctx.newGuid();
-  //     return { guid1, guid2, guid3 };
-  //   };
+  it("should generate deterministic GUIDs with newGuid", async () => {
+    const orchestrator: TOrchestrator = async (ctx: OrchestrationContext) => {
+      const guid1 = ctx.newGuid();
+      const guid2 = ctx.newGuid();
+      const guid3 = ctx.newGuid();
+      return { guid1, guid2, guid3 };
+    };
 
-  //   taskHubWorker.addOrchestrator(orchestrator);
-  //   await taskHubWorker.start();
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
 
-  //   const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
-  //   const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
-  //   expect(state).toBeDefined();
-  //   expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
 
-  //   const output = JSON.parse(state?.serializedOutput ?? "{}");
+    const output = JSON.parse(state?.serializedOutput ?? "{}");
 
-  //   // Verify GUIDs are in valid format (8-4-4-4-12 hex chars)
-  //   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  //   expect(output.guid1).toMatch(uuidRegex);
-  //   expect(output.guid2).toMatch(uuidRegex);
-  //   expect(output.guid3).toMatch(uuidRegex);
+    // Verify GUIDs are in valid format (8-4-4-4-12 hex chars)
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    expect(output.guid1).toMatch(uuidRegex);
+    expect(output.guid2).toMatch(uuidRegex);
+    expect(output.guid3).toMatch(uuidRegex);
 
-  //   // Verify all GUIDs are unique
-  //   expect(output.guid1).not.toEqual(output.guid2);
-  //   expect(output.guid2).not.toEqual(output.guid3);
-  //   expect(output.guid1).not.toEqual(output.guid3);
-  // }, 31000);
+    // Verify all GUIDs are unique
+    expect(output.guid1).not.toEqual(output.guid2);
+    expect(output.guid2).not.toEqual(output.guid3);
+    expect(output.guid1).not.toEqual(output.guid3);
+  }, 31000);
 
-  // it("should generate consistent GUIDs across replays", async () => {
-  //   // This test verifies that newGuid produces the same values across replays
-  //   // by running an orchestration that generates GUIDs, waits, and then returns them
-  //   const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
-  //     // Generate GUIDs before and after a timer
-  //     const guid1 = ctx.newGuid();
-  //     const guid2 = ctx.newGuid();
+  it("should generate consistent GUIDs across replays", async () => {
+    // This test verifies that newGuid produces the same values across replays
+    // by running an orchestration that generates GUIDs, waits, and then returns them
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      // Generate GUIDs before and after a timer
+      const guid1 = ctx.newGuid();
+      const guid2 = ctx.newGuid();
 
-  //     yield ctx.createTimer(1);
+      yield ctx.createTimer(1);
 
-  //     // Generate more GUIDs after replay
-  //     const guid3 = ctx.newGuid();
-  //     const guid4 = ctx.newGuid();
+      // Generate more GUIDs after replay
+      const guid3 = ctx.newGuid();
+      const guid4 = ctx.newGuid();
 
-  //     // Return all GUIDs - if deterministic, guid3/guid4 should be different from guid1/guid2
-  //     // but consistent across replays (which we verify by the orchestration completing successfully)
-  //     return { guid1, guid2, guid3, guid4 };
-  //   };
+      // Return all GUIDs - if deterministic, guid3/guid4 should be different from guid1/guid2
+      // but consistent across replays (which we verify by the orchestration completing successfully)
+      return { guid1, guid2, guid3, guid4 };
+    };
 
-  //   taskHubWorker.addOrchestrator(orchestrator);
-  //   await taskHubWorker.start();
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
 
-  //   const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
-  //   const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
-  //   expect(state).toBeDefined();
-  //   expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
 
-  //   const output = JSON.parse(state?.serializedOutput ?? "{}");
+    const output = JSON.parse(state?.serializedOutput ?? "{}");
 
-  //   // Verify all 4 GUIDs are unique
-  //   const guids = [output.guid1, output.guid2, output.guid3, output.guid4];
-  //   const uniqueGuids = new Set(guids);
-  //   expect(uniqueGuids.size).toBe(4);
+    // Verify all 4 GUIDs are unique
+    const guids = [output.guid1, output.guid2, output.guid3, output.guid4];
+    const uniqueGuids = new Set(guids);
+    expect(uniqueGuids.size).toBe(4);
 
-  //   // Verify all GUIDs are valid UUID v5 format
-  //   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  //   guids.forEach((guid) => expect(guid).toMatch(uuidRegex));
-  // }, 31000);
+    // Verify all GUIDs are valid UUID v5 format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    guids.forEach((guid) => expect(guid).toMatch(uuidRegex));
+  }, 31000);
 
   // // ==================== setCustomStatus Tests ====================
 
