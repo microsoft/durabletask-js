@@ -822,12 +822,12 @@ describe("Orchestration Executor", () => {
         newOrchestratorStartedEvent(),
         newExecutionStartedEvent(name, TEST_INSTANCE_ID, JSON.stringify(21)),
       ];
-      let actions = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+      let result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
 
       // Assert - Step 1: Should schedule activity
-      expect(actions.length).toBe(1);
-      expect(actions[0].hasScheduletask()).toBe(true);
-      expect(actions[0].getScheduletask()?.getName()).toBe("flakyActivity");
+      expect(result.actions.length).toBe(1);
+      expect(result.actions[0].hasScheduletask()).toBe(true);
+      expect(result.actions[0].getScheduletask()?.getName()).toBe("flakyActivity");
 
       // Act - Step 2: Activity scheduled, then fails
       const oldEvents = [
@@ -838,11 +838,11 @@ describe("Orchestration Executor", () => {
       newEvents = [
         newTaskFailedEvent(1, new Error("Transient failure on attempt 1")),
       ];
-      actions = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+      result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
 
       // Assert - Step 2: Should schedule a retry timer
-      expect(actions.length).toBe(1);
-      expect(actions[0].hasCreatetimer()).toBe(true);
+      expect(result.actions.length).toBe(1);
+      expect(result.actions[0].hasCreatetimer()).toBe(true);
     });
 
     it("should complete successfully after retry timer fires and activity succeeds", async () => {
@@ -869,44 +869,44 @@ describe("Orchestration Executor", () => {
         newOrchestratorStartedEvent(startTime),
         newExecutionStartedEvent(name, TEST_INSTANCE_ID, JSON.stringify(21)),
       ];
-      let actions = await executor.execute(TEST_INSTANCE_ID, [], allEvents);
-      expect(actions.length).toBe(1);
-      expect(actions[0].hasScheduletask()).toBe(true);
+      let result = await executor.execute(TEST_INSTANCE_ID, [], allEvents);
+      expect(result.actions.length).toBe(1);
+      expect(result.actions[0].hasScheduletask()).toBe(true);
 
       // Step 2: Activity scheduled, then fails
       allEvents.push(newTaskScheduledEvent(1, "flakyActivity"));
       executor = new OrchestrationExecutor(registry);
-      actions = await executor.execute(TEST_INSTANCE_ID, allEvents, [
+      result = await executor.execute(TEST_INSTANCE_ID, allEvents, [
         newTaskFailedEvent(1, new Error("Transient failure on attempt 1")),
       ]);
-      expect(actions.length).toBe(1);
-      expect(actions[0].hasCreatetimer()).toBe(true);
-      const timerFireAt = actions[0].getCreatetimer()?.getFireat()?.toDate();
+      expect(result.actions.length).toBe(1);
+      expect(result.actions[0].hasCreatetimer()).toBe(true);
+      const timerFireAt = result.actions[0].getCreatetimer()?.getFireat()?.toDate();
       expect(timerFireAt).toBeDefined();
 
       // Step 3: Timer created, then fires
       allEvents.push(newTaskFailedEvent(1, new Error("Transient failure on attempt 1")));
       allEvents.push(newTimerCreatedEvent(2, timerFireAt!));
       executor = new OrchestrationExecutor(registry);
-      actions = await executor.execute(TEST_INSTANCE_ID, allEvents, [
+      result = await executor.execute(TEST_INSTANCE_ID, allEvents, [
         newTimerFiredEvent(2, timerFireAt!),
       ]);
       // Should reschedule the activity with a new ID
-      expect(actions.length).toBe(1);
-      expect(actions[0].hasScheduletask()).toBe(true);
-      expect(actions[0].getScheduletask()?.getName()).toBe("flakyActivity");
-      expect(actions[0].getId()).toBe(3); // New ID after timer
+      expect(result.actions.length).toBe(1);
+      expect(result.actions[0].hasScheduletask()).toBe(true);
+      expect(result.actions[0].getScheduletask()?.getName()).toBe("flakyActivity");
+      expect(result.actions[0].getId()).toBe(3); // New ID after timer
 
       // Step 4: Retried activity scheduled, then completes
       allEvents.push(newTimerFiredEvent(2, timerFireAt!));
       allEvents.push(newTaskScheduledEvent(3, "flakyActivity"));
       executor = new OrchestrationExecutor(registry);
-      actions = await executor.execute(TEST_INSTANCE_ID, allEvents, [
+      result = await executor.execute(TEST_INSTANCE_ID, allEvents, [
         newTaskCompletedEvent(3, JSON.stringify(42)),
       ]);
       
       // Assert: Orchestration should complete successfully
-      const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
+      const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
       expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
       expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify(42));
     });
@@ -935,40 +935,40 @@ describe("Orchestration Executor", () => {
         newOrchestratorStartedEvent(startTime),
         newExecutionStartedEvent(name, TEST_INSTANCE_ID, JSON.stringify(21)),
       ];
-      let actions = await executor.execute(TEST_INSTANCE_ID, [], allEvents);
-      expect(actions.length).toBe(1);
-      expect(actions[0].hasScheduletask()).toBe(true);
+      let result = await executor.execute(TEST_INSTANCE_ID, [], allEvents);
+      expect(result.actions.length).toBe(1);
+      expect(result.actions[0].hasScheduletask()).toBe(true);
 
       // Step 2: Activity fails - first attempt
       allEvents.push(newTaskScheduledEvent(1, "alwaysFailsActivity"));
       executor = new OrchestrationExecutor(registry);
-      actions = await executor.execute(TEST_INSTANCE_ID, allEvents, [
+      result = await executor.execute(TEST_INSTANCE_ID, allEvents, [
         newTaskFailedEvent(1, new Error("Failure on attempt 1")),
       ]);
-      expect(actions.length).toBe(1);
-      expect(actions[0].hasCreatetimer()).toBe(true);
-      const timerFireAt = actions[0].getCreatetimer()?.getFireat()?.toDate();
+      expect(result.actions.length).toBe(1);
+      expect(result.actions[0].hasCreatetimer()).toBe(true);
+      const timerFireAt = result.actions[0].getCreatetimer()?.getFireat()?.toDate();
 
       // Step 3: Timer fires, activity is rescheduled
       allEvents.push(newTaskFailedEvent(1, new Error("Failure on attempt 1")));
       allEvents.push(newTimerCreatedEvent(2, timerFireAt!));
       executor = new OrchestrationExecutor(registry);
-      actions = await executor.execute(TEST_INSTANCE_ID, allEvents, [
+      result = await executor.execute(TEST_INSTANCE_ID, allEvents, [
         newTimerFiredEvent(2, timerFireAt!),
       ]);
-      expect(actions.length).toBe(1);
-      expect(actions[0].hasScheduletask()).toBe(true);
+      expect(result.actions.length).toBe(1);
+      expect(result.actions[0].hasScheduletask()).toBe(true);
 
       // Step 4: Second activity attempt fails - max attempts reached
       allEvents.push(newTimerFiredEvent(2, timerFireAt!));
       allEvents.push(newTaskScheduledEvent(3, "alwaysFailsActivity"));
       executor = new OrchestrationExecutor(registry);
-      actions = await executor.execute(TEST_INSTANCE_ID, allEvents, [
+      result = await executor.execute(TEST_INSTANCE_ID, allEvents, [
         newTaskFailedEvent(3, new Error("Failure on attempt 2")),
       ]);
 
       // Assert: Orchestration should fail
-      const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
+      const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
       expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
     });
   });
