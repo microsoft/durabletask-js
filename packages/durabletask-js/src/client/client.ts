@@ -55,7 +55,7 @@ export class TaskHubGrpcClient {
   }
 
   async stop(): Promise<void> {
-    this._stub.close();
+    await this._stub.close();
 
     // Brief pause to allow gRPC cleanup - this is a known issue with grpc-node
     // https://github.com/grpc/grpc-node/issues/1563#issuecomment-829483711
