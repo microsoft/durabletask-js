@@ -581,78 +581,78 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
 
   // // ==================== setCustomStatus Tests ====================
 
-  // it("should set and retrieve custom status", async () => {
-  //   const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
-  //     ctx.setCustomStatus("Step 1: Starting");
-  //     yield ctx.createTimer(1);
+  it("should set and retrieve custom status", async () => {
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      ctx.setCustomStatus("Step 1: Starting");
+      yield ctx.createTimer(1);
 
-  //     // Use longer timer to give CI environments more time to observe this status
-  //     ctx.setCustomStatus({ step: 2, message: "Processing" });
-  //     yield ctx.createTimer(5);
+      // Use longer timer to give CI environments more time to observe this status
+      ctx.setCustomStatus({ step: 2, message: "Processing" });
+      yield ctx.createTimer(5);
 
-  //     ctx.setCustomStatus("Step 3: Completed");
-  //     return "done";
-  //   };
+      ctx.setCustomStatus("Step 3: Completed");
+      return "done";
+    };
 
-  //   taskHubWorker.addOrchestrator(orchestrator);
-  //   await taskHubWorker.start();
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
 
-  //   const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
 
-  //   // Poll for custom status changes - collect all observed statuses
-  //   let foundObjectStatus = false;
-  //   const observedStatuses: string[] = [];
-  //   const startTime = Date.now();
-  //   while (Date.now() - startTime < 20000) {
-  //     const state = await taskHubClient.getOrchestrationState(id);
-  //     if (state?.serializedCustomStatus) {
-  //       const status = state.serializedCustomStatus;
-  //       // Track unique statuses for debugging
-  //       if (!observedStatuses.includes(status)) {
-  //         observedStatuses.push(status);
-  //       }
-  //       if (status.includes("step") && status.includes("Processing")) {
-  //         foundObjectStatus = true;
-  //         break;
-  //       }
-  //     }
-  //     // Poll more frequently
-  //     await new Promise((resolve) => setTimeout(resolve, 200));
-  //   }
+    // Poll for custom status changes - collect all observed statuses
+    let foundObjectStatus = false;
+    const observedStatuses: string[] = [];
+    const startTime = Date.now();
+    while (Date.now() - startTime < 20000) {
+      const state = await taskHubClient.getOrchestrationState(id);
+      if (state?.serializedCustomStatus) {
+        const status = state.serializedCustomStatus;
+        // Track unique statuses for debugging
+        if (!observedStatuses.includes(status)) {
+          observedStatuses.push(status);
+        }
+        if (status.includes("step") && status.includes("Processing")) {
+          foundObjectStatus = true;
+          break;
+        }
+      }
+      // Poll more frequently
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
 
-  //   const finalState = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+    const finalState = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
-  //   expect(finalState).toBeDefined();
-  //   expect(finalState?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
-  //   expect(finalState?.serializedCustomStatus).toEqual(JSON.stringify("Step 3: Completed"));
-  //   // Provide better error message on failure - log observed statuses if assertion fails
-  //   if (!foundObjectStatus) {
-  //     console.log("Observed statuses during polling:", observedStatuses);
-  //   }
-  //   expect(foundObjectStatus).toBe(true);
-  // }, 60000);
+    expect(finalState).toBeDefined();
+    expect(finalState?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(finalState?.serializedCustomStatus).toEqual(JSON.stringify("Step 3: Completed"));
+    // Provide better error message on failure - log observed statuses if assertion fails
+    if (!foundObjectStatus) {
+      console.log("Observed statuses during polling:", observedStatuses);
+    }
+    expect(foundObjectStatus).toBe(true);
+  }, 60000);
 
-  // it("should update custom status to empty string when explicitly set", async () => {
-  //   const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
-  //     ctx.setCustomStatus("Initial status");
-  //     yield ctx.createTimer(1);
+  it("should update custom status to empty string when explicitly set", async () => {
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      ctx.setCustomStatus("Initial status");
+      yield ctx.createTimer(1);
 
-  //     // Update custom status to an empty string; this is a valid value and does not clear it.
-  //     ctx.setCustomStatus("");
-  //     return "done";
-  //   };
+      // Update custom status to an empty string; this is a valid value and does not clear it.
+      ctx.setCustomStatus("");
+      return "done";
+    };
 
-  //   taskHubWorker.addOrchestrator(orchestrator);
-  //   await taskHubWorker.start();
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
 
-  //   const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
-  //   const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
-  //   expect(state).toBeDefined();
-  //   expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
-  //   // When set to empty string, the serialized value should be '""' (JSON-encoded empty string)
-  //   expect(state?.serializedCustomStatus).toEqual('""');
-  // }, 31000);
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    // When set to empty string, the serialized value should be '""' (JSON-encoded empty string)
+    expect(state?.serializedCustomStatus).toEqual('""');
+  }, 31000);
 
   // ==================== sendEvent Tests ====================
 
