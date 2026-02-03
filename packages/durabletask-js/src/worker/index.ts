@@ -17,7 +17,6 @@ export function getWrongActionTypeError(
   action: pb.OrchestratorAction,
 ): NonDeterminismError {
   const unexpectedMethodName = getMethodNameForAction(action);
-  console.log("getWrongActionTypeError");
   return new NonDeterminismError(
     `Failed to restore orchestration state due to a history mismatch: A previous execution called ${expectedMethodName} with ID=${taskId}, but the current execution is instead trying to call ${unexpectedMethodName} as part of rebuilding it's history. This kind of mismatch can happen if an orchestration has non-deterministic logic or if the code was changed after an instance of this orchestration already started running.`,
   );

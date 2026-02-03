@@ -47,7 +47,8 @@
     "node": ">=22.0.0"
   },
   "dependencies": {
-    "@azure/identity": "^4.0.0"
+    "@azure/identity": "^4.0.0",
+    "@azure/logger": "^1.0.0"
   },
   "peerDependencies": {
     "@grpc/grpc-js": "^1.8.14",

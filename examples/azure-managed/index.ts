@@ -14,6 +14,10 @@ import { DefaultAzureCredential } from "@azure/identity";
 import {
   createAzureManagedClient,
   createAzureManagedWorkerBuilder,
+  // Logger types are re-exported for convenience
+  // ConsoleLogger is used by default
+  // Use createAzureLogger to integrate with @azure/logger
+  createAzureLogger,
 } from "@microsoft/durabletask-js-azuremanaged";
 import { ActivityContext } from "@microsoft/durabletask-js/dist/task/context/activity-context";
 import { OrchestrationContext } from "@microsoft/durabletask-js/dist/task/context/orchestration-context";
@@ -23,6 +27,10 @@ import { Task } from "@microsoft/durabletask-js/dist/task/task";
 
 // Wrap the entire code in an immediately-invoked async function
 (async () => {
+  // Create a logger for this example
+  // This uses Azure SDK's logging infrastructure - set AZURE_LOG_LEVEL=verbose to see all logs
+  const logger = createAzureLogger("example");
+
   // Configuration for Azure Managed DTS
   // These values should be set as environment variables
   const endpoint = process.env.AZURE_DTS_ENDPOINT;
@@ -31,31 +39,31 @@ import { Task } from "@microsoft/durabletask-js/dist/task/task";
 
   // Validate configuration
   if (!connectionString && (!endpoint || !taskHubName)) {
-    console.error(
+    logger.error(
       "Error: Either AZURE_DTS_CONNECTION_STRING or both AZURE_DTS_ENDPOINT and AZURE_DTS_TASKHUB must be set.",
     );
-    console.log("\nUsage:");
-    console.log("  Option 1: Create a .env file in the examples directory (recommended):");
-    console.log(
+    logger.info("\nUsage:");
+    logger.info("  Option 1: Create a .env file in the examples directory (recommended):");
+    logger.info(
       "    AZURE_DTS_CONNECTION_STRING=Endpoint=https://myservice.durabletask.io;Authentication=DefaultAzure;TaskHub=myTaskHub",
     );
-    console.log("    or");
-    console.log("    AZURE_DTS_ENDPOINT=https://myservice.durabletask.io");
-    console.log("    AZURE_DTS_TASKHUB=myTaskHub");
-    console.log("\n  Option 2: Set environment variables directly");
-    console.log("    export AZURE_DTS_CONNECTION_STRING=...");
+    logger.info("    or");
+    logger.info("    AZURE_DTS_ENDPOINT=https://myservice.durabletask.io");
+    logger.info("    AZURE_DTS_TASKHUB=myTaskHub");
+    logger.info("\n  Option 2: Set environment variables directly");
+    logger.info("    export AZURE_DTS_CONNECTION_STRING=...");
     process.exit(1);
   }
 
   // Define an activity function that greets a city
   const greetCity = async (_: ActivityContext, city: string): Promise<string> => {
-    console.log(`Activity executing: greeting ${city}`);
+    logger.info(`Activity executing: greeting ${city}`);
     return `Hello, ${city}!`;
   };
 
   // Define an activity function that processes work items
   const processWorkItem = async (_: ActivityContext, item: string): Promise<number> => {
-    console.log(`Activity executing: processing ${item}`);
+    logger.info(`Activity executing: processing ${item}`);
     // Simulate some processing time
     await new Promise((resolve) => setTimeout(resolve, 500));
     return item.length;
@@ -98,7 +106,7 @@ import { Task } from "@microsoft/durabletask-js/dist/task/task";
   try {
     // Create client and worker using connection string or explicit parameters
     if (connectionString) {
-      console.log("Using connection string authentication...");
+      logger.info("Using connection string authentication...");
       client = createAzureManagedClient(connectionString);
       worker = createAzureManagedWorkerBuilder(connectionString)
         .addOrchestrator(sequenceOrchestrator)
@@ -107,7 +115,7 @@ import { Task } from "@microsoft/durabletask-js/dist/task/task";
         .addActivity(processWorkItem)
         .build();
     } else {
-      console.log("Using DefaultAzureCredential authentication...");
+      logger.info("Using DefaultAzureCredential authentication...");
       const credential = new DefaultAzureCredential();
       client = createAzureManagedClient(endpoint!, taskHubName!, credential);
       worker = createAzureManagedWorkerBuilder(endpoint!, taskHubName!, credential)
@@ -119,42 +127,42 @@ import { Task } from "@microsoft/durabletask-js/dist/task/task";
     }
 
     // Start the worker
-    console.log("Starting worker...");
+    logger.info("Starting worker...");
     await worker.start();
-    console.log("Worker started successfully!");
+    logger.info("Worker started successfully!");
 
     // Run the sequence orchestrator
-    console.log("\n--- Running Sequence Orchestrator ---");
+    logger.info("\n--- Running Sequence Orchestrator ---");
     const sequenceId = await client.scheduleNewOrchestration(sequenceOrchestrator);
-    console.log(`Orchestration scheduled with ID: ${sequenceId}`);
+    logger.info(`Orchestration scheduled with ID: ${sequenceId}`);
 
     const sequenceState = await client.waitForOrchestrationCompletion(sequenceId, undefined, 60);
-    console.log(`Sequence orchestration completed!`);
-    console.log(`Result: ${sequenceState?.serializedOutput}`);
+    logger.info(`Sequence orchestration completed!`);
+    logger.info(`Result: ${sequenceState?.serializedOutput}`);
 
     // Run the fan-out/fan-in orchestrator
-    console.log("\n--- Running Fan-Out/Fan-In Orchestrator ---");
+    logger.info("\n--- Running Fan-Out/Fan-In Orchestrator ---");
     const fanOutId = await client.scheduleNewOrchestration(fanOutFanInOrchestrator);
-    console.log(`Orchestration scheduled with ID: ${fanOutId}`);
+    logger.info(`Orchestration scheduled with ID: ${fanOutId}`);
 
     const fanOutState = await client.waitForOrchestrationCompletion(fanOutId, undefined, 60);
-    console.log(`Fan-out/fan-in orchestration completed!`);
-    console.log(`Result: ${fanOutState?.serializedOutput}`);
+    logger.info(`Fan-out/fan-in orchestration completed!`);
+    logger.info(`Result: ${fanOutState?.serializedOutput}`);
 
-    console.log("\n--- All orchestrations completed successfully! ---");
+    logger.info("\n--- All orchestrations completed successfully! ---");
   } catch (error) {
-    console.error("Error:", error);
+    logger.error("Error:", error);
     process.exit(1);
   } finally {
     // Cleanup: stop worker and client
-    console.log("\nStopping worker and client...");
+    logger.info("\nStopping worker and client...");
     if (worker) {
       await worker.stop();
     }
     if (client) {
       await client.stop();
     }
-    console.log("Cleanup complete.");
+    logger.info("Cleanup complete.");
     process.exit(0);
   }
 })();

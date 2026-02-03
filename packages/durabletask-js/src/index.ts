@@ -2,8 +2,8 @@
 // Licensed under the MIT License.
 
 // Client and Worker
-export { TaskHubGrpcClient, MetadataGenerator, StartOrchestrationOptions } from "./client/client";
-export { TaskHubGrpcWorker } from "./worker/task-hub-grpc-worker";
+export { TaskHubGrpcClient, TaskHubGrpcClientOptions, StartOrchestrationOptions, MetadataGenerator } from "./client/client";
+export { TaskHubGrpcWorker, TaskHubGrpcWorkerOptions } from "./worker/task-hub-grpc-worker";
 
 // Contexts
 export { OrchestrationContext } from "./task/context/orchestration-context";
@@ -65,3 +65,6 @@ export { TOrchestrator } from "./types/orchestrator.type";
 export { TActivity } from "./types/activity.type";
 export { TInput } from "./types/input.type";
 export { TOutput } from "./types/output.type";
+
+// Logger
+export { Logger, ConsoleLogger, NoOpLogger } from "./types/logger.type";
