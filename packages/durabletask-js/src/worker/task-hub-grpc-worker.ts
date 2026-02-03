@@ -206,14 +206,15 @@ export class TaskHubGrpcWorker {
 
       // Wait for the stream to end or error
       stream.on("end", async () => {
-        // Clean up event listeners to prevent memory leaks
-        stream.removeAllListeners();
-        stream.cancel();
-        stream.destroy();
         if (this._stopWorker) {
           this._logger.info("Stream ended");
+          stream.removeAllListeners();
+          stream.destroy();
           return;
         }
+        // Stream ended unexpectedly - clean up and retry
+        stream.removeAllListeners();
+        stream.destroy();
         this._logger.info(`Stream abruptly closed, will retry in ${this._backoff.peekNextDelay()}ms...`);
         await this._backoff.wait();
         // Create a new client for the retry to avoid stale channel issues
@@ -225,7 +226,11 @@ export class TaskHubGrpcWorker {
         );
         this._stub = newClient.stub;
         // do not await
-        this.internalRunWorker(newClient, true);
+        this.internalRunWorker(newClient, true).catch((err) => {
+          if (!this._stopWorker) {
+            this._logger.error(`Worker error: ${err}`);
+          }
+        });
       });
 
       stream.on("error", (err: Error) => {
@@ -254,7 +259,11 @@ export class TaskHubGrpcWorker {
         this._grpcChannelCredentials,
       );
       this._stub = newClient.stub;
-      this.internalRunWorker(newClient, true);
+      this.internalRunWorker(newClient, true).catch((retryErr) => {
+        if (!this._stopWorker) {
+          this._logger.error(`Worker error: ${retryErr}`);
+        }
+      });
       return;
     }
   }
@@ -270,9 +279,13 @@ export class TaskHubGrpcWorker {
 
     this._stopWorker = true;
 
-    // Clean up stream listeners to prevent memory leaks
-    this._responseStream?.removeAllListeners();
+    // Cancel stream first while error handlers are still attached
+    // This allows the error handler to suppress CANCELLED errors
     this._responseStream?.cancel();
+    // Brief pause to let cancellation error propagate to handlers
+    await sleep(10);
+    // Now safe to remove listeners and destroy
+    this._responseStream?.removeAllListeners();
     this._responseStream?.destroy();
 
     // Wait for pending work items to complete with timeout
