@@ -125,8 +125,8 @@ export class DurableTaskAzureManagedClientBuilder {
   }
 
   /**
-  * Sets the logger to use for logging.
-  * Defaults to ConsoleLogger.
+   * Sets the logger to use for logging.
+   * Defaults to ConsoleLogger.
    *
    * @param logger The logger instance.
    * @returns This builder instance.

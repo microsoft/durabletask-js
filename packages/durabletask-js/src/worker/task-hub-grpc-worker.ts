@@ -282,8 +282,27 @@ export class TaskHubGrpcWorker {
     // Cancel stream first while error handlers are still attached
     // This allows the error handler to suppress CANCELLED errors
     this._responseStream?.cancel();
-    // Brief pause to let cancellation error propagate to handlers
-    await sleep(10);
+
+    // Wait for the stream to react to cancellation using events rather than a fixed delay.
+    // This avoids race conditions caused by relying on timing alone.
+    if (this._responseStream) {
+      try {
+        await withTimeout(
+          new Promise<void>((resolve) => {
+            const stream = this._responseStream!;
+            // Any of these events indicates the stream has processed cancellation / is closing.
+            stream.once("end", resolve);
+            stream.once("close", resolve);
+            stream.once("error", () => resolve());
+          }),
+          1000,
+          "Timed out waiting for response stream to close after cancellation",
+        );
+      } catch {
+        // If we time out waiting for the stream to close, proceed with forced cleanup below.
+      }
+    }
+
     // Now safe to remove listeners and destroy
     this._responseStream?.removeAllListeners();
     this._responseStream?.destroy();
