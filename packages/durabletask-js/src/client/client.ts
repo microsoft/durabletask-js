@@ -21,6 +21,8 @@ import { callWithMetadata, MetadataGenerator } from "../utils/grpc-helper.util";
 import { OrchestrationQuery, ListInstanceIdsOptions, DEFAULT_PAGE_SIZE } from "../orchestration/orchestration-query";
 import { Page, AsyncPageable, createAsyncPageable } from "../orchestration/page";
 import { FailureDetails } from "../task/failure-details";
+import { HistoryEvent } from "../orchestration/history-event";
+import { convertProtoHistoryEvent } from "../utils/history-event-converter";
 import { Logger, ConsoleLogger } from "../types/logger.type";
 
 // Re-export MetadataGenerator for backward compatibility
@@ -733,6 +735,77 @@ export class TaskHubGrpcClient {
     const lastInstanceKey = response.getLastinstancekey()?.getValue();
 
     return new Page(instanceIds, lastInstanceKey);
+  }
+
+  /**
+   * Retrieves the history of the specified orchestration instance as a list of HistoryEvent objects.
+   *
+   * This method streams the history events from the backend and returns them as an array.
+   * The history includes all events that occurred during the orchestration execution,
+   * such as task scheduling, completion, failure, timer events, and more.
+   *
+   * If the orchestration instance does not exist, an empty array is returned.
+   *
+   * @param instanceId - The unique identifier of the orchestration instance.
+   * @returns A Promise that resolves to an array of HistoryEvent objects representing
+   *          the orchestration's history. Returns an empty array if the instance is not found.
+   * @throws {Error} If the instanceId is null or empty.
+   * @throws {Error} If the operation is canceled.
+   * @throws {Error} If an internal error occurs while retrieving the history.
+   *
+   * @example
+   * ```typescript
+   * const history = await client.getOrchestrationHistory(instanceId);
+   * for (const event of history) {
+   *   console.log(`Event ${event.eventId}: ${event.type} at ${event.timestamp}`);
+   * }
+   * ```
+   */
+  async getOrchestrationHistory(instanceId: string): Promise<HistoryEvent[]> {
+    if (!instanceId) {
+      throw new Error("instanceId is required");
+    }
+
+    const req = new pb.StreamInstanceHistoryRequest();
+    req.setInstanceid(instanceId);
+    req.setForworkitemprocessing(false);
+
+    const metadata = this._metadataGenerator ? await this._metadataGenerator() : new grpc.Metadata();
+    const stream = this._stub.streamInstanceHistory(req, metadata);
+
+    return new Promise<HistoryEvent[]>((resolve, reject) => {
+      const historyEvents: HistoryEvent[] = [];
+
+      stream.on("data", (chunk: pb.HistoryChunk) => {
+        const protoEvents = chunk.getEventsList();
+        for (const protoEvent of protoEvents) {
+          const event = convertProtoHistoryEvent(protoEvent);
+          if (event) {
+            historyEvents.push(event);
+          }
+        }
+      });
+
+      stream.on("end", () => {
+        stream.removeAllListeners();
+        resolve(historyEvents);
+      });
+
+      stream.on("error", (err: grpc.ServiceError) => {
+        stream.removeAllListeners();
+        // Return empty array for NOT_FOUND to be consistent with DTS behavior
+        // (DTS returns empty stream for non-existent instances) and user-friendly
+        if (err.code === grpc.status.NOT_FOUND) {
+          resolve([]);
+        } else if (err.code === grpc.status.CANCELLED) {
+          reject(new Error(`The getOrchestrationHistory operation was canceled.`));
+        } else if (err.code === grpc.status.INTERNAL) {
+          reject(new Error(`An error occurred while retrieving the history for orchestration with instanceId '${instanceId}'.`));
+        } else {
+          reject(err);
+        }
+      });
+    });
   }
 
   /**
