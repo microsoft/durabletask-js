@@ -11,6 +11,22 @@ import {
 } from "../orchestration/history-event";
 import { FailureDetails } from "../task/failure-details";
 
+// Map OrchestrationStatus enum values to their string names
+const ORCHESTRATION_STATUS_MAP: Record<number, string> = {
+  [pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING]: "ORCHESTRATION_STATUS_RUNNING",
+  [pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED]: "ORCHESTRATION_STATUS_COMPLETED",
+  [pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW]: "ORCHESTRATION_STATUS_CONTINUED_AS_NEW",
+  [pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED]: "ORCHESTRATION_STATUS_FAILED",
+  [pb.OrchestrationStatus.ORCHESTRATION_STATUS_CANCELED]: "ORCHESTRATION_STATUS_CANCELED",
+  [pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED]: "ORCHESTRATION_STATUS_TERMINATED",
+  [pb.OrchestrationStatus.ORCHESTRATION_STATUS_PENDING]: "ORCHESTRATION_STATUS_PENDING",
+  [pb.OrchestrationStatus.ORCHESTRATION_STATUS_SUSPENDED]: "ORCHESTRATION_STATUS_SUSPENDED",
+};
+
+function convertOrchestrationStatus(status: number): string {
+  return ORCHESTRATION_STATUS_MAP[status] ?? `UNKNOWN_STATUS_${status}`;
+}
+
 /**
  * Converts a protobuf HistoryEvent to a TypeScript HistoryEvent.
  * @param protoEvent The protobuf HistoryEvent to convert.
@@ -53,7 +69,7 @@ export function convertProtoHistoryEvent(protoEvent: pb.HistoryEvent): HistoryEv
         eventId,
         timestamp,
         type: HistoryEventType.ExecutionCompleted,
-        orchestrationStatus: pb.OrchestrationStatus[event.getOrchestrationstatus()],
+        orchestrationStatus: convertOrchestrationStatus(event.getOrchestrationstatus()),
         result: event.getResult()?.getValue(),
         failureDetails: convertFailureDetails(event.getFailuredetails()),
       };
