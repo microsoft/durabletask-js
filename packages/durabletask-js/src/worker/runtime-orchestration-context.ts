@@ -146,7 +146,8 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
 
     this._isComplete = true;
     this._completionStatus = status;
-    this._pendingActions = {}; // Clear any pending actions
+    // Note: Do NOT clear pending actions here - fire-and-forget actions like sendEvent
+    // must be preserved and returned alongside the complete action
 
     this._result = result;
 
@@ -168,7 +169,8 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
 
     this._isComplete = true;
     this._completionStatus = pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED;
-    this._pendingActions = {}; // Cancel any pending actions
+    // Note: Do NOT clear pending actions here - fire-and-forget actions like sendEvent
+    // must be preserved and returned alongside the complete action
 
     const action = ph.newCompleteOrchestrationAction(
       this.nextSequenceNumber(),

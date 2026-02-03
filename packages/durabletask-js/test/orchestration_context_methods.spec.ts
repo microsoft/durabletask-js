@@ -130,25 +130,20 @@ describe("OrchestrationContext.sendEvent", () => {
     const executor = new OrchestrationExecutor(registry);
     const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
 
-    // The orchestration completes, but there should be a send event action before that
-    // Note: the executor returns only the final actions, so we check what was scheduled
-    expect(result.actions.length).toBeGreaterThanOrEqual(1);
+    // Should have 2 actions: sendEvent (fire-and-forget) + completeOrchestration
+    expect(result.actions.length).toEqual(2);
 
-    // Check if there's a send event action
-    let hasSendEventAction = false;
-    for (const action of result.actions) {
-      if (action.hasSendevent()) {
-        hasSendEventAction = true;
-        const sendEvent = action.getSendevent();
-        expect(sendEvent?.getInstance()?.getInstanceid()).toEqual("target-instance-id");
-        expect(sendEvent?.getName()).toEqual("my-event");
-        expect(sendEvent?.getData()?.getValue()).toEqual(JSON.stringify({ data: "value" }));
-        break;
-      }
-    }
-    // If no send event action found in actions, check the complete action
-    // send event is a fire-and-forget action, so it should be present
-    expect(hasSendEventAction || result.actions.length >= 1).toBeTruthy();
+    // Find and verify the sendEvent action
+    const sendEventAction = result.actions.find((a) => a.hasSendevent());
+    expect(sendEventAction).toBeDefined();
+    const sendEvent = sendEventAction?.getSendevent();
+    expect(sendEvent?.getInstance()?.getInstanceid()).toEqual("target-instance-id");
+    expect(sendEvent?.getName()).toEqual("my-event");
+    expect(sendEvent?.getData()?.getValue()).toEqual(JSON.stringify({ data: "value" }));
+
+    // Verify the complete action is also present
+    const completeAction = result.actions.find((a) => a.hasCompleteorchestration());
+    expect(completeAction).toBeDefined();
   });
 
   it("should create a SendEvent action without data", async () => {
@@ -166,7 +161,17 @@ describe("OrchestrationContext.sendEvent", () => {
     const executor = new OrchestrationExecutor(registry);
     const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
 
-    expect(result.actions.length).toBeGreaterThanOrEqual(1);
+    // Should have 2 actions: sendEvent (fire-and-forget) + completeOrchestration
+    expect(result.actions.length).toEqual(2);
+
+    // Find and verify the sendEvent action
+    const sendEventAction = result.actions.find((a) => a.hasSendevent());
+    expect(sendEventAction).toBeDefined();
+    const sendEvent = sendEventAction?.getSendevent();
+    expect(sendEvent?.getInstance()?.getInstanceid()).toEqual("target-instance-id");
+    expect(sendEvent?.getName()).toEqual("signal-event");
+    // No data should be set (or empty)
+    expect(sendEvent?.getData()?.getValue() ?? "").toEqual("");
   });
 });
 
