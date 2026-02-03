@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 // Client and Worker
-export { TaskHubGrpcClient, MetadataGenerator } from "./client/client";
+export { TaskHubGrpcClient, MetadataGenerator, StartOrchestrationOptions } from "./client/client";
 export { TaskHubGrpcWorker } from "./worker/task-hub-grpc-worker";
 
 // Contexts
@@ -17,6 +17,37 @@ export { OrchestrationState } from "./orchestration/orchestration-state";
 // Query types
 export { OrchestrationQuery, ListInstanceIdsOptions, DEFAULT_PAGE_SIZE } from "./orchestration/orchestration-query";
 export { Page, AsyncPageable, createAsyncPageable } from "./orchestration/page";
+
+// History event types
+export {
+  HistoryEvent,
+  HistoryEventType,
+  HistoryEventBase,
+  ExecutionStartedEvent,
+  ExecutionCompletedEvent,
+  ExecutionTerminatedEvent,
+  ExecutionSuspendedEvent,
+  ExecutionResumedEvent,
+  ExecutionRewoundEvent,
+  TaskScheduledEvent,
+  TaskCompletedEvent,
+  TaskFailedEvent,
+  SubOrchestrationInstanceCreatedEvent,
+  SubOrchestrationInstanceCompletedEvent,
+  SubOrchestrationInstanceFailedEvent,
+  TimerCreatedEvent,
+  TimerFiredEvent,
+  OrchestratorStartedEvent,
+  OrchestratorCompletedEvent,
+  EventSentEvent,
+  EventRaisedEvent,
+  GenericEvent,
+  HistoryStateEvent,
+  ContinueAsNewEvent,
+  OrchestrationInstance,
+  ParentInstanceInfo,
+  TraceContext,
+} from "./orchestration/history-event";
 
 // Proto types (for advanced usage)
 export { OrchestrationStatus as ProtoOrchestrationStatus } from "./proto/orchestrator_service_pb";

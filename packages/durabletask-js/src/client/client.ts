@@ -21,9 +21,25 @@ import { callWithMetadata, MetadataGenerator } from "../utils/grpc-helper.util";
 import { OrchestrationQuery, ListInstanceIdsOptions, DEFAULT_PAGE_SIZE } from "../orchestration/orchestration-query";
 import { Page, AsyncPageable, createAsyncPageable } from "../orchestration/page";
 import { FailureDetails } from "../task/failure-details";
+import { HistoryEvent } from "../orchestration/history-event";
+import { convertProtoHistoryEvent } from "../utils/history-event-converter";
 
 // Re-export MetadataGenerator for backward compatibility
 export { MetadataGenerator } from "../utils/grpc-helper.util";
+
+/**
+ * Options for scheduling a new orchestration instance.
+ */
+export interface StartOrchestrationOptions {
+  /** The input to pass to the orchestration. */
+  input?: TInput;
+  /** The unique ID for the orchestration instance. If not specified, a new GUID is generated. */
+  instanceId?: string;
+  /** The time when the orchestration should start executing. If not specified, starts immediately. */
+  startAt?: Date;
+  /** Tags to associate with the orchestration instance. */
+  tags?: Record<string, string>;
+}
 
 export class TaskHubGrpcClient {
   private _stub: stubs.TaskHubSidecarServiceClient;
@@ -61,14 +77,36 @@ export class TaskHubGrpcClient {
    * Schedules a new orchestrator using the DurableTask client.
    *
    * @param {TOrchestrator | string} orchestrator - The orchestrator or the name of the orchestrator to be scheduled.
+   * @param {TInput | StartOrchestrationOptions} inputOrOptions - The input to pass to the orchestrator, or an options object.
+   * @param {string} instanceId - (Deprecated) Use options object instead. The unique ID for the orchestration instance.
+   * @param {Date} startAt - (Deprecated) Use options object instead. The time when the orchestration should start.
    * @return {Promise<string>} A Promise resolving to the unique ID of the scheduled orchestrator instance.
    */
   async scheduleNewOrchestration(
     orchestrator: TOrchestrator | string,
-    input?: TInput,
+    inputOrOptions?: TInput | StartOrchestrationOptions,
     instanceId?: string,
     startAt?: Date,
   ): Promise<string> {
+    // Determine if inputOrOptions is an options object or raw input
+    let input: TInput | undefined;
+    let resolvedInstanceId: string | undefined = instanceId;
+    let resolvedStartAt: Date | undefined = startAt;
+    let tags: Record<string, string> | undefined;
+
+    if (inputOrOptions !== null && typeof inputOrOptions === 'object' && !Array.isArray(inputOrOptions) && 
+        ('input' in inputOrOptions || 'instanceId' in inputOrOptions || 'startAt' in inputOrOptions || 'tags' in inputOrOptions)) {
+      // It's an options object
+      const options = inputOrOptions as StartOrchestrationOptions;
+      input = options.input;
+      resolvedInstanceId = options.instanceId ?? instanceId;
+      resolvedStartAt = options.startAt ?? startAt;
+      tags = options.tags;
+    } else {
+      // It's raw input (backward compatible)
+      input = inputOrOptions as TInput;
+    }
+
     let name;
     if (typeof orchestrator === "string") {
       name = orchestrator;
@@ -77,16 +115,24 @@ export class TaskHubGrpcClient {
     }
     const req = new pb.CreateInstanceRequest();
     req.setName(name);
-    req.setInstanceid(instanceId ?? randomUUID());
+    req.setInstanceid(resolvedInstanceId ?? randomUUID());
 
     const i = new StringValue();
     i.setValue(JSON.stringify(input));
 
     const ts = new Timestamp();
-    ts.fromDate(new Date(startAt?.getTime() ?? 0));
+    ts.fromDate(new Date(resolvedStartAt?.getTime() ?? 0));
 
     req.setInput(i);
     req.setScheduledstarttimestamp(ts);
+
+    // Set tags if provided
+    if (tags) {
+      const tagsMap = req.getTagsMap();
+      for (const [key, value] of Object.entries(tags)) {
+        tagsMap.set(key, value);
+      }
+    }
 
     console.log(`Starting new ${name} instance with ID = ${req.getInstanceid()}`);
 
@@ -668,6 +714,72 @@ export class TaskHubGrpcClient {
     const lastInstanceKey = response.getLastinstancekey()?.getValue();
 
     return new Page(instanceIds, lastInstanceKey);
+  }
+
+  /**
+   * Retrieves the history of the specified orchestration instance as a list of HistoryEvent objects.
+   *
+   * This method streams the history events from the backend and returns them as an array.
+   * The history includes all events that occurred during the orchestration execution,
+   * such as task scheduling, completion, failure, timer events, and more.
+   *
+   * @param instanceId - The unique identifier of the orchestration instance.
+   * @returns A Promise that resolves to an array of HistoryEvent objects representing
+   *          the orchestration's history.
+   * @throws {Error} If the instanceId is null or empty.
+   * @throws {Error} If an orchestration with the specified instanceId is not found.
+   * @throws {Error} If the operation is canceled.
+   * @throws {Error} If an internal error occurs while retrieving the history.
+   *
+   * @example
+   * ```typescript
+   * const history = await client.getOrchestrationHistory(instanceId);
+   * for (const event of history) {
+   *   console.log(`Event ${event.eventId}: ${event.type} at ${event.timestamp}`);
+   * }
+   * ```
+   */
+  async getOrchestrationHistory(instanceId: string): Promise<HistoryEvent[]> {
+    if (!instanceId) {
+      throw new Error("instanceId is required");
+    }
+
+    const req = new pb.StreamInstanceHistoryRequest();
+    req.setInstanceid(instanceId);
+    req.setForworkitemprocessing(false);
+
+    const metadata = this._metadataGenerator ? await this._metadataGenerator() : new grpc.Metadata();
+    const stream = this._stub.streamInstanceHistory(req, metadata);
+
+    return new Promise<HistoryEvent[]>((resolve, reject) => {
+      const historyEvents: HistoryEvent[] = [];
+
+      stream.on("data", (chunk: pb.HistoryChunk) => {
+        const protoEvents = chunk.getEventsList();
+        for (const protoEvent of protoEvents) {
+          const event = convertProtoHistoryEvent(protoEvent);
+          if (event) {
+            historyEvents.push(event);
+          }
+        }
+      });
+
+      stream.on("end", () => {
+        resolve(historyEvents);
+      });
+
+      stream.on("error", (err: grpc.ServiceError) => {
+        if (err.code === grpc.status.NOT_FOUND) {
+          reject(new Error(`An orchestration with the instanceId '${instanceId}' was not found.`));
+        } else if (err.code === grpc.status.CANCELLED) {
+          reject(new Error(`The getOrchestrationHistory operation was canceled.`));
+        } else if (err.code === grpc.status.INTERNAL) {
+          reject(new Error(`An error occurred while retrieving the history for orchestration with instanceId '${instanceId}'.`));
+        } else {
+          reject(err);
+        }
+      });
+    });
   }
 
   /**
