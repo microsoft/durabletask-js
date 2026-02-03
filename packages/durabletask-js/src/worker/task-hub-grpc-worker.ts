@@ -158,8 +158,13 @@ export class TaskHubGrpcWorker {
     const client = new GrpcClient(this._hostAddress, this._grpcChannelOptions, this._tls, this._grpcChannelCredentials);
     this._stub = client.stub;
 
-    // do not await so it runs in the background
-    this.internalRunWorker(client);
+    // Run in background but catch any unhandled errors to prevent unhandled rejections
+    this.internalRunWorker(client).catch((err) => {
+      // Only log if the worker wasn't stopped intentionally
+      if (!this._stopWorker) {
+        this._logger.error(`Worker error: ${err}`);
+      }
+    });
 
     this._isRunning = true;
   }
