@@ -22,6 +22,7 @@ import {
   Task,
   TOrchestrator,
   RetryPolicy,
+  Logger,
 } from "@microsoft/durabletask-js";
 import {
   DurableTaskAzureManagedClientBuilder,
@@ -738,4 +739,176 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     expect(receiverState?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(receiverState?.serializedOutput).toEqual(JSON.stringify("received signal"));
   }, 45000);
+
+  describe("Versioning", () => {
+    it("should be able to pass version when scheduling orchestration", async () => {
+      let capturedVersion: string | undefined;
+
+      const orchestrator: TOrchestrator = async (ctx: OrchestrationContext) => {
+        capturedVersion = ctx.version;
+        return ctx.version;
+      };
+
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator, undefined, {
+        version: "1.0.0",
+      });
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(capturedVersion).toEqual("1.0.0");
+      expect(state?.serializedOutput).toEqual(JSON.stringify("1.0.0"));
+    }, 31000);
+
+    it("should have empty version when not specified", async () => {
+      let capturedVersion: string | undefined;
+
+      const orchestrator: TOrchestrator = async (ctx: OrchestrationContext) => {
+        capturedVersion = ctx.version;
+        return "done";
+      };
+
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(capturedVersion).toEqual("");
+    }, 31000);
+  });
+
+  describe("ReplaySafeLogger", () => {
+    it("should only log when not replaying", async () => {
+      const logMessages: string[] = [];
+      const mockLogger: Logger = {
+        error: (msg) => logMessages.push(`error: ${msg}`),
+        warn: (msg) => logMessages.push(`warn: ${msg}`),
+        info: (msg) => logMessages.push(`info: ${msg}`),
+        debug: (msg) => logMessages.push(`debug: ${msg}`),
+      };
+
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        const logger = ctx.createReplaySafeLogger(mockLogger);
+        logger.info("before timer");
+        yield ctx.createTimer(1);
+        logger.info("after timer");
+        return "done";
+      };
+
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+
+      // Each log message should appear only once (not duplicated during replay)
+      const beforeTimerLogs = logMessages.filter((m) => m.includes("before timer"));
+      const afterTimerLogs = logMessages.filter((m) => m.includes("after timer"));
+
+      expect(beforeTimerLogs.length).toEqual(1);
+      expect(afterTimerLogs.length).toEqual(1);
+    }, 31000);
+  });
+
+  describe("Terminate with options", () => {
+    it("should terminate orchestration with output using options object", async () => {
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        // Wait forever
+        yield ctx.waitForExternalEvent("never-coming");
+        return "should not reach here";
+      };
+
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+      await taskHubClient.waitForOrchestrationStart(id, undefined, 10);
+
+      // Terminate with options object
+      await taskHubClient.terminateOrchestration(id, { output: "terminated-output" });
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED);
+      expect(state?.serializedOutput).toEqual(JSON.stringify("terminated-output"));
+    }, 31000);
+
+    it("should terminate orchestration with legacy signature (output only)", async () => {
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        yield ctx.waitForExternalEvent("never-coming");
+        return "should not reach here";
+      };
+
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+      await taskHubClient.waitForOrchestrationStart(id, undefined, 10);
+
+      // Use legacy signature
+      await taskHubClient.terminateOrchestration(id, "legacy-output");
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED);
+      expect(state?.serializedOutput).toEqual(JSON.stringify("legacy-output"));
+    }, 31000);
+  });
+
+  describe("Purge with options", () => {
+    it("should purge orchestration by instance ID", async () => {
+      const orchestrator: TOrchestrator = async (_: OrchestrationContext) => {
+        return "done";
+      };
+
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+
+      // Purge the completed orchestration
+      const purgeResult = await taskHubClient.purgeOrchestration(id);
+
+      expect(purgeResult).toBeDefined();
+      expect(purgeResult?.deletedInstanceCount).toEqual(1);
+
+      // Verify the orchestration is gone
+      const stateAfterPurge = await taskHubClient.getOrchestrationState(id);
+      expect(stateAfterPurge).toBeUndefined();
+    }, 31000);
+
+    it("should purge orchestration with options object", async () => {
+      const orchestrator: TOrchestrator = async (_: OrchestrationContext) => {
+        return "done";
+      };
+
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+
+      // Purge with options (recursive: false for simple case)
+      const purgeResult = await taskHubClient.purgeOrchestration(id, { recursive: false });
+
+      expect(purgeResult).toBeDefined();
+      expect(purgeResult?.deletedInstanceCount).toEqual(1);
+    }, 31000);
+  });
 });

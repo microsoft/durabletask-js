@@ -3,6 +3,8 @@
 
 import { TActivity } from "../../types/activity.type";
 import { TOrchestrator } from "../../types/orchestrator.type";
+import { Logger } from "../../types/logger.type";
+import { ReplaySafeLogger } from "../../types/replay-safe-logger";
 import { TaskOptions, SubOrchestrationOptions } from "../options";
 import { Task } from "../task";
 
@@ -37,6 +39,17 @@ export abstract class OrchestrationContext {
    * @returns {boolean} `true` if the orchestrator function is replaying from history; otherwise, `false`.
    */
   abstract get isReplaying(): boolean;
+
+  /**
+   * Gets the version of the current orchestration instance.
+   *
+   * The version is set when the orchestration instance is created via the client's
+   * scheduleNewOrchestration method using StartOrchestrationOptions.version.
+   * If no version was specified, this returns an empty string.
+   *
+   * @returns {string} The version of the current orchestration instance.
+   */
+  abstract get version(): string;
 
   /**
    * Create a timer task that will fire at a specified time.
@@ -128,4 +141,28 @@ export abstract class OrchestrationContext {
    * @returns {string} A new deterministic UUID string.
    */
   abstract newGuid(): string;
+
+  /**
+   * Creates a replay-safe logger that only writes logs when the orchestrator is not replaying.
+   *
+   * During orchestration replay, history events are re-processed to rebuild state.
+   * This can cause duplicate log entries if not handled properly. The returned logger
+   * wraps the provided logger and automatically suppresses log output during replay,
+   * ensuring that logs are only written once when the orchestration is making forward progress.
+   *
+   * @param {Logger} logger The underlying logger to wrap.
+   * @returns {Logger} A replay-safe logger instance.
+   *
+   * @example
+   * ```typescript
+   * const orchestrator: TOrchestrator = async function* (ctx, input) {
+   *   const logger = ctx.createReplaySafeLogger(myLogger);
+   *   logger.info("This will only be logged once, not during replay");
+   *   yield ctx.callActivity(myActivity, input);
+   * };
+   * ```
+   */
+  createReplaySafeLogger(logger: Logger): Logger {
+    return new ReplaySafeLogger(this, logger);
+  }
 }

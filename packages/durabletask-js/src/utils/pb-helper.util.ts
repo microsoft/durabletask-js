@@ -306,11 +306,15 @@ export function newScheduleTaskAction(
   name: string,
   encodedInput?: string,
   tags?: Record<string, string>,
+  version?: string,
 ): pb.OrchestratorAction {
   const scheduleTaskAction = new pb.ScheduleTaskAction();
   scheduleTaskAction.setName(name);
   scheduleTaskAction.setInput(getStringValue(encodedInput));
   populateTagsMap(scheduleTaskAction.getTagsMap(), tags);
+  if (version) {
+    scheduleTaskAction.setVersion(getStringValue(version));
+  }
 
   const action = new pb.OrchestratorAction();
   action.setId(id);
@@ -331,12 +335,16 @@ export function newCreateSubOrchestrationAction(
   instanceId?: string | null,
   encodedInput?: string,
   tags?: Record<string, string>,
+  version?: string,
 ): pb.OrchestratorAction {
   const createSubOrchestrationAction = new pb.CreateSubOrchestrationAction();
   createSubOrchestrationAction.setName(name);
   createSubOrchestrationAction.setInstanceid(instanceId || "");
   createSubOrchestrationAction.setInput(getStringValue(encodedInput));
   populateTagsMap(createSubOrchestrationAction.getTagsMap(), tags);
+  if (version) {
+    createSubOrchestrationAction.setVersion(getStringValue(version));
+  }
 
   const action = new pb.OrchestratorAction();
   action.setId(id);

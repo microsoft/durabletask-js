@@ -129,6 +129,9 @@ export class OrchestrationExecutor {
               throw new OrchestratorNotRegisteredError(executionStartedEvent?.getName());
             }
 
+            // Set the version from the execution started event
+            ctx._version = executionStartedEvent?.getVersion()?.getValue() ?? "";
+
             // Deserialize the input, if any
             let input = undefined;
 

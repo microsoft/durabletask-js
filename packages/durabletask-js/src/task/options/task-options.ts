@@ -16,6 +16,11 @@ export interface TaskOptions {
    * The tags to associate with the task.
    */
   tags?: Record<string, string>;
+  /**
+   * The version of the task (activity) to execute.
+   * When specified, only workers that handle this version will process the task.
+   */
+  version?: string;
 }
 
 /**
@@ -48,6 +53,12 @@ export interface StartOrchestrationOptions {
    * The tags to associate with the orchestration instance.
    */
   tags?: Record<string, string>;
+  /**
+   * The version of the orchestration to execute.
+   * This version is stored with the orchestration instance and can be accessed
+   * via the OrchestrationContext.version property.
+   */
+  version?: string;
 }
 
 /**

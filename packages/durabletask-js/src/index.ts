@@ -11,6 +11,8 @@ export { ActivityContext } from "./task/context/activity-context";
 
 // Orchestration types and utilities
 export { PurgeInstanceCriteria } from "./orchestration/orchestration-purge-criteria";
+export { PurgeInstanceOptions } from "./orchestration/orchestration-purge-options";
+export { TerminateInstanceOptions } from "./orchestration/orchestration-terminate-options";
 export { OrchestrationStatus } from "./orchestration/enum/orchestration-status.enum";
 export { OrchestrationState } from "./orchestration/orchestration-state";
 
@@ -81,3 +83,7 @@ export { TOutput } from "./types/output.type";
 
 // Logger
 export { Logger, ConsoleLogger, NoOpLogger } from "./types/logger.type";
+export { ReplaySafeLogger, ReplayContext } from "./types/replay-safe-logger";
+
+// Versioning utilities
+export { compareVersions } from "./utils/versioning.util";

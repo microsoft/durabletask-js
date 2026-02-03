@@ -28,6 +28,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   _newGuidCounter: number;
   _currentUtcDatetime: Date;
   _instanceId: string;
+  _version: string;
   _completionStatus?: pb.OrchestrationStatus;
   _receivedEvents: Record<string, any[]>;
   _pendingEvents: Record<string, CompletableTask<any>[]>;
@@ -48,6 +49,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     this._newGuidCounter = 0;
     this._currentUtcDatetime = new Date(1000, 0, 1);
     this._instanceId = instanceId;
+    this._version = "";
     this._completionStatus = undefined;
     this._receivedEvents = {};
     this._pendingEvents = {};
@@ -66,6 +68,10 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
 
   get isReplaying(): boolean {
     return this._isReplaying;
+  }
+
+  get version(): string {
+    return this._version;
   }
 
   /**
@@ -263,7 +269,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     const id = this.nextSequenceNumber();
     const name = typeof activity === "string" ? activity : getName(activity);
     const encodedInput = input ? JSON.stringify(input) : undefined;
-    const action = ph.newScheduleTaskAction(id, name, encodedInput, options?.tags);
+    const action = ph.newScheduleTaskAction(id, name, encodedInput, options?.tags, options?.version);
     this._pendingActions[action.getId()] = action;
 
     // If a retry policy is provided, create a RetryableTask
@@ -307,7 +313,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     }
 
     const encodedInput = input ? JSON.stringify(input) : undefined;
-    const action = ph.newCreateSubOrchestrationAction(id, name, instanceId, encodedInput, options?.tags);
+    const action = ph.newCreateSubOrchestrationAction(id, name, instanceId, encodedInput, options?.tags, options?.version);
     this._pendingActions[action.getId()] = action;
 
     // If a retry policy is provided, create a RetryableTask
