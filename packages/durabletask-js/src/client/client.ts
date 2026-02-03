@@ -827,10 +827,12 @@ export class TaskHubGrpcClient {
       });
 
       stream.on("end", () => {
+        stream.removeAllListeners();
         resolve(historyEvents);
       });
 
       stream.on("error", (err: grpc.ServiceError) => {
+        stream.removeAllListeners();
         if (err.code === grpc.status.NOT_FOUND) {
           reject(new Error(`An orchestration with the instanceId '${instanceId}' was not found.`));
         } else if (err.code === grpc.status.CANCELLED) {
