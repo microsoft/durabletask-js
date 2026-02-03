@@ -367,35 +367,27 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   /**
    * Creates a new deterministic UUID that is safe for replay within an orchestration.
    *
-   * This implementation uses the same algorithm as the .NET SDK:
-   * - UUID v5 (name-based with SHA-1) per RFC 4122 §4.3
-   * - Uses a fixed namespace UUID: "9e952958-5e33-4daf-827f-2fa12937b875"
-   * - Name is: instanceId + "_" + currentUtcDateTime (ISO format) + "_" + counter
-   * - Handles .NET GUID byte ordering (little-endian for first 3 components)
+   * Uses UUID v5 (name-based with SHA-1) per RFC 4122 §4.3.
+   * The generated GUID is deterministic based on instanceId, currentUtcDateTime, and a counter,
+   * ensuring the same value is produced during replay.
    */
   newGuid(): string {
     const NAMESPACE_UUID = "9e952958-5e33-4daf-827f-2fa12937b875";
 
     // Build the name string: instanceId_datetime_counter
-    // Note: Date format matches .NET's "o" format (ISO 8601)
     const guidNameValue = `${this._instanceId}_${this._currentUtcDatetime.toISOString()}_${this._newGuidCounter}`;
     this._newGuidCounter++;
 
-    // Generate UUID v5 using the namespace and name (matching .NET's algorithm)
     return this.generateDeterministicGuid(NAMESPACE_UUID, guidNameValue);
   }
 
   /**
-   * Generates a deterministic GUID matching .NET's NewGuid() implementation.
-   * Uses UUID v5 algorithm but handles .NET GUID byte ordering.
+   * Generates a deterministic GUID using UUID v5 algorithm.
+   * The output format is compatible with other Durable Task SDKs.
    */
   private generateDeterministicGuid(namespace: string, name: string): string {
-    // Parse namespace UUID to bytes and convert to .NET GUID byte order
-    // .NET's Guid.ToByteArray() returns little-endian for first 3 components
-    const namespaceBytes = this.parseUuidToGuidBytes(namespace);
-
-    // Swap to network byte order (big-endian) for hashing - matches .NET's SwapByteArrayValues
-    this.swapGuidBytes(namespaceBytes);
+    // Parse namespace UUID string to bytes (big-endian/network order)
+    const namespaceBytes = this.parseUuidToBytes(namespace);
 
     // Convert name to UTF-8 bytes
     const nameBytes = Buffer.from(name, "utf-8");
@@ -410,50 +402,41 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     const guidBytes = Buffer.alloc(16);
     hashBytes.copy(guidBytes, 0, 0, 16);
 
-    // Set version to 5 (UUID v5) - matches .NET: (byte)((newGuidByteArray[6] & 0x0F) | (versionValue << 4))
+    // Set version to 5 (UUID v5)
     guidBytes[6] = (guidBytes[6] & 0x0f) | 0x50;
 
-    // Set variant to RFC 4122 - matches .NET: (byte)((newGuidByteArray[8] & 0x3F) | 0x80)
+    // Set variant to RFC 4122
     guidBytes[8] = (guidBytes[8] & 0x3f) | 0x80;
 
-    // Swap back to .NET GUID byte order before formatting
+    // Convert to GUID byte order for formatting
     this.swapGuidBytes(guidBytes);
 
-    // Format as GUID string (matching .NET Guid.ToString())
     return this.formatGuidBytes(guidBytes);
   }
 
   /**
-   * Swaps bytes to convert between .NET GUID byte order and network byte order.
-   * .NET GUIDs store the first 3 components in little-endian format.
-   * This matches .NET's SwapByteArrayValues function.
+   * Swaps bytes to convert between UUID (big-endian) and GUID (mixed-endian) byte order.
+   * GUIDs store the first 3 components (Data1, Data2, Data3) in little-endian format.
    */
   private swapGuidBytes(bytes: Buffer): void {
-    // Swap bytes 0 and 3
     [bytes[0], bytes[3]] = [bytes[3], bytes[0]];
-    // Swap bytes 1 and 2
     [bytes[1], bytes[2]] = [bytes[2], bytes[1]];
-    // Swap bytes 4 and 5
     [bytes[4], bytes[5]] = [bytes[5], bytes[4]];
-    // Swap bytes 6 and 7
     [bytes[6], bytes[7]] = [bytes[7], bytes[6]];
   }
 
   /**
-   * Parses a UUID string to a byte buffer in network byte order (big-endian).
+   * Parses a UUID string to a byte buffer in big-endian (network) order.
    */
-  private parseUuidToGuidBytes(uuid: string): Buffer {
+  private parseUuidToBytes(uuid: string): Buffer {
     const hex = uuid.replace(/-/g, "");
     return Buffer.from(hex, "hex");
   }
 
   /**
-   * Formats a GUID byte buffer (in .NET byte order) as a GUID string.
-   * Interprets first 3 components as little-endian to match .NET Guid.ToString().
+   * Formats a GUID byte buffer as a string in standard GUID format (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).
    */
   private formatGuidBytes(bytes: Buffer): string {
-    // .NET Guid stores Data1, Data2, Data3 as little-endian
-    // When formatting, we need to reverse these to get the correct hex representation
     const data1 = bytes.slice(0, 4).reverse().toString("hex");
     const data2 = bytes.slice(4, 6).reverse().toString("hex");
     const data3 = bytes.slice(6, 8).reverse().toString("hex");
