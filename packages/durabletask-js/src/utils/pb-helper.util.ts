@@ -313,6 +313,27 @@ export function newCreateSubOrchestrationAction(
   return action;
 }
 
+export function newSendEventAction(
+  id: number,
+  instanceId: string,
+  eventName: string,
+  encodedData?: string,
+): pb.OrchestratorAction {
+  const orchestrationInstance = new pb.OrchestrationInstance();
+  orchestrationInstance.setInstanceid(instanceId);
+
+  const sendEventAction = new pb.SendEventAction();
+  sendEventAction.setInstance(orchestrationInstance);
+  sendEventAction.setName(eventName);
+  sendEventAction.setData(getStringValue(encodedData));
+
+  const action = new pb.OrchestratorAction();
+  action.setId(id);
+  action.setSendevent(sendEventAction);
+
+  return action;
+}
+
 export function isEmpty(v?: StringValue | null): boolean {
   return v == null || v.getValue() === "";
 }

@@ -21,6 +21,14 @@ import { StopIterationError } from "./exception/stop-iteration-error";
 import { Registry } from "./registry";
 import { RuntimeOrchestrationContext } from "./runtime-orchestration-context";
 
+/**
+ * Result of orchestration execution containing actions and optional custom status.
+ */
+export interface OrchestrationExecutionResult {
+  actions: pb.OrchestratorAction[];
+  customStatus?: string;
+}
+
 export class OrchestrationExecutor {
   _generator?: TOrchestrator;
   _registry: Registry;
@@ -38,7 +46,7 @@ export class OrchestrationExecutor {
     instanceId: string,
     oldEvents: pb.HistoryEvent[],
     newEvents: pb.HistoryEvent[],
-  ): Promise<pb.OrchestratorAction[]> {
+  ): Promise<OrchestrationExecutionResult> {
     if (!newEvents?.length) {
       throw new OrchestrationStateError("The new history event list must have at least one event in it");
     }
@@ -81,7 +89,10 @@ export class OrchestrationExecutor {
     const actions = ctx.getActions();
     console.log(`${instanceId}: Returning ${actions.length} action(s)`);
 
-    return actions;
+    return {
+      actions,
+      customStatus: ctx.getCustomStatus(),
+    };
   }
 
   private async processEvent(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
@@ -101,7 +112,7 @@ export class OrchestrationExecutor {
     try {
       switch (eventType) {
         case pb.HistoryEvent.EventtypeCase.ORCHESTRATORSTARTED:
-          ctx._currentUtcDatetime = event.getTimestamp()?.toDate();
+          ctx._currentUtcDatetime = event.getTimestamp()?.toDate() ?? ctx._currentUtcDatetime;
           break;
         case pb.HistoryEvent.EventtypeCase.EXECUTIONSTARTED:
           {

@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+import { createHash } from "crypto";
 import { getName } from "../task";
 import { OrchestrationContext } from "../task/context/orchestration-context";
 import * as pb from "../proto/orchestrator_service_pb";
@@ -22,14 +23,16 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   _result: any;
   _pendingActions: Record<number, pb.OrchestratorAction>;
   _pendingTasks: Record<number, CompletableTask<any>>;
-  _sequenceNumber: any;
-  _currentUtcDatetime: any;
+  _sequenceNumber: number;
+  _newGuidCounter: number;
+  _currentUtcDatetime: Date;
   _instanceId: string;
   _completionStatus?: pb.OrchestrationStatus;
   _receivedEvents: Record<string, any[]>;
   _pendingEvents: Record<string, CompletableTask<any>[]>;
   _newInput?: any;
-  _saveEvents: any;
+  _saveEvents: boolean;
+  _customStatus?: any;
 
   constructor(instanceId: string) {
     super();
@@ -41,6 +44,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     this._pendingActions = {};
     this._pendingTasks = {};
     this._sequenceNumber = 0;
+    this._newGuidCounter = 0;
     this._currentUtcDatetime = new Date(1000, 0, 1);
     this._instanceId = instanceId;
     this._completionStatus = undefined;
@@ -48,6 +52,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     this._pendingEvents = {};
     this._newInput = undefined;
     this._saveEvents = false;
+    this._customStatus = undefined;
   }
 
   get instanceId(): string {
@@ -141,7 +146,8 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
 
     this._isComplete = true;
     this._completionStatus = status;
-    this._pendingActions = {}; // Clear any pending actions
+    // Note: Do NOT clear pending actions here - fire-and-forget actions like sendEvent
+    // must be preserved and returned alongside the complete action
 
     this._result = result;
 
@@ -163,7 +169,8 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
 
     this._isComplete = true;
     this._completionStatus = pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED;
-    this._pendingActions = {}; // Cancel any pending actions
+    // Note: Do NOT clear pending actions here - fire-and-forget actions like sendEvent
+    // must be preserved and returned alongside the complete action
 
     const action = ph.newCompleteOrchestrationAction(
       this.nextSequenceNumber(),
@@ -362,6 +369,115 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     this.setContinuedAsNew(newInput, saveEvents);
   }
 
+  /**
+   * Sets a custom status value for the current orchestration instance.
+   */
+  setCustomStatus(customStatus: any): void {
+    this._customStatus = customStatus;
+  }
+
+  /**
+   * Gets the encoded custom status value for the current orchestration instance.
+   * This is used internally when building the orchestrator response.
+   */
+  getCustomStatus(): string | undefined {
+    if (this._customStatus === undefined || this._customStatus === null) {
+      return undefined;
+    }
+    return JSON.stringify(this._customStatus);
+  }
+
+  /**
+   * Sends an event to another orchestration instance.
+   */
+  sendEvent(instanceId: string, eventName: string, eventData?: any): void {
+    const id = this.nextSequenceNumber();
+    const encodedData = eventData !== undefined ? JSON.stringify(eventData) : undefined;
+    const action = ph.newSendEventAction(id, instanceId, eventName, encodedData);
+    this._pendingActions[action.getId()] = action;
+  }
+
+  /**
+   * Creates a new deterministic UUID that is safe for replay within an orchestration.
+   *
+   * Uses UUID v5 (name-based with SHA-1) per RFC 4122 §4.3.
+   * The generated GUID is deterministic based on instanceId, currentUtcDateTime, and a counter,
+   * ensuring the same value is produced during replay.
+   */
+  newGuid(): string {
+    const NAMESPACE_UUID = "9e952958-5e33-4daf-827f-2fa12937b875";
+
+    // Build the name string: instanceId_datetime_counter
+    const guidNameValue = `${this._instanceId}_${this._currentUtcDatetime.toISOString()}_${this._newGuidCounter}`;
+    this._newGuidCounter++;
+
+    return this.generateDeterministicGuid(NAMESPACE_UUID, guidNameValue);
+  }
+
+  /**
+   * Generates a deterministic GUID using UUID v5 algorithm.
+   * The output format is compatible with other Durable Task SDKs.
+   */
+  private generateDeterministicGuid(namespace: string, name: string): string {
+    // Parse namespace UUID string to bytes (big-endian/network order)
+    const namespaceBytes = this.parseUuidToBytes(namespace);
+
+    // Convert name to UTF-8 bytes
+    const nameBytes = Buffer.from(name, "utf-8");
+
+    // Compute SHA-1 hash of namespace + name
+    const hash = createHash("sha1");
+    hash.update(namespaceBytes);
+    hash.update(nameBytes);
+    const hashBytes = hash.digest();
+
+    // Take first 16 bytes of hash
+    const guidBytes = Buffer.alloc(16);
+    hashBytes.copy(guidBytes, 0, 0, 16);
+
+    // Set version to 5 (UUID v5)
+    guidBytes[6] = (guidBytes[6] & 0x0f) | 0x50;
+
+    // Set variant to RFC 4122
+    guidBytes[8] = (guidBytes[8] & 0x3f) | 0x80;
+
+    // Convert to GUID byte order for formatting
+    this.swapGuidBytes(guidBytes);
+
+    return this.formatGuidBytes(guidBytes);
+  }
+
+  /**
+   * Swaps bytes to convert between UUID (big-endian) and GUID (mixed-endian) byte order.
+   * GUIDs store the first 3 components (Data1, Data2, Data3) in little-endian format.
+   */
+  private swapGuidBytes(bytes: Buffer): void {
+    [bytes[0], bytes[3]] = [bytes[3], bytes[0]];
+    [bytes[1], bytes[2]] = [bytes[2], bytes[1]];
+    [bytes[4], bytes[5]] = [bytes[5], bytes[4]];
+    [bytes[6], bytes[7]] = [bytes[7], bytes[6]];
+  }
+
+  /**
+   * Parses a UUID string to a byte buffer in big-endian (network) order.
+   */
+  private parseUuidToBytes(uuid: string): Buffer {
+    const hex = uuid.replace(/-/g, "");
+    return Buffer.from(hex, "hex");
+  }
+
+  /**
+   * Formats a GUID byte buffer as a string in standard GUID format (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).
+   */
+  private formatGuidBytes(bytes: Buffer): string {
+    const data1 = bytes.slice(0, 4).reverse().toString("hex");
+    const data2 = bytes.slice(4, 6).reverse().toString("hex");
+    const data3 = bytes.slice(6, 8).reverse().toString("hex");
+    const data4 = bytes.slice(8, 10).toString("hex");
+    const data5 = bytes.slice(10, 16).toString("hex");
+
+    return `${data1}-${data2}-${data3}-${data4}-${data5}`;
+  }
   /**
    * Creates a retry timer for a retryable task.
    * The timer will be associated with the retryable task so that when it fires,
