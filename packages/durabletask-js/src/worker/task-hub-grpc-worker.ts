@@ -16,6 +16,11 @@ import { callWithMetadata, MetadataGenerator } from "../utils/grpc-helper.util";
 import { OrchestrationExecutor } from "./orchestration-executor";
 import { ActivityExecutor } from "./activity-executor";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
+import { Logger, ConsoleLogger } from "../types/logger.type";
+import { ExponentialBackoff, sleep, withTimeout } from "../utils/backoff.util";
+
+/** Default timeout in milliseconds for graceful shutdown. */
+const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30000;
 
 export class TaskHubGrpcWorker {
   private _responseStream: grpc.ClientReadableStream<pb.WorkItem> | null;
@@ -28,6 +33,10 @@ export class TaskHubGrpcWorker {
   private _isRunning: boolean;
   private _stopWorker: boolean;
   private _stub: stubs.TaskHubSidecarServiceClient | null;
+  private _logger: Logger;
+  private _pendingWorkItems: Set<Promise<void>>;
+  private _shutdownTimeoutMs: number;
+  private _backoff: ExponentialBackoff;
 
   /**
    * Creates a new TaskHubGrpcWorker instance.
@@ -37,6 +46,8 @@ export class TaskHubGrpcWorker {
    * @param useTLS Whether to use TLS. Defaults to false.
    * @param credentials Optional pre-configured channel credentials. If provided, useTLS is ignored.
    * @param metadataGenerator Optional function to generate per-call metadata (for taskhub, auth tokens, etc.).
+   * @param logger Optional logger instance. Defaults to ConsoleLogger.
+   * @param shutdownTimeoutMs Optional timeout in milliseconds for graceful shutdown. Defaults to 30000.
    */
   constructor(
     hostAddress?: string,
@@ -44,6 +55,8 @@ export class TaskHubGrpcWorker {
     useTLS?: boolean,
     credentials?: grpc.ChannelCredentials,
     metadataGenerator?: MetadataGenerator,
+    logger?: Logger,
+    shutdownTimeoutMs?: number,
   ) {
     this._registry = new Registry();
     this._hostAddress = hostAddress;
@@ -55,6 +68,14 @@ export class TaskHubGrpcWorker {
     this._isRunning = false;
     this._stopWorker = false;
     this._stub = null;
+    this._logger = logger ?? new ConsoleLogger();
+    this._pendingWorkItems = new Set();
+    this._shutdownTimeoutMs = shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
+    this._backoff = new ExponentialBackoff({
+      initialDelayMs: 1000,
+      maxDelayMs: 30000,
+      multiplier: 2,
+    });
   }
 
   /**
@@ -148,46 +169,58 @@ export class TaskHubGrpcWorker {
       // send a "Hello" message to the sidecar to ensure that it's listening
       await callWithMetadata(client.stub.hello.bind(client.stub), new Empty(), this._metadataGenerator);
 
+      // Reset backoff on successful connection
+      this._backoff.reset();
+
       // Stream work items from the sidecar (pass metadata for insecure connections)
       const metadata = await this._getMetadata();
       const stream = client.stub.getWorkItems(new pb.GetWorkItemsRequest(), metadata);
       this._responseStream = stream;
 
-      console.log(`Successfully connected to ${this._hostAddress}. Waiting for work items...`);
+      this._logger.info(`Successfully connected to ${this._hostAddress}. Waiting for work items...`);
 
       // Wait for a work item to be received
       stream.on("data", (workItem: pb.WorkItem) => {
         const completionToken = workItem.getCompletiontoken();
         if (workItem.hasOrchestratorrequest()) {
-          console.log(
+          this._logger.info(
             `Received "Orchestrator Request" work item with instance id '${workItem
               ?.getOrchestratorrequest()
               ?.getInstanceid()}'`,
           );
           this._executeOrchestrator(workItem.getOrchestratorrequest() as any, completionToken, client.stub);
         } else if (workItem.hasActivityrequest()) {
-          console.log(`Received "Activity Request" work item`);
+          this._logger.info(`Received "Activity Request" work item`);
           this._executeActivity(workItem.getActivityrequest() as any, completionToken, client.stub);
         } else if (workItem.hasHealthping()) {
           // Health ping - no-op, just a keep-alive message from the server
         } else {
-          console.log(`Received unknown type of work item `);
+          this._logger.info(`Received unknown type of work item `);
         }
       });
 
       // Wait for the stream to end or error
       stream.on("end", async () => {
+        // Clean up event listeners to prevent memory leaks
+        stream.removeAllListeners();
         stream.cancel();
         stream.destroy();
         if (this._stopWorker) {
-          console.log("Stream ended");
+          this._logger.info("Stream ended");
           return;
         }
-        console.log("Stream abruptly closed, will retry the connection...");
-        // TODO consider exponential backoff
-        await sleep(5000);
+        this._logger.info(`Stream abruptly closed, will retry in ${this._backoff.peekNextDelay()}ms...`);
+        await this._backoff.wait();
+        // Create a new client for the retry to avoid stale channel issues
+        const newClient = new GrpcClient(
+          this._hostAddress,
+          this._grpcChannelOptions,
+          this._tls,
+          this._grpcChannelCredentials,
+        );
+        this._stub = newClient.stub;
         // do not await
-        this.internalRunWorker(client, true);
+        this.internalRunWorker(newClient, true);
       });
 
       stream.on("error", (err: Error) => {
@@ -195,27 +228,35 @@ export class TaskHubGrpcWorker {
         if (this._stopWorker) {
           return;
         }
-        console.log("Stream error", err);
+        this._logger.info("Stream error", err);
       });
     } catch (err) {
       if (this._stopWorker) {
         // ignoring the error because the worker has been stopped
         return;
       }
-      console.log(`Error on grpc stream: ${err}`);
+      this._logger.error(`Error on grpc stream: ${err}`);
       if (!isRetry) {
         throw err;
       }
-      console.log("Connection will be retried...");
-      // TODO consider exponential backoff
-      await sleep(5000);
-      this.internalRunWorker(client, true);
+      this._logger.info(`Connection will be retried in ${this._backoff.peekNextDelay()}ms...`);
+      await this._backoff.wait();
+      // Create a new client for the retry
+      const newClient = new GrpcClient(
+        this._hostAddress,
+        this._grpcChannelOptions,
+        this._tls,
+        this._grpcChannelCredentials,
+      );
+      this._stub = newClient.stub;
+      this.internalRunWorker(newClient, true);
       return;
     }
   }
 
   /**
-   * Stop the worker and wait for any pending work items to complete
+   * Stop the worker and wait for any pending work items to complete.
+   * Uses a configurable timeout (default 30s) to wait for in-flight work.
    */
   async stop(): Promise<void> {
     if (!this._isRunning) {
@@ -224,22 +265,53 @@ export class TaskHubGrpcWorker {
 
     this._stopWorker = true;
 
+    // Clean up stream listeners to prevent memory leaks
+    this._responseStream?.removeAllListeners();
     this._responseStream?.cancel();
     this._responseStream?.destroy();
 
-    this._stub?.close();
+    // Wait for pending work items to complete with timeout
+    if (this._pendingWorkItems.size > 0) {
+      this._logger.info(`Waiting for ${this._pendingWorkItems.size} pending work item(s) to complete...`);
+      try {
+        await withTimeout(
+          Promise.all(this._pendingWorkItems),
+          this._shutdownTimeoutMs,
+          `Shutdown timed out after ${this._shutdownTimeoutMs}ms waiting for pending work items`,
+        );
+        this._logger.info("All pending work items completed.");
+      } catch (e) {
+        this._logger.warn(`${(e as Error).message}. Forcing shutdown.`);
+      }
+    }
 
+    this._stub?.close();
     this._isRunning = false;
 
-    // Wait a bit to let the async operations finish
+    // Brief pause to allow gRPC cleanup
     // https://github.com/grpc/grpc-node/issues/1563#issuecomment-829483711
-    await sleep(1000);
+    await sleep(500);
   }
 
   /**
-   *
+   * Executes an orchestrator request and tracks it as a pending work item.
    */
-  private async _executeOrchestrator(
+  private _executeOrchestrator(
+    req: pb.OrchestratorRequest,
+    completionToken: string,
+    stub: stubs.TaskHubSidecarServiceClient,
+  ): void {
+    const workPromise = this._executeOrchestratorInternal(req, completionToken, stub);
+    this._pendingWorkItems.add(workPromise);
+    workPromise.finally(() => {
+      this._pendingWorkItems.delete(workPromise);
+    });
+  }
+
+  /**
+   * Internal implementation of orchestrator execution.
+   */
+  private async _executeOrchestratorInternal(
     req: pb.OrchestratorRequest,
     completionToken: string,
     stub: stubs.TaskHubSidecarServiceClient,
@@ -253,7 +325,7 @@ export class TaskHubGrpcWorker {
     let res;
 
     try {
-      const executor = new OrchestrationExecutor(this._registry);
+      const executor = new OrchestrationExecutor(this._registry, this._logger);
       const result = await executor.execute(req.getInstanceid(), req.getPasteventsList(), req.getNeweventsList());
 
       res = new pb.OrchestratorResponse();
@@ -264,8 +336,8 @@ export class TaskHubGrpcWorker {
         res.setCustomstatus(pbh.getStringValue(result.customStatus));
       }
     } catch (e: any) {
-      console.error(e);
-      console.log(`An error occurred while trying to execute instance '${req.getInstanceid()}': ${e.message}`);
+      this._logger.error(e);
+      this._logger.info(`An error occurred while trying to execute instance '${req.getInstanceid()}': ${e.message}`);
 
       const failureDetails = pbh.newFailureDetails(e);
 
@@ -286,14 +358,29 @@ export class TaskHubGrpcWorker {
     try {
       await callWithMetadata(stub.completeOrchestratorTask.bind(stub), res, this._metadataGenerator);
     } catch (e: any) {
-      console.error(`An error occurred while trying to complete instance '${req.getInstanceid()}': ${e?.message}`);
+      this._logger.error(`An error occurred while trying to complete instance '${req.getInstanceid()}': ${e?.message}`);
     }
   }
 
   /**
-   *
+   * Executes an activity request and tracks it as a pending work item.
    */
-  private async _executeActivity(
+  private _executeActivity(
+    req: pb.ActivityRequest,
+    completionToken: string,
+    stub: stubs.TaskHubSidecarServiceClient,
+  ): void {
+    const workPromise = this._executeActivityInternal(req, completionToken, stub);
+    this._pendingWorkItems.add(workPromise);
+    workPromise.finally(() => {
+      this._pendingWorkItems.delete(workPromise);
+    });
+  }
+
+  /**
+   * Internal implementation of activity execution.
+   */
+  private async _executeActivityInternal(
     req: pb.ActivityRequest,
     completionToken: string,
     stub: stubs.TaskHubSidecarServiceClient,
@@ -307,7 +394,7 @@ export class TaskHubGrpcWorker {
     let res;
 
     try {
-      const executor = new ActivityExecutor(this._registry);
+      const executor = new ActivityExecutor(this._registry, this._logger);
       const result = await executor.execute(
         instanceId,
         req.getName(),
@@ -324,8 +411,8 @@ export class TaskHubGrpcWorker {
       res.setCompletiontoken(completionToken);
       res.setResult(s);
     } catch (e: any) {
-      console.error(e);
-      console.log(`An error occurred while trying to execute activity '${req.getName()}': ${e.message}`);
+      this._logger.error(e);
+      this._logger.info(`An error occurred while trying to execute activity '${req.getName()}': ${e.message}`);
 
       const failureDetails = pbh.newFailureDetails(e);
 
@@ -338,15 +425,11 @@ export class TaskHubGrpcWorker {
     try {
       await callWithMetadata(stub.completeActivityTask.bind(stub), res, this._metadataGenerator);
     } catch (e: any) {
-      console.error(
+      this._logger.error(
         `Failed to deliver activity response for '${req.getName()}#${req.getTaskid()}' of orchestration ID '${instanceId}' to sidecar: ${
           e?.message
         }`,
       );
     }
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

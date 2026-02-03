@@ -19,14 +19,18 @@ import {
   newTimerCreatedEvent,
   newTimerFiredEvent,
 } from "../src/utils/pb-helper.util";
-import { OrchestrationExecutor, OrchestrationExecutionResult } from "../src/worker/orchestration-executor";
+import { OrchestrationExecutor } from "../src/worker/orchestration-executor";
 import * as pb from "../src/proto/orchestrator_service_pb";
 import { Registry } from "../src/worker/registry";
 import { TOrchestrator } from "../src/types/orchestrator.type";
+import { NoOpLogger } from "../src/types/logger.type";
 import { ActivityContext } from "../src/task/context/activity-context";
 import { CompletableTask } from "../src/task/completable-task";
 import { Task } from "../src/task/task";
 import { getName, whenAll, whenAny } from "../src/task";
+
+// Use NoOpLogger to suppress log output during tests
+const testLogger = new NoOpLogger();
 
 const TEST_INSTANCE_ID = "abc123";
 
@@ -45,9 +49,9 @@ describe("Orchestration Executor", () => {
       newOrchestratorStartedEvent(startTime),
       newExecutionStartedEvent(name, TEST_INSTANCE_ID, JSON.stringify(testInput)),
     ];
-    const executor = new OrchestrationExecutor(registry);
-    const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
-    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const { actions } = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(completeAction?.getResult()).not.toBeNull();
     const expectedOutput = [testInput, TEST_INSTANCE_ID, startTime.toISOString(), false];
@@ -61,9 +65,9 @@ describe("Orchestration Executor", () => {
     const registry = new Registry();
     const name = registry.addOrchestrator(emptyOrchestrator);
     const newEvents = [newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined)];
-    const executor = new OrchestrationExecutor(registry);
-    const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
-    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const { actions } = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(completeAction?.getResult()).not.toBeNull();
     expect(completeAction?.getResult()?.getValue()).toEqual('"done"');
@@ -72,9 +76,9 @@ describe("Orchestration Executor", () => {
     const registry = new Registry();
     const name = "Bogus";
     const newEvents = [newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined)];
-    const executor = new OrchestrationExecutor(registry);
-    const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
-    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const { actions } = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
     expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("OrchestratorNotRegisteredError");
     expect(completeAction?.getFailuredetails()?.getErrormessage()).not.toBeNull();
@@ -94,13 +98,13 @@ describe("Orchestration Executor", () => {
       newOrchestratorStartedEvent(startTime),
       newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined),
     ];
-    const executor = new OrchestrationExecutor(registry);
-    const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
-    expect(result.actions).not.toBeNull();
-    expect(result.actions.length).toEqual(1);
-    expect(result.actions[0]?.constructor?.name).toEqual(OrchestratorAction.name);
-    expect(result.actions[0]?.getId()).toEqual(1);
-    expect(result.actions[0]?.getCreatetimer()?.getFireat()?.toDate()).toEqual(expectedFireAt);
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const { actions } = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+    expect(actions).not.toBeNull();
+    expect(actions.length).toEqual(1);
+    expect(actions[0]?.constructor?.name).toEqual(OrchestratorAction.name);
+    expect(actions[0]?.getId()).toEqual(1);
+    expect(actions[0]?.getCreatetimer()?.getFireat()?.toDate()).toEqual(expectedFireAt);
   });
   it("should test the resumption of a task using a timerFired event", async () => {
     const delayOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
@@ -119,9 +123,9 @@ describe("Orchestration Executor", () => {
       newTimerCreatedEvent(1, expectedFireAt),
     ];
     const newEvents = [newTimerFiredEvent(1, expectedFireAt)];
-    const executor = new OrchestrationExecutor(registry);
-    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
-    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const { actions } = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(completeAction?.getResult()).not.toBeNull();
     expect(completeAction?.getResult()?.getValue()).toEqual('"done"');
@@ -137,13 +141,13 @@ describe("Orchestration Executor", () => {
     const registry = new Registry();
     const name = registry.addOrchestrator(orchestrator);
     const newEvents = [newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined)];
-    const executor = new OrchestrationExecutor(registry);
-    const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
-    expect(result.actions).not.toBeNull();
-    expect(result.actions.length).toEqual(1);
-    expect(result.actions[0]?.constructor?.name).toEqual(OrchestratorAction.name);
-    expect(result.actions[0]?.getId()).toEqual(1);
-    expect(result.actions[0]?.getScheduletask()?.getName()).toEqual("dummyActivity");
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const { actions } = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+    expect(actions).not.toBeNull();
+    expect(actions.length).toEqual(1);
+    expect(actions[0]?.constructor?.name).toEqual(OrchestratorAction.name);
+    expect(actions[0]?.getId()).toEqual(1);
+    expect(actions[0]?.getScheduletask()?.getName()).toEqual("dummyActivity");
   });
   it("should test the successful completion of an activity task", async () => {
     const dummyActivity = async (_: ActivityContext) => {
@@ -162,10 +166,9 @@ describe("Orchestration Executor", () => {
     ];
     const encodedOutput = JSON.stringify("done!");
     const newEvents = [newTaskCompletedEvent(1, encodedOutput)];
-    const executor = new OrchestrationExecutor(registry);
-    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
-    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
-    console.log(completeAction?.getFailuredetails());
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const { actions } = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(completeAction?.getResult()?.getValue()).toEqual(encodedOutput);
   });
@@ -186,10 +189,9 @@ describe("Orchestration Executor", () => {
     ];
     const encodedOutput = JSON.stringify("done!");
     const newEvents = [newTaskCompletedEvent(1, encodedOutput)];
-    const executor = new OrchestrationExecutor(registry);
-    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
-    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
-    console.log(completeAction?.getFailuredetails());
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const { actions } = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(completeAction?.getResult()?.getValue()).toEqual(encodedOutput);
   });
@@ -210,9 +212,9 @@ describe("Orchestration Executor", () => {
     ];
     const ex = new Error("Kah-BOOOOM!!!");
     const newEvents = [newTaskFailedEvent(1, ex)];
-    const executor = new OrchestrationExecutor(registry);
-    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
-    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const { actions } = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
     expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("TaskFailedError");
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain(ex.message);
@@ -240,9 +242,9 @@ describe("Orchestration Executor", () => {
       newTimerCreatedEvent(1, fireAt),
     ];
     const newEvents = [newTimerFiredEvent(1, fireAt)];
-    const executor = new OrchestrationExecutor(registry);
-    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
-    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const { actions } = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
     expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("NonDeterminismError");
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("1");
@@ -262,9 +264,9 @@ describe("Orchestration Executor", () => {
       newTaskScheduledEvent(1, "bogusActivity"),
     ];
     const newEvents = [newTaskCompletedEvent(1, "done!")];
-    const executor = new OrchestrationExecutor(registry);
-    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
-    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const { actions } = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
     expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("NonDeterminismError");
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("1");
@@ -286,9 +288,9 @@ describe("Orchestration Executor", () => {
       newTaskScheduledEvent(1, getName(dummyActivity)),
     ];
     const newEvents = [newTaskCompletedEvent(1)];
-    const executor = new OrchestrationExecutor(registry);
-    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
-    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const { actions } = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
     expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("NonDeterminismError");
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("1");
@@ -311,9 +313,9 @@ describe("Orchestration Executor", () => {
       newTaskScheduledEvent(1, "originalActivity"),
     ];
     const newEvents = [newTaskCompletedEvent(1)];
-    const executor = new OrchestrationExecutor(registry);
-    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
-    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const { actions } = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
     expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("NonDeterminismError");
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("1");
@@ -338,9 +340,9 @@ describe("Orchestration Executor", () => {
       newSubOrchestrationCreatedEvent(1, subOrchestratorName, "sub-orch-123"),
     ];
     const newEvents = [newSubOrchestrationCompletedEvent(1, "42")];
-    const executor = new OrchestrationExecutor(registry);
-    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
-    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const { actions } = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(completeAction?.getResult()?.getValue()).toEqual("42");
   });
@@ -362,9 +364,9 @@ describe("Orchestration Executor", () => {
     ];
     const ex = new Error("Kah-BOOOOM!!!");
     const newEvents = [newSubOrchestrationFailedEvent(1, ex)];
-    const executor = new OrchestrationExecutor(registry);
-    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
-    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const { actions } = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
     expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("TaskFailedError");
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain(ex.message);
@@ -386,9 +388,9 @@ describe("Orchestration Executor", () => {
       newSubOrchestrationCreatedEvent(1, "some_sub_orchestration", "sub-orch-123"),
     ];
     const newEvents = [newSubOrchestrationCompletedEvent(1, "42")];
-    const executor = new OrchestrationExecutor(registry);
-    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
-    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const { actions } = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
     expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("NonDeterminismError");
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("1");
@@ -416,9 +418,9 @@ describe("Orchestration Executor", () => {
       newSubOrchestrationCreatedEvent(1, "some_sub_orchestration", "sub-orch-123"),
     ];
     const newEvents = [newSubOrchestrationCompletedEvent(1, "42")];
-    const executor = new OrchestrationExecutor(registry);
-    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
-    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const { actions } = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
     expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("NonDeterminismError");
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("1");
@@ -443,18 +445,18 @@ describe("Orchestration Executor", () => {
 
     // Execute the orchestration until it is waiting for an external event.
     // The result should be an empty list of actions because the orchestration didn't schedule any work
-    let executor = new OrchestrationExecutor(registry);
-    let result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
-    expect(result.actions.length).toBe(0);
+    let executor = new OrchestrationExecutor(registry, testLogger);
+    let ({ actions } = await executor.execute)(TEST_INSTANCE_ID, oldEvents, newEvents);
+    expect(actions.length).toBe(0);
 
     // Now send an external event to the orchestration and execute it again.
     // This time the orcehstration should complete
     oldEvents = newEvents;
     newEvents = [newEventRaisedEvent("my_event", "42")];
-    executor = new OrchestrationExecutor(registry);
-    result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    executor = new OrchestrationExecutor(registry, testLogger);
+    ({ actions } = await executor.execute)(TEST_INSTANCE_ID, oldEvents, newEvents);
 
-    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(completeAction?.getResult()?.getValue()).toEqual("42");
   });
@@ -478,10 +480,10 @@ describe("Orchestration Executor", () => {
 
     // Execute the orchestration
     // It should be in a running state waiting for the timer to fire
-    let executor = new OrchestrationExecutor(registry);
-    let result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
-    expect(result.actions.length).toBe(1);
-    expect(result.actions[0].hasCreatetimer()).toBeTruthy();
+    let executor = new OrchestrationExecutor(registry, testLogger);
+    let ({ actions } = await executor.execute)(TEST_INSTANCE_ID, oldEvents, newEvents);
+    expect(actions.length).toBe(1);
+    expect(actions[0].hasCreatetimer()).toBeTruthy();
 
     // Complete the timer task
     // The orchestration should move to the waitForExternalEvent step now which should
@@ -490,10 +492,10 @@ describe("Orchestration Executor", () => {
     newEvents.push(newTimerCreatedEvent(1, timerDueTime));
     oldEvents = newEvents;
     newEvents = [newTimerFiredEvent(1, timerDueTime)];
-    executor = new OrchestrationExecutor(registry);
-    result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    executor = new OrchestrationExecutor(registry, testLogger);
+    ({ actions } = await executor.execute)(TEST_INSTANCE_ID, oldEvents, newEvents);
 
-    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(completeAction?.getResult()?.getValue()).toEqual("42");
   });
@@ -514,17 +516,17 @@ describe("Orchestration Executor", () => {
     // Execute the orchestration
     // It should be in a running state because it was suspended prior
     // to the processing the event raised event
-    let executor = new OrchestrationExecutor(registry);
-    let result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
-    expect(result.actions.length).toBe(0);
+    let executor = new OrchestrationExecutor(registry, testLogger);
+    let ({ actions } = await executor.execute)(TEST_INSTANCE_ID, oldEvents, newEvents);
+    expect(actions.length).toBe(0);
 
     // Resume the orchestration, it should complete successfully
     oldEvents.push(...newEvents);
     newEvents = [newResumeEvent()];
-    executor = new OrchestrationExecutor(registry);
-    result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    executor = new OrchestrationExecutor(registry, testLogger);
+    ({ actions } = await executor.execute)(TEST_INSTANCE_ID, oldEvents, newEvents);
 
-    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(completeAction?.getResult()?.getValue()).toEqual("42");
   });
@@ -544,12 +546,12 @@ describe("Orchestration Executor", () => {
 
     // Execute the orchestration
     // It should be in a running state waiting for an external event
-    let executor = new OrchestrationExecutor(registry);
-    let result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
-    executor = new OrchestrationExecutor(registry);
-    result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    let executor = new OrchestrationExecutor(registry, testLogger);
+    let ({ actions } = await executor.execute)(TEST_INSTANCE_ID, oldEvents, newEvents);
+    executor = new OrchestrationExecutor(registry, testLogger);
+    ({ actions } = await executor.execute)(TEST_INSTANCE_ID, oldEvents, newEvents);
 
-    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED);
     expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify("terminated!"));
   });
@@ -576,10 +578,10 @@ describe("Orchestration Executor", () => {
       const newEvents = [newTimerFiredEvent(1, new Date(Date.now() + 1 * 24 * 60 * 60 * 1000))];
 
       // Execute the orchestration, it should be in a running state waiting for the timer to fire
-      const executor = new OrchestrationExecutor(registry);
-      const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+      const executor = new OrchestrationExecutor(registry, testLogger);
+      const { actions } = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
 
-      const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+      const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
       expect(completeAction?.getOrchestrationstatus()).toEqual(
         pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW,
       );
@@ -625,16 +627,16 @@ describe("Orchestration Executor", () => {
       newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID, "10"),
     ];
 
-    const executor = new OrchestrationExecutor(registry);
-    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const { actions } = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
 
     // The result should be 10 "taskScheduled" actions with inputs from 0 to 9
-    expect(result.actions.length).toEqual(10);
+    expect(actions.length).toEqual(10);
 
     for (let i = 0; i < 10; i++) {
-      expect(result.actions[i].hasScheduletask());
-      expect(result.actions[i].getScheduletask()?.getName()).toEqual(activityName);
-      expect(result.actions[i].getScheduletask()?.getInput()?.getValue()).toEqual(`"${i}"`);
+      expect(actions[i].hasScheduletask());
+      expect(actions[i].getScheduletask()?.getName()).toEqual(activityName);
+      expect(actions[i].getScheduletask()?.getInput()?.getValue()).toEqual(`"${i}"`);
     }
   });
 
@@ -673,16 +675,16 @@ describe("Orchestration Executor", () => {
     // First, test with only the first 5 events
     // we expect the orchestrator to be running
     // it should however return 0 actions, since it is still waiting for the other 5 tasks to complete
-    let executor = new OrchestrationExecutor(registry);
-    let result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents.slice(0, 4));
-    expect(result.actions.length).toBe(0);
+    let executor = new OrchestrationExecutor(registry, testLogger);
+    let ({ actions } = await executor.execute)(TEST_INSTANCE_ID, oldEvents, newEvents.slice(0, 4));
+    expect(actions.length).toBe(0);
 
     // Now test with the full set of new events
     // we expect the orchestration to complete
-    executor = new OrchestrationExecutor(registry);
-    result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    executor = new OrchestrationExecutor(registry, testLogger);
+    ({ actions } = await executor.execute)(TEST_INSTANCE_ID, oldEvents, newEvents);
 
-    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(completeAction?.getResult()?.getValue()).toEqual("[0,1,2,3,4,5,6,7,8,9]");
   });
@@ -726,10 +728,10 @@ describe("Orchestration Executor", () => {
 
     // Now test with the full set of new events
     // We expect the orchestration to complete
-    const executor = new OrchestrationExecutor(registry);
-    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const { actions } = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
 
-    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
     expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("TaskFailedError");
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain(ex.message);
@@ -761,12 +763,12 @@ describe("Orchestration Executor", () => {
     // this should return 2 actions: a Tokyo Task Schedule and a Seattle Task Schedule
     let oldEvents: any[] = [];
     let newEvents = [newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
-    let executor = new OrchestrationExecutor(registry);
-    let result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    let executor = new OrchestrationExecutor(registry, testLogger);
+    let ({ actions } = await executor.execute)(TEST_INSTANCE_ID, oldEvents, newEvents);
 
-    expect(result.actions.length).toEqual(2);
-    expect(result.actions[0].hasScheduletask()).toBeTruthy();
-    expect(result.actions[1].hasScheduletask()).toBeTruthy();
+    expect(actions.length).toEqual(2);
+    expect(actions[0].hasScheduletask()).toBeTruthy();
+    expect(actions[1].hasScheduletask()).toBeTruthy();
 
     // The next tests assume that the orchestration has already await at the task.whenAny
     oldEvents = [
@@ -780,9 +782,9 @@ describe("Orchestration Executor", () => {
     // the orchestration should now complete with "Hello Tokyo!"
     let encodedOutput = JSON.stringify(hello(null, "Tokyo"));
     newEvents = [newTaskCompletedEvent(1, encodedOutput)];
-    executor = new OrchestrationExecutor(registry);
-    result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
-    let completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    executor = new OrchestrationExecutor(registry, testLogger);
+    ({ actions } = await executor.execute)(TEST_INSTANCE_ID, oldEvents, newEvents);
+    let completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(completeAction?.getResult()?.getValue()).toEqual(encodedOutput);
 
@@ -790,9 +792,9 @@ describe("Orchestration Executor", () => {
     // the orchestration should now complete with "Hello Tokyo!"
     encodedOutput = JSON.stringify(hello(null, "Seattle"));
     newEvents = [newTaskCompletedEvent(2, encodedOutput)];
-    executor = new OrchestrationExecutor(registry);
-    result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
-    completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    executor = new OrchestrationExecutor(registry, testLogger);
+    ({ actions } = await executor.execute)(TEST_INSTANCE_ID, oldEvents, newEvents);
+    completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(completeAction?.getResult()?.getValue()).toEqual(encodedOutput);
   });
@@ -817,32 +819,32 @@ describe("Orchestration Executor", () => {
       const name = registry.addOrchestrator(orchestrator);
 
       // Act - Step 1: Start orchestration
-      let executor = new OrchestrationExecutor(registry);
+      let executor = new OrchestrationExecutor(registry, testLogger);
       let newEvents = [
         newOrchestratorStartedEvent(),
         newExecutionStartedEvent(name, TEST_INSTANCE_ID, JSON.stringify(21)),
       ];
-      let result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+      let ({ actions } = await executor.execute)(TEST_INSTANCE_ID, [], newEvents);
 
       // Assert - Step 1: Should schedule activity
-      expect(result.actions.length).toBe(1);
-      expect(result.actions[0].hasScheduletask()).toBe(true);
-      expect(result.actions[0].getScheduletask()?.getName()).toBe("flakyActivity");
+      expect(actions.length).toBe(1);
+      expect(actions[0].hasScheduletask()).toBe(true);
+      expect(actions[0].getScheduletask()?.getName()).toBe("flakyActivity");
 
       // Act - Step 2: Activity scheduled, then fails
       const oldEvents = [
         ...newEvents,
         newTaskScheduledEvent(1, "flakyActivity"),
       ];
-      executor = new OrchestrationExecutor(registry);
+      executor = new OrchestrationExecutor(registry, testLogger);
       newEvents = [
         newTaskFailedEvent(1, new Error("Transient failure on attempt 1")),
       ];
-      result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+      ({ actions } = await executor.execute)(TEST_INSTANCE_ID, oldEvents, newEvents);
 
       // Assert - Step 2: Should schedule a retry timer
-      expect(result.actions.length).toBe(1);
-      expect(result.actions[0].hasCreatetimer()).toBe(true);
+      expect(actions.length).toBe(1);
+      expect(actions[0].hasCreatetimer()).toBe(true);
     });
 
     it("should complete successfully after retry timer fires and activity succeeds", async () => {
@@ -864,49 +866,49 @@ describe("Orchestration Executor", () => {
       const startTime = new Date();
 
       // Step 1: Start orchestration
-      let executor = new OrchestrationExecutor(registry);
+      let executor = new OrchestrationExecutor(registry, testLogger);
       const allEvents = [
         newOrchestratorStartedEvent(startTime),
         newExecutionStartedEvent(name, TEST_INSTANCE_ID, JSON.stringify(21)),
       ];
-      let result = await executor.execute(TEST_INSTANCE_ID, [], allEvents);
-      expect(result.actions.length).toBe(1);
-      expect(result.actions[0].hasScheduletask()).toBe(true);
+      let ({ actions } = await executor.execute)(TEST_INSTANCE_ID, [], allEvents);
+      expect(actions.length).toBe(1);
+      expect(actions[0].hasScheduletask()).toBe(true);
 
       // Step 2: Activity scheduled, then fails
       allEvents.push(newTaskScheduledEvent(1, "flakyActivity"));
-      executor = new OrchestrationExecutor(registry);
-      result = await executor.execute(TEST_INSTANCE_ID, allEvents, [
+      executor = new OrchestrationExecutor(registry, testLogger);
+      ({ actions } = await executor.execute)(TEST_INSTANCE_ID, allEvents, [
         newTaskFailedEvent(1, new Error("Transient failure on attempt 1")),
       ]);
-      expect(result.actions.length).toBe(1);
-      expect(result.actions[0].hasCreatetimer()).toBe(true);
-      const timerFireAt = result.actions[0].getCreatetimer()?.getFireat()?.toDate();
+      expect(actions.length).toBe(1);
+      expect(actions[0].hasCreatetimer()).toBe(true);
+      const timerFireAt = actions[0].getCreatetimer()?.getFireat()?.toDate();
       expect(timerFireAt).toBeDefined();
 
       // Step 3: Timer created, then fires
       allEvents.push(newTaskFailedEvent(1, new Error("Transient failure on attempt 1")));
       allEvents.push(newTimerCreatedEvent(2, timerFireAt!));
-      executor = new OrchestrationExecutor(registry);
-      result = await executor.execute(TEST_INSTANCE_ID, allEvents, [
+      executor = new OrchestrationExecutor(registry, testLogger);
+      ({ actions } = await executor.execute)(TEST_INSTANCE_ID, allEvents, [
         newTimerFiredEvent(2, timerFireAt!),
       ]);
       // Should reschedule the activity with a new ID
-      expect(result.actions.length).toBe(1);
-      expect(result.actions[0].hasScheduletask()).toBe(true);
-      expect(result.actions[0].getScheduletask()?.getName()).toBe("flakyActivity");
-      expect(result.actions[0].getId()).toBe(3); // New ID after timer
+      expect(actions.length).toBe(1);
+      expect(actions[0].hasScheduletask()).toBe(true);
+      expect(actions[0].getScheduletask()?.getName()).toBe("flakyActivity");
+      expect(actions[0].getId()).toBe(3); // New ID after timer
 
       // Step 4: Retried activity scheduled, then completes
       allEvents.push(newTimerFiredEvent(2, timerFireAt!));
       allEvents.push(newTaskScheduledEvent(3, "flakyActivity"));
-      executor = new OrchestrationExecutor(registry);
-      result = await executor.execute(TEST_INSTANCE_ID, allEvents, [
+      executor = new OrchestrationExecutor(registry, testLogger);
+      ({ actions } = await executor.execute)(TEST_INSTANCE_ID, allEvents, [
         newTaskCompletedEvent(3, JSON.stringify(42)),
       ]);
       
       // Assert: Orchestration should complete successfully
-      const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+      const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
       expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
       expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify(42));
     });
@@ -930,55 +932,55 @@ describe("Orchestration Executor", () => {
       const startTime = new Date();
 
       // Step 1: Start orchestration
-      let executor = new OrchestrationExecutor(registry);
+      let executor = new OrchestrationExecutor(registry, testLogger);
       const allEvents = [
         newOrchestratorStartedEvent(startTime),
         newExecutionStartedEvent(name, TEST_INSTANCE_ID, JSON.stringify(21)),
       ];
-      let result = await executor.execute(TEST_INSTANCE_ID, [], allEvents);
-      expect(result.actions.length).toBe(1);
-      expect(result.actions[0].hasScheduletask()).toBe(true);
+      let ({ actions } = await executor.execute)(TEST_INSTANCE_ID, [], allEvents);
+      expect(actions.length).toBe(1);
+      expect(actions[0].hasScheduletask()).toBe(true);
 
       // Step 2: Activity fails - first attempt
       allEvents.push(newTaskScheduledEvent(1, "alwaysFailsActivity"));
-      executor = new OrchestrationExecutor(registry);
-      result = await executor.execute(TEST_INSTANCE_ID, allEvents, [
+      executor = new OrchestrationExecutor(registry, testLogger);
+      ({ actions } = await executor.execute)(TEST_INSTANCE_ID, allEvents, [
         newTaskFailedEvent(1, new Error("Failure on attempt 1")),
       ]);
-      expect(result.actions.length).toBe(1);
-      expect(result.actions[0].hasCreatetimer()).toBe(true);
-      const timerFireAt = result.actions[0].getCreatetimer()?.getFireat()?.toDate();
+      expect(actions.length).toBe(1);
+      expect(actions[0].hasCreatetimer()).toBe(true);
+      const timerFireAt = actions[0].getCreatetimer()?.getFireat()?.toDate();
 
       // Step 3: Timer fires, activity is rescheduled
       allEvents.push(newTaskFailedEvent(1, new Error("Failure on attempt 1")));
       allEvents.push(newTimerCreatedEvent(2, timerFireAt!));
-      executor = new OrchestrationExecutor(registry);
-      result = await executor.execute(TEST_INSTANCE_ID, allEvents, [
+      executor = new OrchestrationExecutor(registry, testLogger);
+      ({ actions } = await executor.execute)(TEST_INSTANCE_ID, allEvents, [
         newTimerFiredEvent(2, timerFireAt!),
       ]);
-      expect(result.actions.length).toBe(1);
-      expect(result.actions[0].hasScheduletask()).toBe(true);
+      expect(actions.length).toBe(1);
+      expect(actions[0].hasScheduletask()).toBe(true);
 
       // Step 4: Second activity attempt fails - max attempts reached
       allEvents.push(newTimerFiredEvent(2, timerFireAt!));
       allEvents.push(newTaskScheduledEvent(3, "alwaysFailsActivity"));
-      executor = new OrchestrationExecutor(registry);
-      result = await executor.execute(TEST_INSTANCE_ID, allEvents, [
+      executor = new OrchestrationExecutor(registry, testLogger);
+      ({ actions } = await executor.execute)(TEST_INSTANCE_ID, allEvents, [
         newTaskFailedEvent(3, new Error("Failure on attempt 2")),
       ]);
 
       // Assert: Orchestration should fail
-      const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+      const completeAction = getAndValidateSingleCompleteOrchestrationAction(actions);
       expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
     });
   });
 });
 
 function getAndValidateSingleCompleteOrchestrationAction(
-  result: OrchestrationExecutionResult,
+  actions: OrchestratorAction[],
 ): CompleteOrchestrationAction | undefined {
-  expect(result.actions.length).toEqual(1);
-  const action = result.actions[0];
+  expect(actions.length).toEqual(1);
+  const action = actions[0];
   expect(action?.constructor?.name).toEqual(CompleteOrchestrationAction.name);
 
   const resCompleteOrchestration = action.getCompleteorchestration();

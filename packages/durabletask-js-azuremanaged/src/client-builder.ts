@@ -5,7 +5,7 @@ import { TokenCredential } from "@azure/identity";
 import * as grpc from "@grpc/grpc-js";
 import { DurableTaskAzureManagedClientOptions } from "./options";
 import { ClientRetryOptions } from "./retry-policy";
-import { TaskHubGrpcClient } from "@microsoft/durabletask-js";
+import { TaskHubGrpcClient, Logger, ConsoleLogger } from "@microsoft/durabletask-js";
 
 /**
  * Builder for creating DurableTaskClient instances that connect to Azure-managed Durable Task service.
@@ -14,6 +14,7 @@ import { TaskHubGrpcClient } from "@microsoft/durabletask-js";
 export class DurableTaskAzureManagedClientBuilder {
   private _options: DurableTaskAzureManagedClientOptions;
   private _grpcChannelOptions: grpc.ChannelOptions = {};
+  private _logger: Logger = new ConsoleLogger();
 
   /**
    * Creates a new instance of DurableTaskAzureManagedClientBuilder.
@@ -124,6 +125,18 @@ export class DurableTaskAzureManagedClientBuilder {
   }
 
   /**
+  * Sets the logger to use for logging.
+  * Defaults to ConsoleLogger.
+   *
+   * @param logger The logger instance.
+   * @returns This builder instance.
+   */
+  logger(logger: Logger): DurableTaskAzureManagedClientBuilder {
+    this._logger = logger;
+    return this;
+  }
+
+  /**
    * Builds and returns a configured TaskHubGrpcClient.
    *
    * @returns A new configured TaskHubGrpcClient instance.
@@ -147,7 +160,7 @@ export class DurableTaskAzureManagedClientBuilder {
     // Use the core TaskHubGrpcClient with custom credentials and metadata generator
     // For insecure connections, metadata is passed via the metadataGenerator parameter
     // For secure connections, metadata is included in the channel credentials
-    return new TaskHubGrpcClient(hostAddress, combinedOptions, true, channelCredentials, metadataGenerator);
+    return new TaskHubGrpcClient(hostAddress, combinedOptions, true, channelCredentials, metadataGenerator, this._logger);
   }
 }
 

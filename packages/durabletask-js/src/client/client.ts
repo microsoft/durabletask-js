@@ -21,6 +21,7 @@ import { callWithMetadata, MetadataGenerator } from "../utils/grpc-helper.util";
 import { OrchestrationQuery, ListInstanceIdsOptions, DEFAULT_PAGE_SIZE } from "../orchestration/orchestration-query";
 import { Page, AsyncPageable, createAsyncPageable } from "../orchestration/page";
 import { FailureDetails } from "../task/failure-details";
+import { Logger, ConsoleLogger } from "../types/logger.type";
 
 // Re-export MetadataGenerator for backward compatibility
 export { MetadataGenerator } from "../utils/grpc-helper.util";
@@ -28,6 +29,7 @@ export { MetadataGenerator } from "../utils/grpc-helper.util";
 export class TaskHubGrpcClient {
   private _stub: stubs.TaskHubSidecarServiceClient;
   private _metadataGenerator?: MetadataGenerator;
+  private _logger: Logger;
 
   /**
    * Creates a new TaskHubGrpcClient instance.
@@ -37,6 +39,7 @@ export class TaskHubGrpcClient {
    * @param useTLS Whether to use TLS. Defaults to false.
    * @param credentials Optional pre-configured channel credentials. If provided, useTLS is ignored.
    * @param metadataGenerator Optional function to generate per-call metadata (for taskhub, auth tokens, etc.).
+   * @param logger Optional logger instance. Defaults to ConsoleLogger.
    */
   constructor(
     hostAddress?: string,
@@ -44,17 +47,19 @@ export class TaskHubGrpcClient {
     useTLS?: boolean,
     credentials?: grpc.ChannelCredentials,
     metadataGenerator?: MetadataGenerator,
+    logger?: Logger,
   ) {
     this._stub = new GrpcClient(hostAddress, options, useTLS, credentials).stub;
     this._metadataGenerator = metadataGenerator;
+    this._logger = logger ?? new ConsoleLogger();
   }
 
   async stop(): Promise<void> {
-    await this._stub.close();
+    this._stub.close();
 
-    // Wait a bit to let the async operations finish
+    // Brief pause to allow gRPC cleanup - this is a known issue with grpc-node
     // https://github.com/grpc/grpc-node/issues/1563#issuecomment-829483711
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
   /**
@@ -88,7 +93,7 @@ export class TaskHubGrpcClient {
     req.setInput(i);
     req.setScheduledstarttimestamp(ts);
 
-    console.log(`Starting new ${name} instance with ID = ${req.getInstanceid()}`);
+    this._logger.info(`Starting new ${name} instance with ID = ${req.getInstanceid()}`);
 
     const res = await callWithMetadata<pb.CreateInstanceRequest, pb.CreateInstanceResponse>(
       this._stub.startInstance.bind(this._stub),
@@ -192,7 +197,7 @@ export class TaskHubGrpcClient {
     req.setInstanceid(instanceId);
     req.setGetinputsandoutputs(fetchPayloads);
 
-    console.info(`Waiting ${timeout} seconds for instance ${instanceId} to complete...`);
+    this._logger.info(`Waiting ${timeout} seconds for instance ${instanceId} to complete...`);
 
     const callPromise = callWithMetadata<pb.GetInstanceRequest, pb.GetInstanceResponse>(
       this._stub.waitForInstanceCompletion.bind(this._stub),
@@ -216,11 +221,11 @@ export class TaskHubGrpcClient {
 
     if (state.runtimeStatus === OrchestrationStatus.FAILED && state.failureDetails) {
       details = state.failureDetails;
-      console.info(`Instance ${instanceId} failed: [${details.errorType}] ${details.message}`);
+      this._logger.info(`Instance ${instanceId} failed: [${details.errorType}] ${details.message}`);
     } else if (state.runtimeStatus === OrchestrationStatus.TERMINATED) {
-      console.info(`Instance ${instanceId} was terminated`);
+      this._logger.info(`Instance ${instanceId} was terminated`);
     } else if (state.runtimeStatus === OrchestrationStatus.COMPLETED) {
-      console.info(`Instance ${instanceId} completed`);
+      this._logger.info(`Instance ${instanceId} completed`);
     }
 
     return state;
@@ -246,7 +251,7 @@ export class TaskHubGrpcClient {
 
     req.setInput(i);
 
-    console.log(`Raising event '${eventName}' for instance '${instanceId}'`);
+    this._logger.info(`Raising event '${eventName}' for instance '${instanceId}'`);
 
     await callWithMetadata<pb.RaiseEventRequest, pb.RaiseEventResponse>(
       this._stub.raiseEvent.bind(this._stub),
@@ -270,7 +275,7 @@ export class TaskHubGrpcClient {
 
     req.setOutput(i);
 
-    console.log(`Terminating '${instanceId}'`);
+    this._logger.info(`Terminating '${instanceId}'`);
 
     await callWithMetadata<pb.TerminateRequest, pb.TerminateResponse>(
       this._stub.terminateInstance.bind(this._stub),
@@ -283,7 +288,7 @@ export class TaskHubGrpcClient {
     const req = new pb.SuspendRequest();
     req.setInstanceid(instanceId);
 
-    console.log(`Suspending '${instanceId}'`);
+    this._logger.info(`Suspending '${instanceId}'`);
 
     await callWithMetadata<pb.SuspendRequest, pb.SuspendResponse>(
       this._stub.suspendInstance.bind(this._stub),
@@ -296,7 +301,7 @@ export class TaskHubGrpcClient {
     const req = new pb.ResumeRequest();
     req.setInstanceid(instanceId);
 
-    console.log(`Resuming '${instanceId}'`);
+    this._logger.info(`Resuming '${instanceId}'`);
 
     await callWithMetadata<pb.ResumeRequest, pb.ResumeResponse>(
       this._stub.resumeInstance.bind(this._stub),
@@ -334,7 +339,7 @@ export class TaskHubGrpcClient {
       req.setReason(reasonValue);
     }
 
-    console.log(`Rewinding '${instanceId}' with reason: ${reason}`);
+    this._logger.info(`Rewinding '${instanceId}' with reason: ${reason}`);
 
     try {
       await callWithMetadata<pb.RewindInstanceRequest, pb.RewindInstanceResponse>(
@@ -391,7 +396,7 @@ export class TaskHubGrpcClient {
     req.setInstanceid(instanceId);
     req.setRestartwithnewinstanceid(restartWithNewInstanceId);
 
-    console.log(`Restarting '${instanceId}' with restartWithNewInstanceId=${restartWithNewInstanceId}`);
+    this._logger.info(`Restarting '${instanceId}' with restartWithNewInstanceId=${restartWithNewInstanceId}`);
 
     try {
       const res = await callWithMetadata<pb.RestartInstanceRequest, pb.RestartInstanceResponse>(
@@ -441,7 +446,7 @@ export class TaskHubGrpcClient {
       const req = new pb.PurgeInstancesRequest();
       req.setInstanceid(instanceId);
 
-      console.log(`Purging Instance '${instanceId}'`);
+      this._logger.info(`Purging Instance '${instanceId}'`);
 
       res = await callWithMetadata<pb.PurgeInstancesRequest, pb.PurgeInstancesResponse>(
         this._stub.purgeInstances.bind(this._stub),
@@ -471,7 +476,7 @@ export class TaskHubGrpcClient {
       req.setPurgeinstancefilter(filter);
       const timeout = purgeInstanceCriteria.getTimeout();
 
-      console.log("Purging Instance using purging criteria");
+      this._logger.info("Purging Instance using purging criteria");
 
       const callPromise = callWithMetadata<pb.PurgeInstancesRequest, pb.PurgeInstancesResponse>(
         this._stub.purgeInstances.bind(this._stub),
