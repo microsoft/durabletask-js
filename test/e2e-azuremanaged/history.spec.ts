@@ -265,8 +265,6 @@ describe("getOrchestrationHistory E2E Tests", () => {
   }, 31000);
 
   it("should return empty array for non-existent orchestration", async () => {
-    // Note: The DTS emulator returns an empty history for non-existent instances
-    // rather than throwing an error. This is different from the .NET SDK behavior.
     const history = await taskHubClient.getOrchestrationHistory("non-existent-instance-id");
     expect(history).toEqual([]);
   }, 31000);
