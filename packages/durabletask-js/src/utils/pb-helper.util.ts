@@ -254,7 +254,7 @@ export function getStringValue(val?: string): StringValue | undefined {
  *   to store tag key-value pairs.
  * @param tags - An optional record of tag key-value pairs to add to the map.
  */
-function populateTagsMap(
+export function populateTagsMap(
   tagsMap: { set: (key: string, value: string) => void },
   tags?: Record<string, string>,
 ): void {
