@@ -290,7 +290,7 @@ export class TaskHubGrpcWorker {
 
     // Brief pause to allow gRPC cleanup
     // https://github.com/grpc/grpc-node/issues/1563#issuecomment-829483711
-    await sleep(500);
+    await sleep(1000);
   }
 
   /**
