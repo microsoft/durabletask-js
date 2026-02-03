@@ -28,11 +28,11 @@ export { Task } from "./task/task";
 // Retry policies and task options
 export { RetryPolicy, RetryPolicyOptions } from "./task/retry";
 export {
-	TaskOptions,
-	SubOrchestrationOptions,
-	StartOrchestrationOptions,
-	taskOptionsFromRetryPolicy,
-	subOrchestrationOptionsFromRetryPolicy,
+  TaskOptions,
+  SubOrchestrationOptions,
+  StartOrchestrationOptions,
+  taskOptionsFromRetryPolicy,
+  subOrchestrationOptionsFromRetryPolicy,
 } from "./task/options";
 
 // Types
