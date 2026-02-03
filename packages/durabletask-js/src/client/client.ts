@@ -24,6 +24,7 @@ import { FailureDetails } from "../task/failure-details";
 import { Logger, ConsoleLogger } from "../types/logger.type";
 import { StartOrchestrationOptions } from "../task/options";
 import { mapToRecord } from "../utils/tags.util";
+import { populateTagsMap } from "../utils/pb-helper.util";
 
 // Re-export MetadataGenerator for backward compatibility
 export { MetadataGenerator } from "../utils/grpc-helper.util";
@@ -188,12 +189,7 @@ export class TaskHubGrpcClient {
     req.setInput(i);
     req.setScheduledstarttimestamp(ts);
 
-    if (tags) {
-      const tagsMap = req.getTagsMap();
-      for (const [key, value] of Object.entries(tags)) {
-        tagsMap.set(key, value);
-      }
-    }
+    populateTagsMap(req.getTagsMap(), tags);
 
     this._logger.info(`Starting new ${name} instance with ID = ${req.getInstanceid()}`);
 
