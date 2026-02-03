@@ -322,7 +322,10 @@ export class TaskHubGrpcWorker {
       }
     }
 
-    this._stub?.close();
+    if (this._stub) {
+      // Await the stub close operation to ensure gRPC client cleanup completes before returning.
+      await Promise.resolve(this._stub.close());
+    }
     this._isRunning = false;
 
     // Brief pause to allow gRPC cleanup
