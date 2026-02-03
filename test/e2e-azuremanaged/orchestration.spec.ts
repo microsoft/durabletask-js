@@ -626,7 +626,7 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
       ctx.setCustomStatus("Initial status");
       yield ctx.createTimer(1);
 
-      // To clear custom status, set it to an empty string (not undefined)
+      // Update custom status to an empty string; this is a valid value and does not clear it.
       ctx.setCustomStatus("");
       return "done";
     };
