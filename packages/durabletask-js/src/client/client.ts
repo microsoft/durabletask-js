@@ -13,11 +13,14 @@ import { randomUUID } from "crypto";
 import { newOrchestrationState } from "../orchestration";
 import { OrchestrationState } from "../orchestration/orchestration-state";
 import { GrpcClient } from "./client-grpc";
-import { OrchestrationStatus, toProtobuf } from "../orchestration/enum/orchestration-status.enum";
+import { OrchestrationStatus, toProtobuf, fromProtobuf } from "../orchestration/enum/orchestration-status.enum";
 import { TimeoutError } from "../exception/timeout-error";
 import { PurgeResult } from "../orchestration/orchestration-purge-result";
 import { PurgeInstanceCriteria } from "../orchestration/orchestration-purge-criteria";
 import { callWithMetadata, MetadataGenerator } from "../utils/grpc-helper.util";
+import { OrchestrationQuery, ListInstanceIdsOptions, DEFAULT_PAGE_SIZE } from "../orchestration/orchestration-query";
+import { Page, AsyncPageable, createAsyncPageable } from "../orchestration/page";
+import { FailureDetails } from "../task/failure-details";
 
 // Re-export MetadataGenerator for backward compatibility
 export { MetadataGenerator } from "../utils/grpc-helper.util";
@@ -148,24 +151,19 @@ export class TaskHubGrpcClient {
     req.setInstanceid(instanceId);
     req.setGetinputsandoutputs(fetchPayloads);
 
-    try {
-      const callPromise = callWithMetadata<pb.GetInstanceRequest, pb.GetInstanceResponse>(
-        this._stub.waitForInstanceStart.bind(this._stub),
-        req,
-        this._metadataGenerator,
-      );
+    const callPromise = callWithMetadata<pb.GetInstanceRequest, pb.GetInstanceResponse>(
+      this._stub.waitForInstanceStart.bind(this._stub),
+      req,
+      this._metadataGenerator,
+    );
 
-      // Execute the request and wait for the first response or timeout
-      const res = (await Promise.race([
-        callPromise,
-        new Promise((_, reject) => setTimeout(() => reject(new TimeoutError()), timeout * 1000)),
-      ])) as pb.GetInstanceResponse;
+    // Execute the request and wait for the first response or timeout
+    const res = (await Promise.race([
+      callPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new TimeoutError()), timeout * 1000)),
+    ])) as pb.GetInstanceResponse;
 
-      return newOrchestrationState(req.getInstanceid(), res);
-    } catch (e) {
-      console.log(e);
-      throw e;
-    }
+    return newOrchestrationState(req.getInstanceid(), res);
   }
 
   /**
@@ -194,43 +192,38 @@ export class TaskHubGrpcClient {
     req.setInstanceid(instanceId);
     req.setGetinputsandoutputs(fetchPayloads);
 
-    try {
-      console.info(`Waiting ${timeout} seconds for instance ${instanceId} to complete...`);
+    console.info(`Waiting ${timeout} seconds for instance ${instanceId} to complete...`);
 
-      const callPromise = callWithMetadata<pb.GetInstanceRequest, pb.GetInstanceResponse>(
-        this._stub.waitForInstanceCompletion.bind(this._stub),
-        req,
-        this._metadataGenerator,
-      );
+    const callPromise = callWithMetadata<pb.GetInstanceRequest, pb.GetInstanceResponse>(
+      this._stub.waitForInstanceCompletion.bind(this._stub),
+      req,
+      this._metadataGenerator,
+    );
 
-      // Execute the request and wait for the first response or timeout
-      const res = (await Promise.race([
-        callPromise,
-        new Promise((_, reject) => setTimeout(() => reject(new TimeoutError()), timeout * 1000)),
-      ])) as pb.GetInstanceResponse;
+    // Execute the request and wait for the first response or timeout
+    const res = (await Promise.race([
+      callPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new TimeoutError()), timeout * 1000)),
+    ])) as pb.GetInstanceResponse;
 
-      const state = newOrchestrationState(req.getInstanceid(), res);
+    const state = newOrchestrationState(req.getInstanceid(), res);
 
-      if (!state) {
-        return undefined;
-      }
-
-      let details;
-
-      if (state.runtimeStatus === OrchestrationStatus.FAILED && state.failureDetails) {
-        details = state.failureDetails;
-        console.info(`Instance ${instanceId} failed: [${details.errorType}] ${details.message}`);
-      } else if (state.runtimeStatus === OrchestrationStatus.TERMINATED) {
-        console.info(`Instance ${instanceId} was terminated`);
-      } else if (state.runtimeStatus === OrchestrationStatus.COMPLETED) {
-        console.info(`Instance ${instanceId} completed`);
-      }
-
-      return state;
-    } catch (e) {
-      console.log(e);
-      throw e;
+    if (!state) {
+      return undefined;
     }
+
+    let details;
+
+    if (state.runtimeStatus === OrchestrationStatus.FAILED && state.failureDetails) {
+      details = state.failureDetails;
+      console.info(`Instance ${instanceId} failed: [${details.errorType}] ${details.message}`);
+    } else if (state.runtimeStatus === OrchestrationStatus.TERMINATED) {
+      console.info(`Instance ${instanceId} was terminated`);
+    } else if (state.runtimeStatus === OrchestrationStatus.COMPLETED) {
+      console.info(`Instance ${instanceId} completed`);
+    }
+
+    return state;
   }
 
   /**
@@ -313,6 +306,118 @@ export class TaskHubGrpcClient {
   }
 
   /**
+   * Rewinds a failed orchestration instance to a previous state to allow it to retry from the point of failure.
+   *
+   * This method is used to "rewind" a failed orchestration back to its last known good state, allowing it
+   * to be replayed from that point. This is particularly useful for recovering from transient failures
+   * or for debugging purposes.
+   *
+   * Only orchestration instances in the `Failed` state can be rewound.
+   *
+   * @param instanceId - The unique identifier of the orchestration instance to rewind.
+   * @param reason - A reason string describing why the orchestration is being rewound.
+   * @throws {Error} If the orchestration instance is not found.
+   * @throws {Error} If the orchestration instance is in a state that does not allow rewinding.
+   * @throws {Error} If the rewind operation is not supported by the backend.
+   */
+  async rewindInstance(instanceId: string, reason: string): Promise<void> {
+    if (!instanceId) {
+      throw new Error("instanceId is required");
+    }
+
+    const req = new pb.RewindInstanceRequest();
+    req.setInstanceid(instanceId);
+
+    if (reason) {
+      const reasonValue = new StringValue();
+      reasonValue.setValue(reason);
+      req.setReason(reasonValue);
+    }
+
+    console.log(`Rewinding '${instanceId}' with reason: ${reason}`);
+
+    try {
+      await callWithMetadata<pb.RewindInstanceRequest, pb.RewindInstanceResponse>(
+        this._stub.rewindInstance.bind(this._stub),
+        req,
+        this._metadataGenerator,
+      );
+    } catch (e) {
+      // Handle gRPC errors and convert them to appropriate errors
+      if (e && typeof e === "object" && "code" in e) {
+        const grpcError = e as { code: number; details?: string };
+        if (grpcError.code === grpc.status.NOT_FOUND) {
+          throw new Error(`An orchestration with the instanceId '${instanceId}' was not found.`);
+        }
+        if (grpcError.code === grpc.status.FAILED_PRECONDITION) {
+          throw new Error(grpcError.details || `Cannot rewind orchestration '${instanceId}': it is in a state that does not allow rewinding.`);
+        }
+        if (grpcError.code === grpc.status.UNIMPLEMENTED) {
+          throw new Error(grpcError.details || `The rewind operation is not supported by the backend.`);
+        }
+        if (grpcError.code === grpc.status.CANCELLED) {
+          throw new Error(`The rewind operation for '${instanceId}' was cancelled.`);
+        }
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Restarts an existing orchestration instance with its original input.
+   *
+   * This method allows you to restart a completed, failed, or terminated orchestration
+   * instance. The restarted orchestration will use the same input that was provided
+   * when the orchestration was originally started.
+   *
+   * @param instanceId - The unique ID of the orchestration instance to restart.
+   * @param restartWithNewInstanceId - If true, the restarted orchestration will be assigned
+   * a new instance ID. If false (default), the same instance ID will be reused.
+   * When reusing the same instance ID, the orchestration must be in a terminal state
+   * (Completed, Failed, or Terminated).
+   * @returns A Promise that resolves to the instance ID of the restarted orchestration.
+   * This will be the same as the input instanceId if restartWithNewInstanceId is false,
+   * or a new ID if restartWithNewInstanceId is true.
+   * @throws Error if the orchestration instance is not found.
+   * @throws Error if the orchestration cannot be restarted (e.g., it's still running
+   * and restartWithNewInstanceId is false).
+   */
+  async restartOrchestration(instanceId: string, restartWithNewInstanceId: boolean = false): Promise<string> {
+    if (!instanceId) {
+      throw new Error("instanceId cannot be null or empty");
+    }
+
+    const req = new pb.RestartInstanceRequest();
+    req.setInstanceid(instanceId);
+    req.setRestartwithnewinstanceid(restartWithNewInstanceId);
+
+    console.log(`Restarting '${instanceId}' with restartWithNewInstanceId=${restartWithNewInstanceId}`);
+
+    try {
+      const res = await callWithMetadata<pb.RestartInstanceRequest, pb.RestartInstanceResponse>(
+        this._stub.restartInstance.bind(this._stub),
+        req,
+        this._metadataGenerator,
+      );
+      return res.getInstanceid();
+    } catch (e) {
+      if (e instanceof Error && "code" in e) {
+        const grpcError = e as grpc.ServiceError;
+        if (grpcError.code === grpc.status.NOT_FOUND) {
+          throw new Error(`An orchestration with the instanceId '${instanceId}' was not found.`);
+        }
+        if (grpcError.code === grpc.status.FAILED_PRECONDITION) {
+          throw new Error(`An orchestration with the instanceId '${instanceId}' cannot be restarted.`);
+        }
+        if (grpcError.code === grpc.status.CANCELLED) {
+          throw new Error(`The restartOrchestration operation was canceled.`);
+        }
+      }
+      throw e;
+    }
+  }
+
+  /**
    * Purges orchestration instance metadata from the durable store.
    *
    * This method can be used to permanently delete orchestration metadata from the underlying storage provider,
@@ -383,5 +488,242 @@ export class TaskHubGrpcClient {
       return;
     }
     return new PurgeResult(res.getDeletedinstancecount());
+  }
+
+  /**
+   * Queries orchestration instances and returns an async iterable of results.
+   *
+   * This method supports querying orchestration instances by various filter criteria including
+   * creation time range, runtime status, instance ID prefix, and task hub names.
+   *
+   * The results are returned as an AsyncPageable that supports both iteration over individual
+   * items and iteration over pages.
+   *
+   * @example
+   * ```typescript
+   * // Iterate over all matching instances
+   * const pageable = client.getAllInstances({ statuses: [OrchestrationStatus.COMPLETED] });
+   * for await (const instance of pageable) {
+   *   console.log(instance.instanceId);
+   * }
+   *
+   * // Iterate over pages
+   * for await (const page of pageable.asPages()) {
+   *   console.log(`Page has ${page.values.length} items`);
+   * }
+   * ```
+   *
+   * @param filter - Optional filter criteria for the query.
+   * @returns An AsyncPageable of OrchestrationState objects.
+   */
+  getAllInstances(filter?: OrchestrationQuery): AsyncPageable<OrchestrationState> {
+    return createAsyncPageable<OrchestrationState>(
+      async (continuationToken?: string, pageSize?: number): Promise<Page<OrchestrationState>> => {
+        const req = new pb.QueryInstancesRequest();
+        const query = new pb.InstanceQuery();
+
+        // Set created time range
+        if (filter?.createdFrom) {
+          const timestamp = new Timestamp();
+          timestamp.fromDate(filter.createdFrom);
+          query.setCreatedtimefrom(timestamp);
+        }
+
+        if (filter?.createdTo) {
+          const timestamp = new Timestamp();
+          timestamp.fromDate(filter.createdTo);
+          query.setCreatedtimeto(timestamp);
+        }
+
+        // Set runtime statuses
+        if (filter?.statuses) {
+          for (const status of filter.statuses) {
+            query.addRuntimestatus(toProtobuf(status));
+          }
+        }
+
+        // Set task hub names
+        if (filter?.taskHubNames) {
+          for (const name of filter.taskHubNames) {
+            const stringValue = new StringValue();
+            stringValue.setValue(name);
+            query.addTaskhubnames(stringValue);
+          }
+        }
+
+        // Set instance ID prefix
+        if (filter?.instanceIdPrefix) {
+          const prefixValue = new StringValue();
+          prefixValue.setValue(filter.instanceIdPrefix);
+          query.setInstanceidprefix(prefixValue);
+        }
+
+        // Set page size
+        const effectivePageSize = pageSize ?? filter?.pageSize ?? DEFAULT_PAGE_SIZE;
+        query.setMaxinstancecount(effectivePageSize);
+
+        // Set continuation token (use provided or from filter)
+        const token = continuationToken ?? filter?.continuationToken;
+        if (token) {
+          const tokenValue = new StringValue();
+          tokenValue.setValue(token);
+          query.setContinuationtoken(tokenValue);
+        }
+
+        // Set fetch inputs and outputs
+        query.setFetchinputsandoutputs(filter?.fetchInputsAndOutputs ?? false);
+
+        req.setQuery(query);
+
+        const response = await callWithMetadata<pb.QueryInstancesRequest, pb.QueryInstancesResponse>(
+          this._stub.queryInstances.bind(this._stub),
+          req,
+          this._metadataGenerator,
+        );
+
+        const states: OrchestrationState[] = [];
+        const orchestrationStateList = response.getOrchestrationstateList();
+        for (const state of orchestrationStateList) {
+          const orchestrationState = this._createOrchestrationStateFromProto(state, filter?.fetchInputsAndOutputs ?? false);
+          if (orchestrationState) {
+            states.push(orchestrationState);
+          }
+        }
+
+        const responseContinuationToken = response.getContinuationtoken()?.getValue();
+        return new Page(states, responseContinuationToken);
+      },
+    );
+  }
+
+  /**
+   * Lists orchestration instance IDs that match the specified runtime status
+   * and completed time range, using key-based pagination.
+   *
+   * This method is optimized for listing instance IDs without fetching full instance metadata,
+   * making it more efficient when only instance IDs are needed.
+   *
+   * @example
+   * ```typescript
+   * // Get first page of completed instances
+   * const page = await client.listInstanceIds({
+   *   runtimeStatus: [OrchestrationStatus.COMPLETED],
+   *   pageSize: 50
+   * });
+   *
+   * // Get next page using the continuation key
+   * if (page.hasMoreResults) {
+   *   const nextPage = await client.listInstanceIds({
+   *     runtimeStatus: [OrchestrationStatus.COMPLETED],
+   *     pageSize: 50,
+   *     lastInstanceKey: page.continuationToken
+   *   });
+   * }
+   * ```
+   *
+   * @param options - Optional filter criteria and pagination options.
+   * @returns A Promise that resolves to a Page of instance IDs.
+   */
+  async listInstanceIds(options?: ListInstanceIdsOptions): Promise<Page<string>> {
+    const req = new pb.ListInstanceIdsRequest();
+
+    // Set page size
+    const pageSize = options?.pageSize ?? DEFAULT_PAGE_SIZE;
+    req.setPagesize(pageSize);
+
+    // Set last instance key (continuation token)
+    if (options?.lastInstanceKey) {
+      const keyValue = new StringValue();
+      keyValue.setValue(options.lastInstanceKey);
+      req.setLastinstancekey(keyValue);
+    }
+
+    // Set runtime statuses
+    if (options?.runtimeStatus) {
+      for (const status of options.runtimeStatus) {
+        req.addRuntimestatus(toProtobuf(status));
+      }
+    }
+
+    // Set completed time range
+    if (options?.completedTimeFrom) {
+      const timestamp = new Timestamp();
+      timestamp.fromDate(options.completedTimeFrom);
+      req.setCompletedtimefrom(timestamp);
+    }
+
+    if (options?.completedTimeTo) {
+      const timestamp = new Timestamp();
+      timestamp.fromDate(options.completedTimeTo);
+      req.setCompletedtimeto(timestamp);
+    }
+
+    const response = await callWithMetadata<pb.ListInstanceIdsRequest, pb.ListInstanceIdsResponse>(
+      this._stub.listInstanceIds.bind(this._stub),
+      req,
+      this._metadataGenerator,
+    );
+
+    const instanceIds = response.getInstanceidsList();
+    const lastInstanceKey = response.getLastinstancekey()?.getValue();
+
+    return new Page(instanceIds, lastInstanceKey);
+  }
+
+  /**
+   * Helper method to create an OrchestrationState from a protobuf OrchestrationState.
+   */
+  private _createOrchestrationStateFromProto(
+    protoState: pb.OrchestrationState,
+    fetchPayloads: boolean,
+  ): OrchestrationState | undefined {
+    const instanceId = protoState.getInstanceid();
+    const name = protoState.getName();
+    const runtimeStatus = protoState.getOrchestrationstatus();
+    const createdTimestamp = protoState.getCreatedtimestamp();
+    const lastUpdatedTimestamp = protoState.getLastupdatedtimestamp();
+
+    if (!instanceId) {
+      return undefined;
+    }
+
+    const createdAt = createdTimestamp ? createdTimestamp.toDate() : new Date(0);
+    const lastUpdatedAt = lastUpdatedTimestamp ? lastUpdatedTimestamp.toDate() : new Date(0);
+
+    // Map proto status to our status enum using the existing conversion function
+    const status = fromProtobuf(runtimeStatus);
+
+    let serializedInput: string | undefined;
+    let serializedOutput: string | undefined;
+    let serializedCustomStatus: string | undefined;
+
+    if (fetchPayloads) {
+      serializedInput = protoState.getInput()?.getValue();
+      serializedOutput = protoState.getOutput()?.getValue();
+      serializedCustomStatus = protoState.getCustomstatus()?.getValue();
+    }
+
+    // Extract failure details if present
+    let failureDetails;
+    const protoFailureDetails = protoState.getFailuredetails();
+    if (protoFailureDetails) {
+      failureDetails = new FailureDetails(
+        protoFailureDetails.getErrormessage(),
+        protoFailureDetails.getErrortype(),
+        protoFailureDetails.getStacktrace()?.getValue(),
+      );
+    }
+
+    return new OrchestrationState(
+      instanceId,
+      name ?? "",
+      status,
+      createdAt,
+      lastUpdatedAt,
+      serializedInput,
+      serializedOutput,
+      serializedCustomStatus,
+      failureDetails,
+    );
   }
 }

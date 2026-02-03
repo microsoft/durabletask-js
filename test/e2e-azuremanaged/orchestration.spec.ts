@@ -22,6 +22,7 @@ import {
   OrchestrationContext,
   Task,
   TOrchestrator,
+  RetryPolicy,
 } from "@microsoft/durabletask-js";
 import {
   DurableTaskAzureManagedClientBuilder,
@@ -280,5 +281,216 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(state?.serializedInput).toEqual(JSON.stringify(15));
     expect(state?.serializedOutput).toEqual(JSON.stringify(16));
+  }, 31000);
+
+  // ==================== Retry Policy Tests ====================
+
+  it("should retry activity and succeed after transient failures", async () => {
+    let attemptCount = 0;
+
+    const flakyActivity = async (_: ActivityContext, input: number) => {
+      attemptCount++;
+      if (attemptCount < 3) {
+        throw new Error(`Transient failure on attempt ${attemptCount}`);
+      }
+      return input * 2;
+    };
+
+    const retryPolicy = new RetryPolicy({
+      maxNumberOfAttempts: 5,
+      firstRetryIntervalInMilliseconds: 100,
+      backoffCoefficient: 1.0,
+    });
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: number): any {
+      const result = yield ctx.callActivity(flakyActivity, input, { retry: retryPolicy });
+      return result;
+    };
+
+    taskHubWorker.addActivity(flakyActivity);
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator, 21);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.failureDetails).toBeUndefined();
+    expect(state?.serializedOutput).toEqual(JSON.stringify(42));
+    expect(attemptCount).toBe(3); // Failed twice, succeeded on third attempt
+  }, 31000);
+
+  it("should fail activity after exhausting all retry attempts", async () => {
+    let attemptCount = 0;
+
+    const alwaysFailsActivity = async (_: ActivityContext) => {
+      attemptCount++;
+      throw new Error(`Permanent failure on attempt ${attemptCount}`);
+    };
+
+    const retryPolicy = new RetryPolicy({
+      maxNumberOfAttempts: 3,
+      firstRetryIntervalInMilliseconds: 100,
+      backoffCoefficient: 1.0,
+    });
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const result = yield ctx.callActivity(alwaysFailsActivity, undefined, { retry: retryPolicy });
+      return result;
+    };
+
+    taskHubWorker.addActivity(alwaysFailsActivity);
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(state?.failureDetails).toBeDefined();
+    expect(attemptCount).toBe(3); // All 3 attempts exhausted
+  }, 31000);
+
+  it("should use exponential backoff for retries", async () => {
+    const attemptTimes: number[] = [];
+
+    const flakyActivity = async (_: ActivityContext, input: number) => {
+      attemptTimes.push(Date.now());
+      if (attemptTimes.length < 3) {
+        throw new Error(`Transient failure on attempt ${attemptTimes.length}`);
+      }
+      return input;
+    };
+
+    const retryPolicy = new RetryPolicy({
+      maxNumberOfAttempts: 5,
+      firstRetryIntervalInMilliseconds: 500,
+      backoffCoefficient: 2.0, // Exponential backoff
+    });
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: number): any {
+      const result = yield ctx.callActivity(flakyActivity, input, { retry: retryPolicy });
+      return result;
+    };
+
+    taskHubWorker.addActivity(flakyActivity);
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator, 100);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(attemptTimes.length).toBe(3);
+
+    // Verify exponential backoff: second delay should be roughly 2x the first
+    // Allow some tolerance for timing variations
+    if (attemptTimes.length >= 3) {
+      const firstDelay = attemptTimes[1] - attemptTimes[0];
+      const secondDelay = attemptTimes[2] - attemptTimes[1];
+      // Second delay should be approximately 2x the first (with 50% tolerance for timing)
+      expect(secondDelay).toBeGreaterThan(firstDelay * 1.5);
+    }
+  }, 31000);
+
+  it("should retry sub-orchestration and succeed after transient failures", async () => {
+    let attemptCount = 0;
+
+    // eslint-disable-next-line require-yield
+    const flakySubOrchestrator: TOrchestrator = async function* (_ctx: OrchestrationContext, input: number): any {
+      attemptCount++;
+      if (attemptCount < 2) {
+        throw new Error(`Sub-orchestration transient failure on attempt ${attemptCount}`);
+      }
+      return input * 3;
+    };
+
+    const retryPolicy = new RetryPolicy({
+      maxNumberOfAttempts: 3,
+      firstRetryIntervalInMilliseconds: 100,
+      backoffCoefficient: 1.0,
+    });
+
+    const parentOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: number): any {
+      const result = yield ctx.callSubOrchestrator(flakySubOrchestrator, input, { retry: retryPolicy });
+      return result;
+    };
+
+    taskHubWorker.addOrchestrator(flakySubOrchestrator);
+    taskHubWorker.addOrchestrator(parentOrchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(parentOrchestrator, 7);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.failureDetails).toBeUndefined();
+    expect(state?.serializedOutput).toEqual(JSON.stringify(21));
+    expect(attemptCount).toBe(2); // Failed once, succeeded on second attempt
+  }, 31000);
+
+  it("should fail sub-orchestration after exhausting all retry attempts", async () => {
+    let attemptCount = 0;
+
+    // eslint-disable-next-line require-yield
+    const alwaysFailsSubOrchestrator: TOrchestrator = async function* (_ctx: OrchestrationContext): any {
+      attemptCount++;
+      throw new Error(`Sub-orchestration permanent failure on attempt ${attemptCount}`);
+    };
+
+    const retryPolicy = new RetryPolicy({
+      maxNumberOfAttempts: 2,
+      firstRetryIntervalInMilliseconds: 100,
+      backoffCoefficient: 1.0,
+    });
+
+    const parentOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const result = yield ctx.callSubOrchestrator(alwaysFailsSubOrchestrator, undefined, { retry: retryPolicy });
+      return result;
+    };
+
+    taskHubWorker.addOrchestrator(alwaysFailsSubOrchestrator);
+    taskHubWorker.addOrchestrator(parentOrchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(parentOrchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(state?.failureDetails).toBeDefined();
+    expect(attemptCount).toBe(2); // All 2 attempts exhausted
+  }, 31000);
+
+  it("should work without retry policy (backward compatibility)", async () => {
+    let invoked = false;
+
+    const simpleActivity = async (_: ActivityContext, input: string) => {
+      invoked = true;
+      return `Hello, ${input}!`;
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: string): any {
+      // No retry policy - should work as before
+      const result = yield ctx.callActivity(simpleActivity, input);
+      return result;
+    };
+
+    taskHubWorker.addActivity(simpleActivity);
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator, "World");
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.failureDetails).toBeUndefined();
+    expect(state?.serializedOutput).toEqual(JSON.stringify("Hello, World!"));
+    expect(invoked).toBe(true);
   }, 31000);
 });

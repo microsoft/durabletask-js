@@ -11,6 +11,8 @@ import {
 import * as pb from "../proto/orchestrator_service_pb";
 import { getName } from "../task";
 import { OrchestrationStateError } from "../task/exception/orchestration-state-error";
+import { RetryableTask } from "../task/retryable-task";
+import { RetryTimerTask } from "../task/retry-timer-task";
 import { TOrchestrator } from "../types/orchestrator.type";
 import { enumValueToKey } from "../utils/enum.util";
 import { getOrchestrationStatusStr, isEmpty } from "../utils/pb-helper.util";
@@ -172,19 +174,31 @@ export class OrchestrationExecutor {
             const timerFiredEvent = event.getTimerfired();
             const timerId = timerFiredEvent ? timerFiredEvent.getTimerid() : undefined;
 
-            let timerTask;
-
-            if (timerId) {
-              timerTask = ctx._pendingTasks[timerId];
-              delete ctx._pendingTasks[timerId];
+            if (timerId === undefined) {
+              if (!ctx._isReplaying) {
+                console.warn(`${ctx._instanceId}: Ignoring timerFired event with undefined ID`);
+              }
+              return;
             }
+
+            const timerTask = ctx._pendingTasks[timerId];
+            delete ctx._pendingTasks[timerId];
 
             if (!timerTask) {
               // TODO: Should this be an error? When would it ever happen?
               if (!ctx._isReplaying) {
                 console.warn(`${ctx._instanceId}: Ignoring unexpected timerFired event with ID = ${timerId}`);
               }
+              return;
+            }
 
+            // Check if this is a retry timer
+            if (timerTask instanceof RetryTimerTask) {
+              // Get the retryable parent task and reschedule it
+              const retryableTask = timerTask.retryableParent;
+              // Reschedule the original action - this will add it back to pendingActions
+              ctx.rescheduleRetryableTask(retryableTask);
+              // Don't resume the orchestrator - we're just rescheduling the task
               return;
             }
 
@@ -254,28 +268,47 @@ export class OrchestrationExecutor {
             const taskFailedEvent = event.getTaskfailed();
             const taskId = taskFailedEvent ? taskFailedEvent.getTaskscheduledid() : undefined;
 
-            let activityTask;
-
-            if (taskId) {
-              activityTask = ctx._pendingTasks[taskId];
-              delete ctx._pendingTasks[taskId];
-            }
-
-            if (!activityTask) {
-              // TODO: Should this be an error? When would it ever happen?
+            if (taskId === undefined) {
               if (!ctx._isReplaying) {
-                console.warn(`${ctx._instanceId}: Ignoring unexpected taskFailed event with ID = ${taskId}`);
+                console.warn(`${ctx._instanceId}: Ignoring taskFailed event with undefined ID`);
               }
-
               return;
             }
 
+            const failureDetails = event.getTaskfailed()?.getFailuredetails();
+            const errorMessage = failureDetails?.getErrormessage() || "Unknown error";
+
+            // Get the task (don't delete yet - we might retry)
+            const activityTask = ctx._pendingTasks[taskId];
+
+            if (!activityTask) {
+              if (!ctx._isReplaying) {
+                console.warn(`${ctx._instanceId}: Ignoring unexpected taskFailed event with ID = ${taskId}`);
+              }
+              return;
+            }
+
+            // Check if this is a retryable task and if we should retry
+            if (activityTask instanceof RetryableTask) {
+              activityTask.recordFailure(errorMessage, failureDetails);
+              const nextDelayMs = activityTask.computeNextDelayInMilliseconds(ctx._currentUtcDatetime);
+
+              if (nextDelayMs !== undefined) {
+                // Schedule a retry timer
+                activityTask.incrementAttemptCount();
+                ctx.createRetryTimer(activityTask, nextDelayMs);
+                // Remove from pendingTasks - the task will be re-added with a new ID when rescheduled
+                delete ctx._pendingTasks[taskId];
+                return;
+              }
+            }
+
+            // No retry - fail the task
+            delete ctx._pendingTasks[taskId];
+
             activityTask.fail(
-              `${ctx._instanceId}: Activity task #${taskId} failed: ${event
-                .getTaskfailed()
-                ?.getFailuredetails()
-                ?.getErrormessage()}`,
-              event.getTaskfailed()?.getFailuredetails(),
+              `Activity task #${taskId} failed: ${errorMessage}`,
+              failureDetails,
             );
 
             await ctx.resume();
@@ -341,30 +374,49 @@ export class OrchestrationExecutor {
               ? subOrchestrationInstanceFailedEvent.getTaskscheduledid()
               : undefined;
 
-            let subOrchTask;
-
-            if (taskId) {
-              subOrchTask = ctx._pendingTasks[taskId];
-              delete ctx._pendingTasks[taskId];
+            if (taskId === undefined) {
+              if (!ctx._isReplaying) {
+                console.warn(`${ctx._instanceId}: Ignoring subOrchestrationInstanceFailed event with undefined ID`);
+              }
+              return;
             }
 
+            const failureDetails = event.getSuborchestrationinstancefailed()?.getFailuredetails();
+            const errorMessage = failureDetails?.getErrormessage() || "Unknown error";
+
+            // Get the task (don't delete yet - we might retry)
+            const subOrchTask = ctx._pendingTasks[taskId];
+
             if (!subOrchTask) {
-              // TODO: Should this be an error? When would it ever happen?
               if (!ctx._isReplaying) {
                 console.warn(
                   `${ctx._instanceId}: Ignoring unexpected subOrchestrationInstanceFailed event with ID = ${taskId}`,
                 );
               }
-
               return;
             }
 
+            // Check if this is a retryable task and if we should retry
+            if (subOrchTask instanceof RetryableTask) {
+              subOrchTask.recordFailure(errorMessage, failureDetails);
+              const nextDelayMs = subOrchTask.computeNextDelayInMilliseconds(ctx._currentUtcDatetime);
+
+              if (nextDelayMs !== undefined) {
+                // Schedule a retry timer
+                subOrchTask.incrementAttemptCount();
+                ctx.createRetryTimer(subOrchTask, nextDelayMs);
+                // Remove from pendingTasks - the task will be re-added with a new ID when rescheduled
+                delete ctx._pendingTasks[taskId];
+                return;
+              }
+            }
+
+            // No retry - fail the task
+            delete ctx._pendingTasks[taskId];
+
             subOrchTask.fail(
-              `${ctx._instanceId}: Sub-orchestration task #${taskId} failed: ${event
-                .getSuborchestrationinstancefailed()
-                ?.getFailuredetails()
-                ?.getErrormessage()}`,
-              event.getSuborchestrationinstancefailed()?.getFailuredetails(),
+              `Sub-orchestration task #${taskId} failed: ${errorMessage}`,
+              failureDetails,
             );
 
             await ctx.resume();
