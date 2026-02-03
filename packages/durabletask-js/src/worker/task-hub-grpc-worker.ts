@@ -22,6 +22,26 @@ import { ExponentialBackoff, sleep, withTimeout } from "../utils/backoff.util";
 /** Default timeout in milliseconds for graceful shutdown. */
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30000;
 
+/**
+ * Options for creating a TaskHubGrpcWorker.
+ */
+export interface TaskHubGrpcWorkerOptions {
+  /** The host address to connect to. Defaults to "localhost:4001". */
+  hostAddress?: string;
+  /** gRPC channel options. */
+  options?: grpc.ChannelOptions;
+  /** Whether to use TLS. Defaults to false. */
+  useTLS?: boolean;
+  /** Optional pre-configured channel credentials. If provided, useTLS is ignored. */
+  credentials?: grpc.ChannelCredentials;
+  /** Optional function to generate per-call metadata (for taskhub, auth tokens, etc.). */
+  metadataGenerator?: MetadataGenerator;
+  /** Optional logger instance. Defaults to ConsoleLogger. */
+  logger?: Logger;
+  /** Optional timeout in milliseconds for graceful shutdown. Defaults to 30000. */
+  shutdownTimeoutMs?: number;
+}
+
 export class TaskHubGrpcWorker {
   private _responseStream: grpc.ClientReadableStream<pb.WorkItem> | null;
   private _registry: Registry;
@@ -41,6 +61,13 @@ export class TaskHubGrpcWorker {
   /**
    * Creates a new TaskHubGrpcWorker instance.
    *
+   * @param options Configuration options for the worker.
+   */
+  constructor(options: TaskHubGrpcWorkerOptions);
+
+  /**
+   * Creates a new TaskHubGrpcWorker instance.
+   *
    * @param hostAddress The host address to connect to. Defaults to "localhost:4001".
    * @param options gRPC channel options.
    * @param useTLS Whether to use TLS. Defaults to false.
@@ -48,6 +75,7 @@ export class TaskHubGrpcWorker {
    * @param metadataGenerator Optional function to generate per-call metadata (for taskhub, auth tokens, etc.).
    * @param logger Optional logger instance. Defaults to ConsoleLogger.
    * @param shutdownTimeoutMs Optional timeout in milliseconds for graceful shutdown. Defaults to 30000.
+   * @deprecated Use the options object constructor instead.
    */
   constructor(
     hostAddress?: string,
@@ -57,20 +85,58 @@ export class TaskHubGrpcWorker {
     metadataGenerator?: MetadataGenerator,
     logger?: Logger,
     shutdownTimeoutMs?: number,
+  );
+
+  constructor(
+    hostAddressOrOptions?: string | TaskHubGrpcWorkerOptions,
+    options?: grpc.ChannelOptions,
+    useTLS?: boolean,
+    credentials?: grpc.ChannelCredentials,
+    metadataGenerator?: MetadataGenerator,
+    logger?: Logger,
+    shutdownTimeoutMs?: number,
   ) {
+    let resolvedHostAddress: string | undefined;
+    let resolvedOptions: grpc.ChannelOptions | undefined;
+    let resolvedUseTLS: boolean | undefined;
+    let resolvedCredentials: grpc.ChannelCredentials | undefined;
+    let resolvedMetadataGenerator: MetadataGenerator | undefined;
+    let resolvedLogger: Logger | undefined;
+    let resolvedShutdownTimeoutMs: number | undefined;
+
+    if (typeof hostAddressOrOptions === "object" && hostAddressOrOptions !== null) {
+      // Options object constructor
+      resolvedHostAddress = hostAddressOrOptions.hostAddress;
+      resolvedOptions = hostAddressOrOptions.options;
+      resolvedUseTLS = hostAddressOrOptions.useTLS;
+      resolvedCredentials = hostAddressOrOptions.credentials;
+      resolvedMetadataGenerator = hostAddressOrOptions.metadataGenerator;
+      resolvedLogger = hostAddressOrOptions.logger;
+      resolvedShutdownTimeoutMs = hostAddressOrOptions.shutdownTimeoutMs;
+    } else {
+      // Deprecated positional parameters constructor
+      resolvedHostAddress = hostAddressOrOptions;
+      resolvedOptions = options;
+      resolvedUseTLS = useTLS;
+      resolvedCredentials = credentials;
+      resolvedMetadataGenerator = metadataGenerator;
+      resolvedLogger = logger;
+      resolvedShutdownTimeoutMs = shutdownTimeoutMs;
+    }
+
     this._registry = new Registry();
-    this._hostAddress = hostAddress;
-    this._tls = useTLS;
-    this._grpcChannelOptions = options;
-    this._grpcChannelCredentials = credentials;
-    this._metadataGenerator = metadataGenerator;
+    this._hostAddress = resolvedHostAddress;
+    this._tls = resolvedUseTLS;
+    this._grpcChannelOptions = resolvedOptions;
+    this._grpcChannelCredentials = resolvedCredentials;
+    this._metadataGenerator = resolvedMetadataGenerator;
     this._responseStream = null;
     this._isRunning = false;
     this._stopWorker = false;
     this._stub = null;
-    this._logger = logger ?? new ConsoleLogger();
+    this._logger = resolvedLogger ?? new ConsoleLogger();
     this._pendingWorkItems = new Set();
-    this._shutdownTimeoutMs = shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
+    this._shutdownTimeoutMs = resolvedShutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
     this._backoff = new ExponentialBackoff({
       initialDelayMs: 1000,
       maxDelayMs: 30000,
@@ -86,6 +152,34 @@ export class TaskHubGrpcWorker {
       return await this._metadataGenerator();
     }
     return new grpc.Metadata();
+  }
+
+  /**
+   * Creates a new gRPC client and retries the worker.
+   * Properly closes the old client to prevent connection leaks.
+   */
+  private async _createNewClientAndRetry(): Promise<void> {
+    // Close the old stub to prevent connection leaks
+    if (this._stub) {
+      this._stub.close();
+    }
+
+    await this._backoff.wait();
+
+    const newClient = new GrpcClient(
+      this._hostAddress,
+      this._grpcChannelOptions,
+      this._tls,
+      this._grpcChannelCredentials,
+    );
+    this._stub = newClient.stub;
+
+    // Do not await - run in background
+    this.internalRunWorker(newClient, true).catch((err) => {
+      if (!this._stopWorker) {
+        this._logger.error("Worker error:", err);
+      }
+    });
   }
 
   /**
@@ -216,21 +310,7 @@ export class TaskHubGrpcWorker {
         stream.removeAllListeners();
         stream.destroy();
         this._logger.info(`Stream abruptly closed, will retry in ${this._backoff.peekNextDelay()}ms...`);
-        await this._backoff.wait();
-        // Create a new client for the retry to avoid stale channel issues
-        const newClient = new GrpcClient(
-          this._hostAddress,
-          this._grpcChannelOptions,
-          this._tls,
-          this._grpcChannelCredentials,
-        );
-        this._stub = newClient.stub;
-        // do not await
-        this.internalRunWorker(newClient, true).catch((err) => {
-          if (!this._stopWorker) {
-            this._logger.error("Worker error:", err);
-          }
-        });
+        await this._createNewClientAndRetry();
       });
 
       stream.on("error", (err: Error) => {
@@ -250,20 +330,7 @@ export class TaskHubGrpcWorker {
         throw err;
       }
       this._logger.info(`Connection will be retried in ${this._backoff.peekNextDelay()}ms...`);
-      await this._backoff.wait();
-      // Create a new client for the retry
-      const newClient = new GrpcClient(
-        this._hostAddress,
-        this._grpcChannelOptions,
-        this._tls,
-        this._grpcChannelCredentials,
-      );
-      this._stub = newClient.stub;
-      this.internalRunWorker(newClient, true).catch((retryErr) => {
-        if (!this._stopWorker) {
-          this._logger.error("Worker error:", retryErr);
-        }
-      });
+      await this._createNewClientAndRetry();
       return;
     }
   }
@@ -323,8 +390,8 @@ export class TaskHubGrpcWorker {
     }
 
     if (this._stub) {
-      // Await the stub close operation to ensure gRPC client cleanup completes before returning.
-      await Promise.resolve(this._stub.close());
+      // Close the gRPC client - this is a synchronous operation
+      this._stub.close();
     }
     this._isRunning = false;
 

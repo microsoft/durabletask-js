@@ -2,8 +2,8 @@
 // Licensed under the MIT License.
 
 // Client and Worker
-export { TaskHubGrpcClient, MetadataGenerator } from "./client/client";
-export { TaskHubGrpcWorker } from "./worker/task-hub-grpc-worker";
+export { TaskHubGrpcClient, TaskHubGrpcClientOptions, MetadataGenerator } from "./client/client";
+export { TaskHubGrpcWorker, TaskHubGrpcWorkerOptions } from "./worker/task-hub-grpc-worker";
 
 // Contexts
 export { OrchestrationContext } from "./task/context/orchestration-context";

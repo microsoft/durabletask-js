@@ -26,10 +26,35 @@ import { Logger, ConsoleLogger } from "../types/logger.type";
 // Re-export MetadataGenerator for backward compatibility
 export { MetadataGenerator } from "../utils/grpc-helper.util";
 
+/**
+ * Options for creating a TaskHubGrpcClient.
+ */
+export interface TaskHubGrpcClientOptions {
+  /** The host address to connect to. Defaults to "localhost:4001". */
+  hostAddress?: string;
+  /** gRPC channel options. */
+  options?: grpc.ChannelOptions;
+  /** Whether to use TLS. Defaults to false. */
+  useTLS?: boolean;
+  /** Optional pre-configured channel credentials. If provided, useTLS is ignored. */
+  credentials?: grpc.ChannelCredentials;
+  /** Optional function to generate per-call metadata (for taskhub, auth tokens, etc.). */
+  metadataGenerator?: MetadataGenerator;
+  /** Optional logger instance. Defaults to ConsoleLogger. */
+  logger?: Logger;
+}
+
 export class TaskHubGrpcClient {
   private _stub: stubs.TaskHubSidecarServiceClient;
   private _metadataGenerator?: MetadataGenerator;
   private _logger: Logger;
+
+  /**
+   * Creates a new TaskHubGrpcClient instance.
+   *
+   * @param options Configuration options for the client.
+   */
+  constructor(options: TaskHubGrpcClientOptions);
 
   /**
    * Creates a new TaskHubGrpcClient instance.
@@ -40,6 +65,7 @@ export class TaskHubGrpcClient {
    * @param credentials Optional pre-configured channel credentials. If provided, useTLS is ignored.
    * @param metadataGenerator Optional function to generate per-call metadata (for taskhub, auth tokens, etc.).
    * @param logger Optional logger instance. Defaults to ConsoleLogger.
+   * @deprecated Use the options object constructor instead.
    */
   constructor(
     hostAddress?: string,
@@ -48,10 +74,44 @@ export class TaskHubGrpcClient {
     credentials?: grpc.ChannelCredentials,
     metadataGenerator?: MetadataGenerator,
     logger?: Logger,
+  );
+
+  constructor(
+    hostAddressOrOptions?: string | TaskHubGrpcClientOptions,
+    options?: grpc.ChannelOptions,
+    useTLS?: boolean,
+    credentials?: grpc.ChannelCredentials,
+    metadataGenerator?: MetadataGenerator,
+    logger?: Logger,
   ) {
-    this._stub = new GrpcClient(hostAddress, options, useTLS, credentials).stub;
-    this._metadataGenerator = metadataGenerator;
-    this._logger = logger ?? new ConsoleLogger();
+    let resolvedHostAddress: string | undefined;
+    let resolvedOptions: grpc.ChannelOptions | undefined;
+    let resolvedUseTLS: boolean | undefined;
+    let resolvedCredentials: grpc.ChannelCredentials | undefined;
+    let resolvedMetadataGenerator: MetadataGenerator | undefined;
+    let resolvedLogger: Logger | undefined;
+
+    if (typeof hostAddressOrOptions === "object" && hostAddressOrOptions !== null) {
+      // Options object constructor
+      resolvedHostAddress = hostAddressOrOptions.hostAddress;
+      resolvedOptions = hostAddressOrOptions.options;
+      resolvedUseTLS = hostAddressOrOptions.useTLS;
+      resolvedCredentials = hostAddressOrOptions.credentials;
+      resolvedMetadataGenerator = hostAddressOrOptions.metadataGenerator;
+      resolvedLogger = hostAddressOrOptions.logger;
+    } else {
+      // Deprecated positional parameters constructor
+      resolvedHostAddress = hostAddressOrOptions;
+      resolvedOptions = options;
+      resolvedUseTLS = useTLS;
+      resolvedCredentials = credentials;
+      resolvedMetadataGenerator = metadataGenerator;
+      resolvedLogger = logger;
+    }
+
+    this._stub = new GrpcClient(resolvedHostAddress, resolvedOptions, resolvedUseTLS, resolvedCredentials).stub;
+    this._metadataGenerator = resolvedMetadataGenerator;
+    this._logger = resolvedLogger ?? new ConsoleLogger();
   }
 
   async stop(): Promise<void> {
