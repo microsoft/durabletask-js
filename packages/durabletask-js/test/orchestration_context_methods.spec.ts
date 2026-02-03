@@ -240,9 +240,6 @@ describe("OrchestrationContext.newGuid", () => {
   });
 
   it("should generate different GUIDs for different instance IDs", async () => {
-    let instance1Guid: string | undefined;
-    let instance2Guid: string | undefined;
-
     const orchestrator: TOrchestrator = async (ctx: OrchestrationContext) => {
       return ctx.newGuid();
     };
@@ -258,8 +255,8 @@ describe("OrchestrationContext.newGuid", () => {
     ];
     const executor1 = new OrchestrationExecutor(registry);
     const result1 = await executor1.execute("instance-1", [], events1);
-    instance1Guid = JSON.parse(
-      result1.actions[0].getCompleteorchestration()?.getResult()?.getValue()!,
+    const instance1Guid = JSON.parse(
+      result1.actions[0].getCompleteorchestration()?.getResult()?.getValue() ?? "",
     );
 
     // Run with instance 2
@@ -269,8 +266,8 @@ describe("OrchestrationContext.newGuid", () => {
     ];
     const executor2 = new OrchestrationExecutor(registry);
     const result2 = await executor2.execute("instance-2", [], events2);
-    instance2Guid = JSON.parse(
-      result2.actions[0].getCompleteorchestration()?.getResult()?.getValue()!,
+    const instance2Guid = JSON.parse(
+      result2.actions[0].getCompleteorchestration()?.getResult()?.getValue() ?? "",
     );
 
     // GUIDs should be different for different instance IDs
