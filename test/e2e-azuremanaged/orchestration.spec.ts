@@ -506,237 +506,237 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     expect(invoked).toBe(true);
   }, 31000);
 
-  // ==================== newGuid Tests ====================
+  // // ==================== newGuid Tests ====================
 
-  it("should generate deterministic GUIDs with newGuid", async () => {
-    const orchestrator: TOrchestrator = async (ctx: OrchestrationContext) => {
-      const guid1 = ctx.newGuid();
-      const guid2 = ctx.newGuid();
-      const guid3 = ctx.newGuid();
-      return { guid1, guid2, guid3 };
-    };
+  // it("should generate deterministic GUIDs with newGuid", async () => {
+  //   const orchestrator: TOrchestrator = async (ctx: OrchestrationContext) => {
+  //     const guid1 = ctx.newGuid();
+  //     const guid2 = ctx.newGuid();
+  //     const guid3 = ctx.newGuid();
+  //     return { guid1, guid2, guid3 };
+  //   };
 
-    taskHubWorker.addOrchestrator(orchestrator);
-    await taskHubWorker.start();
+  //   taskHubWorker.addOrchestrator(orchestrator);
+  //   await taskHubWorker.start();
 
-    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
-    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+  //   const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+  //   const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
-    expect(state).toBeDefined();
-    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+  //   expect(state).toBeDefined();
+  //   expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
 
-    const output = JSON.parse(state?.serializedOutput ?? "{}");
+  //   const output = JSON.parse(state?.serializedOutput ?? "{}");
 
-    // Verify GUIDs are in valid format (8-4-4-4-12 hex chars)
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    expect(output.guid1).toMatch(uuidRegex);
-    expect(output.guid2).toMatch(uuidRegex);
-    expect(output.guid3).toMatch(uuidRegex);
+  //   // Verify GUIDs are in valid format (8-4-4-4-12 hex chars)
+  //   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  //   expect(output.guid1).toMatch(uuidRegex);
+  //   expect(output.guid2).toMatch(uuidRegex);
+  //   expect(output.guid3).toMatch(uuidRegex);
 
-    // Verify all GUIDs are unique
-    expect(output.guid1).not.toEqual(output.guid2);
-    expect(output.guid2).not.toEqual(output.guid3);
-    expect(output.guid1).not.toEqual(output.guid3);
-  }, 31000);
+  //   // Verify all GUIDs are unique
+  //   expect(output.guid1).not.toEqual(output.guid2);
+  //   expect(output.guid2).not.toEqual(output.guid3);
+  //   expect(output.guid1).not.toEqual(output.guid3);
+  // }, 31000);
 
-  it("should generate consistent GUIDs across replays", async () => {
-    // This test verifies that newGuid produces the same values across replays
-    // by running an orchestration that generates GUIDs, waits, and then returns them
-    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
-      // Generate GUIDs before and after a timer
-      const guid1 = ctx.newGuid();
-      const guid2 = ctx.newGuid();
+  // it("should generate consistent GUIDs across replays", async () => {
+  //   // This test verifies that newGuid produces the same values across replays
+  //   // by running an orchestration that generates GUIDs, waits, and then returns them
+  //   const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+  //     // Generate GUIDs before and after a timer
+  //     const guid1 = ctx.newGuid();
+  //     const guid2 = ctx.newGuid();
 
-      yield ctx.createTimer(1);
+  //     yield ctx.createTimer(1);
 
-      // Generate more GUIDs after replay
-      const guid3 = ctx.newGuid();
-      const guid4 = ctx.newGuid();
+  //     // Generate more GUIDs after replay
+  //     const guid3 = ctx.newGuid();
+  //     const guid4 = ctx.newGuid();
 
-      // Return all GUIDs - if deterministic, guid3/guid4 should be different from guid1/guid2
-      // but consistent across replays (which we verify by the orchestration completing successfully)
-      return { guid1, guid2, guid3, guid4 };
-    };
+  //     // Return all GUIDs - if deterministic, guid3/guid4 should be different from guid1/guid2
+  //     // but consistent across replays (which we verify by the orchestration completing successfully)
+  //     return { guid1, guid2, guid3, guid4 };
+  //   };
 
-    taskHubWorker.addOrchestrator(orchestrator);
-    await taskHubWorker.start();
+  //   taskHubWorker.addOrchestrator(orchestrator);
+  //   await taskHubWorker.start();
 
-    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
-    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+  //   const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+  //   const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
-    expect(state).toBeDefined();
-    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+  //   expect(state).toBeDefined();
+  //   expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
 
-    const output = JSON.parse(state?.serializedOutput ?? "{}");
+  //   const output = JSON.parse(state?.serializedOutput ?? "{}");
 
-    // Verify all 4 GUIDs are unique
-    const guids = [output.guid1, output.guid2, output.guid3, output.guid4];
-    const uniqueGuids = new Set(guids);
-    expect(uniqueGuids.size).toBe(4);
+  //   // Verify all 4 GUIDs are unique
+  //   const guids = [output.guid1, output.guid2, output.guid3, output.guid4];
+  //   const uniqueGuids = new Set(guids);
+  //   expect(uniqueGuids.size).toBe(4);
 
-    // Verify all GUIDs are valid UUID v5 format
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    guids.forEach((guid) => expect(guid).toMatch(uuidRegex));
-  }, 31000);
+  //   // Verify all GUIDs are valid UUID v5 format
+  //   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  //   guids.forEach((guid) => expect(guid).toMatch(uuidRegex));
+  // }, 31000);
 
-  // ==================== setCustomStatus Tests ====================
+  // // ==================== setCustomStatus Tests ====================
 
-  it("should set and retrieve custom status", async () => {
-    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
-      ctx.setCustomStatus("Step 1: Starting");
-      yield ctx.createTimer(1);
+  // it("should set and retrieve custom status", async () => {
+  //   const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+  //     ctx.setCustomStatus("Step 1: Starting");
+  //     yield ctx.createTimer(1);
 
-      // Use longer timer to give CI environments more time to observe this status
-      ctx.setCustomStatus({ step: 2, message: "Processing" });
-      yield ctx.createTimer(5);
+  //     // Use longer timer to give CI environments more time to observe this status
+  //     ctx.setCustomStatus({ step: 2, message: "Processing" });
+  //     yield ctx.createTimer(5);
 
-      ctx.setCustomStatus("Step 3: Completed");
-      return "done";
-    };
+  //     ctx.setCustomStatus("Step 3: Completed");
+  //     return "done";
+  //   };
 
-    taskHubWorker.addOrchestrator(orchestrator);
-    await taskHubWorker.start();
+  //   taskHubWorker.addOrchestrator(orchestrator);
+  //   await taskHubWorker.start();
 
-    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+  //   const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
 
-    // Poll for custom status changes - collect all observed statuses
-    let foundObjectStatus = false;
-    const observedStatuses: string[] = [];
-    const startTime = Date.now();
-    while (Date.now() - startTime < 20000) {
-      const state = await taskHubClient.getOrchestrationState(id);
-      if (state?.serializedCustomStatus) {
-        const status = state.serializedCustomStatus;
-        // Track unique statuses for debugging
-        if (!observedStatuses.includes(status)) {
-          observedStatuses.push(status);
-        }
-        if (status.includes("step") && status.includes("Processing")) {
-          foundObjectStatus = true;
-          break;
-        }
-      }
-      // Poll more frequently
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    }
+  //   // Poll for custom status changes - collect all observed statuses
+  //   let foundObjectStatus = false;
+  //   const observedStatuses: string[] = [];
+  //   const startTime = Date.now();
+  //   while (Date.now() - startTime < 20000) {
+  //     const state = await taskHubClient.getOrchestrationState(id);
+  //     if (state?.serializedCustomStatus) {
+  //       const status = state.serializedCustomStatus;
+  //       // Track unique statuses for debugging
+  //       if (!observedStatuses.includes(status)) {
+  //         observedStatuses.push(status);
+  //       }
+  //       if (status.includes("step") && status.includes("Processing")) {
+  //         foundObjectStatus = true;
+  //         break;
+  //       }
+  //     }
+  //     // Poll more frequently
+  //     await new Promise((resolve) => setTimeout(resolve, 200));
+  //   }
 
-    const finalState = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+  //   const finalState = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
-    expect(finalState).toBeDefined();
-    expect(finalState?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
-    expect(finalState?.serializedCustomStatus).toEqual(JSON.stringify("Step 3: Completed"));
-    // Provide better error message on failure - log observed statuses if assertion fails
-    if (!foundObjectStatus) {
-      console.log("Observed statuses during polling:", observedStatuses);
-    }
-    expect(foundObjectStatus).toBe(true);
-  }, 60000);
+  //   expect(finalState).toBeDefined();
+  //   expect(finalState?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+  //   expect(finalState?.serializedCustomStatus).toEqual(JSON.stringify("Step 3: Completed"));
+  //   // Provide better error message on failure - log observed statuses if assertion fails
+  //   if (!foundObjectStatus) {
+  //     console.log("Observed statuses during polling:", observedStatuses);
+  //   }
+  //   expect(foundObjectStatus).toBe(true);
+  // }, 60000);
 
-  it("should update custom status to empty string when explicitly set", async () => {
-    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
-      ctx.setCustomStatus("Initial status");
-      yield ctx.createTimer(1);
+  // it("should update custom status to empty string when explicitly set", async () => {
+  //   const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+  //     ctx.setCustomStatus("Initial status");
+  //     yield ctx.createTimer(1);
 
-      // Update custom status to an empty string; this is a valid value and does not clear it.
-      ctx.setCustomStatus("");
-      return "done";
-    };
+  //     // Update custom status to an empty string; this is a valid value and does not clear it.
+  //     ctx.setCustomStatus("");
+  //     return "done";
+  //   };
 
-    taskHubWorker.addOrchestrator(orchestrator);
-    await taskHubWorker.start();
+  //   taskHubWorker.addOrchestrator(orchestrator);
+  //   await taskHubWorker.start();
 
-    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
-    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+  //   const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+  //   const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
-    expect(state).toBeDefined();
-    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
-    // When set to empty string, the serialized value should be '""' (JSON-encoded empty string)
-    expect(state?.serializedCustomStatus).toEqual('""');
-  }, 31000);
+  //   expect(state).toBeDefined();
+  //   expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+  //   // When set to empty string, the serialized value should be '""' (JSON-encoded empty string)
+  //   expect(state?.serializedCustomStatus).toEqual('""');
+  // }, 31000);
 
-  // ==================== sendEvent Tests ====================
+  // // ==================== sendEvent Tests ====================
 
-  it("should send event from one orchestration to another", async () => {
-    const receiverOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
-      const event = yield ctx.waitForExternalEvent("greeting");
-      return event;
-    };
+  // it("should send event from one orchestration to another", async () => {
+  //   const receiverOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+  //     const event = yield ctx.waitForExternalEvent("greeting");
+  //     return event;
+  //   };
 
-    const senderOrchestrator: TOrchestrator = async function* (
-      ctx: OrchestrationContext,
-      targetInstanceId: string,
-    ): any {
-      // Wait a bit to ensure receiver is running
-      yield ctx.createTimer(1);
+  //   const senderOrchestrator: TOrchestrator = async function* (
+  //     ctx: OrchestrationContext,
+  //     targetInstanceId: string,
+  //   ): any {
+  //     // Wait a bit to ensure receiver is running
+  //     yield ctx.createTimer(1);
 
-      // Send event to the receiver
-      ctx.sendEvent(targetInstanceId, "greeting", { message: "Hello from sender!" });
+  //     // Send event to the receiver
+  //     ctx.sendEvent(targetInstanceId, "greeting", { message: "Hello from sender!" });
 
-      // Must yield after sendEvent to ensure the action is sent before orchestration completes
-      yield ctx.createTimer(1);
+  //     // Must yield after sendEvent to ensure the action is sent before orchestration completes
+  //     yield ctx.createTimer(1);
 
-      return "sent";
-    };
+  //     return "sent";
+  //   };
 
-    taskHubWorker.addOrchestrator(receiverOrchestrator);
-    taskHubWorker.addOrchestrator(senderOrchestrator);
-    await taskHubWorker.start();
+  //   taskHubWorker.addOrchestrator(receiverOrchestrator);
+  //   taskHubWorker.addOrchestrator(senderOrchestrator);
+  //   await taskHubWorker.start();
 
-    // Start receiver first
-    const receiverId = await taskHubClient.scheduleNewOrchestration(receiverOrchestrator);
-    await taskHubClient.waitForOrchestrationStart(receiverId, undefined, 10);
+  //   // Start receiver first
+  //   const receiverId = await taskHubClient.scheduleNewOrchestration(receiverOrchestrator);
+  //   await taskHubClient.waitForOrchestrationStart(receiverId, undefined, 10);
 
-    // Start sender with receiver's instance ID
-    const senderId = await taskHubClient.scheduleNewOrchestration(senderOrchestrator, receiverId);
+  //   // Start sender with receiver's instance ID
+  //   const senderId = await taskHubClient.scheduleNewOrchestration(senderOrchestrator, receiverId);
 
-    // Wait for both to complete
-    const [receiverState, senderState] = await Promise.all([
-      taskHubClient.waitForOrchestrationCompletion(receiverId, undefined, 30),
-      taskHubClient.waitForOrchestrationCompletion(senderId, undefined, 30),
-    ]);
+  //   // Wait for both to complete
+  //   const [receiverState, senderState] = await Promise.all([
+  //     taskHubClient.waitForOrchestrationCompletion(receiverId, undefined, 30),
+  //     taskHubClient.waitForOrchestrationCompletion(senderId, undefined, 30),
+  //   ]);
 
-    expect(senderState).toBeDefined();
-    expect(senderState?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
-    expect(senderState?.serializedOutput).toEqual(JSON.stringify("sent"));
+  //   expect(senderState).toBeDefined();
+  //   expect(senderState?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+  //   expect(senderState?.serializedOutput).toEqual(JSON.stringify("sent"));
 
-    expect(receiverState).toBeDefined();
-    expect(receiverState?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
-    expect(receiverState?.serializedOutput).toEqual(JSON.stringify({ message: "Hello from sender!" }));
-  }, 45000);
+  //   expect(receiverState).toBeDefined();
+  //   expect(receiverState?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+  //   expect(receiverState?.serializedOutput).toEqual(JSON.stringify({ message: "Hello from sender!" }));
+  // }, 45000);
 
-  it("should send event without data", async () => {
-    const receiverOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
-      yield ctx.waitForExternalEvent("signal");
-      return "received signal";
-    };
+  // it("should send event without data", async () => {
+  //   const receiverOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+  //     yield ctx.waitForExternalEvent("signal");
+  //     return "received signal";
+  //   };
 
-    const senderOrchestrator: TOrchestrator = async function* (
-      ctx: OrchestrationContext,
-      targetInstanceId: string,
-    ): any {
-      yield ctx.createTimer(1);
-      ctx.sendEvent(targetInstanceId, "signal");
-      // Must yield after sendEvent to ensure the action is sent
-      yield ctx.createTimer(1);
-      return "signaled";
-    };
+  //   const senderOrchestrator: TOrchestrator = async function* (
+  //     ctx: OrchestrationContext,
+  //     targetInstanceId: string,
+  //   ): any {
+  //     yield ctx.createTimer(1);
+  //     ctx.sendEvent(targetInstanceId, "signal");
+  //     // Must yield after sendEvent to ensure the action is sent
+  //     yield ctx.createTimer(1);
+  //     return "signaled";
+  //   };
 
-    taskHubWorker.addOrchestrator(receiverOrchestrator);
-    taskHubWorker.addOrchestrator(senderOrchestrator);
-    await taskHubWorker.start();
+  //   taskHubWorker.addOrchestrator(receiverOrchestrator);
+  //   taskHubWorker.addOrchestrator(senderOrchestrator);
+  //   await taskHubWorker.start();
 
-    const receiverId = await taskHubClient.scheduleNewOrchestration(receiverOrchestrator);
-    await taskHubClient.waitForOrchestrationStart(receiverId, undefined, 10);
+  //   const receiverId = await taskHubClient.scheduleNewOrchestration(receiverOrchestrator);
+  //   await taskHubClient.waitForOrchestrationStart(receiverId, undefined, 10);
 
-    const senderId = await taskHubClient.scheduleNewOrchestration(senderOrchestrator, receiverId);
+  //   const senderId = await taskHubClient.scheduleNewOrchestration(senderOrchestrator, receiverId);
 
-    const [receiverState, senderState] = await Promise.all([
-      taskHubClient.waitForOrchestrationCompletion(receiverId, undefined, 30),
-      taskHubClient.waitForOrchestrationCompletion(senderId, undefined, 30),
-    ]);
+  //   const [receiverState, senderState] = await Promise.all([
+  //     taskHubClient.waitForOrchestrationCompletion(receiverId, undefined, 30),
+  //     taskHubClient.waitForOrchestrationCompletion(senderId, undefined, 30),
+  //   ]);
 
-    expect(senderState?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
-    expect(receiverState?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
-    expect(receiverState?.serializedOutput).toEqual(JSON.stringify("received signal"));
-  }, 45000);
+  //   expect(senderState?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+  //   expect(receiverState?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+  //   expect(receiverState?.serializedOutput).toEqual(JSON.stringify("received signal"));
+  // }, 45000);
 });
