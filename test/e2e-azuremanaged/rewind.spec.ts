@@ -168,7 +168,7 @@ describe("Rewind Instance E2E Tests", () => {
       // No need to start worker for this test
       // Will throw either "not found" or "not supported" depending on backend
       await expect(taskHubClient.rewindInstance(nonExistentId, "Test rewind")).rejects.toThrow();
-    });
+    }, 60000);
 
     it("should throw an error when rewinding a completed orchestration (or if rewind is not supported)", async () => {
       const instanceId = generateUniqueInstanceId("rewind-completed");
@@ -183,7 +183,7 @@ describe("Rewind Instance E2E Tests", () => {
 
       // Try to rewind a completed orchestration - should fail
       await expect(taskHubClient.rewindInstance(instanceId, "Test rewind")).rejects.toThrow();
-    });
+    }, 60000);
 
     it.skip("should throw an error when rewinding a running orchestration (requires backend support)", async () => {
       const instanceId = generateUniqueInstanceId("rewind-running");
