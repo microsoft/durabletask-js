@@ -54,7 +54,6 @@ describe("Durable Functions", () => {
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
   });
 
-
   it("should be able to run an activity sequence", async () => {
     const plusOne = async (_: ActivityContext, input: number) => {
       return input + 1;
