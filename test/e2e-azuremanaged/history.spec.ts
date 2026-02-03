@@ -341,42 +341,6 @@ describe("getOrchestrationHistory E2E Tests", () => {
     expect(executionCompletedEvents.length).toBe(1);
   }, 31000);
 
-  it("should include tags in ExecutionStarted event", async () => {
-    const taggedOrchestrator: TOrchestrator = async (_: OrchestrationContext) => {
-      return "Tagged result";
-    };
-
-    taskHubWorker.addOrchestrator(taggedOrchestrator);
-    await taskHubWorker.start();
-
-    const tags = {
-      "environment": "test",
-      "owner": "copilot",
-      "priority": "high"
-    };
-
-    const id = await taskHubClient.scheduleNewOrchestration(taggedOrchestrator, {
-      tags: tags
-    });
-    await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
-
-    const history = await taskHubClient.getOrchestrationHistory(id);
-
-    expect(history).toBeDefined();
-    expect(history.length).toBeGreaterThan(0);
-
-    // Check for ExecutionStarted event with tags
-    const startedEvents = history.filter(e => e.type === HistoryEventType.ExecutionStarted) as ExecutionStartedEvent[];
-    expect(startedEvents.length).toBe(1);
-    
-    const startedEvent = startedEvents[0];
-    expect(startedEvent.tags).toBeDefined();
-    expect(startedEvent.tags).toEqual(tags);
-    expect(startedEvent.tags?.["environment"]).toBe("test");
-    expect(startedEvent.tags?.["owner"]).toBe("copilot");
-    expect(startedEvent.tags?.["priority"]).toBe("high");
-  }, 31000);
-
   it("should validate complete history event sequence for orchestration with activity, sub-orchestration, and timer", async () => {
     // Define activity
     const greetActivity = async (_: ActivityContext, name: string) => {

@@ -25,19 +25,8 @@ import { HistoryEvent } from "../orchestration/history-event";
 import { convertProtoHistoryEvent } from "../utils/history-event-converter";
 import { Logger, ConsoleLogger } from "../types/logger.type";
 
-/**
- * Options for scheduling a new orchestration instance.
- */
-export interface StartOrchestrationOptions {
-  /** The input to pass to the orchestration. */
-  input?: TInput;
-  /** The unique ID for the orchestration instance. If not specified, a new GUID is generated. */
-  instanceId?: string;
-  /** The time when the orchestration should start executing. If not specified, starts immediately. */
-  startAt?: Date;
-  /** Tags to associate with the orchestration instance. */
-  tags?: Record<string, string>;
-}
+// Re-export MetadataGenerator for backward compatibility
+export { MetadataGenerator } from "../utils/grpc-helper.util";
 
 /**
  * Options for creating a TaskHubGrpcClient.
@@ -139,36 +128,14 @@ export class TaskHubGrpcClient {
    * Schedules a new orchestrator using the DurableTask client.
    *
    * @param {TOrchestrator | string} orchestrator - The orchestrator or the name of the orchestrator to be scheduled.
-   * @param {TInput | StartOrchestrationOptions} inputOrOptions - The input to pass to the orchestrator, or an options object.
-   * @param {string} instanceId - (Deprecated) Use options object instead. The unique ID for the orchestration instance.
-   * @param {Date} startAt - (Deprecated) Use options object instead. The time when the orchestration should start.
    * @return {Promise<string>} A Promise resolving to the unique ID of the scheduled orchestrator instance.
    */
   async scheduleNewOrchestration(
     orchestrator: TOrchestrator | string,
-    inputOrOptions?: TInput | StartOrchestrationOptions,
+    input?: TInput,
     instanceId?: string,
     startAt?: Date,
   ): Promise<string> {
-    // Determine if inputOrOptions is an options object or raw input
-    let input: TInput | undefined;
-    let resolvedInstanceId: string | undefined = instanceId;
-    let resolvedStartAt: Date | undefined = startAt;
-    let tags: Record<string, string> | undefined;
-
-    if (inputOrOptions !== null && typeof inputOrOptions === 'object' && !Array.isArray(inputOrOptions) && 
-        ('input' in inputOrOptions || 'instanceId' in inputOrOptions || 'startAt' in inputOrOptions || 'tags' in inputOrOptions)) {
-      // It's an options object
-      const options = inputOrOptions as StartOrchestrationOptions;
-      input = options.input;
-      resolvedInstanceId = options.instanceId ?? instanceId;
-      resolvedStartAt = options.startAt ?? startAt;
-      tags = options.tags;
-    } else {
-      // It's raw input (backward compatible)
-      input = inputOrOptions as TInput;
-    }
-
     let name;
     if (typeof orchestrator === "string") {
       name = orchestrator;
@@ -177,24 +144,16 @@ export class TaskHubGrpcClient {
     }
     const req = new pb.CreateInstanceRequest();
     req.setName(name);
-    req.setInstanceid(resolvedInstanceId ?? randomUUID());
+    req.setInstanceid(instanceId ?? randomUUID());
 
     const i = new StringValue();
     i.setValue(JSON.stringify(input));
 
     const ts = new Timestamp();
-    ts.fromDate(new Date(resolvedStartAt?.getTime() ?? 0));
+    ts.fromDate(new Date(startAt?.getTime() ?? 0));
 
     req.setInput(i);
     req.setScheduledstarttimestamp(ts);
-
-    // Set tags if provided
-    if (tags) {
-      const tagsMap = req.getTagsMap();
-      for (const [key, value] of Object.entries(tags)) {
-        tagsMap.set(key, value);
-      }
-    }
 
     this._logger.info(`Starting new ${name} instance with ID = ${req.getInstanceid()}`);
 
