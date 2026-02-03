@@ -5,21 +5,7 @@ import * as pb from "../proto/orchestrator_service_pb";
 import { FailureDetails } from "../task/failure-details";
 import { fromProtobuf } from "./enum/orchestration-status.enum";
 import { OrchestrationState } from "./orchestration-state";
-
-function mapToRecord(tagsMap?: { forEach: (cb: (value: string, key: string) => void) => void }):
-  | Record<string, string>
-  | undefined {
-  if (!tagsMap) {
-    return;
-  }
-
-  const tags: Record<string, string> = {};
-  tagsMap.forEach((value, key) => {
-    tags[key] = value;
-  });
-
-  return Object.keys(tags).length > 0 ? tags : undefined;
-}
+import { mapToRecord } from "../utils/tags.util";
 
 export function newOrchestrationState(
   instanceId: string,

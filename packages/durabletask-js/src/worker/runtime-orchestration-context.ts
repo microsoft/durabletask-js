@@ -14,21 +14,7 @@ import { TActivity } from "../types/activity.type";
 import { TOrchestrator } from "../types/orchestrator.type";
 import { Task } from "../task/task";
 import { StopIterationError } from "./exception/stop-iteration-error";
-
-function mapToRecord(tagsMap?: { forEach: (cb: (value: string, key: string) => void) => void }):
-  | Record<string, string>
-  | undefined {
-  if (!tagsMap) {
-    return;
-  }
-
-  const tags: Record<string, string> = {};
-  tagsMap.forEach((value, key) => {
-    tags[key] = value;
-  });
-
-  return Object.keys(tags).length > 0 ? tags : undefined;
-}
+import { mapToRecord } from "../utils/tags.util";
 
 export class RuntimeOrchestrationContext extends OrchestrationContext {
   _generator?: Generator<Task<any>, any, any>;

@@ -243,7 +243,18 @@ export function getStringValue(val?: string): StringValue | undefined {
   return stringValue;
 }
 
-function setTagsMap(
+/**
+ * Populates a tag map with the provided tags.
+ *
+ * Copies all key-value pairs from the optional {@link tags} object into the given
+ * {@link tagsMap} by invoking its `set` method for each entry. If no tags are
+ * provided, this function is a no-op.
+ *
+ * @param tagsMap - A map-like object that exposes a `set(key, value)` method used
+ *   to store tag key-value pairs.
+ * @param tags - An optional record of tag key-value pairs to add to the map.
+ */
+function populateTagsMap(
   tagsMap: { set: (key: string, value: string) => void },
   tags?: Record<string, string>,
 ): void {
@@ -299,7 +310,7 @@ export function newScheduleTaskAction(
   const scheduleTaskAction = new pb.ScheduleTaskAction();
   scheduleTaskAction.setName(name);
   scheduleTaskAction.setInput(getStringValue(encodedInput));
-  setTagsMap(scheduleTaskAction.getTagsMap(), tags);
+  populateTagsMap(scheduleTaskAction.getTagsMap(), tags);
 
   const action = new pb.OrchestratorAction();
   action.setId(id);
@@ -325,7 +336,7 @@ export function newCreateSubOrchestrationAction(
   createSubOrchestrationAction.setName(name);
   createSubOrchestrationAction.setInstanceid(instanceId || "");
   createSubOrchestrationAction.setInput(getStringValue(encodedInput));
-  setTagsMap(createSubOrchestrationAction.getTagsMap(), tags);
+  populateTagsMap(createSubOrchestrationAction.getTagsMap(), tags);
 
   const action = new pb.OrchestratorAction();
   action.setId(id);

@@ -23,24 +23,10 @@ import { Page, AsyncPageable, createAsyncPageable } from "../orchestration/page"
 import { FailureDetails } from "../task/failure-details";
 import { Logger, ConsoleLogger } from "../types/logger.type";
 import { StartOrchestrationOptions } from "../task/options";
+import { mapToRecord } from "../utils/tags.util";
 
 // Re-export MetadataGenerator for backward compatibility
 export { MetadataGenerator } from "../utils/grpc-helper.util";
-
-function mapToRecord(tagsMap?: { forEach: (cb: (value: string, key: string) => void) => void }):
-  | Record<string, string>
-  | undefined {
-  if (!tagsMap) {
-    return;
-  }
-
-  const tags: Record<string, string> = {};
-  tagsMap.forEach((value, key) => {
-    tags[key] = value;
-  });
-
-  return Object.keys(tags).length > 0 ? tags : undefined;
-}
 
 /**
  * Options for creating a TaskHubGrpcClient.
@@ -623,14 +609,15 @@ export class TaskHubGrpcClient {
    * @example
    * ```typescript
    * // Iterate over all matching instances
+  * const logger = new ConsoleLogger();
    * const pageable = client.getAllInstances({ statuses: [OrchestrationStatus.COMPLETED] });
    * for await (const instance of pageable) {
-   *   console.log(instance.instanceId);
+  *   logger.info(instance.instanceId);
    * }
    *
    * // Iterate over pages
    * for await (const page of pageable.asPages()) {
-   *   console.log(`Page has ${page.values.length} items`);
+  *   logger.info(`Page has ${page.values.length} items`);
    * }
    * ```
    *
