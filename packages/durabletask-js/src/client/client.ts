@@ -25,9 +25,6 @@ import { HistoryEvent } from "../orchestration/history-event";
 import { convertProtoHistoryEvent } from "../utils/history-event-converter";
 import { Logger, ConsoleLogger } from "../types/logger.type";
 
-// Re-export MetadataGenerator for backward compatibility
-export { MetadataGenerator } from "../utils/grpc-helper.util";
-
 /**
  * Options for scheduling a new orchestration instance.
  */
