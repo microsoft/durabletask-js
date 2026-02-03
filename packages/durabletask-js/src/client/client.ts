@@ -744,11 +744,12 @@ export class TaskHubGrpcClient {
    * The history includes all events that occurred during the orchestration execution,
    * such as task scheduling, completion, failure, timer events, and more.
    *
+   * If the orchestration instance does not exist, an empty array is returned.
+   *
    * @param instanceId - The unique identifier of the orchestration instance.
    * @returns A Promise that resolves to an array of HistoryEvent objects representing
-   *          the orchestration's history.
+   *          the orchestration's history. Returns an empty array if the instance is not found.
    * @throws {Error} If the instanceId is null or empty.
-   * @throws {Error} If an orchestration with the specified instanceId is not found.
    * @throws {Error} If the operation is canceled.
    * @throws {Error} If an internal error occurs while retrieving the history.
    *
@@ -792,8 +793,10 @@ export class TaskHubGrpcClient {
 
       stream.on("error", (err: grpc.ServiceError) => {
         stream.removeAllListeners();
+        // Return empty array for NOT_FOUND to be consistent with DTS behavior
+        // (DTS returns empty stream for non-existent instances) and user-friendly
         if (err.code === grpc.status.NOT_FOUND) {
-          reject(new Error(`An orchestration with the instanceId '${instanceId}' was not found.`));
+          resolve([]);
         } else if (err.code === grpc.status.CANCELLED) {
           reject(new Error(`The getOrchestrationHistory operation was canceled.`));
         } else if (err.code === grpc.status.INTERNAL) {
