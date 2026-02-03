@@ -609,15 +609,15 @@ export class TaskHubGrpcClient {
    * @example
    * ```typescript
    * // Iterate over all matching instances
-  * const logger = new ConsoleLogger();
+   * const logger = new ConsoleLogger();
    * const pageable = client.getAllInstances({ statuses: [OrchestrationStatus.COMPLETED] });
    * for await (const instance of pageable) {
-  *   logger.info(instance.instanceId);
+   *   logger.info(instance.instanceId);
    * }
    *
    * // Iterate over pages
    * for await (const page of pageable.asPages()) {
-  *   logger.info(`Page has ${page.values.length} items`);
+   *   logger.info(`Page has ${page.values.length} items`);
    * }
    * ```
    *
