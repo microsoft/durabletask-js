@@ -8,9 +8,10 @@ import { Logger } from "@microsoft/durabletask-js";
  * Pre-configured logger adapter that uses the default "durabletask" namespace.
  * 
  * This adapter integrates with the Azure SDK logging infrastructure, allowing
- * log output to be controlled via the `AZURE_LOG_LEVEL` environment variable.
+ * log output to be controlled via the `AZURE_LOG_LEVEL` environment variable
+ * or programmatically using `setLogLevel()` from `@azure/logger`.
  * 
- * Supported log levels (via AZURE_LOG_LEVEL):
+ * Supported log levels (when configured via AZURE_LOG_LEVEL or setLogLevel()):
  * - error: Only show errors
  * - warning: Show warnings and errors
  * - info: Show info, warnings, and errors
