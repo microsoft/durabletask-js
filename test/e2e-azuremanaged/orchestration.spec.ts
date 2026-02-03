@@ -86,6 +86,23 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
   }, 31000);
 
+  it("should round-trip orchestration tags", async () => {
+    const orchestrator: TOrchestrator = async (_: OrchestrationContext) => {
+      return "done";
+    };
+
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const tags = { env: "test", owner: "durable" };
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator, undefined, { tags });
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.tags).toEqual(tags);
+  }, 31000);
+
   it("should be able to run an activity sequence", async () => {
     const plusOne = async (_: ActivityContext, input: number) => {
       return input + 1;

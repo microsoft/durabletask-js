@@ -243,6 +243,19 @@ export function getStringValue(val?: string): StringValue | undefined {
   return stringValue;
 }
 
+function setTagsMap(
+  tagsMap: { set: (key: string, value: string) => void },
+  tags?: Record<string, string>,
+): void {
+  if (!tags) {
+    return;
+  }
+
+  for (const [key, value] of Object.entries(tags)) {
+    tagsMap.set(key, value);
+  }
+}
+
 export function newCompleteOrchestrationAction(
   id: number,
   status: pb.OrchestrationStatus,
@@ -277,10 +290,16 @@ export function newCreateTimerAction(id: number, fireAt: Date): pb.OrchestratorA
   return action;
 }
 
-export function newScheduleTaskAction(id: number, name: string, encodedInput?: string): pb.OrchestratorAction {
+export function newScheduleTaskAction(
+  id: number,
+  name: string,
+  encodedInput?: string,
+  tags?: Record<string, string>,
+): pb.OrchestratorAction {
   const scheduleTaskAction = new pb.ScheduleTaskAction();
   scheduleTaskAction.setName(name);
   scheduleTaskAction.setInput(getStringValue(encodedInput));
+  setTagsMap(scheduleTaskAction.getTagsMap(), tags);
 
   const action = new pb.OrchestratorAction();
   action.setId(id);
@@ -300,11 +319,13 @@ export function newCreateSubOrchestrationAction(
   name: string,
   instanceId?: string | null,
   encodedInput?: string,
+  tags?: Record<string, string>,
 ): pb.OrchestratorAction {
   const createSubOrchestrationAction = new pb.CreateSubOrchestrationAction();
   createSubOrchestrationAction.setName(name);
   createSubOrchestrationAction.setInstanceid(instanceId || "");
   createSubOrchestrationAction.setInput(getStringValue(encodedInput));
+  setTagsMap(createSubOrchestrationAction.getTagsMap(), tags);
 
   const action = new pb.OrchestratorAction();
   action.setId(id);

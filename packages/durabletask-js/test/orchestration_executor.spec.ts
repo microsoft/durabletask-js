@@ -149,6 +149,25 @@ describe("Orchestration Executor", () => {
     expect(result.actions[0]?.getId()).toEqual(1);
     expect(result.actions[0]?.getScheduletask()?.getName()).toEqual("dummyActivity");
   });
+
+  it("should include tags on scheduled activity actions", async () => {
+    const dummyActivity = async (_: ActivityContext) => {
+      // do nothing
+    };
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any) {
+      yield ctx.callActivity(dummyActivity, undefined, { tags: { env: "test", owner: "durable" } });
+      return "done";
+    };
+    const registry = new Registry();
+    const name = registry.addOrchestrator(orchestrator);
+    const newEvents = [newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined)];
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+    const scheduleTask = result.actions[0]?.getScheduletask();
+
+    expect(scheduleTask?.getTagsMap().get("env")).toEqual("test");
+    expect(scheduleTask?.getTagsMap().get("owner")).toEqual("durable");
+  });
   it("should test the successful completion of an activity task", async () => {
     const dummyActivity = async (_: ActivityContext) => {
       // do nothing
@@ -347,6 +366,26 @@ describe("Orchestration Executor", () => {
     const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(completeAction?.getResult()?.getValue()).toEqual("42");
+  });
+
+  it("should include tags on scheduled sub-orchestration actions", async () => {
+    const subOrchestrator = async (_: OrchestrationContext) => {
+      // do nothing
+    };
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
+      yield ctx.callSubOrchestrator(subOrchestrator, undefined, { tags: { env: "test" } });
+      return "done";
+    };
+    const registry = new Registry();
+    const subOrchestratorName = registry.addOrchestrator(subOrchestrator);
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const newEvents = [newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID, undefined)];
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+    const createSubOrch = result.actions[0]?.getCreatesuborchestration();
+
+    expect(createSubOrch?.getName()).toEqual(subOrchestratorName);
+    expect(createSubOrch?.getTagsMap().get("env")).toEqual("test");
   });
   it("should test that a sub-orchestration task is completed when the sub-orchestration fails", async () => {
     const subOrchestrator = async (_: OrchestrationContext) => {
