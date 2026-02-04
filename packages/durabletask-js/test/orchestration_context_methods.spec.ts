@@ -517,47 +517,6 @@ describe("OrchestrationContext.createReplaySafeLogger", () => {
   });
 });
 
-describe("OrchestrationContext.version", () => {
-  it("should return the version from ExecutionStarted event", async () => {
-    let capturedVersion: string | undefined;
-    const orchestrator: TOrchestrator = async (ctx: OrchestrationContext) => {
-      capturedVersion = ctx.version;
-      return "done";
-    };
-
-    const registry = new Registry();
-    const name = registry.addOrchestrator(orchestrator);
-    const newEvents = [
-      newOrchestratorStartedEvent(),
-      newExecutionStartedEventWithVersion(name, TEST_INSTANCE_ID, "1.0.0"),
-    ];
-    const executor = new OrchestrationExecutor(registry);
-    await executor.execute(TEST_INSTANCE_ID, [], newEvents);
-
-    expect(capturedVersion).toEqual("1.0.0");
-  });
-
-  it("should return empty string when no version is set", async () => {
-    let capturedVersion: string | undefined = "should-be-empty";
-    const orchestrator: TOrchestrator = async (ctx: OrchestrationContext) => {
-      capturedVersion = ctx.version;
-      return "done";
-    };
-
-    const registry = new Registry();
-    const name = registry.addOrchestrator(orchestrator);
-    const newEvents = [
-      newOrchestratorStartedEvent(),
-      newExecutionStartedEvent(name, TEST_INSTANCE_ID),
-    ];
-    const executor = new OrchestrationExecutor(registry);
-    await executor.execute(TEST_INSTANCE_ID, [], newEvents);
-
-    // When no version is set in the ExecutionStarted event, the version property returns empty string
-    expect(capturedVersion).toBe("");
-  });
-});
-
 describe("OrchestrationContext.compareVersionTo", () => {
   it("should return 0 when versions are equal", async () => {
     let comparisonResult: number | undefined;

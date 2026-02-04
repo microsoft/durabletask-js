@@ -590,7 +590,7 @@ export class TaskHubGrpcClient {
     options?: PurgeInstanceOptions,
   ): Promise<PurgeResult | undefined> {
     let res;
-    if (typeof value === `string`) {
+    if (typeof value === "string") {
       const instanceId = value;
       const req = new pb.PurgeInstancesRequest();
       req.setInstanceid(instanceId);
