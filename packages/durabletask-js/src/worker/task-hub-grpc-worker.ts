@@ -18,6 +18,8 @@ import { ActivityExecutor } from "./activity-executor";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 import { Logger, ConsoleLogger } from "../types/logger.type";
 import { ExponentialBackoff, sleep, withTimeout } from "../utils/backoff.util";
+import { VersioningOptions, VersionMatchStrategy, VersionFailureStrategy } from "./versioning-options";
+import { compareVersions } from "../utils/versioning.util";
 
 /** Default timeout in milliseconds for graceful shutdown. */
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30000;
@@ -40,6 +42,8 @@ export interface TaskHubGrpcWorkerOptions {
   logger?: Logger;
   /** Optional timeout in milliseconds for graceful shutdown. Defaults to 30000. */
   shutdownTimeoutMs?: number;
+  /** Optional versioning options for filtering orchestrations by version. */
+  versioning?: VersioningOptions;
 }
 
 export class TaskHubGrpcWorker {
@@ -57,6 +61,7 @@ export class TaskHubGrpcWorker {
   private _pendingWorkItems: Set<Promise<void>>;
   private _shutdownTimeoutMs: number;
   private _backoff: ExponentialBackoff;
+  private _versioning?: VersioningOptions;
 
   /**
    * Creates a new TaskHubGrpcWorker instance.
@@ -103,6 +108,7 @@ export class TaskHubGrpcWorker {
     let resolvedMetadataGenerator: MetadataGenerator | undefined;
     let resolvedLogger: Logger | undefined;
     let resolvedShutdownTimeoutMs: number | undefined;
+    let resolvedVersioning: VersioningOptions | undefined;
 
     if (typeof hostAddressOrOptions === "object" && hostAddressOrOptions !== null) {
       // Options object constructor
@@ -113,6 +119,7 @@ export class TaskHubGrpcWorker {
       resolvedMetadataGenerator = hostAddressOrOptions.metadataGenerator;
       resolvedLogger = hostAddressOrOptions.logger;
       resolvedShutdownTimeoutMs = hostAddressOrOptions.shutdownTimeoutMs;
+      resolvedVersioning = hostAddressOrOptions.versioning;
     } else {
       // Deprecated positional parameters constructor
       resolvedHostAddress = hostAddressOrOptions;
@@ -142,6 +149,7 @@ export class TaskHubGrpcWorker {
       maxDelayMs: 30000,
       multiplier: 2,
     });
+    this._versioning = resolvedVersioning;
   }
 
   /**
@@ -401,6 +409,74 @@ export class TaskHubGrpcWorker {
   }
 
   /**
+   * Result of version compatibility check.
+   */
+  private _checkVersionCompatibility(req: pb.OrchestratorRequest): {
+    compatible: boolean;
+    shouldFail: boolean;
+    orchestrationVersion?: string;
+  } {
+    // If no versioning options configured or match strategy is None, always compatible
+    if (!this._versioning || this._versioning.matchStrategy === VersionMatchStrategy.None) {
+      return { compatible: true, shouldFail: false };
+    }
+
+    // Extract orchestration version from ExecutionStarted event
+    const orchestrationVersion = this._getOrchestrationVersion(req);
+    const workerVersion = this._versioning.version;
+
+    // If worker version is not set, process all
+    if (!workerVersion) {
+      return { compatible: true, shouldFail: false };
+    }
+
+    let compatible = false;
+
+    switch (this._versioning.matchStrategy) {
+      case VersionMatchStrategy.Strict:
+        // Only process if versions match exactly
+        compatible = orchestrationVersion === workerVersion;
+        break;
+
+      case VersionMatchStrategy.CurrentOrOlder:
+        // Process if orchestration version is current or older
+        if (!orchestrationVersion) {
+          // Empty orchestration version is considered older
+          compatible = true;
+        } else {
+          compatible = compareVersions(orchestrationVersion, workerVersion) <= 0;
+        }
+        break;
+
+      default:
+        compatible = true;
+    }
+
+    if (!compatible) {
+      const shouldFail = this._versioning.failureStrategy === VersionFailureStrategy.Fail;
+      return { compatible: false, shouldFail, orchestrationVersion };
+    }
+
+    return { compatible: true, shouldFail: false };
+  }
+
+  /**
+   * Extracts the orchestration version from the ExecutionStarted event in the request.
+   */
+  private _getOrchestrationVersion(req: pb.OrchestratorRequest): string | undefined {
+    // Look for ExecutionStarted event in both past and new events
+    const allEvents = [...req.getPasteventsList(), ...req.getNeweventsList()];
+
+    for (const event of allEvents) {
+      if (event.hasExecutionstarted()) {
+        return event.getExecutionstarted()?.getVersion()?.getValue();
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
    * Executes an orchestrator request and tracks it as a pending work item.
    */
   private _executeOrchestrator(
@@ -427,6 +503,55 @@ export class TaskHubGrpcWorker {
 
     if (!instanceId) {
       throw new Error(`Could not execute the orchestrator as the instanceId was not provided (${instanceId})`);
+    }
+
+    // Check version compatibility if versioning is enabled
+    const versionCheckResult = this._checkVersionCompatibility(req);
+    if (!versionCheckResult.compatible) {
+      if (versionCheckResult.shouldFail) {
+        // Fail the orchestration with version mismatch error
+        this._logger.warn(
+          `Version mismatch for instance '${instanceId}': orchestration version '${versionCheckResult.orchestrationVersion}' does not match worker version '${this._versioning?.version}'. Failing orchestration.`,
+        );
+
+        const failureDetails = pbh.newFailureDetails(
+          new Error(`Version mismatch: orchestration version '${versionCheckResult.orchestrationVersion}' is not compatible with worker version '${this._versioning?.version}'`),
+        );
+
+        const actions = [
+          pbh.newCompleteOrchestrationAction(
+            -1,
+            pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+            failureDetails?.toString(),
+          ),
+        ];
+
+        const res = new pb.OrchestratorResponse();
+        res.setInstanceid(instanceId);
+        res.setCompletiontoken(completionToken);
+        res.setActionsList(actions);
+
+        try {
+          await callWithMetadata(stub.completeOrchestratorTask.bind(stub), res, this._metadataGenerator);
+        } catch (e: any) {
+          this._logger.error(`An error occurred while trying to complete instance '${instanceId}': ${e?.message}`);
+        }
+        return;
+      } else {
+        // Reject the work item - explicitly abandon it so it can be picked up by another worker
+        this._logger.info(
+          `Version mismatch for instance '${instanceId}': orchestration version '${versionCheckResult.orchestrationVersion}' does not match worker version '${this._versioning?.version}'. Abandoning work item.`,
+        );
+
+        try {
+          const abandonRequest = new pb.AbandonOrchestrationTaskRequest();
+          abandonRequest.setCompletiontoken(completionToken);
+          await callWithMetadata(stub.abandonTaskOrchestratorWorkItem.bind(stub), abandonRequest, this._metadataGenerator);
+        } catch (e: any) {
+          this._logger.error(`An error occurred while trying to abandon work item for instance '${instanceId}': ${e?.message}`);
+        }
+        return;
+      }
     }
 
     let res;

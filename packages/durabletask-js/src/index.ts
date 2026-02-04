@@ -4,6 +4,7 @@
 // Client and Worker
 export { TaskHubGrpcClient, TaskHubGrpcClientOptions, MetadataGenerator } from "./client/client";
 export { TaskHubGrpcWorker, TaskHubGrpcWorkerOptions } from "./worker/task-hub-grpc-worker";
+export { VersioningOptions, VersionMatchStrategy, VersionFailureStrategy } from "./worker/versioning-options";
 
 // Contexts
 export { OrchestrationContext } from "./task/context/orchestration-context";
