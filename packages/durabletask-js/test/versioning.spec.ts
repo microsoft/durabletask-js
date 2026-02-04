@@ -106,4 +106,49 @@ describe("compareVersions", () => {
       expect(compareVersions("1", "1")).toBe(0);
     });
   });
+
+  describe("mixed semantic and non-semantic versions", () => {
+    it("should fall back to lexicographic when one version is semver and other is not", () => {
+      // "1.0.0" is valid semver, "alpha" is not - should use lexicographic comparison
+      // "1" < "a" in ASCII, so "1.0.0" < "alpha" lexicographically
+      expect(compareVersions("1.0.0", "alpha")).toBeLessThan(0);
+      expect(compareVersions("alpha", "1.0.0")).toBeGreaterThan(0);
+    });
+
+    it("should handle semver vs prefixed version strings", () => {
+      // "1.0.0" is valid semver, "v1.0.0" is not (has 'v' prefix)
+      // Falls back to lexicographic: "1" < "v"
+      expect(compareVersions("1.0.0", "v1.0.0")).toBeLessThan(0);
+      expect(compareVersions("v1.0.0", "1.0.0")).toBeGreaterThan(0);
+    });
+
+    it("should handle semver vs pre-release style versions", () => {
+      // "2.0.0" is valid semver, "1.0.0-beta" is not (has "-beta" suffix)
+      // Falls back to lexicographic: "2" > "1"
+      expect(compareVersions("2.0.0", "1.0.0-beta")).toBeGreaterThan(0);
+      expect(compareVersions("1.0.0-beta", "2.0.0")).toBeLessThan(0);
+    });
+
+    it("should handle semver vs text-only versions", () => {
+      // Comparing numeric semver with pure text versions
+      expect(compareVersions("1.0.0", "latest")).toBeLessThan(0);
+      expect(compareVersions("latest", "1.0.0")).toBeGreaterThan(0);
+      expect(compareVersions("2.5.0", "stable")).toBeLessThan(0);
+      expect(compareVersions("stable", "2.5.0")).toBeGreaterThan(0);
+    });
+
+    it("should handle semver vs versions with build metadata", () => {
+      // "1.0.0" is valid semver, "1.0.0+build123" is not (has build metadata)
+      // Falls back to lexicographic
+      expect(compareVersions("1.0.0", "1.0.0+build123")).toBeLessThan(0);
+      expect(compareVersions("1.0.0+build123", "1.0.0")).toBeGreaterThan(0);
+    });
+
+    it("should handle numeric semver vs alphanumeric non-semver", () => {
+      // "3.0.0" is valid semver, "3.0.0rc1" is not (no separator before rc)
+      // Falls back to lexicographic: "3.0.0" < "3.0.0rc1"
+      expect(compareVersions("3.0.0", "3.0.0rc1")).toBeLessThan(0);
+      expect(compareVersions("3.0.0rc1", "3.0.0")).toBeGreaterThan(0);
+    });
+  });
 });
