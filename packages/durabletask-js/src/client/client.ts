@@ -218,7 +218,7 @@ export class TaskHubGrpcClient {
 
     populateTagsMap(req.getTagsMap(), tags);
 
-    this._logger.info(`Starting new ${name} instance with ID = ${req.getInstanceid()}${effectiveVersion ? ` (version: ${effectiveVersion})` : ''}`);
+    this._logger.info(`Starting new ${name} instance with ID = ${req.getInstanceid()}${effectiveVersion ? ` (version: ${effectiveVersion})` : ""}`);
 
     const res = await callWithMetadata<pb.CreateInstanceRequest, pb.CreateInstanceResponse>(
       this._stub.startInstance.bind(this._stub),
