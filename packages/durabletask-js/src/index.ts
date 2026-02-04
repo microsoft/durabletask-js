@@ -81,6 +81,7 @@ export { TOrchestrator } from "./types/orchestrator.type";
 export { TActivity } from "./types/activity.type";
 export { TInput } from "./types/input.type";
 export { TOutput } from "./types/output.type";
+export { ParentOrchestrationInstance } from "./types/parent-orchestration-instance.type";
 
 // Logger
 export { Logger, ConsoleLogger, NoOpLogger } from "./types/logger.type";
