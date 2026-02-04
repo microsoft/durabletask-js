@@ -21,5 +21,8 @@ export { DurableTaskAzureManagedWorkerBuilder, createAzureManagedWorkerBuilder }
 // Logger exports - re-export from core package for convenience
 export { Logger, ConsoleLogger, NoOpLogger } from "@microsoft/durabletask-js";
 
+// Versioning exports - re-export from core package for convenience
+export { VersioningOptions, VersionMatchStrategy, VersionFailureStrategy } from "@microsoft/durabletask-js";
+
 // Azure-specific logger adapter
 export { AzureLoggerAdapter, createAzureLogger } from "./azure-logger-adapter";
