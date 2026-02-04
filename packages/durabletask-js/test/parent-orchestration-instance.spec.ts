@@ -6,6 +6,8 @@ import { ParentOrchestrationInstance } from "../src/types/parent-orchestration-i
 import {
   newExecutionStartedEvent,
   newOrchestratorStartedEvent,
+  newTimerCreatedEvent,
+  newTimerFiredEvent,
 } from "../src/utils/pb-helper.util";
 import { OrchestrationExecutor } from "../src/worker/orchestration-executor";
 import * as pb from "../src/proto/orchestrator_service_pb";
@@ -134,9 +136,6 @@ describe("Parent Orchestration Instance", () => {
         taskScheduledId: PARENT_TASK_SCHEDULED_ID,
       }),
     ];
-
-    // Import timer events
-    const { newTimerCreatedEvent, newTimerFiredEvent } = require("../src/utils/pb-helper.util");
 
     const oldEventsWithTimer = [
       ...oldEvents,
