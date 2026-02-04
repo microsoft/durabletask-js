@@ -15,6 +15,7 @@ import { TActivity } from "../types/activity.type";
 import { TOrchestrator } from "../types/orchestrator.type";
 import { Task } from "../task/task";
 import { StopIterationError } from "./exception/stop-iteration-error";
+import { mapToRecord } from "../utils/tags.util";
 
 export class RuntimeOrchestrationContext extends OrchestrationContext {
   _generator?: Generator<Task<any>, any, any>;
@@ -269,7 +270,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     const id = this.nextSequenceNumber();
     const name = typeof activity === "string" ? activity : getName(activity);
     const encodedInput = input ? JSON.stringify(input) : undefined;
-    const action = ph.newScheduleTaskAction(id, name, encodedInput);
+    const action = ph.newScheduleTaskAction(id, name, encodedInput, options?.tags);
     this._pendingActions[action.getId()] = action;
 
     // If a retry policy is provided, create a RetryableTask
@@ -313,7 +314,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     }
 
     const encodedInput = input ? JSON.stringify(input) : undefined;
-    const action = ph.newCreateSubOrchestrationAction(id, name, instanceId, encodedInput);
+    const action = ph.newCreateSubOrchestrationAction(id, name, instanceId, encodedInput, options?.tags);
     this._pendingActions[action.getId()] = action;
 
     // If a retry policy is provided, create a RetryableTask
@@ -527,7 +528,8 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
       }
       const name = scheduleTask.getName();
       const input = scheduleTask.getInput()?.getValue();
-      newAction = ph.newScheduleTaskAction(newId, name, input);
+      const tags = mapToRecord(scheduleTask.getTagsMap());
+      newAction = ph.newScheduleTaskAction(newId, name, input, tags);
     } else {
       // Reschedule a sub-orchestration task
       const subOrch = originalAction.getCreatesuborchestration();
@@ -537,7 +539,8 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
       const name = subOrch.getName();
       const instanceId = subOrch.getInstanceid();
       const input = subOrch.getInput()?.getValue();
-      newAction = ph.newCreateSubOrchestrationAction(newId, name, instanceId, input);
+      const tags = mapToRecord(subOrch.getTagsMap());
+      newAction = ph.newCreateSubOrchestrationAction(newId, name, instanceId, input, tags);
     }
 
     // Register the new action

@@ -18,6 +18,44 @@ export { OrchestrationState } from "./orchestration/orchestration-state";
 export { OrchestrationQuery, ListInstanceIdsOptions, DEFAULT_PAGE_SIZE } from "./orchestration/orchestration-query";
 export { Page, AsyncPageable, createAsyncPageable } from "./orchestration/page";
 
+// History event types
+export {
+  HistoryEvent,
+  HistoryEventType,
+  HistoryEventBase,
+  ExecutionStartedEvent,
+  ExecutionCompletedEvent,
+  ExecutionTerminatedEvent,
+  ExecutionSuspendedEvent,
+  ExecutionResumedEvent,
+  ExecutionRewoundEvent,
+  TaskScheduledEvent,
+  TaskCompletedEvent,
+  TaskFailedEvent,
+  SubOrchestrationInstanceCreatedEvent,
+  SubOrchestrationInstanceCompletedEvent,
+  SubOrchestrationInstanceFailedEvent,
+  TimerCreatedEvent,
+  TimerFiredEvent,
+  OrchestratorStartedEvent,
+  OrchestratorCompletedEvent,
+  EventSentEvent,
+  EventRaisedEvent,
+  GenericEvent,
+  HistoryStateEvent,
+  ContinueAsNewEvent,
+  OrchestrationInstance,
+  ParentInstanceInfo,
+  TraceContext,
+  EntityOperationSignaledEvent,
+  EntityOperationCalledEvent,
+  EntityOperationCompletedEvent,
+  EntityOperationFailedEvent,
+  EntityLockRequestedEvent,
+  EntityLockGrantedEvent,
+  EntityUnlockSentEvent,
+} from "./orchestration/history-event";
+
 // Proto types (for advanced usage)
 export { OrchestrationStatus as ProtoOrchestrationStatus } from "./proto/orchestrator_service_pb";
 
@@ -27,7 +65,13 @@ export { Task } from "./task/task";
 
 // Retry policies and task options
 export { RetryPolicy, RetryPolicyOptions } from "./task/retry";
-export { TaskOptions, SubOrchestrationOptions, taskOptionsFromRetryPolicy, subOrchestrationOptionsFromRetryPolicy } from "./task/options";
+export {
+  TaskOptions,
+  SubOrchestrationOptions,
+  StartOrchestrationOptions,
+  taskOptionsFromRetryPolicy,
+  subOrchestrationOptionsFromRetryPolicy,
+} from "./task/options";
 
 // Types
 export { TOrchestrator } from "./types/orchestrator.type";
