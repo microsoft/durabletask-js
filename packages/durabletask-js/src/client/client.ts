@@ -627,7 +627,7 @@ export class TaskHubGrpcClient {
       req.setRecursive(options?.recursive ?? false);
       const timeout = purgeInstanceCriteria.getTimeout();
 
-      this._logger.info(`Purging Instances using purging criteria${options?.recursive ? ' (recursive)' : ''}`);
+      this._logger.info(`Purging Instances using purging criteria${options?.recursive ? " (recursive)" : ""}`);
 
       const callPromise = callWithMetadata<pb.PurgeInstancesRequest, pb.PurgeInstancesResponse>(
         this._stub.purgeInstances.bind(this._stub),
