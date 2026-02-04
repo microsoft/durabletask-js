@@ -4,6 +4,7 @@
 import { createHash } from "crypto";
 import { getName } from "../task";
 import { OrchestrationContext } from "../task/context/orchestration-context";
+import { ParentOrchestrationInstance } from "../types/parent-orchestration-instance.type";
 import * as pb from "../proto/orchestrator_service_pb";
 import * as ph from "../utils/pb-helper.util";
 import { CompletableTask } from "../task/completable-task";
@@ -28,6 +29,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   _newGuidCounter: number;
   _currentUtcDatetime: Date;
   _instanceId: string;
+  _parent?: ParentOrchestrationInstance;
   _completionStatus?: pb.OrchestrationStatus;
   _receivedEvents: Record<string, any[]>;
   _pendingEvents: Record<string, CompletableTask<any>[]>;
@@ -48,6 +50,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     this._newGuidCounter = 0;
     this._currentUtcDatetime = new Date(1000, 0, 1);
     this._instanceId = instanceId;
+    this._parent = undefined;
     this._completionStatus = undefined;
     this._receivedEvents = {};
     this._pendingEvents = {};
@@ -58,6 +61,10 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
 
   get instanceId(): string {
     return this._instanceId;
+  }
+
+  get parent(): ParentOrchestrationInstance | undefined {
+    return this._parent;
   }
 
   get currentUtcDateTime(): Date {

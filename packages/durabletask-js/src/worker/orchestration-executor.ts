@@ -129,6 +129,17 @@ export class OrchestrationExecutor {
               throw new OrchestratorNotRegisteredError(executionStartedEvent?.getName());
             }
 
+            // Extract parent instance info if this is a sub-orchestration
+            const parentInstance = executionStartedEvent?.getParentinstance();
+            if (parentInstance) {
+              const parentOrchestrationInstance = parentInstance.getOrchestrationinstance();
+              ctx._parent = {
+                name: parentInstance.getName()?.getValue() ?? "",
+                instanceId: parentOrchestrationInstance?.getInstanceid() ?? "",
+                taskScheduledId: parentInstance.getTaskscheduledid(),
+              };
+            }
+
             // Deserialize the input, if any
             let input = undefined;
 

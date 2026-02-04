@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+import { ParentOrchestrationInstance } from "../../types/parent-orchestration-instance.type";
 import { TActivity } from "../../types/activity.type";
 import { TOrchestrator } from "../../types/orchestrator.type";
 import { TaskOptions, SubOrchestrationOptions } from "../options";
@@ -16,6 +17,16 @@ export abstract class OrchestrationContext {
    * @returns {string} The instance ID of the currently executing orchestration.
    */
   abstract get instanceId(): string;
+
+  /**
+   * Gets the parent orchestration instance, or `undefined` if this is not a sub-orchestration.
+   *
+   * This property is useful for determining if the current orchestration was started by another
+   * orchestration (i.e., it's a sub-orchestration) and for accessing details about the parent.
+   *
+   * @returns {ParentOrchestrationInstance | undefined} The parent orchestration details, or `undefined` if this is a top-level orchestration.
+   */
+  abstract get parent(): ParentOrchestrationInstance | undefined;
 
   /**
    * Get the current date/time as UTC

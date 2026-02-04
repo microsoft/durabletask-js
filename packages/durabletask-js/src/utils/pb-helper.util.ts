@@ -22,7 +22,7 @@ export function newOrchestratorStartedEvent(timestamp?: Date | null): pb.History
   return event;
 }
 
-export function newExecutionStartedEvent(name: string, instanceId: string, encodedInput?: string): pb.HistoryEvent {
+export function newExecutionStartedEvent(name: string, instanceId: string, encodedInput?: string, parentInstance?: { name: string; instanceId: string; taskScheduledId: number }): pb.HistoryEvent {
   const ts = new Timestamp();
 
   const orchestrationInstance = new pb.OrchestrationInstance();
@@ -32,6 +32,19 @@ export function newExecutionStartedEvent(name: string, instanceId: string, encod
   executionStartedEvent.setName(name);
   executionStartedEvent.setInput(getStringValue(encodedInput));
   executionStartedEvent.setOrchestrationinstance(orchestrationInstance);
+
+  // Set parent instance info if provided (for sub-orchestrations)
+  if (parentInstance) {
+    const parentOrchestrationInstance = new pb.OrchestrationInstance();
+    parentOrchestrationInstance.setInstanceid(parentInstance.instanceId);
+
+    const parentInstanceInfo = new pb.ParentInstanceInfo();
+    parentInstanceInfo.setName(getStringValue(parentInstance.name));
+    parentInstanceInfo.setOrchestrationinstance(parentOrchestrationInstance);
+    parentInstanceInfo.setTaskscheduledid(parentInstance.taskScheduledId);
+
+    executionStartedEvent.setParentinstance(parentInstanceInfo);
+  }
 
   const event = new pb.HistoryEvent();
   event.setEventid(-1);

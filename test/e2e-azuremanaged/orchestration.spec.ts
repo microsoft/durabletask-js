@@ -738,4 +738,77 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     expect(receiverState?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(receiverState?.serializedOutput).toEqual(JSON.stringify("received signal"));
   }, 45000);
+
+  it("should expose parent orchestration info in sub-orchestrations", async () => {
+    // Child orchestration that captures and returns its parent info
+    const childOrchestrator: TOrchestrator = async (ctx: OrchestrationContext) => {
+      if (ctx.parent) {
+        return {
+          hasParent: true,
+          parentName: ctx.parent.name,
+          parentInstanceId: ctx.parent.instanceId,
+          taskScheduledId: ctx.parent.taskScheduledId,
+        };
+      }
+      return { hasParent: false };
+    };
+
+    // Parent orchestration that calls the child
+    const parentOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      // First verify parent is not set for top-level orchestration
+      const topLevelParentInfo = ctx.parent;
+
+      // Call sub-orchestration
+      const childResult = yield ctx.callSubOrchestrator(childOrchestrator);
+
+      return {
+        topLevelHasParent: topLevelParentInfo !== undefined,
+        childResult,
+      };
+    };
+
+    taskHubWorker.addOrchestrator(childOrchestrator);
+    taskHubWorker.addOrchestrator(parentOrchestrator);
+    await taskHubWorker.start();
+
+    const parentId = await taskHubClient.scheduleNewOrchestration(parentOrchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(parentId, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.failureDetails).toBeUndefined();
+
+    const result = JSON.parse(state?.serializedOutput || "{}");
+
+    // Verify top-level orchestration has no parent
+    expect(result.topLevelHasParent).toBe(false);
+
+    // Verify child orchestration received parent info
+    expect(result.childResult.hasParent).toBe(true);
+    expect(result.childResult.parentName).toEqual(getName(parentOrchestrator));
+    expect(result.childResult.parentInstanceId).toEqual(parentId);
+    expect(typeof result.childResult.taskScheduledId).toBe("number");
+  }, 31000);
+
+  it("should have undefined parent for top-level orchestration started by client", async () => {
+    const orchestrator: TOrchestrator = async (ctx: OrchestrationContext) => {
+      return {
+        hasParent: ctx.parent !== undefined,
+        parentInfo: ctx.parent,
+      };
+    };
+
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+
+    const result = JSON.parse(state?.serializedOutput || "{}");
+    expect(result.hasParent).toBe(false);
+    expect(result.parentInfo).toBeUndefined();
+  }, 31000);
 });
