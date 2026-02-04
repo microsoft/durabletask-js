@@ -181,6 +181,22 @@ export function newFailureDetails(e: any): pb.TaskFailureDetails {
   return failure;
 }
 
+/**
+ * Creates a TaskFailureDetails for version mismatch errors.
+ * These errors are non-retriable as the version mismatch is deterministic.
+ *
+ * @param errorType The type of version error (e.g., "VersionMismatch", "VersionError")
+ * @param errorMessage The error message describing the version mismatch
+ * @returns A TaskFailureDetails with IsNonRetriable set to true
+ */
+export function newVersionMismatchFailureDetails(errorType: string, errorMessage: string): pb.TaskFailureDetails {
+  const failure = new pb.TaskFailureDetails();
+  failure.setErrortype(errorType);
+  failure.setErrormessage(errorMessage);
+  failure.setIsnonretriable(true);
+  return failure;
+}
+
 export function newEventRaisedEvent(name: string, encodedInput?: string): pb.HistoryEvent {
   const ts = new Timestamp();
 

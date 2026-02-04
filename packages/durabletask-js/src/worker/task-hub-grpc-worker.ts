@@ -415,6 +415,8 @@ export class TaskHubGrpcWorker {
     compatible: boolean;
     shouldFail: boolean;
     orchestrationVersion?: string;
+    errorType?: string;
+    errorMessage?: string;
   } {
     // If no versioning options configured or match strategy is None, always compatible
     if (!this._versioning || this._versioning.matchStrategy === VersionMatchStrategy.None) {
@@ -431,11 +433,16 @@ export class TaskHubGrpcWorker {
     }
 
     let compatible = false;
+    let errorType = "VersionMismatch";
+    let errorMessage = "";
 
     switch (this._versioning.matchStrategy) {
       case VersionMatchStrategy.Strict:
-        // Only process if versions match exactly
-        compatible = orchestrationVersion === workerVersion;
+        // Only process if versions match (using semantic comparison)
+        compatible = compareVersions(orchestrationVersion, workerVersion) === 0;
+        if (!compatible) {
+          errorMessage = `The orchestration version '${orchestrationVersion ?? ""}' does not match the worker version '${workerVersion}'.`;
+        }
         break;
 
       case VersionMatchStrategy.CurrentOrOlder:
@@ -445,16 +452,23 @@ export class TaskHubGrpcWorker {
           compatible = true;
         } else {
           compatible = compareVersions(orchestrationVersion, workerVersion) <= 0;
+          if (!compatible) {
+            errorMessage = `The orchestration version '${orchestrationVersion}' is greater than the worker version '${workerVersion}'.`;
+          }
         }
         break;
 
       default:
-        compatible = true;
+        // Unknown match strategy - treat as version error
+        compatible = false;
+        errorType = "VersionError";
+        errorMessage = `The version match strategy '${this._versioning.matchStrategy}' is unknown.`;
+        break;
     }
 
     if (!compatible) {
       const shouldFail = this._versioning.failureStrategy === VersionFailureStrategy.Fail;
-      return { compatible: false, shouldFail, orchestrationVersion };
+      return { compatible: false, shouldFail, orchestrationVersion, errorType, errorMessage };
     }
 
     return { compatible: true, shouldFail: false };
@@ -511,18 +525,20 @@ export class TaskHubGrpcWorker {
       if (versionCheckResult.shouldFail) {
         // Fail the orchestration with version mismatch error
         this._logger.warn(
-          `Version mismatch for instance '${instanceId}': orchestration version '${versionCheckResult.orchestrationVersion}' does not match worker version '${this._versioning?.version}'. Failing orchestration.`,
+          `${versionCheckResult.errorType} for instance '${instanceId}': ${versionCheckResult.errorMessage}. Failing orchestration.`,
         );
 
-        const failureDetails = pbh.newFailureDetails(
-          new Error(`Version mismatch: orchestration version '${versionCheckResult.orchestrationVersion}' is not compatible with worker version '${this._versioning?.version}'`),
+        const failureDetails = pbh.newVersionMismatchFailureDetails(
+          versionCheckResult.errorType!,
+          versionCheckResult.errorMessage!,
         );
 
         const actions = [
           pbh.newCompleteOrchestrationAction(
             -1,
             pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
-            failureDetails?.toString(),
+            undefined,
+            failureDetails,
           ),
         ];
 
@@ -540,7 +556,7 @@ export class TaskHubGrpcWorker {
       } else {
         // Reject the work item - explicitly abandon it so it can be picked up by another worker
         this._logger.info(
-          `Version mismatch for instance '${instanceId}': orchestration version '${versionCheckResult.orchestrationVersion}' does not match worker version '${this._versioning?.version}'. Abandoning work item.`,
+          `${versionCheckResult.errorType} for instance '${instanceId}': ${versionCheckResult.errorMessage}. Abandoning work item.`,
         );
 
         try {

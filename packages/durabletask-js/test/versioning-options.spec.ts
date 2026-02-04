@@ -32,11 +32,13 @@ describe("VersioningOptions", () => {
     it("should allow creating options with all properties", () => {
       const options: VersioningOptions = {
         version: "1.0.0",
+        defaultVersion: "1.0.0",
         matchStrategy: VersionMatchStrategy.Strict,
         failureStrategy: VersionFailureStrategy.Fail,
       };
 
       expect(options.version).toBe("1.0.0");
+      expect(options.defaultVersion).toBe("1.0.0");
       expect(options.matchStrategy).toBe(VersionMatchStrategy.Strict);
       expect(options.failureStrategy).toBe(VersionFailureStrategy.Fail);
     });
@@ -47,6 +49,7 @@ describe("VersioningOptions", () => {
       };
 
       expect(options.version).toBe("2.0.0");
+      expect(options.defaultVersion).toBeUndefined();
       expect(options.matchStrategy).toBeUndefined();
       expect(options.failureStrategy).toBeUndefined();
     });
@@ -55,6 +58,7 @@ describe("VersioningOptions", () => {
       const options: VersioningOptions = {};
 
       expect(options.version).toBeUndefined();
+      expect(options.defaultVersion).toBeUndefined();
       expect(options.matchStrategy).toBeUndefined();
       expect(options.failureStrategy).toBeUndefined();
     });
@@ -77,6 +81,17 @@ describe("VersioningOptions", () => {
       };
 
       expect(options.matchStrategy).toBe(VersionMatchStrategy.None);
+    });
+
+    it("should allow defaultVersion for client orchestration scheduling", () => {
+      const options: VersioningOptions = {
+        version: "2.0.0",
+        defaultVersion: "1.5.0",
+        matchStrategy: VersionMatchStrategy.CurrentOrOlder,
+      };
+
+      expect(options.version).toBe("2.0.0");
+      expect(options.defaultVersion).toBe("1.5.0");
     });
   });
 });

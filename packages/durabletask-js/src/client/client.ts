@@ -49,12 +49,19 @@ export interface TaskHubGrpcClientOptions {
   metadataGenerator?: MetadataGenerator;
   /** Optional logger instance. Defaults to ConsoleLogger. */
   logger?: Logger;
+  /**
+   * The default version to use when starting new orchestrations without an explicit version.
+   * If specified, this will be used as the version for orchestrations that don't provide
+   * their own version in StartOrchestrationOptions.
+   */
+  defaultVersion?: string;
 }
 
 export class TaskHubGrpcClient {
   private _stub: stubs.TaskHubSidecarServiceClient;
   private _metadataGenerator?: MetadataGenerator;
   private _logger: Logger;
+  private _defaultVersion?: string;
 
   /**
    * Creates a new TaskHubGrpcClient instance.
@@ -97,6 +104,7 @@ export class TaskHubGrpcClient {
     let resolvedCredentials: grpc.ChannelCredentials | undefined;
     let resolvedMetadataGenerator: MetadataGenerator | undefined;
     let resolvedLogger: Logger | undefined;
+    let resolvedDefaultVersion: string | undefined;
 
     if (typeof hostAddressOrOptions === "object" && hostAddressOrOptions !== null) {
       // Options object constructor
@@ -106,6 +114,7 @@ export class TaskHubGrpcClient {
       resolvedCredentials = hostAddressOrOptions.credentials;
       resolvedMetadataGenerator = hostAddressOrOptions.metadataGenerator;
       resolvedLogger = hostAddressOrOptions.logger;
+      resolvedDefaultVersion = hostAddressOrOptions.defaultVersion;
     } else {
       // Deprecated positional parameters constructor
       resolvedHostAddress = hostAddressOrOptions;
@@ -119,6 +128,7 @@ export class TaskHubGrpcClient {
     this._stub = new GrpcClient(resolvedHostAddress, resolvedOptions, resolvedUseTLS, resolvedCredentials).stub;
     this._metadataGenerator = resolvedMetadataGenerator;
     this._logger = resolvedLogger ?? new ConsoleLogger();
+    this._defaultVersion = resolvedDefaultVersion;
   }
 
   async stop(): Promise<void> {
@@ -184,6 +194,9 @@ export class TaskHubGrpcClient {
         ? undefined
         : instanceIdOrOptions.version;
 
+    // Use provided version, or fall back to client's default version
+    const effectiveVersion = version ?? this._defaultVersion;
+
     const req = new pb.CreateInstanceRequest();
     req.setName(name);
     req.setInstanceid(instanceId ?? randomUUID());
@@ -197,15 +210,15 @@ export class TaskHubGrpcClient {
     req.setInput(i);
     req.setScheduledstarttimestamp(ts);
 
-    if (version) {
+    if (effectiveVersion) {
       const v = new StringValue();
-      v.setValue(version);
+      v.setValue(effectiveVersion);
       req.setVersion(v);
     }
 
     populateTagsMap(req.getTagsMap(), tags);
 
-    this._logger.info(`Starting new ${name} instance with ID = ${req.getInstanceid()}${version ? ` (version: ${version})` : ''}`);
+    this._logger.info(`Starting new ${name} instance with ID = ${req.getInstanceid()}${effectiveVersion ? ` (version: ${effectiveVersion})` : ''}`);
 
     const res = await callWithMetadata<pb.CreateInstanceRequest, pb.CreateInstanceResponse>(
       this._stub.startInstance.bind(this._stub),

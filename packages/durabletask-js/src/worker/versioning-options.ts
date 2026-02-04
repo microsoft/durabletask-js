@@ -49,6 +49,12 @@ export interface VersioningOptions {
   version?: string;
 
   /**
+   * The default version to use when starting new orchestrations without an explicit version.
+   * This is used by the client when scheduling new orchestrations.
+   */
+  defaultVersion?: string;
+
+  /**
    * The strategy for matching orchestration versions.
    * @default VersionMatchStrategy.None
    */
