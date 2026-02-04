@@ -405,8 +405,8 @@ export class TaskHubGrpcClient {
     // Check if outputOrOptions is a TerminateInstanceOptions object
     if (
       outputOrOptions !== null &&
-      typeof outputOrOptions === 'object' &&
-      ('recursive' in outputOrOptions || 'output' in outputOrOptions)
+      typeof outputOrOptions === "object" &&
+      ("recursive" in outputOrOptions || "output" in outputOrOptions)
     ) {
       output = outputOrOptions.output ?? null;
       recursive = outputOrOptions.recursive ?? false;
