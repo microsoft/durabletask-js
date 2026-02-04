@@ -92,12 +92,12 @@ describe("Parent Orchestration Instance", () => {
   it("should preserve parent info during replay", async () => {
     let capturedParentDuringReplay: ParentOrchestrationInstance | undefined;
     let capturedParentAfterReplay: ParentOrchestrationInstance | undefined;
-    let replayState = true;
+    let _replayState = true;
 
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
       if (ctx.isReplaying) {
         capturedParentDuringReplay = ctx.parent;
-        replayState = ctx.isReplaying;
+        _replayState = ctx.isReplaying;
       }
 
       // Create a timer to force replay
@@ -169,6 +169,7 @@ describe("Parent Orchestration Instance", () => {
   it("should make parent info available in generator orchestrations", async () => {
     let capturedParent: ParentOrchestrationInstance | undefined;
 
+    // eslint-disable-next-line require-yield
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
       capturedParent = ctx.parent;
       return "done";
@@ -187,7 +188,7 @@ describe("Parent Orchestration Instance", () => {
     ];
 
     const executor = new OrchestrationExecutor(registry, testLogger);
-    const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+    await executor.execute(TEST_INSTANCE_ID, [], newEvents);
 
     // Verify parent instance info is accessible in generator functions
     expect(capturedParent).toBeDefined();
