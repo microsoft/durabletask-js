@@ -13,7 +13,7 @@ export { ActivityContext } from "./task/context/activity-context";
 // Orchestration types and utilities
 export { PurgeInstanceCriteria } from "./orchestration/orchestration-purge-criteria";
 export { PurgeInstanceOptions } from "./orchestration/orchestration-purge-options";
-export { TerminateInstanceOptions } from "./orchestration/orchestration-terminate-options";
+export { TerminateInstanceOptions, terminateOptions, isTerminateInstanceOptions, TERMINATE_OPTIONS_SYMBOL } from "./orchestration/orchestration-terminate-options";
 export { OrchestrationStatus } from "./orchestration/enum/orchestration-status.enum";
 export { OrchestrationState } from "./orchestration/orchestration-state";
 

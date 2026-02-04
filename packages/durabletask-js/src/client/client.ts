@@ -18,7 +18,7 @@ import { TimeoutError } from "../exception/timeout-error";
 import { PurgeResult } from "../orchestration/orchestration-purge-result";
 import { PurgeInstanceCriteria } from "../orchestration/orchestration-purge-criteria";
 import { PurgeInstanceOptions } from "../orchestration/orchestration-purge-options";
-import { TerminateInstanceOptions } from "../orchestration/orchestration-terminate-options";
+import { TerminateInstanceOptions, isTerminateInstanceOptions } from "../orchestration/orchestration-terminate-options";
 import { callWithMetadata, MetadataGenerator } from "../utils/grpc-helper.util";
 import { OrchestrationQuery, ListInstanceIdsOptions, DEFAULT_PAGE_SIZE } from "../orchestration/orchestration-query";
 import { Page, AsyncPageable, createAsyncPageable } from "../orchestration/page";
@@ -390,7 +390,21 @@ export class TaskHubGrpcClient {
    *
    * @param {string} instanceId - orchestrator instance id to terminate.
    * @param {any | TerminateInstanceOptions} outputOrOptions - The optional output to set for the terminated orchestrator instance,
-   *        or an options object that can include both output and recursive termination settings.
+   *        or a TerminateInstanceOptions object created with `terminateOptions()` that can include both
+   *        output and recursive termination settings.
+   *
+   * @example
+   * ```typescript
+   * // Simple termination with output
+   * await client.terminateOrchestration(instanceId, { reason: "cancelled" });
+   *
+   * // Recursive termination with options (use terminateOptions helper)
+   * import { terminateOptions } from "@microsoft/durabletask-js";
+   * await client.terminateOrchestration(instanceId, terminateOptions({
+   *   output: { reason: "cancelled" },
+   *   recursive: true
+   * }));
+   * ```
    */
   async terminateOrchestration(
     instanceId: string,
@@ -402,12 +416,9 @@ export class TaskHubGrpcClient {
     let output: any = null;
     let recursive = false;
 
-    // Check if outputOrOptions is a TerminateInstanceOptions object
-    if (
-      outputOrOptions !== null &&
-      typeof outputOrOptions === "object" &&
-      ("recursive" in outputOrOptions || "output" in outputOrOptions)
-    ) {
+    // Use type guard to safely detect TerminateInstanceOptions
+    // This avoids false positives when user output happens to have 'recursive' or 'output' properties
+    if (isTerminateInstanceOptions(outputOrOptions)) {
       output = outputOrOptions.output ?? null;
       recursive = outputOrOptions.recursive ?? false;
     } else {
