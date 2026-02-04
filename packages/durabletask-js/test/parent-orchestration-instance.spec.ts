@@ -134,10 +134,6 @@ describe("Parent Orchestration Instance", () => {
         taskScheduledId: PARENT_TASK_SCHEDULED_ID,
       }),
     ];
-    const newEvents2 = [
-      newOrchestratorStartedEvent(fireAt),
-      { ...require("../src/utils/pb-helper.util").newTimerCreatedEvent(1, fireAt) },
-    ];
 
     // Import timer events
     const { newTimerCreatedEvent, newTimerFiredEvent } = require("../src/utils/pb-helper.util");
