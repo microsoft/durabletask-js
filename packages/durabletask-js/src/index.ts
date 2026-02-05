@@ -105,7 +105,7 @@ export {
 // Entity types - Worker-side operation types (Step 3)
 export { SignalEntityOptions, CallEntityOptions } from "./entities/signal-entity-options";
 export { TaskEntityState } from "./entities/task-entity-state";
-export { TaskEntityContext, StartOrchestrationOptions } from "./entities/task-entity-context";
+export { TaskEntityContext } from "./entities/task-entity-context";
 export { TaskEntityOperation } from "./entities/task-entity-operation";
 
 // Entity interface and base class (Step 4)

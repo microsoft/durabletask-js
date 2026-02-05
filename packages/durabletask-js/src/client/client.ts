@@ -1031,7 +1031,7 @@ export class TaskHubGrpcClient {
   getEntities<T = unknown>(query?: EntityQuery): AsyncPageable<EntityMetadata<T>> {
     const includeState = query?.includeState ?? true;
 
-    return AsyncPageable.create(async (continuationToken?: string): Promise<Page<EntityMetadata<T>>> => {
+    return createAsyncPageable(async (continuationToken?: string): Promise<Page<EntityMetadata<T>>> => {
       const req = new pb.QueryEntitiesRequest();
       const protoQuery = new pb.EntityQuery();
 
@@ -1081,10 +1081,7 @@ export class TaskHubGrpcClient {
       const entities = res.getEntitiesList();
       const values = entities.map((protoMetadata) => this.convertEntityMetadata<T>(protoMetadata, includeState));
 
-      return {
-        values,
-        continuationToken: res.getContinuationtoken()?.getValue(),
-      };
+      return new Page(values, res.getContinuationtoken()?.getValue());
     });
   }
 
@@ -1152,7 +1149,7 @@ export class TaskHubGrpcClient {
       return createEntityMetadataWithoutState(entityId, lastModifiedTime, backlogQueueSize, lockedBy) as EntityMetadata<T>;
     }
   }
-  
+
   /**
    * Helper method to create an OrchestrationState from a protobuf OrchestrationState.
    */

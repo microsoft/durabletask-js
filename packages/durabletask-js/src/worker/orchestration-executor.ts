@@ -583,6 +583,26 @@ export class OrchestrationExecutor {
             }
           }
           break;
+        // This history event confirms that the lock request was successfully scheduled.
+        // Remove the action from the pending action list so we don't schedule it again.
+        // The pending lock request in _entityFeature.pendingLockRequests remains to receive the granted event.
+        case pb.HistoryEvent.EventtypeCase.ENTITYLOCKREQUESTED:
+          {
+            const eventId = event.getEventid();
+            const action = ctx._pendingActions[eventId];
+            delete ctx._pendingActions[eventId];
+
+            const isSendEntityMessageAction = action?.hasSendentitymessage();
+
+            if (!action) {
+              throw getNonDeterminismError(eventId, "lockEntities");
+            } else if (!isSendEntityMessageAction) {
+              throw getWrongActionTypeError(eventId, "lockEntities", action);
+            } else if (!action.getSendentitymessage()?.hasEntitylockrequested()) {
+              throw getWrongActionTypeError(eventId, "lockEntities (EntityLockRequested)", action);
+            }
+          }
+          break;
         case pb.HistoryEvent.EventtypeCase.ENTITYOPERATIONCOMPLETED:
           {
             const completedEvent = event.getEntityoperationcompleted();

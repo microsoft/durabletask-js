@@ -37,7 +37,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   _newGuidCounter: number;
   _currentUtcDatetime: Date;
   _instanceId: string;
-  _executionId: string;
+  _executionId: string = "";
   _version: string;
   _parent?: ParentOrchestrationInstance;
   _completionStatus?: pb.OrchestrationStatus;
@@ -69,7 +69,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     this._newInput = undefined;
     this._saveEvents = false;
     this._customStatus = undefined;
-    this._entityFeature = new RuntimeOrchestrationEntityFeature();
+    this._entityFeature = new RuntimeOrchestrationEntityFeature(this);
   }
 
   get instanceId(): string {

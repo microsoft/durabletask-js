@@ -61,6 +61,24 @@ function createEntityLockGrantedEvent(criticalSectionId: string): pb.HistoryEven
   return event;
 }
 
+function createEntityLockRequestedEvent(
+  eventId: number,
+  criticalSectionId: string,
+  lockSet: string[],
+): pb.HistoryEvent {
+  const event = new pb.HistoryEvent();
+  event.setEventid(eventId);
+  const ts = new Timestamp();
+  ts.fromDate(new Date());
+  event.setTimestamp(ts);
+
+  const lockRequested = new pb.EntityLockRequestedEvent();
+  lockRequested.setCriticalsectionid(criticalSectionId);
+  lockRequested.setLocksetList(lockSet);
+  event.setEntitylockrequested(lockRequested);
+  return event;
+}
+
 describe("Entity Locking (Critical Sections)", () => {
   describe("lockEntities", () => {
     it("should throw when entity list is empty", async () => {
@@ -112,7 +130,8 @@ describe("Entity Locking (Critical Sections)", () => {
       ];
 
       // Act
-      capturedActions = await executor.execute("test-instance", [], newEvents);
+      const result = await executor.execute("test-instance", [], newEvents);
+      capturedActions = result.actions;
 
       // Assert - Find the lock request action
       const lockAction = capturedActions.find(
@@ -149,10 +168,10 @@ describe("Entity Locking (Critical Sections)", () => {
       ];
 
       // Act
-      const actions = await executor.execute("test-instance", [], newEvents);
+      const result = await executor.execute("test-instance", [], newEvents);
 
       // Assert - Find the lock request action
-      const lockAction = actions.find((a) => a.getSendentitymessage()?.hasEntitylockrequested());
+      const lockAction = result.actions.find((a) => a.getSendentitymessage()?.hasEntitylockrequested());
       expect(lockAction).toBeDefined();
 
       const lockEvent = lockAction!.getSendentitymessage()!.getEntitylockrequested()!;
@@ -168,6 +187,7 @@ describe("Entity Locking (Critical Sections)", () => {
       // Arrange
       const registry = new Registry();
       let lockAcquired = false;
+      const orchestratorStartTime = new Date();
 
       registry.addOrchestrator(async function* testOrchestration(ctx: any) {
         const entity = new EntityInstanceId("counter", "test");
@@ -181,34 +201,38 @@ describe("Entity Locking (Critical Sections)", () => {
 
       // First execution - request lock
       const newEvents1 = [
-        createOrchestratorStartedEvent(),
+        createOrchestratorStartedEvent(orchestratorStartTime),
         createExecutionStartedEvent("testOrchestration"),
       ];
-      const actions1 = await executor.execute("test-instance", [], newEvents1);
+      const result1 = await executor.execute("test-instance", [], newEvents1);
 
-      // Find the critical section ID from the lock request
-      const lockAction = actions1.find((a) => a.getSendentitymessage()?.hasEntitylockrequested());
-      const criticalSectionId = lockAction!
-        .getSendentitymessage()!
-        .getEntitylockrequested()!
-        .getCriticalsectionid();
+      // Find the critical section ID and action ID from the lock request
+      const lockAction = result1.actions.find((a) => a.getSendentitymessage()?.hasEntitylockrequested());
+      const lockRequest = lockAction!.getSendentitymessage()!.getEntitylockrequested()!;
+      const criticalSectionId = lockRequest.getCriticalsectionid();
+      const actionId = lockAction!.getId();
+      const lockSet = lockRequest.getLocksetList();
 
-      // Second execution - lock granted
+      // Second execution - lock granted (use same timestamp for determinism)
       const executor2 = new OrchestrationExecutor(registry);
-      const oldEvents = [createOrchestratorStartedEvent(), createExecutionStartedEvent("testOrchestration")];
+      const oldEvents = [
+        createOrchestratorStartedEvent(orchestratorStartTime),
+        createExecutionStartedEvent("testOrchestration"),
+        createEntityLockRequestedEvent(actionId, criticalSectionId, lockSet),
+      ];
       const newEvents2 = [
-        createOrchestratorStartedEvent(),
+        createOrchestratorStartedEvent(), // New timestamp for the new execution
         createEntityLockGrantedEvent(criticalSectionId),
       ];
 
       // Act
-      const actions2 = await executor2.execute("test-instance", oldEvents, newEvents2);
+      const result2 = await executor2.execute("test-instance", oldEvents, newEvents2);
 
       // Assert
       expect(lockAcquired).toBe(true);
 
       // Should have completion action with unlock action
-      const completionAction = actions2.find((a) => a.hasCompleteorchestration());
+      const completionAction = result2.actions.find((a) => a.hasCompleteorchestration());
       expect(completionAction).toBeDefined();
       expect(completionAction!.getCompleteorchestration()!.getOrchestrationstatus()).toBe(
         pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED,
@@ -245,6 +269,7 @@ describe("Entity Locking (Critical Sections)", () => {
       // Arrange
       const registry = new Registry();
       let criticalSectionInfo: any = null;
+      const orchestratorStartTime = new Date();
 
       registry.addOrchestrator(async function* testOrchestration(ctx: any) {
         const entityA = new EntityInstanceId("counter", "a");
@@ -259,21 +284,25 @@ describe("Entity Locking (Critical Sections)", () => {
 
       // First execution - request lock
       const newEvents1 = [
-        createOrchestratorStartedEvent(),
+        createOrchestratorStartedEvent(orchestratorStartTime),
         createExecutionStartedEvent("testOrchestration"),
       ];
-      const actions1 = await executor.execute("test-instance", [], newEvents1);
+      const result1 = await executor.execute("test-instance", [], newEvents1);
 
-      // Find the critical section ID from the lock request
-      const lockAction = actions1.find((a) => a.getSendentitymessage()?.hasEntitylockrequested());
-      const criticalSectionId = lockAction!
-        .getSendentitymessage()!
-        .getEntitylockrequested()!
-        .getCriticalsectionid();
+      // Find the critical section ID and action ID from the lock request
+      const lockAction = result1.actions.find((a) => a.getSendentitymessage()?.hasEntitylockrequested());
+      const lockRequest = lockAction!.getSendentitymessage()!.getEntitylockrequested()!;
+      const criticalSectionId = lockRequest.getCriticalsectionid();
+      const actionId = lockAction!.getId();
+      const lockSet = lockRequest.getLocksetList();
 
-      // Second execution - lock granted
+      // Second execution - lock granted (use same timestamp for determinism)
       const executor2 = new OrchestrationExecutor(registry);
-      const oldEvents = [createOrchestratorStartedEvent(), createExecutionStartedEvent("testOrchestration")];
+      const oldEvents = [
+        createOrchestratorStartedEvent(orchestratorStartTime),
+        createExecutionStartedEvent("testOrchestration"),
+        createEntityLockRequestedEvent(actionId, criticalSectionId, lockSet),
+      ];
       const newEvents2 = [
         createOrchestratorStartedEvent(),
         createEntityLockGrantedEvent(criticalSectionId),
@@ -298,6 +327,7 @@ describe("Entity Locking (Critical Sections)", () => {
     it("should send unlock messages when lock is released", async () => {
       // Arrange
       const registry = new Registry();
+      const orchestratorStartTime = new Date();
 
       registry.addOrchestrator(async function* testOrchestration(ctx: any) {
         const entityA = new EntityInstanceId("counter", "a");
@@ -311,31 +341,35 @@ describe("Entity Locking (Critical Sections)", () => {
 
       // First execution - request lock
       const newEvents1 = [
-        createOrchestratorStartedEvent(),
+        createOrchestratorStartedEvent(orchestratorStartTime),
         createExecutionStartedEvent("testOrchestration"),
       ];
-      const actions1 = await executor.execute("test-instance", [], newEvents1);
+      const result1 = await executor.execute("test-instance", [], newEvents1);
 
-      // Find the critical section ID from the lock request
-      const lockAction = actions1.find((a) => a.getSendentitymessage()?.hasEntitylockrequested());
-      const criticalSectionId = lockAction!
-        .getSendentitymessage()!
-        .getEntitylockrequested()!
-        .getCriticalsectionid();
+      // Find the critical section ID and action ID from the lock request
+      const lockAction = result1.actions.find((a) => a.getSendentitymessage()?.hasEntitylockrequested());
+      const lockRequest = lockAction!.getSendentitymessage()!.getEntitylockrequested()!;
+      const criticalSectionId = lockRequest.getCriticalsectionid();
+      const actionId = lockAction!.getId();
+      const lockSet = lockRequest.getLocksetList();
 
-      // Second execution - lock granted
+      // Second execution - lock granted (use same timestamp for determinism)
       const executor2 = new OrchestrationExecutor(registry);
-      const oldEvents = [createOrchestratorStartedEvent(), createExecutionStartedEvent("testOrchestration")];
+      const oldEvents = [
+        createOrchestratorStartedEvent(orchestratorStartTime),
+        createExecutionStartedEvent("testOrchestration"),
+        createEntityLockRequestedEvent(actionId, criticalSectionId, lockSet),
+      ];
       const newEvents2 = [
         createOrchestratorStartedEvent(),
         createEntityLockGrantedEvent(criticalSectionId),
       ];
 
       // Act
-      const actions2 = await executor2.execute("test-instance", oldEvents, newEvents2);
+      const result2 = await executor2.execute("test-instance", oldEvents, newEvents2);
 
       // Assert - Should have unlock actions for both entities
-      const unlockActions = actions2.filter((a) => a.getSendentitymessage()?.hasEntityunlocksent());
+      const unlockActions = result2.actions.filter((a) => a.getSendentitymessage()?.hasEntityunlocksent());
       expect(unlockActions.length).toBe(2);
 
       const unlockedEntities = unlockActions.map(
@@ -348,6 +382,7 @@ describe("Entity Locking (Critical Sections)", () => {
     it("should be idempotent - multiple releases should be safe", async () => {
       // Arrange
       const registry = new Registry();
+      const orchestratorStartTime = new Date();
 
       registry.addOrchestrator(async function* testOrchestration(ctx: any) {
         const entity = new EntityInstanceId("counter", "a");
@@ -362,31 +397,35 @@ describe("Entity Locking (Critical Sections)", () => {
 
       // First execution - request lock
       const newEvents1 = [
-        createOrchestratorStartedEvent(),
+        createOrchestratorStartedEvent(orchestratorStartTime),
         createExecutionStartedEvent("testOrchestration"),
       ];
-      const actions1 = await executor.execute("test-instance", [], newEvents1);
+      const result1 = await executor.execute("test-instance", [], newEvents1);
 
-      // Find the critical section ID from the lock request
-      const lockAction = actions1.find((a) => a.getSendentitymessage()?.hasEntitylockrequested());
-      const criticalSectionId = lockAction!
-        .getSendentitymessage()!
-        .getEntitylockrequested()!
-        .getCriticalsectionid();
+      // Find the critical section ID and action ID from the lock request
+      const lockAction = result1.actions.find((a) => a.getSendentitymessage()?.hasEntitylockrequested());
+      const lockRequest = lockAction!.getSendentitymessage()!.getEntitylockrequested()!;
+      const criticalSectionId = lockRequest.getCriticalsectionid();
+      const actionId = lockAction!.getId();
+      const lockSet = lockRequest.getLocksetList();
 
-      // Second execution - lock granted
+      // Second execution - lock granted (use same timestamp for determinism)
       const executor2 = new OrchestrationExecutor(registry);
-      const oldEvents = [createOrchestratorStartedEvent(), createExecutionStartedEvent("testOrchestration")];
+      const oldEvents = [
+        createOrchestratorStartedEvent(orchestratorStartTime),
+        createExecutionStartedEvent("testOrchestration"),
+        createEntityLockRequestedEvent(actionId, criticalSectionId, lockSet),
+      ];
       const newEvents2 = [
         createOrchestratorStartedEvent(),
         createEntityLockGrantedEvent(criticalSectionId),
       ];
 
       // Act
-      const actions2 = await executor2.execute("test-instance", oldEvents, newEvents2);
+      const result2 = await executor2.execute("test-instance", oldEvents, newEvents2);
 
       // Assert - Should only have one unlock action (not three)
-      const unlockActions = actions2.filter((a) => a.getSendentitymessage()?.hasEntityunlocksent());
+      const unlockActions = result2.actions.filter((a) => a.getSendentitymessage()?.hasEntityunlocksent());
       expect(unlockActions.length).toBe(1);
     });
   });
@@ -396,6 +435,7 @@ describe("Entity Locking (Critical Sections)", () => {
       // Arrange
       const registry = new Registry();
       let errorThrown: Error | null = null;
+      const orchestratorStartTime = new Date();
 
       registry.addOrchestrator(async function* testOrchestration(ctx: any) {
         const entityA = new EntityInstanceId("counter", "a");
@@ -417,21 +457,25 @@ describe("Entity Locking (Critical Sections)", () => {
 
       // First execution - request lock
       const newEvents1 = [
-        createOrchestratorStartedEvent(),
+        createOrchestratorStartedEvent(orchestratorStartTime),
         createExecutionStartedEvent("testOrchestration"),
       ];
-      const actions1 = await executor.execute("test-instance", [], newEvents1);
+      const result1 = await executor.execute("test-instance", [], newEvents1);
 
-      // Find the critical section ID from the lock request
-      const lockAction = actions1.find((a) => a.getSendentitymessage()?.hasEntitylockrequested());
-      const criticalSectionId = lockAction!
-        .getSendentitymessage()!
-        .getEntitylockrequested()!
-        .getCriticalsectionid();
+      // Find the critical section ID and action ID from the lock request
+      const lockAction = result1.actions.find((a) => a.getSendentitymessage()?.hasEntitylockrequested());
+      const lockRequest = lockAction!.getSendentitymessage()!.getEntitylockrequested()!;
+      const criticalSectionId = lockRequest.getCriticalsectionid();
+      const actionId = lockAction!.getId();
+      const lockSet = lockRequest.getLocksetList();
 
-      // Second execution - lock granted
+      // Second execution - lock granted (use same timestamp for determinism)
       const executor2 = new OrchestrationExecutor(registry);
-      const oldEvents = [createOrchestratorStartedEvent(), createExecutionStartedEvent("testOrchestration")];
+      const oldEvents = [
+        createOrchestratorStartedEvent(orchestratorStartTime),
+        createExecutionStartedEvent("testOrchestration"),
+        createEntityLockRequestedEvent(actionId, criticalSectionId, lockSet),
+      ];
       const newEvents2 = [
         createOrchestratorStartedEvent(),
         createEntityLockGrantedEvent(criticalSectionId),
@@ -449,6 +493,7 @@ describe("Entity Locking (Critical Sections)", () => {
       // Arrange
       const registry = new Registry();
       let errorThrown: Error | null = null;
+      const orchestratorStartTime = new Date();
 
       registry.addOrchestrator(async function* testOrchestration(ctx: any) {
         const entity = new EntityInstanceId("counter", "a");
@@ -469,21 +514,25 @@ describe("Entity Locking (Critical Sections)", () => {
 
       // First execution - request lock
       const newEvents1 = [
-        createOrchestratorStartedEvent(),
+        createOrchestratorStartedEvent(orchestratorStartTime),
         createExecutionStartedEvent("testOrchestration"),
       ];
-      const actions1 = await executor.execute("test-instance", [], newEvents1);
+      const result1 = await executor.execute("test-instance", [], newEvents1);
 
-      // Find the critical section ID from the lock request
-      const lockAction = actions1.find((a) => a.getSendentitymessage()?.hasEntitylockrequested());
-      const criticalSectionId = lockAction!
-        .getSendentitymessage()!
-        .getEntitylockrequested()!
-        .getCriticalsectionid();
+      // Find the critical section ID and action ID from the lock request
+      const lockAction = result1.actions.find((a) => a.getSendentitymessage()?.hasEntitylockrequested());
+      const lockRequest = lockAction!.getSendentitymessage()!.getEntitylockrequested()!;
+      const criticalSectionId = lockRequest.getCriticalsectionid();
+      const actionId = lockAction!.getId();
+      const lockSet = lockRequest.getLocksetList();
 
-      // Second execution - lock granted
+      // Second execution - lock granted (use same timestamp for determinism)
       const executor2 = new OrchestrationExecutor(registry);
-      const oldEvents = [createOrchestratorStartedEvent(), createExecutionStartedEvent("testOrchestration")];
+      const oldEvents = [
+        createOrchestratorStartedEvent(orchestratorStartTime),
+        createExecutionStartedEvent("testOrchestration"),
+        createEntityLockRequestedEvent(actionId, criticalSectionId, lockSet),
+      ];
       const newEvents2 = [
         createOrchestratorStartedEvent(),
         createEntityLockGrantedEvent(criticalSectionId),
@@ -501,6 +550,7 @@ describe("Entity Locking (Critical Sections)", () => {
       // Arrange
       const registry = new Registry();
       let errorThrown: Error | null = null;
+      const orchestratorStartTime = new Date();
 
       registry.addOrchestrator(async function* testOrchestration(ctx: any) {
         const entityA = new EntityInstanceId("counter", "a");
@@ -522,21 +572,25 @@ describe("Entity Locking (Critical Sections)", () => {
 
       // First execution - request lock
       const newEvents1 = [
-        createOrchestratorStartedEvent(),
+        createOrchestratorStartedEvent(orchestratorStartTime),
         createExecutionStartedEvent("testOrchestration"),
       ];
-      const actions1 = await executor.execute("test-instance", [], newEvents1);
+      const result1 = await executor.execute("test-instance", [], newEvents1);
 
-      // Find the critical section ID from the lock request
-      const lockAction = actions1.find((a) => a.getSendentitymessage()?.hasEntitylockrequested());
-      const criticalSectionId = lockAction!
-        .getSendentitymessage()!
-        .getEntitylockrequested()!
-        .getCriticalsectionid();
+      // Find the critical section ID and action ID from the lock request
+      const lockAction = result1.actions.find((a) => a.getSendentitymessage()?.hasEntitylockrequested());
+      const lockRequest = lockAction!.getSendentitymessage()!.getEntitylockrequested()!;
+      const criticalSectionId = lockRequest.getCriticalsectionid();
+      const actionId = lockAction!.getId();
+      const lockSet = lockRequest.getLocksetList();
 
-      // Second execution - lock granted
+      // Second execution - lock granted (use same timestamp for determinism)
       const executor2 = new OrchestrationExecutor(registry);
-      const oldEvents = [createOrchestratorStartedEvent(), createExecutionStartedEvent("testOrchestration")];
+      const oldEvents = [
+        createOrchestratorStartedEvent(orchestratorStartTime),
+        createExecutionStartedEvent("testOrchestration"),
+        createEntityLockRequestedEvent(actionId, criticalSectionId, lockSet),
+      ];
       const newEvents2 = [
         createOrchestratorStartedEvent(),
         createEntityLockGrantedEvent(criticalSectionId),

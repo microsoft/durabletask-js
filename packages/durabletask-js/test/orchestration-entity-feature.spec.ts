@@ -130,10 +130,10 @@ describe("RuntimeOrchestrationContext", () => {
 
       // Assert
       const actions = Object.values(ctx._pendingActions);
-      // Each signal uses two sequence numbers: one for action ID, one for request GUID
-      // So action IDs are 1, 3 (not 1, 2)
+      // Each signal uses one sequence number for the action ID
+      // Request GUIDs use a separate counter (_newGuidCounter), not sequence numbers
       expect(actions[0].getId()).toBe(1);
-      expect(actions[1].getId()).toBe(3);
+      expect(actions[1].getId()).toBe(2);
       // All action IDs should be unique
       const ids = actions.map((a) => a.getId());
       expect(new Set(ids).size).toBe(ids.length);
@@ -175,10 +175,15 @@ describe("RuntimeOrchestrationContext", () => {
       const guid2 = ctx.newGuid();
       const guid3 = ctx.newGuid();
 
-      // Assert
-      expect(guid1).toBe("my-orchestration:00000001");
-      expect(guid2).toBe("my-orchestration:00000002");
-      expect(guid3).toBe("my-orchestration:00000003");
+      // Assert - Should be valid UUIDs (UUID v5 format)
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      expect(guid1).toMatch(uuidRegex);
+      expect(guid2).toMatch(uuidRegex);
+      expect(guid3).toMatch(uuidRegex);
+
+      // Each GUID should be unique
+      expect(guid1).not.toBe(guid2);
+      expect(guid2).not.toBe(guid3);
     });
 
     it("should be replayable - same sequence produces same GUIDs", () => {

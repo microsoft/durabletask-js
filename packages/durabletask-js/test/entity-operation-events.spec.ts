@@ -88,11 +88,11 @@ describe("OrchestrationExecutor Entity Operation Events", () => {
       ];
 
       // First execution - should create the callEntity action
-      const actions1 = await executor.execute("test-instance", oldEvents, newEvents);
+      const result1 = await executor.execute("test-instance", oldEvents, newEvents);
 
       // Verify the action was created
-      expect(actions1.length).toBe(1);
-      const action = actions1[0];
+      expect(result1.actions.length).toBe(1);
+      const action = result1.actions[0];
       expect(action.hasSendentitymessage()).toBe(true);
       expect(action.getSendentitymessage()!.hasEntityoperationcalled()).toBe(true);
 
@@ -106,12 +106,12 @@ describe("OrchestrationExecutor Entity Operation Events", () => {
         newEntityOperationCompletedEvent(100, requestId, "42"),
       ];
 
-      const actions2 = await executor.execute("test-instance", oldEvents2, newEvents2);
+      const result2 = await executor.execute("test-instance", oldEvents2, newEvents2);
 
       // Assert
       expect(callResult).toBe(42);
       // Note: actions include previously-scheduled entity call (idempotent, has sequence number)
-      const completeAction = actions2.find((a) => a.hasCompleteorchestration());
+      const completeAction = result2.actions.find((a) => a.hasCompleteorchestration());
       expect(completeAction).toBeDefined();
     });
 
@@ -135,8 +135,8 @@ describe("OrchestrationExecutor Entity Operation Events", () => {
         ph.newExecutionStartedEvent("TestOrchestrator", "test-instance", undefined),
       ];
 
-      const actions1 = await executor.execute("test-instance", oldEvents, newEvents);
-      const requestId = actions1[0].getSendentitymessage()!.getEntityoperationcalled()!.getRequestid();
+      const result1 = await executor.execute("test-instance", oldEvents, newEvents);
+      const requestId = result1.actions[0].getSendentitymessage()!.getEntityoperationcalled()!.getRequestid();
 
       // Complete with no output (null)
       const oldEvents2 = [...newEvents];
@@ -172,8 +172,8 @@ describe("OrchestrationExecutor Entity Operation Events", () => {
         ph.newExecutionStartedEvent("TestOrchestrator", "test-instance", undefined),
       ];
 
-      const actions1 = await executor.execute("test-instance", oldEvents, newEvents);
-      const requestId = actions1[0].getSendentitymessage()!.getEntityoperationcalled()!.getRequestid();
+      const result1 = await executor.execute("test-instance", oldEvents, newEvents);
+      const requestId = result1.actions[0].getSendentitymessage()!.getEntityoperationcalled()!.getRequestid();
 
       const resultObject = { name: "John", age: 30 };
       const oldEvents2 = [...newEvents];
@@ -213,8 +213,8 @@ describe("OrchestrationExecutor Entity Operation Events", () => {
         ph.newExecutionStartedEvent("TestOrchestrator", "test-instance", undefined),
       ];
 
-      const actions1 = await executor.execute("test-instance", oldEvents, newEvents);
-      const requestId = actions1[0].getSendentitymessage()!.getEntityoperationcalled()!.getRequestid();
+      const result1 = await executor.execute("test-instance", oldEvents, newEvents);
+      const requestId = result1.actions[0].getSendentitymessage()!.getEntityoperationcalled()!.getRequestid();
 
       // Fail the operation
       const oldEvents2 = [...newEvents];
@@ -249,8 +249,8 @@ describe("OrchestrationExecutor Entity Operation Events", () => {
         ph.newExecutionStartedEvent("TestOrchestrator", "test-instance", undefined),
       ];
 
-      const actions1 = await executor.execute("test-instance", oldEvents, newEvents);
-      const requestId = actions1[0].getSendentitymessage()!.getEntityoperationcalled()!.getRequestid();
+      const result1 = await executor.execute("test-instance", oldEvents, newEvents);
+      const requestId = result1.actions[0].getSendentitymessage()!.getEntityoperationcalled()!.getRequestid();
 
       // Fail the operation
       const oldEvents2 = [...newEvents];
@@ -259,11 +259,11 @@ describe("OrchestrationExecutor Entity Operation Events", () => {
         newEntityOperationFailedEvent(100, requestId, "Error", "Something went wrong"),
       ];
 
-      const actions2 = await executor.execute("test-instance", oldEvents2, newEvents2);
+      const result2 = await executor.execute("test-instance", oldEvents2, newEvents2);
 
       // Assert - orchestration should fail
       // Note: actions include previously-scheduled entity call (idempotent, has sequence number)
-      const completeActionWrapper = actions2.find((a) => a.hasCompleteorchestration());
+      const completeActionWrapper = result2.actions.find((a) => a.hasCompleteorchestration());
       expect(completeActionWrapper).toBeDefined();
       const completeAction = completeActionWrapper!.getCompleteorchestration()!;
       expect(completeAction.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
@@ -273,8 +273,8 @@ describe("OrchestrationExecutor Entity Operation Events", () => {
   describe("Multiple entity calls", () => {
     it("should handle multiple concurrent entity calls", async () => {
       // Arrange
-      let result1: number | undefined;
-      let result2: number | undefined;
+      let orchResult1: number | undefined;
+      let orchResult2: number | undefined;
       const orchestrator = async function* (ctx: OrchestrationContext): AsyncGenerator<Task<number>, number, number> {
         const counter1 = new EntityInstanceId("counter", "counter-1");
         const counter2 = new EntityInstanceId("counter", "counter-2");
@@ -284,11 +284,11 @@ describe("OrchestrationExecutor Entity Operation Events", () => {
         const task2 = ctx.entities.callEntity<number>(counter2, "get");
 
         // Wait for first
-        result1 = yield task1;
+        orchResult1 = yield task1;
         // Wait for second
-        result2 = yield task2;
+        orchResult2 = yield task2;
 
-        return (result1 ?? 0) + (result2 ?? 0);
+        return (orchResult1 ?? 0) + (orchResult2 ?? 0);
       };
 
       registry.addNamedOrchestrator("TestOrchestrator", orchestrator);
@@ -301,12 +301,12 @@ describe("OrchestrationExecutor Entity Operation Events", () => {
         ph.newExecutionStartedEvent("TestOrchestrator", "test-instance", undefined),
       ];
 
-      const actions1 = await executor.execute("test-instance", oldEvents, newEvents);
+      const execResult1 = await executor.execute("test-instance", oldEvents, newEvents);
 
       // Verify two actions were created
-      expect(actions1.length).toBe(2);
-      const requestId1 = actions1[0].getSendentitymessage()!.getEntityoperationcalled()!.getRequestid();
-      const requestId2 = actions1[1].getSendentitymessage()!.getEntityoperationcalled()!.getRequestid();
+      expect(execResult1.actions.length).toBe(2);
+      const requestId1 = execResult1.actions[0].getSendentitymessage()!.getEntityoperationcalled()!.getRequestid();
+      const requestId2 = execResult1.actions[1].getSendentitymessage()!.getEntityoperationcalled()!.getRequestid();
 
       // Complete both calls
       const oldEvents2 = [...newEvents];
@@ -316,13 +316,13 @@ describe("OrchestrationExecutor Entity Operation Events", () => {
         newEntityOperationCompletedEvent(101, requestId2, "20"),
       ];
 
-      const actions2 = await executor.execute("test-instance", oldEvents2, newEvents2);
+      const execResult2 = await executor.execute("test-instance", oldEvents2, newEvents2);
 
       // Assert
-      expect(result1).toBe(10);
-      expect(result2).toBe(20);
+      expect(orchResult1).toBe(10);
+      expect(orchResult2).toBe(20);
       // Note: actions include previously-scheduled entity calls (idempotent, have sequence numbers)
-      const completeAction = actions2.find((a) => a.hasCompleteorchestration());
+      const completeAction = execResult2.actions.find((a) => a.hasCompleteorchestration());
       expect(completeAction).toBeDefined();
       expect(completeAction!.getCompleteorchestration()!.getResult()?.getValue()).toBe("30");
     });
