@@ -10,7 +10,7 @@
  * Environment variables:
  *   - ENDPOINT: The endpoint for the DTS emulator (default: localhost:8080)
  *   - TASKHUB: The task hub name (default: default)
- *   - AZURE_DTS_CONNECTION_STRING: Optional connection string for real Azure DTS
+ *   - DURABLE_TASK_SCHEDULER_CONNECTION_STRING: Optional connection string for real Azure DTS
  */
 
 import {
@@ -29,7 +29,7 @@ import { DefaultAzureCredential } from "@azure/identity";
 // Read environment variables
 const endpoint = process.env.ENDPOINT || "localhost:8080";
 const taskHub = process.env.TASKHUB || "default";
-const connectionString = process.env.AZURE_DTS_CONNECTION_STRING;
+const connectionString = process.env.DURABLE_TASK_SCHEDULER_CONNECTION_STRING;
 
 /**
  * Helper to create a client that works with both emulator and real Azure DTS

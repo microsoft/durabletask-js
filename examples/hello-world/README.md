@@ -47,7 +47,7 @@ Create a `.env` file in the `examples` directory with your configuration:
 
 ```env
 # Using connection string
-AZURE_DTS_CONNECTION_STRING=Endpoint=https://myservice.durabletask.io;Authentication=DefaultAzure;TaskHub=myTaskHub
+DURABLE_TASK_SCHEDULER_CONNECTION_STRING=Endpoint=https://myservice.durabletask.io;Authentication=DefaultAzure;TaskHub=myTaskHub
 
 # Or using explicit parameters (uses DefaultAzureCredential)
 # AZURE_DTS_ENDPOINT=https://myservice.durabletask.io
@@ -65,7 +65,7 @@ npm run example ./examples/azure-managed-dts.ts
 ### Option 2: Using environment variables directly
 
 ```sh
-export AZURE_DTS_CONNECTION_STRING="Endpoint=https://myservice.durabletask.io;Authentication=DefaultAzure;TaskHub=myTaskHub"
+export DURABLE_TASK_SCHEDULER_CONNECTION_STRING="Endpoint=https://myservice.durabletask.io;Authentication=DefaultAzure;TaskHub=myTaskHub"
 npm run example ./examples/azure-managed-dts.ts
 ```
 

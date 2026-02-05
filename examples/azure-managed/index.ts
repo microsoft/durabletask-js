@@ -23,7 +23,6 @@ import { ActivityContext } from "@microsoft/durabletask-js/dist/task/context/act
 import { OrchestrationContext } from "@microsoft/durabletask-js/dist/task/context/orchestration-context";
 import { TOrchestrator } from "@microsoft/durabletask-js/dist/types/orchestrator.type";
 import { whenAll } from "@microsoft/durabletask-js/dist/task";
-import { Task } from "@microsoft/durabletask-js/dist/task/task";
 
 // Wrap the entire code in an immediately-invoked async function
 (async () => {
@@ -35,23 +34,23 @@ import { Task } from "@microsoft/durabletask-js/dist/task/task";
   // These values should be set as environment variables
   const endpoint = process.env.AZURE_DTS_ENDPOINT;
   const taskHubName = process.env.AZURE_DTS_TASKHUB;
-  const connectionString = process.env.AZURE_DTS_CONNECTION_STRING;
+  const connectionString = process.env.DURABLE_TASK_SCHEDULER_CONNECTION_STRING;
 
   // Validate configuration
   if (!connectionString && (!endpoint || !taskHubName)) {
     logger.error(
-      "Error: Either AZURE_DTS_CONNECTION_STRING or both AZURE_DTS_ENDPOINT and AZURE_DTS_TASKHUB must be set.",
+      "Error: Either DURABLE_TASK_SCHEDULER_CONNECTION_STRING or both AZURE_DTS_ENDPOINT and AZURE_DTS_TASKHUB must be set.",
     );
     logger.info("\nUsage:");
     logger.info("  Option 1: Create a .env file in the examples directory (recommended):");
     logger.info(
-      "    AZURE_DTS_CONNECTION_STRING=Endpoint=https://myservice.durabletask.io;Authentication=DefaultAzure;TaskHub=myTaskHub",
+      "    DURABLE_TASK_SCHEDULER_CONNECTION_STRING=Endpoint=https://myservice.durabletask.io;Authentication=DefaultAzure;TaskHub=myTaskHub",
     );
     logger.info("    or");
     logger.info("    AZURE_DTS_ENDPOINT=https://myservice.durabletask.io");
     logger.info("    AZURE_DTS_TASKHUB=myTaskHub");
     logger.info("\n  Option 2: Set environment variables directly");
-    logger.info("    export AZURE_DTS_CONNECTION_STRING=...");
+    logger.info("    export DURABLE_TASK_SCHEDULER_CONNECTION_STRING=...");
     process.exit(1);
   }
 
@@ -87,7 +86,7 @@ import { Task } from "@microsoft/durabletask-js/dist/task/task";
     const workItems = ["item-1", "item-2", "item-3", "item-4", "item-5"];
 
     // Fan-out: schedule all activities in parallel
-    const tasks: Task<number>[] = [];
+    const tasks = [];
     for (const item of workItems) {
       tasks.push(ctx.callActivity(processWorkItem, item));
     }

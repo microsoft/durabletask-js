@@ -1,0 +1,39 @@
+version: "3.8"
+
+# Docker Compose stack for running the distributed tracing example locally.
+# Starts the DTS Emulator (Durable Task Scheduler) and Jaeger (trace collector + UI).
+#
+# Usage:
+#   docker compose up -d
+#   # Run the example ...
+#   docker compose down
+
+services:
+  # ---------------------------------------------------------------------------
+  # Durable Task Scheduler (DTS) Emulator
+  # Provides a local gRPC endpoint compatible with Azure Managed DTS.
+  # No Azure subscription required – perfect for development and testing.
+  # ---------------------------------------------------------------------------
+  dts-emulator:
+    image: mcr.microsoft.com/dts/emulator:latest
+    container_name: dts-emulator
+    ports:
+      - "8080:8080"       # gRPC endpoint
+      - "8082:8082"       # HTTP dashboard (if available)
+    environment:
+      - ASPNETCORE_URLS=http://+:8080;http://+:8082
+
+  # ---------------------------------------------------------------------------
+  # Jaeger – distributed tracing backend & UI
+  # Receives traces via OTLP (HTTP on 4318, gRPC on 4317) and exposes a web UI
+  # on port 16686 for exploring traces.
+  # ---------------------------------------------------------------------------
+  jaeger:
+    image: jaegertracing/jaeger:2
+    container_name: jaeger
+    ports:
+      - "4317:4317"       # OTLP gRPC receiver
+      - "4318:4318"       # OTLP HTTP receiver (used by this example)
+      - "16686:16686"     # Jaeger UI
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true

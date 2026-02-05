@@ -6,14 +6,14 @@
  *
  * NOTE: These tests can run against either:
  *   1. DTS emulator - set ENDPOINT and TASKHUB environment variables
- *   2. Real Azure DTS - set AZURE_DTS_CONNECTION_STRING environment variable
+ *   2. Real Azure DTS - set DURABLE_TASK_SCHEDULER_CONNECTION_STRING environment variable
  *
  * Example for emulator:
  *   docker run -i -p 8080:8080 -d mcr.microsoft.com/dts/dts-emulator:latest
  *   ENDPOINT=localhost:8080 TASKHUB=default npx jest query-apis.spec.ts
  *
  * Example for real DTS:
- *   AZURE_DTS_CONNECTION_STRING="Endpoint=https://...;Authentication=DefaultAzure;TaskHub=th3" npx jest query-apis.spec.ts
+ *   DURABLE_TASK_SCHEDULER_CONNECTION_STRING="Endpoint=https://...;Authentication=DefaultAzure;TaskHub=th3" npx jest query-apis.spec.ts
  */
 
 import {
@@ -32,7 +32,7 @@ import {
 } from "@microsoft/durabletask-js-azuremanaged";
 
 // Read environment variables - support both connection string and endpoint/taskhub
-const connectionString = process.env.AZURE_DTS_CONNECTION_STRING;
+const connectionString = process.env.DURABLE_TASK_SCHEDULER_CONNECTION_STRING;
 const endpoint = process.env.ENDPOINT || "localhost:8080";
 const taskHub = process.env.TASKHUB || "default";
 
