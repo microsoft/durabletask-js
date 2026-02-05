@@ -92,3 +92,16 @@ export { ReplaySafeLogger, ReplayContext } from "./types/replay-safe-logger";
 
 // Versioning utilities
 export { compareVersions } from "./utils/versioning.util";
+
+// Distributed Tracing (OpenTelemetry)
+export {
+  TRACER_NAME,
+  DurableTaskAttributes,
+  TaskType,
+  createSpanName,
+  createTimerSpanName,
+  getOtelApi,
+  getTracer,
+  OrchestrationSpanInfo,
+  startSpanForEventRaisedFromClient,
+} from "./tracing";

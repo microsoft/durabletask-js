@@ -29,6 +29,13 @@ import { Logger, ConsoleLogger } from "../types/logger.type";
 import { StartOrchestrationOptions } from "../task/options";
 import { mapToRecord } from "../utils/tags.util";
 import { populateTagsMap } from "../utils/pb-helper.util";
+import {
+  startSpanForNewOrchestration,
+  startSpanForEventRaisedFromClient,
+  setSpanError,
+  setSpanOk,
+  endSpan,
+} from "../tracing";
 
 // Re-export MetadataGenerator for backward compatibility
 export { MetadataGenerator } from "../utils/grpc-helper.util";
@@ -218,15 +225,26 @@ export class TaskHubGrpcClient {
 
     populateTagsMap(req.getTagsMap(), tags);
 
+    // Create a tracing span for the new orchestration (if OTEL is available)
+    const span = startSpanForNewOrchestration(req);
+
     this._logger.info(`Starting new ${name} instance with ID = ${req.getInstanceid()}${effectiveVersion ? ` (version: ${effectiveVersion})` : ""}`);
 
-    const res = await callWithMetadata<pb.CreateInstanceRequest, pb.CreateInstanceResponse>(
-      this._stub.startInstance.bind(this._stub),
-      req,
-      this._metadataGenerator,
-    );
+    try {
+      const res = await callWithMetadata<pb.CreateInstanceRequest, pb.CreateInstanceResponse>(
+        this._stub.startInstance.bind(this._stub),
+        req,
+        this._metadataGenerator,
+      );
 
-    return res.getInstanceid();
+      setSpanOk(span);
+      return res.getInstanceid();
+    } catch (e: any) {
+      setSpanError(span, e);
+      throw e;
+    } finally {
+      endSpan(span);
+    }
   }
 
   /**
@@ -376,13 +394,25 @@ export class TaskHubGrpcClient {
 
     req.setInput(i);
 
+    // Create a tracing span for the raised event (if OTEL is available)
+    const span = startSpanForEventRaisedFromClient(eventName, instanceId);
+
     this._logger.info(`Raising event '${eventName}' for instance '${instanceId}'`);
 
-    await callWithMetadata<pb.RaiseEventRequest, pb.RaiseEventResponse>(
-      this._stub.raiseEvent.bind(this._stub),
-      req,
-      this._metadataGenerator,
-    );
+    try {
+      await callWithMetadata<pb.RaiseEventRequest, pb.RaiseEventResponse>(
+        this._stub.raiseEvent.bind(this._stub),
+        req,
+        this._metadataGenerator,
+      );
+
+      setSpanOk(span);
+    } catch (e: any) {
+      setSpanError(span, e);
+      throw e;
+    } finally {
+      endSpan(span);
+    }
   }
 
   /**

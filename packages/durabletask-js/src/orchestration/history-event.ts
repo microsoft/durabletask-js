@@ -89,6 +89,10 @@ export interface ExecutionStartedEvent extends HistoryEventBase {
   parentInstance?: ParentInstanceInfo;
   scheduledStartTimestamp?: Date;
   tags?: Record<string, string>;
+  /** The parent trace context for distributed tracing (W3C Trace Context). */
+  parentTraceContext?: TraceContext;
+  /** The span ID assigned to this orchestration execution for replay continuity. */
+  orchestrationSpanId?: string;
 }
 
 /**
@@ -151,6 +155,8 @@ export interface TaskScheduledEvent extends HistoryEventBase {
   version?: string;
   input?: string;
   tags?: Record<string, string>;
+  /** The parent trace context for distributed tracing (W3C Trace Context). */
+  parentTraceContext?: TraceContext;
 }
 
 /**
@@ -181,6 +187,8 @@ export interface SubOrchestrationInstanceCreatedEvent extends HistoryEventBase {
   instanceId?: string;
   input?: string;
   tags?: Record<string, string>;
+  /** The parent trace context for distributed tracing (W3C Trace Context). */
+  parentTraceContext?: TraceContext;
 }
 
 /**

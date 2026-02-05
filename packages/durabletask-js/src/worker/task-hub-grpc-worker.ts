@@ -20,6 +20,15 @@ import { Logger, ConsoleLogger } from "../types/logger.type";
 import { ExponentialBackoff, sleep, withTimeout } from "../utils/backoff.util";
 import { VersioningOptions, VersionMatchStrategy, VersionFailureStrategy } from "./versioning-options";
 import { compareVersions } from "../utils/versioning.util";
+import {
+  startSpanForOrchestrationExecution,
+  startSpanForTaskExecution,
+  processActionsForTracing,
+  createOrchestrationTraceContextPb,
+  setSpanError,
+  setSpanOk,
+  endSpan,
+} from "../tracing";
 
 /** Default timeout in milliseconds for graceful shutdown. */
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30000;
@@ -570,11 +579,33 @@ export class TaskHubGrpcWorker {
       }
     }
 
+    // Find the ExecutionStartedEvent from either past or new events for tracing
+    const allProtoEvents = [...req.getPasteventsList(), ...req.getNeweventsList()];
+    let executionStartedProtoEvent: pb.ExecutionStartedEvent | undefined;
+    for (const protoEvent of allProtoEvents) {
+      if (protoEvent.hasExecutionstarted()) {
+        executionStartedProtoEvent = protoEvent.getExecutionstarted()!;
+        break;
+      }
+    }
+
+    // Start the orchestration span BEFORE execution so failures are traced
+    const orchTraceContext = req.getOrchestrationtracecontext();
+    const tracingResult = executionStartedProtoEvent
+      ? startSpanForOrchestrationExecution(executionStartedProtoEvent, orchTraceContext, instanceId)
+      : undefined;
+
     let res;
 
     try {
       const executor = new OrchestrationExecutor(this._registry, this._logger);
       const result = await executor.execute(req.getInstanceid(), req.getPasteventsList(), req.getNeweventsList());
+
+      // Process actions to inject trace context into scheduled tasks, sub-orchestrations, etc.
+      if (tracingResult) {
+        const orchName = executionStartedProtoEvent?.getName() ?? "";
+        processActionsForTracing(tracingResult.span, result.actions, orchName);
+      }
 
       res = new pb.OrchestratorResponse();
       res.setInstanceid(req.getInstanceid());
@@ -583,11 +614,24 @@ export class TaskHubGrpcWorker {
       if (result.customStatus !== undefined) {
         res.setCustomstatus(pbh.getStringValue(result.customStatus));
       }
+
+      // Set the OrchestrationTraceContext on the response for replay continuity
+      if (tracingResult) {
+        const orchTraceCtxPb = createOrchestrationTraceContextPb(tracingResult.spanInfo);
+        res.setOrchestrationtracecontext(orchTraceCtxPb);
+
+        setSpanOk(tracingResult.span);
+      }
     } catch (e: any) {
       this._logger.error(
         `An error occurred while trying to execute instance '${req.getInstanceid()}':`,
         e,
       );
+
+      // Record the failure on the tracing span
+      if (tracingResult) {
+        setSpanError(tracingResult.span, e);
+      }
 
       const failureDetails = pbh.newFailureDetails(e);
 
@@ -603,6 +647,10 @@ export class TaskHubGrpcWorker {
       res.setInstanceid(req.getInstanceid());
       res.setCompletiontoken(completionToken);
       res.setActionsList(actions);
+    } finally {
+      // Always end the orchestration span, regardless of success or failure.
+      // Status (OK/Error) is set in the respective try/catch branches above.
+      endSpan(tracingResult?.span);
     }
 
     try {
@@ -643,6 +691,9 @@ export class TaskHubGrpcWorker {
 
     let res;
 
+    // Start the activity span for distributed tracing
+    const activitySpan = startSpanForTaskExecution(req);
+
     try {
       const executor = new ActivityExecutor(this._registry, this._logger);
       const result = await executor.execute(
@@ -660,8 +711,12 @@ export class TaskHubGrpcWorker {
       res.setTaskid(req.getTaskid());
       res.setCompletiontoken(completionToken);
       res.setResult(s);
+
+      setSpanOk(activitySpan);
     } catch (e: any) {
       this._logger.error(`An error occurred while trying to execute activity '${req.getName()}':`, e);
+
+      setSpanError(activitySpan, e);
 
       const failureDetails = pbh.newFailureDetails(e);
 
@@ -669,6 +724,12 @@ export class TaskHubGrpcWorker {
       res.setTaskid(req.getTaskid());
       res.setCompletiontoken(completionToken);
       res.setFailuredetails(failureDetails);
+    } finally {
+      // End the activity span BEFORE the gRPC completion call.
+      // This ensures the span duration reflects only the activity execution time,
+      // not the network latency of reporting back to the sidecar.
+      // Status (OK/Error) is set in the respective try/catch branches above.
+      endSpan(activitySpan);
     }
 
     try {
