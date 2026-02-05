@@ -5,7 +5,7 @@
 !.vscode/launch.json
 !.vscode/extensions.json
 *.code-workspace
-
+.DS_Store
 ### DotnetCore ###
 # .NET Core build folders
 bin/

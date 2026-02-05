@@ -1,13 +1,17 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { TaskHubGrpcClient } from "../src/client/client";
-import { whenAny } from "../src/task";
-import { ActivityContext } from "../src/task/context/activity-context";
-import { OrchestrationContext } from "../src/task/context/orchestration-context";
-import { Task } from "../src/task/task";
-import { TOrchestrator } from "../src/types/orchestrator.type";
-import { TaskHubGrpcWorker } from "../src/worker/task-hub-grpc-worker";
+import {
+  TaskHubGrpcClient,
+  TaskHubGrpcWorker,
+  ActivityContext,
+  OrchestrationContext,
+  Task,
+  TOrchestrator,
+  whenAny,
+  // Logger types: ConsoleLogger (default), NoOpLogger (silent)
+  ConsoleLogger,
+} from "@microsoft/durabletask-js";
 import * as readlineSync from "readline-sync";
 
 // Wrap the entire code in an immediately-invoked async function
@@ -29,19 +33,37 @@ import * as readlineSync from "readline-sync";
 
   // Update the gRPC client and worker to use a local address and port
   const grpcServerAddress = "localhost:4001";
-  const taskHubClient: TaskHubGrpcClient = new TaskHubGrpcClient(grpcServerAddress);
-  const taskHubWorker: TaskHubGrpcWorker = new TaskHubGrpcWorker(grpcServerAddress);
+
+  // Optional: Use a custom logger (ConsoleLogger is the default)
+  const logger = new ConsoleLogger();
+
+  const taskHubClient: TaskHubGrpcClient = new TaskHubGrpcClient(
+    grpcServerAddress,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    logger,
+  );
+  const taskHubWorker: TaskHubGrpcWorker = new TaskHubGrpcWorker(
+    grpcServerAddress,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    logger,
+  );
 
   //Activity function that sends an approval request to the manager
   const sendApprovalRequest = async (_: ActivityContext, order: Order) => {
     // Simulate some work that takes an amount of time
     await sleep(3000);
-    console.log(`Sending approval request for order: ${order.product}`);
+    logger.info(`Sending approval request for order: ${order.product}`);
   };
 
   // Activity function that places an order
   const placeOrder = async (_: ActivityContext, order: Order) => {
-    console.log(`Placing order: ${order.product}`);
+    logger.info(`Placing order: ${order.product}`);
   };
 
   // Orchestrator function that represents a purchase order workflow
@@ -78,9 +100,9 @@ import * as readlineSync from "readline-sync";
   // Wrap the worker startup in a try-catch block to handle any errors during startup
   try {
     await taskHubWorker.start();
-    console.log("Worker started successfully");
+    logger.info("Worker started successfully");
   } catch (error) {
-    console.error("Error starting worker:", error);
+    logger.error("Error starting worker:", error);
   }
 
   // Schedule a new orchestration
@@ -90,7 +112,7 @@ import * as readlineSync from "readline-sync";
     const timeout = readlineSync.question("Timeout for your order in seconds:");
     const order = new Order(cost, "MyProduct", 1);
     const id = await taskHubClient.scheduleNewOrchestration(purchaseOrderWorkflow, order);
-    console.log(`Orchestration scheduled with ID: ${id}`);
+    logger.info(`Orchestration scheduled with ID: ${id}`);
 
     if (readlineSync.keyInYN("Press [Y] to approve the order... Y/yes, N/no")) {
       const approvalEvent = { approver: approver };
@@ -102,9 +124,9 @@ import * as readlineSync from "readline-sync";
     // Wait for orchestration completion
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, timeout + 2);
 
-    console.log(`Orchestration completed! Result: ${state?.serializedOutput}`);
+    logger.info(`Orchestration completed! Result: ${state?.serializedOutput}`);
   } catch (error) {
-    console.error("Error scheduling or waiting for orchestration:", error);
+    logger.error("Error scheduling or waiting for orchestration:", error);
   }
 
   // stop worker and client

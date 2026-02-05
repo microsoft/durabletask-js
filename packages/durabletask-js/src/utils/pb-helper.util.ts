@@ -22,7 +22,7 @@ export function newOrchestratorStartedEvent(timestamp?: Date | null): pb.History
   return event;
 }
 
-export function newExecutionStartedEvent(name: string, instanceId: string, encodedInput?: string): pb.HistoryEvent {
+export function newExecutionStartedEvent(name: string, instanceId: string, encodedInput?: string, parentInstance?: { name: string; instanceId: string; taskScheduledId: number }): pb.HistoryEvent {
   const ts = new Timestamp();
 
   const orchestrationInstance = new pb.OrchestrationInstance();
@@ -32,6 +32,19 @@ export function newExecutionStartedEvent(name: string, instanceId: string, encod
   executionStartedEvent.setName(name);
   executionStartedEvent.setInput(getStringValue(encodedInput));
   executionStartedEvent.setOrchestrationinstance(orchestrationInstance);
+
+  // Set parent instance info if provided (for sub-orchestrations)
+  if (parentInstance) {
+    const parentOrchestrationInstance = new pb.OrchestrationInstance();
+    parentOrchestrationInstance.setInstanceid(parentInstance.instanceId);
+
+    const parentInstanceInfo = new pb.ParentInstanceInfo();
+    parentInstanceInfo.setName(getStringValue(parentInstance.name));
+    parentInstanceInfo.setOrchestrationinstance(parentOrchestrationInstance);
+    parentInstanceInfo.setTaskscheduledid(parentInstance.taskScheduledId);
+
+    executionStartedEvent.setParentinstance(parentInstanceInfo);
+  }
 
   const event = new pb.HistoryEvent();
   event.setEventid(-1);
@@ -175,9 +188,25 @@ export function newFailureDetails(e: any): pb.TaskFailureDetails {
 
   // Construct a google_protobuf_wrappers_pb.StringValue
   const stringValueStackTrace = new StringValue();
-  stringValueStackTrace.setValue(e.stack.toString());
+  stringValueStackTrace.setValue(e.stack?.toString() ?? "");
   failure.setStacktrace(stringValueStackTrace);
 
+  return failure;
+}
+
+/**
+ * Creates a TaskFailureDetails for version mismatch errors.
+ * These errors are non-retriable as the version mismatch is deterministic.
+ *
+ * @param errorType The type of version error (e.g., "VersionMismatch", "VersionError")
+ * @param errorMessage The error message describing the version mismatch
+ * @returns A TaskFailureDetails with IsNonRetriable set to true
+ */
+export function newVersionMismatchFailureDetails(errorType: string, errorMessage: string): pb.TaskFailureDetails {
+  const failure = new pb.TaskFailureDetails();
+  failure.setErrortype(errorType);
+  failure.setErrormessage(errorMessage);
+  failure.setIsnonretriable(true);
   return failure;
 }
 
@@ -243,6 +272,30 @@ export function getStringValue(val?: string): StringValue | undefined {
   return stringValue;
 }
 
+/**
+ * Populates a tag map with the provided tags.
+ *
+ * Copies all key-value pairs from the optional {@link tags} object into the given
+ * {@link tagsMap} by invoking its `set` method for each entry. If no tags are
+ * provided, this function is a no-op.
+ *
+ * @param tagsMap - A map-like object that exposes a `set(key, value)` method used
+ *   to store tag key-value pairs.
+ * @param tags - An optional record of tag key-value pairs to add to the map.
+ */
+export function populateTagsMap(
+  tagsMap: { set: (key: string, value: string) => void },
+  tags?: Record<string, string>,
+): void {
+  if (!tags) {
+    return;
+  }
+
+  for (const [key, value] of Object.entries(tags)) {
+    tagsMap.set(key, value);
+  }
+}
+
 export function newCompleteOrchestrationAction(
   id: number,
   status: pb.OrchestrationStatus,
@@ -277,10 +330,20 @@ export function newCreateTimerAction(id: number, fireAt: Date): pb.OrchestratorA
   return action;
 }
 
-export function newScheduleTaskAction(id: number, name: string, encodedInput?: string): pb.OrchestratorAction {
+export function newScheduleTaskAction(
+  id: number,
+  name: string,
+  encodedInput?: string,
+  tags?: Record<string, string>,
+  version?: string,
+): pb.OrchestratorAction {
   const scheduleTaskAction = new pb.ScheduleTaskAction();
   scheduleTaskAction.setName(name);
   scheduleTaskAction.setInput(getStringValue(encodedInput));
+  populateTagsMap(scheduleTaskAction.getTagsMap(), tags);
+  if (version) {
+    scheduleTaskAction.setVersion(getStringValue(version));
+  }
 
   const action = new pb.OrchestratorAction();
   action.setId(id);
@@ -300,15 +363,42 @@ export function newCreateSubOrchestrationAction(
   name: string,
   instanceId?: string | null,
   encodedInput?: string,
+  tags?: Record<string, string>,
+  version?: string,
 ): pb.OrchestratorAction {
   const createSubOrchestrationAction = new pb.CreateSubOrchestrationAction();
   createSubOrchestrationAction.setName(name);
   createSubOrchestrationAction.setInstanceid(instanceId || "");
   createSubOrchestrationAction.setInput(getStringValue(encodedInput));
+  populateTagsMap(createSubOrchestrationAction.getTagsMap(), tags);
+  if (version) {
+    createSubOrchestrationAction.setVersion(getStringValue(version));
+  }
 
   const action = new pb.OrchestratorAction();
   action.setId(id);
   action.setCreatesuborchestration(createSubOrchestrationAction);
+
+  return action;
+}
+
+export function newSendEventAction(
+  id: number,
+  instanceId: string,
+  eventName: string,
+  encodedData?: string,
+): pb.OrchestratorAction {
+  const orchestrationInstance = new pb.OrchestrationInstance();
+  orchestrationInstance.setInstanceid(instanceId);
+
+  const sendEventAction = new pb.SendEventAction();
+  sendEventAction.setInstance(orchestrationInstance);
+  sendEventAction.setName(eventName);
+  sendEventAction.setData(getStringValue(encodedData));
+
+  const action = new pb.OrchestratorAction();
+  action.setId(id);
+  action.setSendevent(sendEventAction);
 
   return action;
 }

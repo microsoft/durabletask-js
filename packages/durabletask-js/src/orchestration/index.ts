@@ -5,6 +5,7 @@ import * as pb from "../proto/orchestrator_service_pb";
 import { FailureDetails } from "../task/failure-details";
 import { fromProtobuf } from "./enum/orchestration-status.enum";
 import { OrchestrationState } from "./orchestration-state";
+import { mapToRecord } from "../utils/tags.util";
 
 export function newOrchestrationState(
   instanceId: string,
@@ -43,6 +44,8 @@ export function newOrchestrationState(
     tsUpdatedParsed = new Date(tsUpdated.getSeconds() * 1000 + tsUpdated.getNanos() / 1000000);
   }
 
+  const tags = mapToRecord(state?.getTagsMap());
+
   return new OrchestrationState(
     instanceId,
     state?.getName() ?? "",
@@ -53,5 +56,6 @@ export function newOrchestrationState(
     state?.getOutput()?.toString(),
     state?.getCustomstatus()?.toString(),
     failureDetails,
+    tags,
   );
 }

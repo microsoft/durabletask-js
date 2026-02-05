@@ -9,8 +9,11 @@ import {
   isSuspendable,
 } from ".";
 import * as pb from "../proto/orchestrator_service_pb";
+import { Logger, ConsoleLogger } from "../types/logger.type";
 import { getName } from "../task";
 import { OrchestrationStateError } from "../task/exception/orchestration-state-error";
+import { RetryableTask } from "../task/retryable-task";
+import { RetryTimerTask } from "../task/retry-timer-task";
 import { TOrchestrator } from "../types/orchestrator.type";
 import { enumValueToKey } from "../utils/enum.util";
 import { getOrchestrationStatusStr, isEmpty } from "../utils/pb-helper.util";
@@ -23,24 +26,34 @@ import {
   createTaskFailureDetails,
 } from "../entities/entity-operation-failed-exception";
 
-export class OrchestrationExecutor {
-  _generator?: TOrchestrator;
-  _registry: Registry;
-  _isSuspended: boolean;
-  _suspendedEvents: pb.HistoryEvent[];
+/**
+ * Result of orchestration execution containing actions and optional custom status.
+ */
+export interface OrchestrationExecutionResult {
+  actions: pb.OrchestratorAction[];
+  customStatus?: string;
+}
 
-  constructor(registry: Registry) {
+export class OrchestrationExecutor {
+  private _generator?: TOrchestrator;
+  private _registry: Registry;
+  private _isSuspended: boolean;
+  private _suspendedEvents: pb.HistoryEvent[];
+  private _logger: Logger;
+
+  constructor(registry: Registry, logger?: Logger) {
     this._registry = registry;
     this._generator = undefined;
     this._isSuspended = false;
     this._suspendedEvents = [];
+    this._logger = logger ?? new ConsoleLogger();
   }
 
   async execute(
     instanceId: string,
     oldEvents: pb.HistoryEvent[],
     newEvents: pb.HistoryEvent[],
-  ): Promise<pb.OrchestratorAction[]> {
+  ): Promise<OrchestrationExecutionResult> {
     if (!newEvents?.length) {
       throw new OrchestrationStateError("The new history event list must have at least one event in it");
     }
@@ -49,7 +62,7 @@ export class OrchestrationExecutor {
 
     try {
       // Rebuild the local state by replaying the history events into the orchestrator function
-      console.info(`${instanceId}: Rebuilding local state with ${oldEvents.length} history event...`);
+      this._logger.info(`${instanceId}: Rebuilding local state with ${oldEvents.length} history event...`);
       ctx._isReplaying = true;
 
       for (const oldEvent of oldEvents) {
@@ -58,7 +71,7 @@ export class OrchestrationExecutor {
 
       // Get new actions by executing newly received events into the orchestrator function
       const summary = getNewEventSummary(newEvents);
-      console.info(`${instanceId}: Processing ${newEvents.length} new history event(s): ${summary}`);
+      this._logger.info(`${instanceId}: Processing ${newEvents.length} new history event(s): ${summary}`);
       ctx._isReplaying = false;
 
       for (const newEvent of newEvents) {
@@ -71,25 +84,28 @@ export class OrchestrationExecutor {
     if (!ctx._isComplete) {
       const taskCount = Object.keys(ctx._pendingTasks).length;
       const eventCount = Object.keys(ctx._pendingEvents).length;
-      console.log(`${instanceId}: Waiting for ${taskCount} task(s) and ${eventCount} event(s) to complete...`);
+      this._logger.info(`${instanceId}: Waiting for ${taskCount} task(s) and ${eventCount} event(s) to complete...`);
     } else if (
       ctx._completionStatus &&
       ctx._completionStatus !== pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW
     ) {
       const completionStatusStr = getOrchestrationStatusStr(ctx._completionStatus);
-      console.log(`${instanceId}: Orchestration completed with status ${completionStatusStr}`);
+      this._logger.info(`${instanceId}: Orchestration completed with status ${completionStatusStr}`);
     }
 
     const actions = ctx.getActions();
-    console.log(`${instanceId}: Returning ${actions.length} action(s)`);
+    this._logger.info(`${instanceId}: Returning ${actions.length} action(s)`);
 
-    return actions;
+    return {
+      actions,
+      customStatus: ctx.getCustomStatus(),
+    };
   }
 
   private async processEvent(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
     // Check if we are suspended to see if we need to buffer the event until we are resumed
     if (this._isSuspended && isSuspendable(event)) {
-      console.log("Suspended, buffering event");
+      this._logger.info("Suspended, buffering event");
       this._suspendedEvents.push(event);
       return;
     }
@@ -97,13 +113,13 @@ export class OrchestrationExecutor {
     const eventType = event.getEventtypeCase();
     const eventTypeName = enumValueToKey(pb.HistoryEvent.EventtypeCase, eventType);
 
-    // console.debug(`DEBUG - Processing event type ${eventTypeName} (${event.getEventtypeCase()})`);
+    this._logger.debug(`Processing event type ${eventTypeName} (${event.getEventtypeCase()})`);
 
     // Process the event type
     try {
       switch (eventType) {
         case pb.HistoryEvent.EventtypeCase.ORCHESTRATORSTARTED:
-          ctx._currentUtcDatetime = event.getTimestamp()?.toDate();
+          ctx._currentUtcDatetime = event.getTimestamp()?.toDate() ?? ctx._currentUtcDatetime;
           break;
         case pb.HistoryEvent.EventtypeCase.EXECUTIONSTARTED:
           {
@@ -123,6 +139,20 @@ export class OrchestrationExecutor {
               ctx._executionId = executionId;
             }
 
+            // Set the version from the execution started event
+            ctx._version = executionStartedEvent?.getVersion()?.getValue() ?? "";
+
+            // Extract parent instance info if this is a sub-orchestration
+            const parentInstance = executionStartedEvent?.getParentinstance();
+            if (parentInstance) {
+              const parentOrchestrationInstance = parentInstance.getOrchestrationinstance();
+              ctx._parent = {
+                name: parentInstance.getName()?.getValue() ?? "",
+                instanceId: parentOrchestrationInstance?.getInstanceid() ?? "",
+                taskScheduledId: parentInstance.getTaskscheduledid(),
+              };
+            }
+
             // Deserialize the input, if any
             let input = undefined;
 
@@ -140,7 +170,7 @@ export class OrchestrationExecutor {
               await ctx.run(result);
             } else {
               const resultType = Object.prototype.toString.call(result);
-              console.log(`An orchestrator was returned that doesn't schedule any tasks (type = ${resultType})`);
+            this._logger.info(`An orchestrator was returned that doesn't schedule any tasks (type = ${resultType})`);
 
               // This is an orchestrator that doesn't schedule any tasks
               ctx.setComplete(result, pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
@@ -171,19 +201,31 @@ export class OrchestrationExecutor {
             const timerFiredEvent = event.getTimerfired();
             const timerId = timerFiredEvent ? timerFiredEvent.getTimerid() : undefined;
 
-            let timerTask;
-
-            if (timerId) {
-              timerTask = ctx._pendingTasks[timerId];
-              delete ctx._pendingTasks[timerId];
+            if (timerId === undefined) {
+              if (!ctx._isReplaying) {
+                this._logger.warn(`${ctx._instanceId}: Ignoring timerFired event with undefined ID`);
+              }
+              return;
             }
+
+            const timerTask = ctx._pendingTasks[timerId];
+            delete ctx._pendingTasks[timerId];
 
             if (!timerTask) {
               // TODO: Should this be an error? When would it ever happen?
               if (!ctx._isReplaying) {
-                console.warn(`${ctx._instanceId}: Ignoring unexpected timerFired event with ID = ${timerId}`);
+                this._logger.warn(`${ctx._instanceId}: Ignoring unexpected timerFired event with ID = ${timerId}`);
               }
+              return;
+            }
 
+            // Check if this is a retry timer
+            if (timerTask instanceof RetryTimerTask) {
+              // Get the retryable parent task and reschedule it
+              const retryableTask = timerTask.retryableParent;
+              // Reschedule the original action - this will add it back to pendingActions
+              ctx.rescheduleRetryableTask(retryableTask);
+              // Don't resume the orchestrator - we're just rescheduling the task
               return;
             }
 
@@ -232,7 +274,7 @@ export class OrchestrationExecutor {
             if (!activityTask) {
               // TODO: Should this be an error? When would it ever happen?
               if (!ctx._isReplaying) {
-                console.warn(`${ctx._instanceId}: Ignoring unexpected taskCompleted event with ID = ${taskId}`);
+                this._logger.warn(`${ctx._instanceId}: Ignoring unexpected taskCompleted event with ID = ${taskId}`);
               }
 
               return;
@@ -253,28 +295,47 @@ export class OrchestrationExecutor {
             const taskFailedEvent = event.getTaskfailed();
             const taskId = taskFailedEvent ? taskFailedEvent.getTaskscheduledid() : undefined;
 
-            let activityTask;
-
-            if (taskId) {
-              activityTask = ctx._pendingTasks[taskId];
-              delete ctx._pendingTasks[taskId];
-            }
-
-            if (!activityTask) {
-              // TODO: Should this be an error? When would it ever happen?
+            if (taskId === undefined) {
               if (!ctx._isReplaying) {
-                console.warn(`${ctx._instanceId}: Ignoring unexpected taskFailed event with ID = ${taskId}`);
+                this._logger.warn(`${ctx._instanceId}: Ignoring taskFailed event with undefined ID`);
               }
-
               return;
             }
 
+            const failureDetails = event.getTaskfailed()?.getFailuredetails();
+            const errorMessage = failureDetails?.getErrormessage() || "Unknown error";
+
+            // Get the task (don't delete yet - we might retry)
+            const activityTask = ctx._pendingTasks[taskId];
+
+            if (!activityTask) {
+              if (!ctx._isReplaying) {
+                this._logger.warn(`${ctx._instanceId}: Ignoring unexpected taskFailed event with ID = ${taskId}`);
+              }
+              return;
+            }
+
+            // Check if this is a retryable task and if we should retry
+            if (activityTask instanceof RetryableTask) {
+              activityTask.recordFailure(errorMessage, failureDetails);
+              const nextDelayMs = activityTask.computeNextDelayInMilliseconds(ctx._currentUtcDatetime);
+
+              if (nextDelayMs !== undefined) {
+                // Schedule a retry timer
+                activityTask.incrementAttemptCount();
+                ctx.createRetryTimer(activityTask, nextDelayMs);
+                // Remove from pendingTasks - the task will be re-added with a new ID when rescheduled
+                delete ctx._pendingTasks[taskId];
+                return;
+              }
+            }
+
+            // No retry - fail the task
+            delete ctx._pendingTasks[taskId];
+
             activityTask.fail(
-              `${ctx._instanceId}: Activity task #${taskId} failed: ${event
-                .getTaskfailed()
-                ?.getFailuredetails()
-                ?.getErrormessage()}`,
-              event.getTaskfailed()?.getFailuredetails(),
+              `Activity task #${taskId} failed: ${errorMessage}`,
+              failureDetails,
             );
 
             await ctx.resume();
@@ -340,30 +401,49 @@ export class OrchestrationExecutor {
               ? subOrchestrationInstanceFailedEvent.getTaskscheduledid()
               : undefined;
 
-            let subOrchTask;
-
-            if (taskId) {
-              subOrchTask = ctx._pendingTasks[taskId];
-              delete ctx._pendingTasks[taskId];
-            }
-
-            if (!subOrchTask) {
-              // TODO: Should this be an error? When would it ever happen?
+            if (taskId === undefined) {
               if (!ctx._isReplaying) {
-                console.warn(
-                  `${ctx._instanceId}: Ignoring unexpected subOrchestrationInstanceFailed event with ID = ${taskId}`,
-                );
+                this._logger.warn(`${ctx._instanceId}: Ignoring subOrchestrationInstanceFailed event with undefined ID`);
               }
-
               return;
             }
 
+            const failureDetails = event.getSuborchestrationinstancefailed()?.getFailuredetails();
+            const errorMessage = failureDetails?.getErrormessage() || "Unknown error";
+
+            // Get the task (don't delete yet - we might retry)
+            const subOrchTask = ctx._pendingTasks[taskId];
+
+            if (!subOrchTask) {
+              if (!ctx._isReplaying) {
+                this._logger.warn(
+                  `${ctx._instanceId}: Ignoring unexpected subOrchestrationInstanceFailed event with ID = ${taskId}`,
+                );
+              }
+              return;
+            }
+
+            // Check if this is a retryable task and if we should retry
+            if (subOrchTask instanceof RetryableTask) {
+              subOrchTask.recordFailure(errorMessage, failureDetails);
+              const nextDelayMs = subOrchTask.computeNextDelayInMilliseconds(ctx._currentUtcDatetime);
+
+              if (nextDelayMs !== undefined) {
+                // Schedule a retry timer
+                subOrchTask.incrementAttemptCount();
+                ctx.createRetryTimer(subOrchTask, nextDelayMs);
+                // Remove from pendingTasks - the task will be re-added with a new ID when rescheduled
+                delete ctx._pendingTasks[taskId];
+                return;
+              }
+            }
+
+            // No retry - fail the task
+            delete ctx._pendingTasks[taskId];
+
             subOrchTask.fail(
-              `${ctx._instanceId}: Sub-orchestration task #${taskId} failed: ${event
-                .getSuborchestrationinstancefailed()
-                ?.getFailuredetails()
-                ?.getErrormessage()}`,
-              event.getSuborchestrationinstancefailed()?.getFailuredetails(),
+              `Sub-orchestration task #${taskId} failed: ${errorMessage}`,
+              failureDetails,
             );
 
             await ctx.resume();
@@ -375,7 +455,7 @@ export class OrchestrationExecutor {
             const eventName = event.getEventraised()?.getName()?.toLowerCase();
 
             if (!ctx._isReplaying) {
-              console.log(`${ctx._instanceId}: Event raised: ${eventName}`);
+              this._logger.info(`${ctx._instanceId}: Event raised: ${eventName}`);
             }
 
             let taskList;
@@ -422,7 +502,7 @@ export class OrchestrationExecutor {
               eventList?.push(decodedResult);
 
               if (!ctx._isReplaying) {
-                console.log(
+                this._logger.info(
                   `${ctx._instanceId}: Event ${eventName} has been buffered as there are no tasks waiting for it.`,
                 );
               }
@@ -432,7 +512,7 @@ export class OrchestrationExecutor {
         case pb.HistoryEvent.EventtypeCase.EXECUTIONSUSPENDED:
           {
             if (!this._isSuspended && !ctx._isReplaying) {
-              console.log(`${ctx._instanceId}: Execution suspended`);
+              this._logger.info(`${ctx._instanceId}: Execution suspended`);
             }
 
             this._isSuspended = true;
@@ -453,7 +533,7 @@ export class OrchestrationExecutor {
           break;
         case pb.HistoryEvent.EventtypeCase.EXECUTIONTERMINATED: {
           if (!ctx._isReplaying) {
-            console.log(`${ctx._instanceId}: Execution terminated`);
+            this._logger.info(`${ctx._instanceId}: Execution terminated`);
           }
 
           let encodedOutput;
@@ -615,7 +695,7 @@ export class OrchestrationExecutor {
           }
           break;
         default:
-          console.info(`Unknown history event type: ${eventTypeName} (value: ${eventType}), skipping...`);
+          this._logger.info(`Unknown history event type: ${eventTypeName} (value: ${eventType}), skipping...`);
         // throw new OrchestrationStateError(`Unknown history event type: ${eventTypeName} (value: ${eventType})`);
       }
     } catch (e: any) {
@@ -627,7 +707,7 @@ export class OrchestrationExecutor {
 
       // For the rest we don't do anything
       // Else we throw it upwards
-      console.error(`Could not process the event ${eventTypeName} due to error ${e}`);
+      this._logger.error(`Could not process the event ${eventTypeName} due to error ${e}`);
       throw e;
     }
   }

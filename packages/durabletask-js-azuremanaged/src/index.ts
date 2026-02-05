@@ -17,3 +17,12 @@ export {
 } from "./retry-policy";
 export { DurableTaskAzureManagedClientBuilder, createAzureManagedClient } from "./client-builder";
 export { DurableTaskAzureManagedWorkerBuilder, createAzureManagedWorkerBuilder } from "./worker-builder";
+
+// Logger exports - re-export from core package for convenience
+export { Logger, ConsoleLogger, NoOpLogger } from "@microsoft/durabletask-js";
+
+// Versioning exports - re-export from core package for convenience
+export { VersioningOptions, VersionMatchStrategy, VersionFailureStrategy } from "@microsoft/durabletask-js";
+
+// Azure-specific logger adapter
+export { AzureLoggerAdapter, createAzureLogger } from "./azure-logger-adapter";

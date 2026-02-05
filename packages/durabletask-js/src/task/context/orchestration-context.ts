@@ -1,10 +1,15 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+import { ParentOrchestrationInstance } from "../../types/parent-orchestration-instance.type";
 import { TActivity } from "../../types/activity.type";
 import { TOrchestrator } from "../../types/orchestrator.type";
+import { Logger } from "../../types/logger.type";
+import { ReplaySafeLogger } from "../../types/replay-safe-logger";
+import { TaskOptions, SubOrchestrationOptions } from "../options";
 import { Task } from "../task";
 import { OrchestrationEntityFeature } from "../../entities/orchestration-entity-feature";
+import { compareVersions } from "../../utils/versioning.util";
 
 export abstract class OrchestrationContext {
   /**
@@ -16,6 +21,16 @@ export abstract class OrchestrationContext {
    * @returns {string} The instance ID of the currently executing orchestration.
    */
   abstract get instanceId(): string;
+
+  /**
+   * Gets the parent orchestration instance, or `undefined` if this is not a sub-orchestration.
+   *
+   * This property is useful for determining if the current orchestration was started by another
+   * orchestration (i.e., it's a sub-orchestration) and for accessing details about the parent.
+   *
+   * @returns {ParentOrchestrationInstance | undefined} The parent orchestration details, or `undefined` if this is a top-level orchestration.
+   */
+  abstract get parent(): ParentOrchestrationInstance | undefined;
 
   /**
    * Get the current date/time as UTC
@@ -50,6 +65,46 @@ export abstract class OrchestrationContext {
   abstract get entities(): OrchestrationEntityFeature;
 
   /**
+   * Gets the version of the current orchestration instance.
+   *
+   * The version is set when the orchestration instance is created via the client's
+   * scheduleNewOrchestration method using StartOrchestrationOptions.version.
+   * If no version was specified, this returns an empty string.
+   *
+   * @returns {string} The version of the current orchestration instance.
+   */
+  abstract get version(): string;
+
+  /**
+   * Compares the current orchestration version to the specified version.
+   *
+   * This method uses semantic versioning comparison when both versions are valid
+   * semantic versions, and falls back to lexicographic comparison otherwise.
+   *
+   * @remarks
+   * - If both versions are empty, this returns 0 (equal).
+   * - An empty context version is considered less than a defined version.
+   * - An empty parameter version is considered less than a defined context version.
+   *
+   * @param {string} version The version to compare against.
+   * @returns {number} A negative number if context version < parameter version,
+   *                   zero if equal, positive if context version > parameter version.
+   *
+   * @example
+   * ```typescript
+   * const orchestrator: TOrchestrator = async function* (ctx, input) {
+   *   if (ctx.compareVersionTo("2.0.0") >= 0) {
+   *     // This orchestration is version 2.0.0 or newer
+   *     yield ctx.callActivity(newFeature, input);
+   *   }
+   * };
+   * ```
+   */
+  compareVersionTo(version: string): number {
+    return compareVersions(this.version, version);
+  }
+
+  /**
    * Create a timer task that will fire at a specified time.
    *
    * @param {Date | number} fireAt The time at which the timer should fire.
@@ -60,27 +115,31 @@ export abstract class OrchestrationContext {
   /**
    * Schedule an activity for execution.
    *
-   * @param {Orchestrator} orchestrator The sub-orchestrator function to call.
-   * @param {TInput} input The JSON-serializable input value for the sub-orchestrator function.
-   * @param {string} instanceId The ID to use for the sub-orchestration instance. If not provided, a new GUID will be used.
+   * @param {TActivity} activity The activity function to call.
+   * @param {TInput} input The JSON-serializable input value for the activity function.
+   * @param {TaskOptions} options Optional options to control the behavior of the activity execution, including retry policies.
    *
-   * @returns {Task<TOutput>} A Durable Task that completes when the sub-orchestrator function completes.
+   * @returns {Task<TOutput>} A Durable Task that completes when the activity function completes.
    */
-  abstract callActivity<TInput, TOutput>(activity: TActivity<TInput, TOutput> | string, input?: TInput): Task<TOutput>;
+  abstract callActivity<TInput, TOutput>(
+    activity: TActivity<TInput, TOutput> | string,
+    input?: TInput,
+    options?: TaskOptions,
+  ): Task<TOutput>;
 
   /**
    * Schedule sub-orchestrator function for execution.
    *
-   * @param orchestrator A reference to the orchestrator function call
+   * @param orchestrator A reference to the orchestrator function to call.
    * @param input The JSON-serializable input value for the orchestrator function.
-   * @param instanceId A unique ID to use for the sub-orchestration instance. If not provided, a new GUID will be used.
+   * @param options Optional options to control the behavior of the sub-orchestration, including retry policies and instance ID.
    *
    * @returns {Task<TOutput>} A Durable Task that completes when the sub-orchestrator function completes.
    */
   abstract callSubOrchestrator<TInput, TOutput>(
     orchestrator: TOrchestrator | string,
     input?: TInput,
-    instanceId?: string,
+    options?: SubOrchestrationOptions,
   ): Task<TOutput>;
 
   /**
@@ -98,4 +157,65 @@ export abstract class OrchestrationContext {
    * @param saveEvents {boolean} A flag indicating whether to add any unprocessed external events in the new orchestration history.
    */
   abstract continueAsNew(newInput: any, saveEvents: boolean): void;
+
+  /**
+   * Sets a custom status value for the current orchestration instance.
+   *
+   * The custom status value is serialized and stored in orchestration state and will
+   * be made available to the orchestration status query APIs. The serialized value
+   * must not exceed 16 KB of UTF-16 encoded text.
+   *
+   * @param {any} customStatus A JSON-serializable value to assign as the custom status, or `null`/`undefined` to clear it.
+   */
+  abstract setCustomStatus(customStatus: any): void;
+
+  /**
+   * Sends an event to another orchestration instance.
+   *
+   * The target orchestration can handle the sent event using the `waitForExternalEvent()` method.
+   * If the target orchestration doesn't exist or has completed, the event will be silently dropped.
+   *
+   * @param {string} instanceId The ID of the orchestration instance to send the event to.
+   * @param {string} eventName The name of the event. Event names are case-insensitive.
+   * @param {any} eventData The JSON-serializable payload of the event.
+   */
+  abstract sendEvent(instanceId: string, eventName: string, eventData?: any): void;
+
+  /**
+   * Creates a new UUID that is safe for replay within an orchestration.
+   *
+   * This method generates a deterministic UUID v5 using the algorithm from RFC 4122 §4.3.
+   * The name input used to generate this value is a combination of the orchestration instance ID,
+   * the current UTC datetime, and an internally managed sequence counter.
+   *
+   * Use this method instead of random UUID generators (like `crypto.randomUUID()`) to ensure
+   * deterministic execution during orchestration replay.
+   *
+   * @returns {string} A new deterministic UUID string.
+   */
+  abstract newGuid(): string;
+
+  /**
+   * Creates a replay-safe logger that only writes logs when the orchestrator is not replaying.
+   *
+   * During orchestration replay, history events are re-processed to rebuild state.
+   * This can cause duplicate log entries if not handled properly. The returned logger
+   * wraps the provided logger and automatically suppresses log output during replay,
+   * ensuring that logs are only written once when the orchestration is making forward progress.
+   *
+   * @param {Logger} logger The underlying logger to wrap.
+   * @returns {Logger} A replay-safe logger instance.
+   *
+   * @example
+   * ```typescript
+   * const orchestrator: TOrchestrator = async function* (ctx, input) {
+   *   const logger = ctx.createReplaySafeLogger(myLogger);
+   *   logger.info("This will only be logged once, not during replay");
+   *   yield ctx.callActivity(myActivity, input);
+   * };
+   * ```
+   */
+  createReplaySafeLogger(logger: Logger): Logger {
+    return new ReplaySafeLogger(this, logger);
+  }
 }

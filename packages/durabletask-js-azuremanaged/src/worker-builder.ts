@@ -4,13 +4,16 @@
 import { TokenCredential } from "@azure/identity";
 import * as grpc from "@grpc/grpc-js";
 import { DurableTaskAzureManagedWorkerOptions } from "./options";
-import { TaskHubGrpcWorker } from "@microsoft/durabletask-js";
-
-// Types for orchestrator and activity functions
-type TOrchestrator = (...args: any[]) => any;
-type TActivity<TInput, TOutput> = (ctx: any, input: TInput) => TOutput | Promise<TOutput>;
-type TInput = any;
-type TOutput = any;
+import {
+  TaskHubGrpcWorker,
+  TOrchestrator,
+  TActivity,
+  TInput,
+  TOutput,
+  Logger,
+  ConsoleLogger,
+  VersioningOptions,
+} from "@microsoft/durabletask-js";
 
 /**
  * Builder for creating DurableTaskWorker instances that connect to Azure-managed Durable Task service.
@@ -21,6 +24,9 @@ export class DurableTaskAzureManagedWorkerBuilder {
   private _grpcChannelOptions: grpc.ChannelOptions = {};
   private _orchestrators: { name?: string; fn: TOrchestrator }[] = [];
   private _activities: { name?: string; fn: TActivity<TInput, TOutput> }[] = [];
+  private _logger: Logger = new ConsoleLogger();
+  private _shutdownTimeoutMs?: number;
+  private _versioning?: VersioningOptions;
 
   /**
    * Creates a new instance of DurableTaskAzureManagedWorkerBuilder.
@@ -178,6 +184,43 @@ export class DurableTaskAzureManagedWorkerBuilder {
   }
 
   /**
+   * Sets the logger to use for logging.
+   * Defaults to ConsoleLogger.
+   *
+   * @param logger The logger instance.
+   * @returns This builder instance.
+   */
+  logger(logger: Logger): DurableTaskAzureManagedWorkerBuilder {
+    this._logger = logger;
+    return this;
+  }
+
+  /**
+   * Sets the shutdown timeout in milliseconds.
+   * This is the maximum time to wait for pending work items to complete during shutdown.
+   * Defaults to 30000 (30 seconds).
+   *
+   * @param timeoutMs The shutdown timeout in milliseconds.
+   * @returns This builder instance.
+   */
+  shutdownTimeout(timeoutMs: number): DurableTaskAzureManagedWorkerBuilder {
+    this._shutdownTimeoutMs = timeoutMs;
+    return this;
+  }
+
+  /**
+   * Configures versioning options for the worker.
+   * This allows filtering orchestrations by version using different match strategies.
+   *
+   * @param options The versioning options including version, matchStrategy, and failureStrategy.
+   * @returns This builder instance.
+   */
+  versioning(options: VersioningOptions): DurableTaskAzureManagedWorkerBuilder {
+    this._versioning = options;
+    return this;
+  }
+
+  /**
    * Builds and returns a configured TaskHubGrpcWorker.
    *
    * @returns A new configured TaskHubGrpcWorker instance.
@@ -198,10 +241,17 @@ export class DurableTaskAzureManagedWorkerBuilder {
       ...this._grpcChannelOptions,
     };
 
-    // Use the core TaskHubGrpcWorker with custom credentials and metadata generator
-    // For insecure connections, metadata is passed via the metadataGenerator parameter
-    // For secure connections, metadata is included in the channel credentials
-    const worker = new TaskHubGrpcWorker(hostAddress, combinedOptions, true, channelCredentials, metadataGenerator);
+    // Use the core TaskHubGrpcWorker with options-based constructor
+    const worker = new TaskHubGrpcWorker({
+      hostAddress,
+      options: combinedOptions,
+      useTLS: true,
+      credentials: channelCredentials,
+      metadataGenerator,
+      logger: this._logger,
+      shutdownTimeoutMs: this._shutdownTimeoutMs,
+      versioning: this._versioning,
+    });
 
     // Register all orchestrators
     for (const { name, fn } of this._orchestrators) {

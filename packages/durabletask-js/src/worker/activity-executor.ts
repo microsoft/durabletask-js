@@ -3,14 +3,17 @@
 
 import { isPromise } from "util/types";
 import { ActivityContext } from "../task/context/activity-context";
+import { Logger, ConsoleLogger } from "../types/logger.type";
 import { ActivityNotRegisteredError } from "./exception/activity-not-registered-error";
 import { Registry } from "./registry";
 
 export class ActivityExecutor {
   private _registry: Registry;
+  private _logger: Logger;
 
-  constructor(registry: Registry) {
+  constructor(registry: Registry, logger?: Logger) {
     this._registry = registry;
+    this._logger = logger ?? new ConsoleLogger();
   }
 
   public async execute(
@@ -38,7 +41,7 @@ export class ActivityExecutor {
     // Return the output
     const encodedOutput = activityOutput ? JSON.stringify(activityOutput) : undefined;
     const chars = encodedOutput ? encodedOutput.length : 0;
-    console.log(`Activity ${name} completed with output ${encodedOutput} (${chars} chars)`);
+    this._logger.info(`Activity ${name} completed (${chars} chars)`);
 
     return encodedOutput;
   }
