@@ -113,7 +113,22 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
       if (this._previousTask.isFailed) {
         // Raise the failure as an exception to the generator. The orchestrator can then either
         // handle the exception or allow it to fail the orchestration.
-        await this._generator.throw(this._previousTask._exception);
+        const throwResult = await this._generator.throw(this._previousTask._exception);
+
+        // If the generator caught the exception and completed, signal completion
+        if (throwResult.done) {
+          throw new StopIterationError(throwResult.value);
+        }
+
+        // If the generator yielded a new task after catching the exception
+        if (throwResult.value instanceof Task) {
+          this._previousTask = throwResult.value;
+          // If the new task is already complete, continue processing
+          if (this._previousTask.isComplete) {
+            await this.resume();
+          }
+          return;
+        }
       } else if (this._previousTask.isComplete) {
         while (true) {
           // Resume the generator. This will either return a Task or raise StopIteration if it's done.

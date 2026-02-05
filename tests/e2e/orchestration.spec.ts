@@ -2,11 +2,11 @@
 // Licensed under the MIT License.
 
 import {
-  TaskHubGrpcClient,
-  TaskHubGrpcWorker,
+  InMemoryOrchestrationBackend,
+  TestOrchestrationClient,
+  TestOrchestrationWorker,
   PurgeInstanceCriteria,
-  ProtoOrchestrationStatus as OrchestrationStatus,
-  OrchestrationStatus as RuntimeStatus,
+  OrchestrationStatus,
   getName,
   whenAll,
   whenAny,
@@ -17,18 +17,21 @@ import {
 } from "@microsoft/durabletask-js";
 
 describe("Durable Functions", () => {
-  let taskHubClient: TaskHubGrpcClient;
-  let taskHubWorker: TaskHubGrpcWorker;
+  let backend: InMemoryOrchestrationBackend;
+  let taskHubClient: TestOrchestrationClient;
+  let taskHubWorker: TestOrchestrationWorker;
 
   beforeEach(async () => {
-    // Start a worker, which will connect to the sidecar in a background thread
-    taskHubWorker = new TaskHubGrpcWorker("localhost:4001");
-    taskHubClient = new TaskHubGrpcClient("localhost:4001");
+    // Create in-memory backend for testing without sidecar
+    backend = new InMemoryOrchestrationBackend();
+    taskHubWorker = new TestOrchestrationWorker(backend);
+    taskHubClient = new TestOrchestrationClient(backend);
   });
 
   afterEach(async () => {
     await taskHubWorker.stop();
     await taskHubClient.stop();
+    backend.reset();
   });
 
   it("should be able to run an empty orchestration", async () => {
@@ -51,7 +54,7 @@ describe("Durable Functions", () => {
     expect(state?.name).toEqual(getName(emptyOrchestrator));
     expect(state?.instanceId).toEqual(id);
     expect(state?.failureDetails).toBeUndefined();
-    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
   });
 
   it("should be able to run an activity sequence", async () => {
@@ -82,7 +85,7 @@ describe("Durable Functions", () => {
     expect(state?.name).toEqual(getName(sequence));
     expect(state?.instanceId).toEqual(id);
     expect(state?.failureDetails).toBeUndefined();
-    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
     expect(state?.serializedInput).toEqual(JSON.stringify(1));
     expect(state?.serializedOutput).toEqual(JSON.stringify([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]));
   }, 31000);
@@ -114,7 +117,7 @@ describe("Durable Functions", () => {
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 10);
 
     expect(state);
-    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
     expect(state?.failureDetails).toBeUndefined();
     expect(activityCounter).toEqual(10);
   }, 31000);
@@ -144,7 +147,7 @@ describe("Durable Functions", () => {
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
     expect(state);
-    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
     expect(state?.failureDetails).toBeUndefined();
     expect(activityCounter).toEqual(1);
   }, 31000);
@@ -186,7 +189,7 @@ describe("Durable Functions", () => {
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
     expect(state);
-    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
     expect(state?.failureDetails).toBeUndefined();
     expect(activityCounter).toEqual(SUB_ORCHESTRATION_COUNT * ACTIVITY_COUNT);
   }, 31000);
@@ -210,7 +213,7 @@ describe("Durable Functions", () => {
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
     expect(state);
-    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
     expect(state?.serializedOutput).toEqual(JSON.stringify(["a", "b", "c"]));
   });
 
@@ -238,7 +241,7 @@ describe("Durable Functions", () => {
     expect(state?.name).toEqual(getName(singleTimer));
     expect(state?.instanceId).toEqual(id);
     expect(state?.failureDetails).toBeUndefined();
-    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
     expect(state?.createdAt).toBeDefined();
     expect(state?.lastUpdatedAt).toBeDefined();
     // Timer should fire after approximately the expected delay (with tolerance for timing variations)
@@ -272,7 +275,7 @@ describe("Durable Functions", () => {
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
     expect(state);
-    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
 
     if (shouldRaiseEvent) {
       expect(state?.serializedOutput).toEqual(JSON.stringify("approved"));
@@ -308,7 +311,7 @@ describe("Durable Functions", () => {
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
     expect(state);
-    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
 
     if (shouldRaiseEvent) {
       expect(state?.serializedOutput).toEqual(JSON.stringify("approved"));
@@ -329,12 +332,12 @@ describe("Durable Functions", () => {
     const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
     let state = await taskHubClient.waitForOrchestrationStart(id, undefined, 30);
     expect(state);
-    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING);
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.RUNNING);
 
     await taskHubClient.terminateOrchestration(id, "some reason for termination");
     state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
     expect(state);
-    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED);
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.TERMINATED);
     expect(state?.serializedOutput).toEqual(JSON.stringify("some reason for termination"));
   }, 31000);
 
@@ -354,7 +357,7 @@ describe("Durable Functions", () => {
 
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
     expect(state);
-    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
     expect(state?.serializedOutput).toEqual(JSON.stringify(10));
   }, 31000);
 
@@ -373,7 +376,7 @@ describe("Durable Functions", () => {
     expect(state?.name).toEqual(getName(orchestrator));
     expect(state?.instanceId).toEqual(id);
     expect(state?.failureDetails).toBeUndefined();
-    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
     expect(state?.serializedInput).toEqual(JSON.stringify(15));
     expect(state?.serializedOutput).toEqual(JSON.stringify(16));
   }, 31000);
@@ -398,7 +401,7 @@ describe("Durable Functions", () => {
     expect(state?.name).toEqual(getName(orchestrator));
     expect(state?.instanceId).toEqual(id);
     expect(state?.failureDetails).toBeUndefined();
-    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
     expect(state?.serializedInput).toEqual(JSON.stringify(1));
     expect(state?.serializedOutput).toEqual(JSON.stringify(2));
 
@@ -407,8 +410,8 @@ describe("Durable Functions", () => {
     expect(purgeResult?.deletedInstanceCount).toEqual(1);
   }, 31000);
 
-  // Skip: multi-instance purge is not implemented in the durabletask-go sidecar emulator
-  // See: https://github.com/microsoft/durabletask-go/issues/XXX
+  // Skip: multi-instance purge is not implemented in the in-memory testing backend
+  // This test uses PurgeInstanceCriteria which requires gRPC sidecar
   it.skip("should be able to purge orchestration by PurgeInstanceCriteria", async () => {
     const delaySeconds = 1;
     const plusOne = async (_: ActivityContext, input: number) => {
@@ -437,14 +440,15 @@ describe("Durable Functions", () => {
     expect(state?.name).toEqual(getName(orchestrator));
     expect(state?.instanceId).toEqual(id);
     expect(state?.failureDetails).toBeUndefined();
-    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
     expect(state?.serializedInput).toEqual(JSON.stringify(1));
     expect(state?.serializedOutput).toEqual(JSON.stringify(2));
 
     // purge instance, test CreatedTimeFrom
     const criteria = new PurgeInstanceCriteria();
     criteria.setCreatedTimeFrom(startTime);
-    let purgeResult = await taskHubClient.purgeOrchestration(criteria);
+    // Note: This uses gRPC client API, not available in in-memory backend
+    let purgeResult = await (taskHubClient as any).purgeOrchestration(criteria);
     expect(purgeResult);
     expect(purgeResult?.deletedInstanceCount).toEqual(1);
 
@@ -454,7 +458,7 @@ describe("Durable Functions", () => {
 
     // purge instance, test CreatedTimeTo
     criteria.setCreatedTimeTo(new Date(Date.now()));
-    purgeResult = await taskHubClient.purgeOrchestration(criteria);
+    purgeResult = await (taskHubClient as any).purgeOrchestration(criteria);
     expect(purgeResult);
     expect(purgeResult?.deletedInstanceCount).toEqual(0);
 
@@ -469,7 +473,7 @@ describe("Durable Functions", () => {
     expect(state1?.name).toEqual(getName(orchestrator));
     expect(state1?.instanceId).toEqual(id1);
     expect(state1?.failureDetails).toBeUndefined();
-    expect(state1?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state1?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
     expect(state1?.serializedInput).toEqual(JSON.stringify(1));
     expect(state1?.serializedOutput).toEqual(JSON.stringify(2));
 
@@ -480,18 +484,18 @@ describe("Durable Functions", () => {
     expect(state2?.name).toEqual(getName(terminate));
     expect(state2?.instanceId).toEqual(id2);
     expect(state2?.failureDetails).toBeUndefined();
-    expect(state2?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED);
+    expect(state2?.runtimeStatus).toEqual(OrchestrationStatus.TERMINATED);
 
-    const runtimeStatuses: RuntimeStatus[] = [];
-    runtimeStatuses.push(RuntimeStatus.TERMINATED);
-    runtimeStatuses.push(RuntimeStatus.COMPLETED);
+    const runtimeStatuses: OrchestrationStatus[] = [];
+    runtimeStatuses.push(OrchestrationStatus.TERMINATED);
+    runtimeStatuses.push(OrchestrationStatus.COMPLETED);
 
     // Add a small delay to ensure the orchestrations are fully persisted
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
     criteria.setCreatedTimeTo(new Date(Date.now()));
     criteria.setRuntimeStatusList(runtimeStatuses);
-    purgeResult = await taskHubClient.purgeOrchestration(criteria);
+    purgeResult = await (taskHubClient as any).purgeOrchestration(criteria);
     expect(purgeResult);
     expect(purgeResult?.deletedInstanceCount).toEqual(2);
 
