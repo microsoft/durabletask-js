@@ -87,11 +87,12 @@ export class TestOrchestrationWorker {
   }
 
   /**
-   * Stops the worker.
+   * Stops the worker. This method is idempotent and can be safely called
+   * even if the worker is not running.
    */
   async stop(): Promise<void> {
     if (!this.isRunning) {
-      throw new Error("The worker is not running.");
+      return; // Already stopped, nothing to do
     }
 
     this.stopRequested = true;

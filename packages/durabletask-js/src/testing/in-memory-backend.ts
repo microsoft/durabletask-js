@@ -58,6 +58,7 @@ interface StateWaiter {
 export class InMemoryOrchestrationBackend {
   private readonly instances: Map<string, OrchestrationInstance> = new Map();
   private readonly orchestrationQueue: string[] = [];
+  private readonly orchestrationQueueSet: Set<string> = new Set();
   private readonly activityQueue: ActivityWorkItem[] = [];
   private readonly stateWaiters: Map<string, StateWaiter[]> = new Map();
   private nextCompletionToken: number = 1;
@@ -133,7 +134,7 @@ export class InMemoryOrchestrationBackend {
     instance.lastUpdatedAt = new Date();
 
     // Ensure instance is queued for processing
-    if (!this.orchestrationQueue.includes(instanceId)) {
+    if (!this.orchestrationQueueSet.has(instanceId)) {
       this.enqueueOrchestration(instanceId);
     }
   }
@@ -155,7 +156,7 @@ export class InMemoryOrchestrationBackend {
     instance.pendingEvents.push(event);
     instance.lastUpdatedAt = new Date();
 
-    if (!this.orchestrationQueue.includes(instanceId)) {
+    if (!this.orchestrationQueueSet.has(instanceId)) {
       this.enqueueOrchestration(instanceId);
     }
   }
@@ -177,7 +178,7 @@ export class InMemoryOrchestrationBackend {
     instance.pendingEvents.push(event);
     instance.lastUpdatedAt = new Date();
 
-    if (!this.orchestrationQueue.includes(instanceId)) {
+    if (!this.orchestrationQueueSet.has(instanceId)) {
       this.enqueueOrchestration(instanceId);
     }
   }
@@ -195,7 +196,7 @@ export class InMemoryOrchestrationBackend {
     instance.pendingEvents.push(event);
     instance.lastUpdatedAt = new Date();
 
-    if (!this.orchestrationQueue.includes(instanceId)) {
+    if (!this.orchestrationQueueSet.has(instanceId)) {
       this.enqueueOrchestration(instanceId);
     }
   }
@@ -224,6 +225,7 @@ export class InMemoryOrchestrationBackend {
   getNextOrchestrationWorkItem(): OrchestrationInstance | undefined {
     while (this.orchestrationQueue.length > 0) {
       const instanceId = this.orchestrationQueue.shift()!;
+      this.orchestrationQueueSet.delete(instanceId);
       const instance = this.instances.get(instanceId);
       
       if (instance && instance.pendingEvents.length > 0) {
@@ -259,6 +261,15 @@ export class InMemoryOrchestrationBackend {
       return;
     }
 
+    // Check history size limit before adding events
+    const projectedSize = instance.history.length + instance.pendingEvents.length;
+    if (projectedSize > this.maxHistorySize) {
+      throw new Error(
+        `Orchestration '${instanceId}' would exceed maximum history size of ${this.maxHistorySize} ` +
+          `(current: ${instance.history.length}, pending: ${instance.pendingEvents.length})`,
+      );
+    }
+
     // Move pending events to history
     instance.history.push(...instance.pendingEvents);
     instance.pendingEvents = [];
@@ -266,11 +277,6 @@ export class InMemoryOrchestrationBackend {
 
     if (customStatus !== undefined) {
       instance.customStatus = customStatus;
-    }
-
-    // Check history size limit
-    if (instance.history.length > this.maxHistorySize) {
-      throw new Error(`Orchestration '${instanceId}' exceeded maximum history size of ${this.maxHistorySize}`);
     }
 
     // Transition to RUNNING once the orchestration has been processed for the first time
@@ -410,8 +416,9 @@ export class InMemoryOrchestrationBackend {
   }
 
   private enqueueOrchestration(instanceId: string): void {
-    if (!this.orchestrationQueue.includes(instanceId)) {
+    if (!this.orchestrationQueueSet.has(instanceId)) {
       this.orchestrationQueue.push(instanceId);
+      this.orchestrationQueueSet.add(instanceId);
     }
   }
 

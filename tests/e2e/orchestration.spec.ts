@@ -29,11 +29,7 @@ describe("Durable Functions", () => {
   });
 
   afterEach(async () => {
-    try {
-      await taskHubWorker.stop();
-    } catch {
-      // Ignore if not running
-    }
+    await taskHubWorker.stop();
     await taskHubClient.stop();
     backend.reset();
   });
