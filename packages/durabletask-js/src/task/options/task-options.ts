@@ -12,6 +12,10 @@ export interface TaskOptions {
    * Controls how many times a task is retried and the delay between retries.
    */
   retry?: RetryPolicy;
+  /**
+   * The tags to associate with the task.
+   */
+  tags?: Record<string, string>;
 }
 
 /**
@@ -24,6 +28,26 @@ export interface SubOrchestrationOptions extends TaskOptions {
    * If not specified, a deterministic ID will be generated based on the parent instance ID.
    */
   instanceId?: string;
+}
+
+/**
+ * Options for scheduling new orchestrations via the client.
+ */
+export interface StartOrchestrationOptions {
+  /**
+   * The unique ID to use for the orchestration instance.
+   * If not specified, a random UUID will be generated.
+   */
+  instanceId?: string;
+  /**
+   * The time when the orchestration should start executing.
+   * If not specified or in the past, it will start immediately.
+   */
+  startAt?: Date;
+  /**
+   * The tags to associate with the orchestration instance.
+   */
+  tags?: Record<string, string>;
 }
 
 /**

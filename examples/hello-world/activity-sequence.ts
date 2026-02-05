@@ -7,14 +7,40 @@ import {
   ActivityContext,
   OrchestrationContext,
   TOrchestrator,
+  // Logger types for custom logging
+  // ConsoleLogger (default) - logs to console
+  // NoOpLogger - silent mode, useful for testing
+  // You can also implement your own Logger interface
+  ConsoleLogger,
 } from "@microsoft/durabletask-js";
 
 // Wrap the entire code in an immediately-invoked async function
 (async () => {
   // Update the gRPC client and worker to use a local address and port
   const grpcServerAddress = "localhost:4001";
-  const taskHubClient: TaskHubGrpcClient = new TaskHubGrpcClient(grpcServerAddress);
-  const taskHubWorker: TaskHubGrpcWorker = new TaskHubGrpcWorker(grpcServerAddress);
+
+  // Optional: Create a custom logger (defaults to ConsoleLogger if not provided)
+  // You can implement your own Logger interface to integrate with Winston, Pino, etc.
+  const logger = new ConsoleLogger();
+
+  // Pass the logger as the 6th parameter (after metadataGenerator)
+  // Parameters: hostAddress, options, useTLS, credentials, metadataGenerator, logger
+  const taskHubClient: TaskHubGrpcClient = new TaskHubGrpcClient(
+    grpcServerAddress,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    logger,
+  );
+  const taskHubWorker: TaskHubGrpcWorker = new TaskHubGrpcWorker(
+    grpcServerAddress,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    logger,
+  );
 
   const hello = async (_: ActivityContext, name: string) => {
     return `Hello ${name}!`;
@@ -39,22 +65,22 @@ import {
   // Wrap the worker startup in a try-catch block to handle any errors during startup
   try {
     await taskHubWorker.start();
-    console.log("Worker started successfully");
+    logger.info("Worker started successfully");
   } catch (error) {
-    console.error("Error starting worker:", error);
+    logger.error("Error starting worker:", error);
   }
 
   // Schedule a new orchestration
   try {
     const id = await taskHubClient.scheduleNewOrchestration(sequence);
-    console.log(`Orchestration scheduled with ID: ${id}`);
+    logger.info(`Orchestration scheduled with ID: ${id}`);
 
     // Wait for orchestration completion
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
-    console.log(`Orchestration completed! Result: ${state?.serializedOutput}`);
+    logger.info(`Orchestration completed! Result: ${state?.serializedOutput}`);
   } catch (error) {
-    console.error("Error scheduling or waiting for orchestration:", error);
+    logger.error("Error scheduling or waiting for orchestration:", error);
   }
 
   // stop worker and client

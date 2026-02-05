@@ -367,6 +367,24 @@ describe("OrchestrationState", () => {
     expect(state.serializedCustomStatus).toBe('{"status": "custom"}');
   });
 
+  it("should create state with tags", () => {
+    const tags = { env: "test", owner: "durable" };
+    const state = new OrchestrationState(
+      "instance-2",
+      "TestOrchestration",
+      OrchestrationStatus.COMPLETED,
+      new Date("2024-01-01T00:00:00Z"),
+      new Date("2024-01-01T01:00:00Z"),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      tags,
+    );
+
+    expect(state.tags).toEqual(tags);
+  });
+
   it("should correctly indicate running status", () => {
     const state = new OrchestrationState(
       "instance-3",
