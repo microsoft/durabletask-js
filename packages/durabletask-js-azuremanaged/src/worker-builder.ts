@@ -4,7 +4,7 @@
 import { TokenCredential } from "@azure/identity";
 import * as grpc from "@grpc/grpc-js";
 import { DurableTaskAzureManagedWorkerOptions } from "./options";
-import { TaskHubGrpcWorker, TOrchestrator, TActivity, TInput, TOutput } from "@microsoft/durabletask-js";
+import { TaskHubGrpcWorker, TOrchestrator, TActivity, TInput, TOutput, Logger, ConsoleLogger } from "@microsoft/durabletask-js";
 
 /**
  * Builder for creating DurableTaskWorker instances that connect to Azure-managed Durable Task service.
@@ -15,6 +15,8 @@ export class DurableTaskAzureManagedWorkerBuilder {
   private _grpcChannelOptions: grpc.ChannelOptions = {};
   private _orchestrators: { name?: string; fn: TOrchestrator }[] = [];
   private _activities: { name?: string; fn: TActivity<TInput, TOutput> }[] = [];
+  private _logger: Logger = new ConsoleLogger();
+  private _shutdownTimeoutMs?: number;
 
   /**
    * Creates a new instance of DurableTaskAzureManagedWorkerBuilder.
@@ -172,6 +174,31 @@ export class DurableTaskAzureManagedWorkerBuilder {
   }
 
   /**
+   * Sets the logger to use for logging.
+   * Defaults to ConsoleLogger.
+   *
+   * @param logger The logger instance.
+   * @returns This builder instance.
+   */
+  logger(logger: Logger): DurableTaskAzureManagedWorkerBuilder {
+    this._logger = logger;
+    return this;
+  }
+
+  /**
+   * Sets the shutdown timeout in milliseconds.
+   * This is the maximum time to wait for pending work items to complete during shutdown.
+   * Defaults to 30000 (30 seconds).
+   *
+   * @param timeoutMs The shutdown timeout in milliseconds.
+   * @returns This builder instance.
+   */
+  shutdownTimeout(timeoutMs: number): DurableTaskAzureManagedWorkerBuilder {
+    this._shutdownTimeoutMs = timeoutMs;
+    return this;
+  }
+
+  /**
    * Builds and returns a configured TaskHubGrpcWorker.
    *
    * @returns A new configured TaskHubGrpcWorker instance.
@@ -195,7 +222,15 @@ export class DurableTaskAzureManagedWorkerBuilder {
     // Use the core TaskHubGrpcWorker with custom credentials and metadata generator
     // For insecure connections, metadata is passed via the metadataGenerator parameter
     // For secure connections, metadata is included in the channel credentials
-    const worker = new TaskHubGrpcWorker(hostAddress, combinedOptions, true, channelCredentials, metadataGenerator);
+    const worker = new TaskHubGrpcWorker(
+      hostAddress,
+      combinedOptions,
+      true,
+      channelCredentials,
+      metadataGenerator,
+      this._logger,
+      this._shutdownTimeoutMs,
+    );
 
     // Register all orchestrators
     for (const { name, fn } of this._orchestrators) {

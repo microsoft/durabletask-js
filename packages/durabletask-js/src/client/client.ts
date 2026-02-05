@@ -21,13 +21,45 @@ import { callWithMetadata, MetadataGenerator } from "../utils/grpc-helper.util";
 import { OrchestrationQuery, ListInstanceIdsOptions, DEFAULT_PAGE_SIZE } from "../orchestration/orchestration-query";
 import { Page, AsyncPageable, createAsyncPageable } from "../orchestration/page";
 import { FailureDetails } from "../task/failure-details";
+import { HistoryEvent } from "../orchestration/history-event";
+import { convertProtoHistoryEvent } from "../utils/history-event-converter";
+import { Logger, ConsoleLogger } from "../types/logger.type";
+import { StartOrchestrationOptions } from "../task/options";
+import { mapToRecord } from "../utils/tags.util";
+import { populateTagsMap } from "../utils/pb-helper.util";
 
 // Re-export MetadataGenerator for backward compatibility
 export { MetadataGenerator } from "../utils/grpc-helper.util";
 
+/**
+ * Options for creating a TaskHubGrpcClient.
+ */
+export interface TaskHubGrpcClientOptions {
+  /** The host address to connect to. Defaults to "localhost:4001". */
+  hostAddress?: string;
+  /** gRPC channel options. */
+  options?: grpc.ChannelOptions;
+  /** Whether to use TLS. Defaults to false. */
+  useTLS?: boolean;
+  /** Optional pre-configured channel credentials. If provided, useTLS is ignored. */
+  credentials?: grpc.ChannelCredentials;
+  /** Optional function to generate per-call metadata (for taskhub, auth tokens, etc.). */
+  metadataGenerator?: MetadataGenerator;
+  /** Optional logger instance. Defaults to ConsoleLogger. */
+  logger?: Logger;
+}
+
 export class TaskHubGrpcClient {
   private _stub: stubs.TaskHubSidecarServiceClient;
   private _metadataGenerator?: MetadataGenerator;
+  private _logger: Logger;
+
+  /**
+   * Creates a new TaskHubGrpcClient instance.
+   *
+   * @param options Configuration options for the client.
+   */
+  constructor(options: TaskHubGrpcClientOptions);
 
   /**
    * Creates a new TaskHubGrpcClient instance.
@@ -37,6 +69,8 @@ export class TaskHubGrpcClient {
    * @param useTLS Whether to use TLS. Defaults to false.
    * @param credentials Optional pre-configured channel credentials. If provided, useTLS is ignored.
    * @param metadataGenerator Optional function to generate per-call metadata (for taskhub, auth tokens, etc.).
+   * @param logger Optional logger instance. Defaults to ConsoleLogger.
+   * @deprecated Use the options object constructor instead.
    */
   constructor(
     hostAddress?: string,
@@ -44,15 +78,51 @@ export class TaskHubGrpcClient {
     useTLS?: boolean,
     credentials?: grpc.ChannelCredentials,
     metadataGenerator?: MetadataGenerator,
+    logger?: Logger,
+  );
+
+  constructor(
+    hostAddressOrOptions?: string | TaskHubGrpcClientOptions,
+    options?: grpc.ChannelOptions,
+    useTLS?: boolean,
+    credentials?: grpc.ChannelCredentials,
+    metadataGenerator?: MetadataGenerator,
+    logger?: Logger,
   ) {
-    this._stub = new GrpcClient(hostAddress, options, useTLS, credentials).stub;
-    this._metadataGenerator = metadataGenerator;
+    let resolvedHostAddress: string | undefined;
+    let resolvedOptions: grpc.ChannelOptions | undefined;
+    let resolvedUseTLS: boolean | undefined;
+    let resolvedCredentials: grpc.ChannelCredentials | undefined;
+    let resolvedMetadataGenerator: MetadataGenerator | undefined;
+    let resolvedLogger: Logger | undefined;
+
+    if (typeof hostAddressOrOptions === "object" && hostAddressOrOptions !== null) {
+      // Options object constructor
+      resolvedHostAddress = hostAddressOrOptions.hostAddress;
+      resolvedOptions = hostAddressOrOptions.options;
+      resolvedUseTLS = hostAddressOrOptions.useTLS;
+      resolvedCredentials = hostAddressOrOptions.credentials;
+      resolvedMetadataGenerator = hostAddressOrOptions.metadataGenerator;
+      resolvedLogger = hostAddressOrOptions.logger;
+    } else {
+      // Deprecated positional parameters constructor
+      resolvedHostAddress = hostAddressOrOptions;
+      resolvedOptions = options;
+      resolvedUseTLS = useTLS;
+      resolvedCredentials = credentials;
+      resolvedMetadataGenerator = metadataGenerator;
+      resolvedLogger = logger;
+    }
+
+    this._stub = new GrpcClient(resolvedHostAddress, resolvedOptions, resolvedUseTLS, resolvedCredentials).stub;
+    this._metadataGenerator = resolvedMetadataGenerator;
+    this._logger = resolvedLogger ?? new ConsoleLogger();
   }
 
   async stop(): Promise<void> {
     await this._stub.close();
 
-    // Wait a bit to let the async operations finish
+    // Brief pause to allow gRPC cleanup - this is a known issue with grpc-node
     // https://github.com/grpc/grpc-node/issues/1563#issuecomment-829483711
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
@@ -68,6 +138,25 @@ export class TaskHubGrpcClient {
     input?: TInput,
     instanceId?: string,
     startAt?: Date,
+  ): Promise<string>;
+  /**
+   * Schedules a new orchestrator using the DurableTask client.
+   *
+   * @param {TOrchestrator | string} orchestrator - The orchestrator or the name of the orchestrator to be scheduled.
+   * @param {TInput} input - Optional input for the orchestrator.
+   * @param {StartOrchestrationOptions} options - Options for instance ID, start time, and tags.
+   * @return {Promise<string>} A Promise resolving to the unique ID of the scheduled orchestrator instance.
+   */
+  async scheduleNewOrchestration(
+    orchestrator: TOrchestrator | string,
+    input?: TInput,
+    options?: StartOrchestrationOptions,
+  ): Promise<string>;
+  async scheduleNewOrchestration(
+    orchestrator: TOrchestrator | string,
+    input?: TInput,
+    instanceIdOrOptions?: string | StartOrchestrationOptions,
+    startAt?: Date,
   ): Promise<string> {
     let name;
     if (typeof orchestrator === "string") {
@@ -75,6 +164,20 @@ export class TaskHubGrpcClient {
     } else {
       name = getName(orchestrator);
     }
+
+    const instanceId =
+      typeof instanceIdOrOptions === "string" || instanceIdOrOptions === undefined
+        ? instanceIdOrOptions
+        : instanceIdOrOptions.instanceId;
+    const scheduledStartAt =
+      typeof instanceIdOrOptions === "string" || instanceIdOrOptions === undefined
+        ? startAt
+        : instanceIdOrOptions.startAt;
+    const tags =
+      typeof instanceIdOrOptions === "string" || instanceIdOrOptions === undefined
+        ? undefined
+        : instanceIdOrOptions.tags;
+
     const req = new pb.CreateInstanceRequest();
     req.setName(name);
     req.setInstanceid(instanceId ?? randomUUID());
@@ -83,12 +186,14 @@ export class TaskHubGrpcClient {
     i.setValue(JSON.stringify(input));
 
     const ts = new Timestamp();
-    ts.fromDate(new Date(startAt?.getTime() ?? 0));
+    ts.fromDate(new Date(scheduledStartAt?.getTime() ?? 0));
 
     req.setInput(i);
     req.setScheduledstarttimestamp(ts);
 
-    console.log(`Starting new ${name} instance with ID = ${req.getInstanceid()}`);
+    populateTagsMap(req.getTagsMap(), tags);
+
+    this._logger.info(`Starting new ${name} instance with ID = ${req.getInstanceid()}`);
 
     const res = await callWithMetadata<pb.CreateInstanceRequest, pb.CreateInstanceResponse>(
       this._stub.startInstance.bind(this._stub),
@@ -192,7 +297,7 @@ export class TaskHubGrpcClient {
     req.setInstanceid(instanceId);
     req.setGetinputsandoutputs(fetchPayloads);
 
-    console.info(`Waiting ${timeout} seconds for instance ${instanceId} to complete...`);
+    this._logger.info(`Waiting ${timeout} seconds for instance ${instanceId} to complete...`);
 
     const callPromise = callWithMetadata<pb.GetInstanceRequest, pb.GetInstanceResponse>(
       this._stub.waitForInstanceCompletion.bind(this._stub),
@@ -216,11 +321,11 @@ export class TaskHubGrpcClient {
 
     if (state.runtimeStatus === OrchestrationStatus.FAILED && state.failureDetails) {
       details = state.failureDetails;
-      console.info(`Instance ${instanceId} failed: [${details.errorType}] ${details.message}`);
+      this._logger.info(`Instance ${instanceId} failed: [${details.errorType}] ${details.message}`);
     } else if (state.runtimeStatus === OrchestrationStatus.TERMINATED) {
-      console.info(`Instance ${instanceId} was terminated`);
+      this._logger.info(`Instance ${instanceId} was terminated`);
     } else if (state.runtimeStatus === OrchestrationStatus.COMPLETED) {
-      console.info(`Instance ${instanceId} completed`);
+      this._logger.info(`Instance ${instanceId} completed`);
     }
 
     return state;
@@ -246,7 +351,7 @@ export class TaskHubGrpcClient {
 
     req.setInput(i);
 
-    console.log(`Raising event '${eventName}' for instance '${instanceId}'`);
+    this._logger.info(`Raising event '${eventName}' for instance '${instanceId}'`);
 
     await callWithMetadata<pb.RaiseEventRequest, pb.RaiseEventResponse>(
       this._stub.raiseEvent.bind(this._stub),
@@ -270,7 +375,7 @@ export class TaskHubGrpcClient {
 
     req.setOutput(i);
 
-    console.log(`Terminating '${instanceId}'`);
+    this._logger.info(`Terminating '${instanceId}'`);
 
     await callWithMetadata<pb.TerminateRequest, pb.TerminateResponse>(
       this._stub.terminateInstance.bind(this._stub),
@@ -283,7 +388,7 @@ export class TaskHubGrpcClient {
     const req = new pb.SuspendRequest();
     req.setInstanceid(instanceId);
 
-    console.log(`Suspending '${instanceId}'`);
+    this._logger.info(`Suspending '${instanceId}'`);
 
     await callWithMetadata<pb.SuspendRequest, pb.SuspendResponse>(
       this._stub.suspendInstance.bind(this._stub),
@@ -296,7 +401,7 @@ export class TaskHubGrpcClient {
     const req = new pb.ResumeRequest();
     req.setInstanceid(instanceId);
 
-    console.log(`Resuming '${instanceId}'`);
+    this._logger.info(`Resuming '${instanceId}'`);
 
     await callWithMetadata<pb.ResumeRequest, pb.ResumeResponse>(
       this._stub.resumeInstance.bind(this._stub),
@@ -334,7 +439,7 @@ export class TaskHubGrpcClient {
       req.setReason(reasonValue);
     }
 
-    console.log(`Rewinding '${instanceId}' with reason: ${reason}`);
+    this._logger.info(`Rewinding '${instanceId}' with reason: ${reason}`);
 
     try {
       await callWithMetadata<pb.RewindInstanceRequest, pb.RewindInstanceResponse>(
@@ -391,7 +496,7 @@ export class TaskHubGrpcClient {
     req.setInstanceid(instanceId);
     req.setRestartwithnewinstanceid(restartWithNewInstanceId);
 
-    console.log(`Restarting '${instanceId}' with restartWithNewInstanceId=${restartWithNewInstanceId}`);
+    this._logger.info(`Restarting '${instanceId}' with restartWithNewInstanceId=${restartWithNewInstanceId}`);
 
     try {
       const res = await callWithMetadata<pb.RestartInstanceRequest, pb.RestartInstanceResponse>(
@@ -441,7 +546,7 @@ export class TaskHubGrpcClient {
       const req = new pb.PurgeInstancesRequest();
       req.setInstanceid(instanceId);
 
-      console.log(`Purging Instance '${instanceId}'`);
+      this._logger.info(`Purging Instance '${instanceId}'`);
 
       res = await callWithMetadata<pb.PurgeInstancesRequest, pb.PurgeInstancesResponse>(
         this._stub.purgeInstances.bind(this._stub),
@@ -471,7 +576,7 @@ export class TaskHubGrpcClient {
       req.setPurgeinstancefilter(filter);
       const timeout = purgeInstanceCriteria.getTimeout();
 
-      console.log("Purging Instance using purging criteria");
+      this._logger.info("Purging Instance using purging criteria");
 
       const callPromise = callWithMetadata<pb.PurgeInstancesRequest, pb.PurgeInstancesResponse>(
         this._stub.purgeInstances.bind(this._stub),
@@ -502,14 +607,15 @@ export class TaskHubGrpcClient {
    * @example
    * ```typescript
    * // Iterate over all matching instances
+   * const logger = new ConsoleLogger();
    * const pageable = client.getAllInstances({ statuses: [OrchestrationStatus.COMPLETED] });
    * for await (const instance of pageable) {
-   *   console.log(instance.instanceId);
+   *   logger.info(instance.instanceId);
    * }
    *
    * // Iterate over pages
    * for await (const page of pageable.asPages()) {
-   *   console.log(`Page has ${page.values.length} items`);
+   *   logger.info(`Page has ${page.values.length} items`);
    * }
    * ```
    *
@@ -671,6 +777,77 @@ export class TaskHubGrpcClient {
   }
 
   /**
+   * Retrieves the history of the specified orchestration instance as a list of HistoryEvent objects.
+   *
+   * This method streams the history events from the backend and returns them as an array.
+   * The history includes all events that occurred during the orchestration execution,
+   * such as task scheduling, completion, failure, timer events, and more.
+   *
+   * If the orchestration instance does not exist, an empty array is returned.
+   *
+   * @param instanceId - The unique identifier of the orchestration instance.
+   * @returns A Promise that resolves to an array of HistoryEvent objects representing
+   *          the orchestration's history. Returns an empty array if the instance is not found.
+   * @throws {Error} If the instanceId is null or empty.
+   * @throws {Error} If the operation is canceled.
+   * @throws {Error} If an internal error occurs while retrieving the history.
+   *
+   * @example
+   * ```typescript
+   * const history = await client.getOrchestrationHistory(instanceId);
+   * for (const event of history) {
+   *   console.log(`Event ${event.eventId}: ${event.type} at ${event.timestamp}`);
+   * }
+   * ```
+   */
+  async getOrchestrationHistory(instanceId: string): Promise<HistoryEvent[]> {
+    if (!instanceId) {
+      throw new Error("instanceId is required");
+    }
+
+    const req = new pb.StreamInstanceHistoryRequest();
+    req.setInstanceid(instanceId);
+    req.setForworkitemprocessing(false);
+
+    const metadata = this._metadataGenerator ? await this._metadataGenerator() : new grpc.Metadata();
+    const stream = this._stub.streamInstanceHistory(req, metadata);
+
+    return new Promise<HistoryEvent[]>((resolve, reject) => {
+      const historyEvents: HistoryEvent[] = [];
+
+      stream.on("data", (chunk: pb.HistoryChunk) => {
+        const protoEvents = chunk.getEventsList();
+        for (const protoEvent of protoEvents) {
+          const event = convertProtoHistoryEvent(protoEvent);
+          if (event) {
+            historyEvents.push(event);
+          }
+        }
+      });
+
+      stream.on("end", () => {
+        stream.removeAllListeners();
+        resolve(historyEvents);
+      });
+
+      stream.on("error", (err: grpc.ServiceError) => {
+        stream.removeAllListeners();
+        // Return empty array for NOT_FOUND to be consistent with DTS behavior
+        // (DTS returns empty stream for non-existent instances) and user-friendly
+        if (err.code === grpc.status.NOT_FOUND) {
+          resolve([]);
+        } else if (err.code === grpc.status.CANCELLED) {
+          reject(new Error(`The getOrchestrationHistory operation was canceled.`));
+        } else if (err.code === grpc.status.INTERNAL) {
+          reject(new Error(`An error occurred while retrieving the history for orchestration with instanceId '${instanceId}'.`));
+        } else {
+          reject(err);
+        }
+      });
+    });
+  }
+
+  /**
    * Helper method to create an OrchestrationState from a protobuf OrchestrationState.
    */
   private _createOrchestrationStateFromProto(
@@ -714,6 +891,8 @@ export class TaskHubGrpcClient {
       );
     }
 
+    const tags = mapToRecord(protoState.getTagsMap());
+
     return new OrchestrationState(
       instanceId,
       name ?? "",
@@ -724,6 +903,7 @@ export class TaskHubGrpcClient {
       serializedOutput,
       serializedCustomStatus,
       failureDetails,
+      tags,
     );
   }
 }

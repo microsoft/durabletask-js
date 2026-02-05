@@ -9,14 +9,34 @@ import {
   Task,
   TOrchestrator,
   whenAll,
+  // Logger types: ConsoleLogger (default), NoOpLogger (silent)
+  ConsoleLogger,
 } from "@microsoft/durabletask-js";
 
 // Wrap the entire code in an immediately-invoked async function
 (async () => {
   // Update the gRPC client and worker to use a local address and port
   const grpcServerAddress = "localhost:4001";
-  const taskHubClient: TaskHubGrpcClient = new TaskHubGrpcClient(grpcServerAddress);
-  const taskHubWorker: TaskHubGrpcWorker = new TaskHubGrpcWorker(grpcServerAddress);
+
+  // Optional: Use a custom logger (ConsoleLogger is the default)
+  const logger = new ConsoleLogger();
+
+  const taskHubClient: TaskHubGrpcClient = new TaskHubGrpcClient(
+    grpcServerAddress,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    logger,
+  );
+  const taskHubWorker: TaskHubGrpcWorker = new TaskHubGrpcWorker(
+    grpcServerAddress,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    logger,
+  );
 
   function getRandomInt(min: number, max: number): number {
     return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -24,7 +44,7 @@ import {
 
   async function getWorkItemsActivity(_: ActivityContext): Promise<string[]> {
     const count: number = getRandomInt(2, 10);
-    console.log(`generating ${count} work items...`);
+    logger.info(`generating ${count} work items...`);
 
     const workItems: string[] = Array.from({ length: count }, (_, i) => `work item ${i}`);
     return workItems;
@@ -35,7 +55,7 @@ import {
   }
 
   async function processWorkItemActivity(context: ActivityContext, item: string): Promise<number> {
-    console.log(`processing work item: ${item}`);
+    logger.info(`processing work item: ${item}`);
 
     // Simulate some work that takes a variable amount of time
     const sleepTime = Math.random() * 5000;
@@ -63,22 +83,22 @@ import {
   // Wrap the worker startup in a try-catch block to handle any errors during startup
   try {
     await taskHubWorker.start();
-    console.log("Worker started successfully");
+    logger.info("Worker started successfully");
   } catch (error) {
-    console.error("Error starting worker:", error);
+    logger.error("Error starting worker:", error);
   }
 
   // Schedule a new orchestration
   try {
     const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
-    console.log(`Orchestration scheduled with ID: ${id}`);
+    logger.info(`Orchestration scheduled with ID: ${id}`);
 
     // Wait for orchestration completion
     const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
-    console.log(`Orchestration completed! Result: ${state?.serializedOutput}`);
+    logger.info(`Orchestration completed! Result: ${state?.serializedOutput}`);
   } catch (error) {
-    console.error("Error scheduling or waiting for orchestration:", error);
+    logger.error("Error scheduling or waiting for orchestration:", error);
   }
 
   // stop worker and client

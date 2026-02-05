@@ -22,7 +22,7 @@ export function newOrchestratorStartedEvent(timestamp?: Date | null): pb.History
   return event;
 }
 
-export function newExecutionStartedEvent(name: string, instanceId: string, encodedInput?: string): pb.HistoryEvent {
+export function newExecutionStartedEvent(name: string, instanceId: string, encodedInput?: string, parentInstance?: { name: string; instanceId: string; taskScheduledId: number }): pb.HistoryEvent {
   const ts = new Timestamp();
 
   const orchestrationInstance = new pb.OrchestrationInstance();
@@ -32,6 +32,19 @@ export function newExecutionStartedEvent(name: string, instanceId: string, encod
   executionStartedEvent.setName(name);
   executionStartedEvent.setInput(getStringValue(encodedInput));
   executionStartedEvent.setOrchestrationinstance(orchestrationInstance);
+
+  // Set parent instance info if provided (for sub-orchestrations)
+  if (parentInstance) {
+    const parentOrchestrationInstance = new pb.OrchestrationInstance();
+    parentOrchestrationInstance.setInstanceid(parentInstance.instanceId);
+
+    const parentInstanceInfo = new pb.ParentInstanceInfo();
+    parentInstanceInfo.setName(getStringValue(parentInstance.name));
+    parentInstanceInfo.setOrchestrationinstance(parentOrchestrationInstance);
+    parentInstanceInfo.setTaskscheduledid(parentInstance.taskScheduledId);
+
+    executionStartedEvent.setParentinstance(parentInstanceInfo);
+  }
 
   const event = new pb.HistoryEvent();
   event.setEventid(-1);
@@ -243,6 +256,30 @@ export function getStringValue(val?: string): StringValue | undefined {
   return stringValue;
 }
 
+/**
+ * Populates a tag map with the provided tags.
+ *
+ * Copies all key-value pairs from the optional {@link tags} object into the given
+ * {@link tagsMap} by invoking its `set` method for each entry. If no tags are
+ * provided, this function is a no-op.
+ *
+ * @param tagsMap - A map-like object that exposes a `set(key, value)` method used
+ *   to store tag key-value pairs.
+ * @param tags - An optional record of tag key-value pairs to add to the map.
+ */
+export function populateTagsMap(
+  tagsMap: { set: (key: string, value: string) => void },
+  tags?: Record<string, string>,
+): void {
+  if (!tags) {
+    return;
+  }
+
+  for (const [key, value] of Object.entries(tags)) {
+    tagsMap.set(key, value);
+  }
+}
+
 export function newCompleteOrchestrationAction(
   id: number,
   status: pb.OrchestrationStatus,
@@ -277,10 +314,16 @@ export function newCreateTimerAction(id: number, fireAt: Date): pb.OrchestratorA
   return action;
 }
 
-export function newScheduleTaskAction(id: number, name: string, encodedInput?: string): pb.OrchestratorAction {
+export function newScheduleTaskAction(
+  id: number,
+  name: string,
+  encodedInput?: string,
+  tags?: Record<string, string>,
+): pb.OrchestratorAction {
   const scheduleTaskAction = new pb.ScheduleTaskAction();
   scheduleTaskAction.setName(name);
   scheduleTaskAction.setInput(getStringValue(encodedInput));
+  populateTagsMap(scheduleTaskAction.getTagsMap(), tags);
 
   const action = new pb.OrchestratorAction();
   action.setId(id);
@@ -300,11 +343,13 @@ export function newCreateSubOrchestrationAction(
   name: string,
   instanceId?: string | null,
   encodedInput?: string,
+  tags?: Record<string, string>,
 ): pb.OrchestratorAction {
   const createSubOrchestrationAction = new pb.CreateSubOrchestrationAction();
   createSubOrchestrationAction.setName(name);
   createSubOrchestrationAction.setInstanceid(instanceId || "");
   createSubOrchestrationAction.setInput(getStringValue(encodedInput));
+  populateTagsMap(createSubOrchestrationAction.getTagsMap(), tags);
 
   const action = new pb.OrchestratorAction();
   action.setId(id);
