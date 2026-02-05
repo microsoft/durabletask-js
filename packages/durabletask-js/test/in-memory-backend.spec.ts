@@ -12,7 +12,7 @@ import {
   OrchestrationContext,
   Task,
   TOrchestrator,
-} from "@microsoft/durabletask-js";
+} from "../src";
 
 describe("In-Memory Backend", () => {
   let backend: InMemoryOrchestrationBackend;
