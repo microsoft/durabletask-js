@@ -4,6 +4,7 @@
 // Client and Worker
 export { TaskHubGrpcClient, TaskHubGrpcClientOptions, MetadataGenerator } from "./client/client";
 export { TaskHubGrpcWorker, TaskHubGrpcWorkerOptions } from "./worker/task-hub-grpc-worker";
+export { VersioningOptions, VersionMatchStrategy, VersionFailureStrategy } from "./worker/versioning-options";
 
 // Contexts
 export { OrchestrationContext } from "./task/context/orchestration-context";
@@ -11,6 +12,8 @@ export { ActivityContext } from "./task/context/activity-context";
 
 // Orchestration types and utilities
 export { PurgeInstanceCriteria } from "./orchestration/orchestration-purge-criteria";
+export { PurgeInstanceOptions } from "./orchestration/orchestration-purge-options";
+export { TerminateInstanceOptions, terminateOptions, isTerminateInstanceOptions, TERMINATE_OPTIONS_SYMBOL } from "./orchestration/orchestration-terminate-options";
 export { OrchestrationStatus } from "./orchestration/enum/orchestration-status.enum";
 export { OrchestrationState } from "./orchestration/orchestration-state";
 
@@ -85,3 +88,7 @@ export { ParentOrchestrationInstance } from "./types/parent-orchestration-instan
 
 // Logger
 export { Logger, ConsoleLogger, NoOpLogger } from "./types/logger.type";
+export { ReplaySafeLogger, ReplayContext } from "./types/replay-safe-logger";
+
+// Versioning utilities
+export { compareVersions } from "./utils/versioning.util";

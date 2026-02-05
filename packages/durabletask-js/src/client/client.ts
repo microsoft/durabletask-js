@@ -17,6 +17,8 @@ import { OrchestrationStatus, toProtobuf, fromProtobuf } from "../orchestration/
 import { TimeoutError } from "../exception/timeout-error";
 import { PurgeResult } from "../orchestration/orchestration-purge-result";
 import { PurgeInstanceCriteria } from "../orchestration/orchestration-purge-criteria";
+import { PurgeInstanceOptions } from "../orchestration/orchestration-purge-options";
+import { TerminateInstanceOptions, isTerminateInstanceOptions } from "../orchestration/orchestration-terminate-options";
 import { callWithMetadata, MetadataGenerator } from "../utils/grpc-helper.util";
 import { OrchestrationQuery, ListInstanceIdsOptions, DEFAULT_PAGE_SIZE } from "../orchestration/orchestration-query";
 import { Page, AsyncPageable, createAsyncPageable } from "../orchestration/page";
@@ -47,12 +49,19 @@ export interface TaskHubGrpcClientOptions {
   metadataGenerator?: MetadataGenerator;
   /** Optional logger instance. Defaults to ConsoleLogger. */
   logger?: Logger;
+  /**
+   * The default version to use when starting new orchestrations without an explicit version.
+   * If specified, this will be used as the version for orchestrations that don't provide
+   * their own version in StartOrchestrationOptions.
+   */
+  defaultVersion?: string;
 }
 
 export class TaskHubGrpcClient {
   private _stub: stubs.TaskHubSidecarServiceClient;
   private _metadataGenerator?: MetadataGenerator;
   private _logger: Logger;
+  private _defaultVersion?: string;
 
   /**
    * Creates a new TaskHubGrpcClient instance.
@@ -95,6 +104,7 @@ export class TaskHubGrpcClient {
     let resolvedCredentials: grpc.ChannelCredentials | undefined;
     let resolvedMetadataGenerator: MetadataGenerator | undefined;
     let resolvedLogger: Logger | undefined;
+    let resolvedDefaultVersion: string | undefined;
 
     if (typeof hostAddressOrOptions === "object" && hostAddressOrOptions !== null) {
       // Options object constructor
@@ -104,6 +114,7 @@ export class TaskHubGrpcClient {
       resolvedCredentials = hostAddressOrOptions.credentials;
       resolvedMetadataGenerator = hostAddressOrOptions.metadataGenerator;
       resolvedLogger = hostAddressOrOptions.logger;
+      resolvedDefaultVersion = hostAddressOrOptions.defaultVersion;
     } else {
       // Deprecated positional parameters constructor
       resolvedHostAddress = hostAddressOrOptions;
@@ -117,6 +128,7 @@ export class TaskHubGrpcClient {
     this._stub = new GrpcClient(resolvedHostAddress, resolvedOptions, resolvedUseTLS, resolvedCredentials).stub;
     this._metadataGenerator = resolvedMetadataGenerator;
     this._logger = resolvedLogger ?? new ConsoleLogger();
+    this._defaultVersion = resolvedDefaultVersion;
   }
 
   async stop(): Promise<void> {
@@ -177,6 +189,13 @@ export class TaskHubGrpcClient {
       typeof instanceIdOrOptions === "string" || instanceIdOrOptions === undefined
         ? undefined
         : instanceIdOrOptions.tags;
+    const version =
+      typeof instanceIdOrOptions === "string" || instanceIdOrOptions === undefined
+        ? undefined
+        : instanceIdOrOptions.version;
+
+    // Use provided version, or fall back to client's default version
+    const effectiveVersion = version ?? this._defaultVersion;
 
     const req = new pb.CreateInstanceRequest();
     req.setName(name);
@@ -191,9 +210,15 @@ export class TaskHubGrpcClient {
     req.setInput(i);
     req.setScheduledstarttimestamp(ts);
 
+    if (effectiveVersion) {
+      const v = new StringValue();
+      v.setValue(effectiveVersion);
+      req.setVersion(v);
+    }
+
     populateTagsMap(req.getTagsMap(), tags);
 
-    this._logger.info(`Starting new ${name} instance with ID = ${req.getInstanceid()}`);
+    this._logger.info(`Starting new ${name} instance with ID = ${req.getInstanceid()}${effectiveVersion ? ` (version: ${effectiveVersion})` : ""}`);
 
     const res = await callWithMetadata<pb.CreateInstanceRequest, pb.CreateInstanceResponse>(
       this._stub.startInstance.bind(this._stub),
@@ -364,18 +389,49 @@ export class TaskHubGrpcClient {
    * Terminates the orchestrator associated with the provided instance id.
    *
    * @param {string} instanceId - orchestrator instance id to terminate.
-   * @param {any} output - The optional output to set for the terminated orchestrator instance.
+   * @param {any | TerminateInstanceOptions} outputOrOptions - The optional output to set for the terminated orchestrator instance,
+   *        or a TerminateInstanceOptions object created with `terminateOptions()` that can include both
+   *        output and recursive termination settings.
+   *
+   * @example
+   * ```typescript
+   * // Simple termination with output
+   * await client.terminateOrchestration(instanceId, { reason: "cancelled" });
+   *
+   * // Recursive termination with options (use terminateOptions helper)
+   * import { terminateOptions } from "@microsoft/durabletask-js";
+   * await client.terminateOrchestration(instanceId, terminateOptions({
+   *   output: { reason: "cancelled" },
+   *   recursive: true
+   * }));
+   * ```
    */
-  async terminateOrchestration(instanceId: string, output: any = null): Promise<void> {
+  async terminateOrchestration(
+    instanceId: string,
+    outputOrOptions: any | TerminateInstanceOptions = null,
+  ): Promise<void> {
     const req = new pb.TerminateRequest();
     req.setInstanceid(instanceId);
+
+    let output: any = null;
+    let recursive = false;
+
+    // Use type guard to safely detect TerminateInstanceOptions
+    // This avoids false positives when user output happens to have 'recursive' or 'output' properties
+    if (isTerminateInstanceOptions(outputOrOptions)) {
+      output = outputOrOptions.output ?? null;
+      recursive = outputOrOptions.recursive ?? false;
+    } else {
+      output = outputOrOptions;
+    }
 
     const i = new StringValue();
     i.setValue(JSON.stringify(output));
 
     req.setOutput(i);
+    req.setRecursive(recursive);
 
-    this._logger.info(`Terminating '${instanceId}'`);
+    this._logger.info(`Terminating '${instanceId}'${recursive ? ' (recursive)' : ''}`);
 
     await callWithMetadata<pb.TerminateRequest, pb.TerminateResponse>(
       this._stub.terminateInstance.bind(this._stub),
@@ -537,16 +593,21 @@ export class TaskHubGrpcClient {
    *
    * @param value - The unique ID of the orchestration instance to purge or orchestration instance filter criteria used
    * to determine which instances to purge.
+   * @param options - Optional options to control the purge behavior, such as recursive purging of sub-orchestrations.
    * @returns A Promise that resolves to a {@link PurgeResult} or `undefined` if the purge operation was not successful.
    */
-  async purgeOrchestration(value: string | PurgeInstanceCriteria): Promise<PurgeResult | undefined> {
+  async purgeOrchestration(
+    value: string | PurgeInstanceCriteria,
+    options?: PurgeInstanceOptions,
+  ): Promise<PurgeResult | undefined> {
     let res;
-    if (typeof value === `string`) {
+    if (typeof value === "string") {
       const instanceId = value;
       const req = new pb.PurgeInstancesRequest();
       req.setInstanceid(instanceId);
+      req.setRecursive(options?.recursive ?? false);
 
-      this._logger.info(`Purging Instance '${instanceId}'`);
+      this._logger.info(`Purging Instance '${instanceId}'${options?.recursive ? ' (recursive)' : ''}`);
 
       res = await callWithMetadata<pb.PurgeInstancesRequest, pb.PurgeInstancesResponse>(
         this._stub.purgeInstances.bind(this._stub),
@@ -574,9 +635,10 @@ export class TaskHubGrpcClient {
         filter.addRuntimestatus(toProtobuf(status));
       }
       req.setPurgeinstancefilter(filter);
+      req.setRecursive(options?.recursive ?? false);
       const timeout = purgeInstanceCriteria.getTimeout();
 
-      this._logger.info("Purging Instance using purging criteria");
+      this._logger.info(`Purging Instances using purging criteria${options?.recursive ? " (recursive)" : ""}`);
 
       const callPromise = callWithMetadata<pb.PurgeInstancesRequest, pb.PurgeInstancesResponse>(
         this._stub.purgeInstances.bind(this._stub),

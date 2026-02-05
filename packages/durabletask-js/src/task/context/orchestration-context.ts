@@ -4,8 +4,11 @@
 import { ParentOrchestrationInstance } from "../../types/parent-orchestration-instance.type";
 import { TActivity } from "../../types/activity.type";
 import { TOrchestrator } from "../../types/orchestrator.type";
+import { Logger } from "../../types/logger.type";
+import { ReplaySafeLogger } from "../../types/replay-safe-logger";
 import { TaskOptions, SubOrchestrationOptions } from "../options";
 import { Task } from "../task";
+import { compareVersions } from "../../utils/versioning.util";
 
 export abstract class OrchestrationContext {
   /**
@@ -48,6 +51,46 @@ export abstract class OrchestrationContext {
    * @returns {boolean} `true` if the orchestrator function is replaying from history; otherwise, `false`.
    */
   abstract get isReplaying(): boolean;
+
+  /**
+   * Gets the version of the current orchestration instance.
+   *
+   * The version is set when the orchestration instance is created via the client's
+   * scheduleNewOrchestration method using StartOrchestrationOptions.version.
+   * If no version was specified, this returns an empty string.
+   *
+   * @returns {string} The version of the current orchestration instance.
+   */
+  abstract get version(): string;
+
+  /**
+   * Compares the current orchestration version to the specified version.
+   *
+   * This method uses semantic versioning comparison when both versions are valid
+   * semantic versions, and falls back to lexicographic comparison otherwise.
+   *
+   * @remarks
+   * - If both versions are empty, this returns 0 (equal).
+   * - An empty context version is considered less than a defined version.
+   * - An empty parameter version is considered less than a defined context version.
+   *
+   * @param {string} version The version to compare against.
+   * @returns {number} A negative number if context version < parameter version,
+   *                   zero if equal, positive if context version > parameter version.
+   *
+   * @example
+   * ```typescript
+   * const orchestrator: TOrchestrator = async function* (ctx, input) {
+   *   if (ctx.compareVersionTo("2.0.0") >= 0) {
+   *     // This orchestration is version 2.0.0 or newer
+   *     yield ctx.callActivity(newFeature, input);
+   *   }
+   * };
+   * ```
+   */
+  compareVersionTo(version: string): number {
+    return compareVersions(this.version, version);
+  }
 
   /**
    * Create a timer task that will fire at a specified time.
@@ -139,4 +182,28 @@ export abstract class OrchestrationContext {
    * @returns {string} A new deterministic UUID string.
    */
   abstract newGuid(): string;
+
+  /**
+   * Creates a replay-safe logger that only writes logs when the orchestrator is not replaying.
+   *
+   * During orchestration replay, history events are re-processed to rebuild state.
+   * This can cause duplicate log entries if not handled properly. The returned logger
+   * wraps the provided logger and automatically suppresses log output during replay,
+   * ensuring that logs are only written once when the orchestration is making forward progress.
+   *
+   * @param {Logger} logger The underlying logger to wrap.
+   * @returns {Logger} A replay-safe logger instance.
+   *
+   * @example
+   * ```typescript
+   * const orchestrator: TOrchestrator = async function* (ctx, input) {
+   *   const logger = ctx.createReplaySafeLogger(myLogger);
+   *   logger.info("This will only be logged once, not during replay");
+   *   yield ctx.callActivity(myActivity, input);
+   * };
+   * ```
+   */
+  createReplaySafeLogger(logger: Logger): Logger {
+    return new ReplaySafeLogger(this, logger);
+  }
 }

@@ -129,6 +129,9 @@ export class OrchestrationExecutor {
               throw new OrchestratorNotRegisteredError(executionStartedEvent?.getName());
             }
 
+            // Set the version from the execution started event
+            ctx._version = executionStartedEvent?.getVersion()?.getValue() ?? "";
+
             // Extract parent instance info if this is a sub-orchestration
             const parentInstance = executionStartedEvent?.getParentinstance();
             if (parentInstance) {

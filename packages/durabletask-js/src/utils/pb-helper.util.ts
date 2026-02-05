@@ -194,6 +194,22 @@ export function newFailureDetails(e: any): pb.TaskFailureDetails {
   return failure;
 }
 
+/**
+ * Creates a TaskFailureDetails for version mismatch errors.
+ * These errors are non-retriable as the version mismatch is deterministic.
+ *
+ * @param errorType The type of version error (e.g., "VersionMismatch", "VersionError")
+ * @param errorMessage The error message describing the version mismatch
+ * @returns A TaskFailureDetails with IsNonRetriable set to true
+ */
+export function newVersionMismatchFailureDetails(errorType: string, errorMessage: string): pb.TaskFailureDetails {
+  const failure = new pb.TaskFailureDetails();
+  failure.setErrortype(errorType);
+  failure.setErrormessage(errorMessage);
+  failure.setIsnonretriable(true);
+  return failure;
+}
+
 export function newEventRaisedEvent(name: string, encodedInput?: string): pb.HistoryEvent {
   const ts = new Timestamp();
 
@@ -319,11 +335,15 @@ export function newScheduleTaskAction(
   name: string,
   encodedInput?: string,
   tags?: Record<string, string>,
+  version?: string,
 ): pb.OrchestratorAction {
   const scheduleTaskAction = new pb.ScheduleTaskAction();
   scheduleTaskAction.setName(name);
   scheduleTaskAction.setInput(getStringValue(encodedInput));
   populateTagsMap(scheduleTaskAction.getTagsMap(), tags);
+  if (version) {
+    scheduleTaskAction.setVersion(getStringValue(version));
+  }
 
   const action = new pb.OrchestratorAction();
   action.setId(id);
@@ -344,12 +364,16 @@ export function newCreateSubOrchestrationAction(
   instanceId?: string | null,
   encodedInput?: string,
   tags?: Record<string, string>,
+  version?: string,
 ): pb.OrchestratorAction {
   const createSubOrchestrationAction = new pb.CreateSubOrchestrationAction();
   createSubOrchestrationAction.setName(name);
   createSubOrchestrationAction.setInstanceid(instanceId || "");
   createSubOrchestrationAction.setInput(getStringValue(encodedInput));
   populateTagsMap(createSubOrchestrationAction.getTagsMap(), tags);
+  if (version) {
+    createSubOrchestrationAction.setVersion(getStringValue(version));
+  }
 
   const action = new pb.OrchestratorAction();
   action.setId(id);
