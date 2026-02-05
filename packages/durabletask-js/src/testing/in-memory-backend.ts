@@ -566,19 +566,28 @@ export class InMemoryOrchestrationBackend {
   }
 
   private watchSubOrchestration(parentInstanceId: string, subInstanceId: string, taskId: number): void {
-    const checkCompletion = (): void => {
-      const subInstance = this.instances.get(subInstanceId);
-      const parentInstance = this.instances.get(parentInstanceId);
+    // Use the stateWaiters mechanism instead of polling to avoid infinite loops
+    // and unnecessary resource consumption
+    this.waitForState(
+      subInstanceId,
+      (inst) => this.isTerminalStatus(inst.status),
+      // No timeout - sub-orchestration will eventually complete, fail, or be terminated
+      // If parent is terminated, we check that when delivering the event
+    )
+      .then((subInstance) => {
+        const parentInstance = this.instances.get(parentInstanceId);
 
-      if (!subInstance || !parentInstance) {
-        return;
-      }
+        // If parent or sub no longer exists, nothing to do
+        if (!subInstance || !parentInstance) {
+          return;
+        }
 
-      if (this.isTerminalStatus(parentInstance.status)) {
-        return;
-      }
+        // If parent already terminated, don't deliver the completion event
+        if (this.isTerminalStatus(parentInstance.status)) {
+          return;
+        }
 
-      if (this.isTerminalStatus(subInstance.status)) {
+        // Deliver the sub-orchestration completion/failure event to parent
         let event: pb.HistoryEvent;
         if (subInstance.status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED) {
           event = pbh.newSubOrchestrationCompletedEvent(taskId, subInstance.output);
@@ -589,13 +598,10 @@ export class InMemoryOrchestrationBackend {
         parentInstance.pendingEvents.push(event);
         parentInstance.lastUpdatedAt = new Date();
         this.enqueueOrchestration(parentInstanceId);
-      } else {
-        // Check again later
-        setImmediate(checkCompletion);
-      }
-    };
-
-    setImmediate(checkCompletion);
+      })
+      .catch(() => {
+        // Timeout or reset - sub-orchestration watcher cancelled, nothing to do
+      });
   }
 
   private processSendEventAction(sendEvent: pb.SendEventAction): void {
