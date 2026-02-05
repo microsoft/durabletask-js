@@ -854,8 +854,8 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
       const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
       await taskHubClient.waitForOrchestrationStart(id, undefined, 10);
 
-      // Terminate with options object
-      await taskHubClient.terminateOrchestration(id, { output: "terminated-output" });
+      // Terminate with options object using terminateOptions factory
+      await taskHubClient.terminateOrchestration(id, terminateOptions({ output: "terminated-output" }));
       const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
       expect(state).toBeDefined();
