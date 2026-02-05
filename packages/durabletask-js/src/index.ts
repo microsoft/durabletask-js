@@ -62,18 +62,36 @@ export {
 // Proto types (for advanced usage)
 export { OrchestrationStatus as ProtoOrchestrationStatus } from "./proto/orchestrator_service_pb";
 
+// Failure details
+export { FailureDetails, TaskFailureDetails } from "./task/failure-details";
+
 // Task utilities
 export { getName, whenAll, whenAny } from "./task";
 export { Task } from "./task/task";
 
 // Retry policies and task options
-export { RetryPolicy, RetryPolicyOptions } from "./task/retry";
+export {
+  RetryPolicy,
+  RetryPolicyOptions,
+  FailureHandlerPredicate,
+  RetryContext,
+  createRetryContext,
+  RetryHandler,
+  AsyncRetryHandler,
+  toAsyncRetryHandler,
+} from "./task/retry";
 export {
   TaskOptions,
   SubOrchestrationOptions,
   StartOrchestrationOptions,
+  TaskRetryOptions,
   taskOptionsFromRetryPolicy,
+  taskOptionsFromRetryHandler,
+  taskOptionsFromSyncRetryHandler,
   subOrchestrationOptionsFromRetryPolicy,
+  subOrchestrationOptionsFromRetryHandler,
+  isRetryPolicy,
+  isAsyncRetryHandler,
 } from "./task/options";
 
 // Types

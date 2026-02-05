@@ -10,7 +10,7 @@ import * as ph from "../utils/pb-helper.util";
 import { CompletableTask } from "../task/completable-task";
 import { RetryableTask } from "../task/retryable-task";
 import { RetryTimerTask } from "../task/retry-timer-task";
-import { TaskOptions, SubOrchestrationOptions } from "../task/options";
+import { TaskOptions, SubOrchestrationOptions, isRetryPolicy } from "../task/options";
 import { TActivity } from "../types/activity.type";
 import { TOrchestrator } from "../types/orchestrator.type";
 import { Task } from "../task/task";
@@ -295,7 +295,8 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     this._pendingActions[action.getId()] = action;
 
     // If a retry policy is provided, create a RetryableTask
-    if (options?.retry) {
+    // Note: AsyncRetryHandler support requires more infrastructure and is not yet implemented
+    if (options?.retry && isRetryPolicy(options.retry)) {
       const retryableTask = new RetryableTask<TOutput>(
         options.retry,
         action,
@@ -339,7 +340,8 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     this._pendingActions[action.getId()] = action;
 
     // If a retry policy is provided, create a RetryableTask
-    if (options?.retry) {
+    // Note: AsyncRetryHandler support requires more infrastructure and is not yet implemented
+    if (options?.retry && isRetryPolicy(options.retry)) {
       const retryableTask = new RetryableTask<TOutput>(
         options.retry,
         action,
