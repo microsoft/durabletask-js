@@ -306,6 +306,163 @@ describe("Trace Helper - startSpanForNewOrchestration", () => {
   });
 });
 
+describe("Trace Helper - error paths", () => {
+  it("startSpanForNewOrchestration should handle request with no version gracefully", () => {
+    const req = new pb.CreateInstanceRequest();
+    req.setName("NoVersionOrch");
+    req.setInstanceid("no-version-instance");
+
+    const span = startSpanForNewOrchestration(req);
+    expect(span).toBeDefined();
+    span!.end();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].name).toBe("create_orchestration:NoVersionOrch");
+    expect(spans[0].attributes[DurableTaskAttributes.TASK_VERSION]).toBeUndefined();
+  });
+
+  it("startSpanForNewOrchestration should handle empty name", () => {
+    const req = new pb.CreateInstanceRequest();
+    req.setName("");
+    req.setInstanceid("empty-name-instance");
+
+    const span = startSpanForNewOrchestration(req);
+    expect(span).toBeDefined();
+    span!.end();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].name).toBe("create_orchestration:");
+  });
+
+  it("startSpanForOrchestrationExecution should handle event with no parent trace context", () => {
+    const event = new pb.ExecutionStartedEvent();
+    event.setName("NoParentCtxOrch");
+
+    const result = startSpanForOrchestrationExecution(event, undefined, "no-ctx-instance");
+    expect(result).toBeDefined();
+    result!.span.end();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].name).toBe("orchestration:NoParentCtxOrch");
+    expect(spans[0].kind).toBe(otel.SpanKind.SERVER);
+  });
+
+  it("startSpanForOrchestrationExecution should handle OrchestrationTraceContext with missing spanId", () => {
+    const event = new pb.ExecutionStartedEvent();
+    event.setName("MissingSpanIdOrch");
+
+    // OrchestrationTraceContext with start time but no spanId
+    const orchTraceCtx = new pb.OrchestrationTraceContext();
+    const startTimestamp = new Timestamp();
+    startTimestamp.fromDate(new Date("2025-06-15T10:00:00Z"));
+    orchTraceCtx.setSpanstarttime(startTimestamp);
+    // Deliberately not setting spanId
+
+    const result = startSpanForOrchestrationExecution(event, orchTraceCtx, "missing-spanid-instance");
+    expect(result).toBeDefined();
+    result!.span.end();
+
+    const spans = exporter.getFinishedSpans();
+    // Should treat as first execution (not replay) since spanId is missing
+    expect(result!.spanInfo.spanId).toBe(spans[0].spanContext().spanId);
+    expect(spans[0].attributes[DurableTaskAttributes.REPLAY_SPAN_ID]).toBeUndefined();
+  });
+
+  it("startSpanForOrchestrationExecution should handle OrchestrationTraceContext with missing startTime", () => {
+    const event = new pb.ExecutionStartedEvent();
+    event.setName("MissingStartTimeOrch");
+
+    // OrchestrationTraceContext with spanId but no start time
+    const orchTraceCtx = new pb.OrchestrationTraceContext();
+    const spanIdValue = new StringValue();
+    spanIdValue.setValue("aabbccdd11223344");
+    orchTraceCtx.setSpanid(spanIdValue);
+    // Deliberately not setting spanstarttime
+
+    const result = startSpanForOrchestrationExecution(event, orchTraceCtx, "missing-starttime-instance");
+    expect(result).toBeDefined();
+    result!.span.end();
+
+    const spans = exporter.getFinishedSpans();
+    // Should treat as first execution (not replay) since startTime is missing
+    expect(result!.spanInfo.spanId).toBe(spans[0].spanContext().spanId);
+    expect(spans[0].attributes[DurableTaskAttributes.REPLAY_SPAN_ID]).toBeUndefined();
+  });
+
+  it("startSpanForTaskExecution should handle request with no parent trace context", () => {
+    const req = new pb.ActivityRequest();
+    req.setName("NoCtxActivity");
+    req.setTaskid(1);
+
+    const orchInstance = new pb.OrchestrationInstance();
+    orchInstance.setInstanceid("parent-orch");
+    req.setOrchestrationinstance(orchInstance);
+
+    const span = startSpanForTaskExecution(req);
+    expect(span).toBeDefined();
+    span!.end();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].name).toBe("activity:NoCtxActivity");
+    // Should still create a valid span, just without a parent
+    expect(spans[0].kind).toBe(otel.SpanKind.SERVER);
+  });
+
+  it("startSpanForTaskExecution should handle request with no orchestration instance", () => {
+    const req = new pb.ActivityRequest();
+    req.setName("NoInstanceActivity");
+    req.setTaskid(2);
+    // Deliberately not setting orchestration instance
+
+    const span = startSpanForTaskExecution(req);
+    expect(span).toBeDefined();
+    span!.end();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].name).toBe("activity:NoInstanceActivity");
+    expect(spans[0].attributes[DurableTaskAttributes.TASK_INSTANCE_ID]).toBe("");
+  });
+
+  it("setSpanError should record exception for Error instances", () => {
+    const tracer = otel.trace.getTracer(TRACER_NAME);
+    const span = tracer.startSpan("error-exception-test");
+
+    const error = new Error("test error with stack");
+    setSpanError(span, error);
+    span.end();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].status.code).toBe(otel.SpanStatusCode.ERROR);
+    expect(spans[0].status.message).toBe("test error with stack");
+    // Should have recorded the exception event
+    expect(spans[0].events.length).toBeGreaterThanOrEqual(1);
+    expect(spans[0].events[0].name).toBe("exception");
+  });
+
+  it("setSpanError should not record exception for non-Error types", () => {
+    const tracer = otel.trace.getTracer(TRACER_NAME);
+    const span = tracer.startSpan("non-error-exception-test");
+
+    setSpanError(span, "string error");
+    span.end();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].status.code).toBe(otel.SpanStatusCode.ERROR);
+    // Should not have recorded an exception event for string errors
+    expect(spans[0].events.length).toBe(0);
+  });
+
+  it("endSpan should not throw when span.end() throws", () => {
+    const mockSpan = {
+      end: () => {
+        throw new Error("span already ended");
+      },
+    } as unknown as import("@opentelemetry/api").Span;
+
+    expect(() => endSpan(mockSpan)).not.toThrow();
+  });
+});
+
 describe("Trace Helper - startSpanForTaskExecution", () => {
   it("should create a Server span for activity execution", () => {
     const req = new pb.ActivityRequest();
@@ -457,6 +614,53 @@ describe("Trace Helper - processActionsForTracing", () => {
     const timerSpan = spans.find((s: any) => s.name === "timer:MyOrchestration");
     expect(timerSpan).toBeDefined();
     expect(timerSpan!.kind).toBe(otel.SpanKind.INTERNAL);
+  });
+
+  it("should create spans for SendEventAction", () => {
+    const tracer = otel.trace.getTracer(TRACER_NAME);
+    const parentSpan = tracer.startSpan("parent-orch");
+
+    const sendEvent = new pb.SendEventAction();
+    sendEvent.setName("ApprovalEvent");
+    const targetInstance = new pb.OrchestrationInstance();
+    targetInstance.setInstanceid("target-instance-1");
+    sendEvent.setInstance(targetInstance);
+
+    const action = new pb.OrchestratorAction();
+    action.setId(4);
+    action.setSendevent(sendEvent);
+
+    processActionsForTracing(parentSpan, [action], "MyOrchestration");
+    parentSpan.end();
+
+    const spans = exporter.getFinishedSpans();
+    const eventSpan = spans.find((s: any) => s.name === "orchestration_event:ApprovalEvent");
+    expect(eventSpan).toBeDefined();
+    expect(eventSpan!.kind).toBe(otel.SpanKind.PRODUCER);
+    expect(eventSpan!.attributes[DurableTaskAttributes.TYPE]).toBe(TaskType.ORCHESTRATION_EVENT);
+    expect(eventSpan!.attributes[DurableTaskAttributes.TASK_NAME]).toBe("ApprovalEvent");
+    expect(eventSpan!.attributes[DurableTaskAttributes.EVENT_TARGET_INSTANCE_ID]).toBe("target-instance-1");
+  });
+
+  it("should create spans for SendEventAction without target instance", () => {
+    const tracer = otel.trace.getTracer(TRACER_NAME);
+    const parentSpan = tracer.startSpan("parent-orch");
+
+    const sendEvent = new pb.SendEventAction();
+    sendEvent.setName("EventNoTarget");
+
+    const action = new pb.OrchestratorAction();
+    action.setId(5);
+    action.setSendevent(sendEvent);
+
+    processActionsForTracing(parentSpan, [action], "MyOrchestration");
+    parentSpan.end();
+
+    const spans = exporter.getFinishedSpans();
+    const eventSpan = spans.find((s: any) => s.name === "orchestration_event:EventNoTarget");
+    expect(eventSpan).toBeDefined();
+    expect(eventSpan!.kind).toBe(otel.SpanKind.PRODUCER);
+    expect(eventSpan!.attributes[DurableTaskAttributes.EVENT_TARGET_INSTANCE_ID]).toBeUndefined();
   });
 
   it("should not throw when orchestrationSpan is null or undefined", () => {
