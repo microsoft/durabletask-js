@@ -6,4 +6,7 @@ module.exports = {
   transform: {
     "^.+\\.ts$": "ts-jest",
   },
+  moduleNameMapper: {
+    "^@microsoft/durabletask-js$": "<rootDir>/../durabletask-js/src/index.ts",
+  },
 };
