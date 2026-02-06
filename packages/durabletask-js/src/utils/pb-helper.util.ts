@@ -185,16 +185,20 @@ export function newSubOrchestrationFailedEvent(eventId: number, ex: Error): pb.H
   return event;
 }
 
-export function newFailureDetails(e: any): pb.TaskFailureDetails {
+export function newFailureDetails(e: unknown): pb.TaskFailureDetails {
   const failure = new pb.TaskFailureDetails();
-  // Use error.name if set (allows custom error names), otherwise fall back to constructor name
-  failure.setErrortype(e.name || e.constructor.name);
-  failure.setErrormessage(e.message);
+  const errorType = e instanceof Error ? e.constructor.name : "UnknownError";
+  const errorMessage = e instanceof Error ? e.message : String(e);
+  const stack = e instanceof Error ? e.stack : undefined;
 
-  // Construct a google_protobuf_wrappers_pb.StringValue
-  const stringValueStackTrace = new StringValue();
-  stringValueStackTrace.setValue(e.stack?.toString() ?? "");
-  failure.setStacktrace(stringValueStackTrace);
+  failure.setErrortype(errorType);
+  failure.setErrormessage(errorMessage);
+
+  if (stack !== undefined) {
+    const sv = new StringValue();
+    sv.setValue(stack);
+    failure.setStacktrace(sv);
+  }
 
   return failure;
 }
@@ -412,19 +416,20 @@ export function isEmpty(v?: StringValue | null): boolean {
   return v == null || v.getValue() === "";
 }
 
+// Pre-built reverse map for O(1) orchestration status string lookups
+const orchestrationStatusStrMap = new Map<number, string>();
+for (const [name, value] of Object.entries(pb.OrchestrationStatus)) {
+  if (typeof value === "number" && name.startsWith("ORCHESTRATION_STATUS_")) {
+    orchestrationStatusStrMap.set(value, name.slice("ORCHESTRATION_STATUS_".length));
+  }
+}
+
 /**
- * Get the orchstration status by the enum value of the status
+ * Get the orchestration status string by the enum value of the status
  *
  * @param status
  * @returns
  */
 export function getOrchestrationStatusStr(status: number): string {
-  const idx = Object.values(pb.OrchestrationStatus).indexOf(status);
-  const name = Object.keys(pb.OrchestrationStatus)[idx];
-
-  if (name?.startsWith("ORCHESTRATION_STATUS_")) {
-    return name.slice("ORCHESTRATION_STATUS_".length);
-  }
-
-  return "UNKNOWN";
+  return orchestrationStatusStrMap.get(status) ?? "UNKNOWN";
 }

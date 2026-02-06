@@ -193,7 +193,7 @@ describe("Orchestration Executor", () => {
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(completeAction?.getResult()?.getValue()).toEqual(encodedOutput);
   });
-  it("should test the successful completion of an activity task", async () => {
+  it("should test the successful completion of an activity task (additional case)", async () => {
     const dummyActivity = async (_: ActivityContext) => {
       // do nothing
     };

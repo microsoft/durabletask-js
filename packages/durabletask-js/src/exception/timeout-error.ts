@@ -2,8 +2,8 @@
 // Licensed under the MIT License.
 
 export class TimeoutError extends Error {
-  constructor() {
-    super("TimeoutError");
+  constructor(message: string = "The operation timed out.") {
+    super(message);
     this.name = "TimeoutError";
   }
 }
