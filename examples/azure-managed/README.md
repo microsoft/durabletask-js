@@ -191,7 +191,7 @@ const traceExporter = new AzureMonitorTraceExporter({
 
 | Property | Value |
 |----------|-------|
-| **Image** | `mcr.microsoft.com/dts/emulator:latest` |
+| **Image** | `should be mcr.microsoft.com/dts/dts-emulator:latest` |
 | **gRPC Port** | `8080` |
 | **Dashboard Port** | `8082` |
 | **Authentication** | `None` (no credentials required) |
@@ -204,7 +204,7 @@ docker run -d \
   --name dts-emulator \
   -p 8080:8080 \
   -p 8082:8082 \
-  mcr.microsoft.com/dts/emulator:latest
+  should be mcr.microsoft.com/dts/dts-emulator:latest
 ```
 
 ### Stopping the Emulator
