@@ -87,7 +87,7 @@ export { InMemoryOrchestrationBackend, TestOrchestrationClient, TestOrchestratio
 export { ParentOrchestrationInstance } from "./types/parent-orchestration-instance.type";
 
 // Logger
-export { Logger, ConsoleLogger, NoOpLogger } from "./types/logger.type";
+export { Logger, ConsoleLogger, NoOpLogger, StructuredLogger, LogEvent, isStructuredLogger, createLogEventHandler } from "./types/logger.type";
 export { ReplaySafeLogger, ReplayContext } from "./types/replay-safe-logger";
 
 // Versioning utilities

@@ -6,6 +6,7 @@ import { ActivityContext } from "../task/context/activity-context";
 import { Logger, ConsoleLogger } from "../types/logger.type";
 import { ActivityNotRegisteredError } from "./exception/activity-not-registered-error";
 import { Registry } from "./registry";
+import * as WorkerLogs from "./logs";
 
 export class ActivityExecutor {
   private _registry: Registry;
@@ -28,21 +29,31 @@ export class ActivityExecutor {
       throw new ActivityNotRegisteredError(name);
     }
 
+    // Log activity start (matching .NET EventId 603)
+    WorkerLogs.activityStarted(this._logger, orchestrationId, name);
+
     const activityInput = encodedInput ? JSON.parse(encodedInput) : undefined;
     const ctx = new ActivityContext(orchestrationId, taskId);
 
-    // Execute the activity function
-    let activityOutput = fn(ctx, activityInput);
+    try {
+      // Execute the activity function
+      let activityOutput = fn(ctx, activityInput);
 
-    if (isPromise(activityOutput)) {
-      activityOutput = await activityOutput;
+      if (isPromise(activityOutput)) {
+        activityOutput = await activityOutput;
+      }
+
+      // Return the output
+      const encodedOutput = activityOutput ? JSON.stringify(activityOutput) : undefined;
+
+      // Log activity completion (matching .NET EventId 604)
+      WorkerLogs.activityCompleted(this._logger, orchestrationId, name);
+
+      return encodedOutput;
+    } catch (e: any) {
+      // Log activity failure (matching .NET EventId 605)
+      WorkerLogs.activityFailed(this._logger, orchestrationId, name, e instanceof Error ? e : new Error(String(e)));
+      throw e;
     }
-
-    // Return the output
-    const encodedOutput = activityOutput ? JSON.stringify(activityOutput) : undefined;
-    const chars = encodedOutput ? encodedOutput.length : 0;
-    this._logger.info(`Activity ${name} completed (${chars} chars)`);
-
-    return encodedOutput;
   }
 }

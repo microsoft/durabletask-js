@@ -20,6 +20,7 @@ import { Logger, ConsoleLogger } from "../types/logger.type";
 import { ExponentialBackoff, sleep, withTimeout } from "../utils/backoff.util";
 import { VersioningOptions, VersionMatchStrategy, VersionFailureStrategy } from "./versioning-options";
 import { compareVersions } from "../utils/versioning.util";
+import * as WorkerLogs from "./logs";
 import {
   startSpanForOrchestrationExecution,
   startSpanForTaskExecution,
@@ -194,7 +195,7 @@ export class TaskHubGrpcWorker {
     // Do not await - run in background
     this.internalRunWorker(newClient, true).catch((err) => {
       if (!this._stopWorker) {
-        this._logger.error("Worker error:", err);
+        WorkerLogs.workerError(this._logger, err);
       }
     });
   }
@@ -273,7 +274,7 @@ export class TaskHubGrpcWorker {
     this.internalRunWorker(client).catch((err) => {
       // Only log if the worker wasn't stopped intentionally
       if (!this._stopWorker) {
-        this._logger.error("Worker error:", err);
+        WorkerLogs.workerError(this._logger, err);
       }
     });
 
@@ -293,32 +294,32 @@ export class TaskHubGrpcWorker {
       const stream = client.stub.getWorkItems(new pb.GetWorkItemsRequest(), metadata);
       this._responseStream = stream;
 
-      this._logger.info(`Successfully connected to ${this._hostAddress}. Waiting for work items...`);
+      WorkerLogs.workerConnected(this._logger, this._hostAddress ?? "localhost:4001");
 
       // Wait for a work item to be received
       stream.on("data", (workItem: pb.WorkItem) => {
         const completionToken = workItem.getCompletiontoken();
         if (workItem.hasOrchestratorrequest()) {
-          this._logger.info(
-            `Received "Orchestrator Request" work item with instance id '${workItem
-              ?.getOrchestratorrequest()
-              ?.getInstanceid()}'`,
+          WorkerLogs.workItemReceived(
+            this._logger,
+            "Orchestrator Request",
+            workItem?.getOrchestratorrequest()?.getInstanceid(),
           );
           this._executeOrchestrator(workItem.getOrchestratorrequest() as any, completionToken, client.stub);
         } else if (workItem.hasActivityrequest()) {
-          this._logger.info(`Received "Activity Request" work item`);
+          WorkerLogs.workItemReceived(this._logger, "Activity Request");
           this._executeActivity(workItem.getActivityrequest() as any, completionToken, client.stub);
         } else if (workItem.hasHealthping()) {
           // Health ping - no-op, just a keep-alive message from the server
         } else {
-          this._logger.info(`Received unknown type of work item `);
+          WorkerLogs.unknownWorkItem(this._logger);
         }
       });
 
       // Wait for the stream to end or error
       stream.on("end", async () => {
         if (this._stopWorker) {
-          this._logger.info("Stream ended");
+          WorkerLogs.streamEnded(this._logger);
           stream.removeAllListeners();
           stream.destroy();
           return;
@@ -326,7 +327,7 @@ export class TaskHubGrpcWorker {
         // Stream ended unexpectedly - clean up and retry
         stream.removeAllListeners();
         stream.destroy();
-        this._logger.info(`Stream abruptly closed, will retry in ${this._backoff.peekNextDelay()}ms...`);
+        WorkerLogs.streamRetry(this._logger, this._backoff.peekNextDelay());
         await this._createNewClientAndRetry();
       });
 
@@ -335,18 +336,18 @@ export class TaskHubGrpcWorker {
         if (this._stopWorker) {
           return;
         }
-        this._logger.info("Stream error", err);
+        WorkerLogs.streamErrorInfo(this._logger, err);
       });
     } catch (err) {
       if (this._stopWorker) {
         // ignoring the error because the worker has been stopped
         return;
       }
-      this._logger.error(`Error on grpc stream: ${err}`);
+      WorkerLogs.streamError(this._logger, err);
       if (!isRetry) {
         throw err;
       }
-      this._logger.info(`Connection will be retried in ${this._backoff.peekNextDelay()}ms...`);
+      WorkerLogs.connectionRetry(this._logger, this._backoff.peekNextDelay());
       await this._createNewClientAndRetry();
       return;
     }
@@ -393,16 +394,16 @@ export class TaskHubGrpcWorker {
 
     // Wait for pending work items to complete with timeout
     if (this._pendingWorkItems.size > 0) {
-      this._logger.info(`Waiting for ${this._pendingWorkItems.size} pending work item(s) to complete...`);
+      WorkerLogs.shutdownWaiting(this._logger, this._pendingWorkItems.size);
       try {
         await withTimeout(
           Promise.all(this._pendingWorkItems),
           this._shutdownTimeoutMs,
           `Shutdown timed out after ${this._shutdownTimeoutMs}ms waiting for pending work items`,
         );
-        this._logger.info("All pending work items completed.");
+        WorkerLogs.shutdownCompleted(this._logger);
       } catch (e) {
-        this._logger.warn(`${(e as Error).message}. Forcing shutdown.`);
+        WorkerLogs.shutdownTimeout(this._logger, (e as Error).message);
       }
     }
 
@@ -533,8 +534,11 @@ export class TaskHubGrpcWorker {
     if (!versionCheckResult.compatible) {
       if (versionCheckResult.shouldFail) {
         // Fail the orchestration with version mismatch error
-        this._logger.warn(
-          `${versionCheckResult.errorType} for instance '${instanceId}': ${versionCheckResult.errorMessage}. Failing orchestration.`,
+        WorkerLogs.versionMismatchFail(
+          this._logger,
+          instanceId,
+          versionCheckResult.errorType!,
+          versionCheckResult.errorMessage!,
         );
 
         const failureDetails = pbh.newVersionMismatchFailureDetails(
@@ -559,13 +563,16 @@ export class TaskHubGrpcWorker {
         try {
           await callWithMetadata(stub.completeOrchestratorTask.bind(stub), res, this._metadataGenerator);
         } catch (e: any) {
-          this._logger.error(`An error occurred while trying to complete instance '${instanceId}': ${e?.message}`);
+          WorkerLogs.completionError(this._logger, instanceId, e);
         }
         return;
       } else {
         // Reject the work item - explicitly abandon it so it can be picked up by another worker
-        this._logger.info(
-          `${versionCheckResult.errorType} for instance '${instanceId}': ${versionCheckResult.errorMessage}. Abandoning work item.`,
+        WorkerLogs.versionMismatchAbandon(
+          this._logger,
+          instanceId,
+          versionCheckResult.errorType!,
+          versionCheckResult.errorMessage!,
         );
 
         try {
@@ -573,7 +580,7 @@ export class TaskHubGrpcWorker {
           abandonRequest.setCompletiontoken(completionToken);
           await callWithMetadata(stub.abandonTaskOrchestratorWorkItem.bind(stub), abandonRequest, this._metadataGenerator);
         } catch (e: any) {
-          this._logger.error(`An error occurred while trying to abandon work item for instance '${instanceId}': ${e?.message}`);
+          WorkerLogs.completionError(this._logger, instanceId, e);
         }
         return;
       }
@@ -623,10 +630,7 @@ export class TaskHubGrpcWorker {
         setSpanOk(tracingResult.span);
       }
     } catch (e: any) {
-      this._logger.error(
-        `An error occurred while trying to execute instance '${req.getInstanceid()}':`,
-        e,
-      );
+      WorkerLogs.executionError(this._logger, req.getInstanceid(), e);
 
       // Record the failure on the tracing span
       if (tracingResult) {
@@ -656,7 +660,7 @@ export class TaskHubGrpcWorker {
     try {
       await callWithMetadata(stub.completeOrchestratorTask.bind(stub), res, this._metadataGenerator);
     } catch (e: any) {
-      this._logger.error(`An error occurred while trying to complete instance '${req.getInstanceid()}': ${e?.message}`);
+      WorkerLogs.completionError(this._logger, req.getInstanceid(), e);
     }
   }
 
@@ -714,7 +718,7 @@ export class TaskHubGrpcWorker {
 
       setSpanOk(activitySpan);
     } catch (e: any) {
-      this._logger.error(`An error occurred while trying to execute activity '${req.getName()}':`, e);
+      WorkerLogs.activityExecutionError(this._logger, req.getName(), e);
 
       setSpanError(activitySpan, e);
 
@@ -735,11 +739,7 @@ export class TaskHubGrpcWorker {
     try {
       await callWithMetadata(stub.completeActivityTask.bind(stub), res, this._metadataGenerator);
     } catch (e: any) {
-      this._logger.error(
-        `Failed to deliver activity response for '${req.getName()}#${req.getTaskid()}' of orchestration ID '${instanceId}' to sidecar: ${
-          e?.message
-        }`,
-      );
+      WorkerLogs.activityResponseError(this._logger, req.getName(), req.getTaskid(), instanceId!, e);
     }
   }
 }

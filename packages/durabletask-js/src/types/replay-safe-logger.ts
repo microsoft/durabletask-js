@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { Logger } from "./logger.type";
+import { Logger, StructuredLogger, LogEvent, isStructuredLogger } from "./logger.type";
 
 /**
  * Interface representing a context that can determine if replay is occurring.
@@ -22,6 +22,9 @@ export interface ReplayContext {
  * wraps an existing logger and automatically suppresses log output during replay,
  * ensuring that logs are only written once when the orchestration is making forward progress.
  *
+ * If the wrapped logger implements {@link StructuredLogger}, structured log events
+ * will also be forwarded (and suppressed during replay).
+ *
  * @example
  * ```typescript
  * // Inside an orchestrator function:
@@ -29,7 +32,7 @@ export interface ReplayContext {
  * logger.info("This will only be logged once, not during replay");
  * ```
  */
-export class ReplaySafeLogger implements Logger {
+export class ReplaySafeLogger implements StructuredLogger {
   private readonly context: ReplayContext;
   private readonly innerLogger: Logger;
 
@@ -91,6 +94,25 @@ export class ReplaySafeLogger implements Logger {
   debug(message: string, ...args: unknown[]): void {
     if (!this.context.isReplaying) {
       this.innerLogger.debug(message, ...args);
+    }
+  }
+
+  /**
+   * Logs a structured event if not replaying.
+   * If the inner logger supports structured logging, delegates to its `logEvent` method.
+   * Otherwise, falls back to the appropriate plain log method.
+   *
+   * @param level - The log level.
+   * @param event - Structured event metadata.
+   * @param message - The formatted log message.
+   */
+  logEvent(level: "error" | "warn" | "info" | "debug", event: LogEvent, message: string): void {
+    if (!this.context.isReplaying) {
+      if (isStructuredLogger(this.innerLogger)) {
+        this.innerLogger.logEvent(level, event, message);
+      } else {
+        this.innerLogger[level](message);
+      }
     }
   }
 }

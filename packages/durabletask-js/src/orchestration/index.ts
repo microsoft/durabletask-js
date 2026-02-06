@@ -52,9 +52,9 @@ export function newOrchestrationState(
     fromProtobuf(state?.getOrchestrationstatus() ?? 0),
     new Date(tsCreatedParsed),
     new Date(tsUpdatedParsed),
-    state?.getInput()?.toString(),
-    state?.getOutput()?.toString(),
-    state?.getCustomstatus()?.toString(),
+    state?.getInput()?.getValue(),
+    state?.getOutput()?.getValue(),
+    state?.getCustomstatus()?.getValue(),
     failureDetails,
     tags,
   );

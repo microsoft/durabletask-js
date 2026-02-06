@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 import { createClientLogger, AzureLogger } from "@azure/logger";
-import { Logger } from "@microsoft/durabletask-js";
+import { StructuredLogger, createLogEventHandler } from "@microsoft/durabletask-js";
 
 /**
  * Pre-configured logger adapter that uses the default "durabletask" namespace.
@@ -29,19 +29,22 @@ import { Logger } from "@microsoft/durabletask-js";
  *   .build();
  * ```
  */
-export const AzureLoggerAdapter: Logger = createAzureLogger();
+export const AzureLoggerAdapter: StructuredLogger = createAzureLogger();
 
 /**
- * Creates a Logger instance that integrates with Azure SDK's logging infrastructure.
+ * Creates a StructuredLogger instance that integrates with Azure SDK's logging infrastructure.
  * 
  * The created logger uses `@azure/logger` under the hood, which means:
  * - Log output can be controlled via the `AZURE_LOG_LEVEL` environment variable
  * - Log output can be redirected using `setLogLevel()` from `@azure/logger`
  * - Logs are prefixed with the namespace for easy filtering
  * 
+ * When structured log events are emitted, the event ID and category are included in the
+ * log message prefix for easy filtering and correlation.
+ * 
  * @param namespace - Optional sub-namespace to append to "durabletask".
  *                    For example, "client" results in "durabletask:client".
- * @returns A Logger instance configured for the specified namespace.
+ * @returns A StructuredLogger instance configured for the specified namespace.
  * 
  * @example
  * ```typescript
@@ -58,7 +61,7 @@ export const AzureLoggerAdapter: Logger = createAzureLogger();
  * // Logs will be prefixed with "durabletask"
  * ```
  */
-export function createAzureLogger(namespace?: string): Logger {
+export function createAzureLogger(namespace?: string): StructuredLogger {
   const fullNamespace = namespace ? `durabletask:${namespace}` : "durabletask";
   const azureLogger: AzureLogger = createClientLogger(fullNamespace);
   
@@ -75,5 +78,11 @@ export function createAzureLogger(namespace?: string): Logger {
     debug: (message: string, ...args: unknown[]): void => {
       azureLogger.verbose(message, ...args);
     },
+    logEvent: createLogEventHandler({
+      error: azureLogger.error.bind(azureLogger),
+      warn: azureLogger.warning.bind(azureLogger),
+      info: azureLogger.info.bind(azureLogger),
+      debug: azureLogger.verbose.bind(azureLogger),
+    }),
   };
 }

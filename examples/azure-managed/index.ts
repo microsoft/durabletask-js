@@ -128,6 +128,9 @@ import { whenAll } from "@microsoft/durabletask-js/dist/task";
     // Start the worker
     logger.info("Starting worker...");
     await worker.start();
+    // Allow the worker time to establish the gRPC stream with the scheduler.
+    // worker.start() returns before the connection is fully established.
+    await new Promise((resolve) => setTimeout(resolve, 2000));
     logger.info("Worker started successfully!");
 
     // Run the sequence orchestrator
@@ -135,7 +138,7 @@ import { whenAll } from "@microsoft/durabletask-js/dist/task";
     const sequenceId = await client.scheduleNewOrchestration(sequenceOrchestrator);
     logger.info(`Orchestration scheduled with ID: ${sequenceId}`);
 
-    const sequenceState = await client.waitForOrchestrationCompletion(sequenceId, undefined, 60);
+    const sequenceState = await client.waitForOrchestrationCompletion(sequenceId, true, 60);
     logger.info(`Sequence orchestration completed!`);
     logger.info(`Result: ${sequenceState?.serializedOutput}`);
 
@@ -144,7 +147,7 @@ import { whenAll } from "@microsoft/durabletask-js/dist/task";
     const fanOutId = await client.scheduleNewOrchestration(fanOutFanInOrchestrator);
     logger.info(`Orchestration scheduled with ID: ${fanOutId}`);
 
-    const fanOutState = await client.waitForOrchestrationCompletion(fanOutId, undefined, 60);
+    const fanOutState = await client.waitForOrchestrationCompletion(fanOutId, true, 60);
     logger.info(`Fan-out/fan-in orchestration completed!`);
     logger.info(`Result: ${fanOutState?.serializedOutput}`);
 

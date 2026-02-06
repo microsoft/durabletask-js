@@ -29,6 +29,7 @@ import { Logger, ConsoleLogger } from "../types/logger.type";
 import { StartOrchestrationOptions } from "../task/options";
 import { mapToRecord } from "../utils/tags.util";
 import { populateTagsMap } from "../utils/pb-helper.util";
+import * as ClientLogs from "./logs";
 import {
   startSpanForNewOrchestration,
   startSpanForEventRaisedFromClient,
@@ -228,7 +229,9 @@ export class TaskHubGrpcClient {
     // Create a tracing span for the new orchestration (if OTEL is available)
     const span = startSpanForNewOrchestration(req);
 
-    this._logger.info(`Starting new ${name} instance with ID = ${req.getInstanceid()}${effectiveVersion ? ` (version: ${effectiveVersion})` : ""}`);
+    const serializedInput = i.getValue() ?? "";
+    const inputSizeInBytes = Buffer.byteLength(serializedInput, "utf8");
+    ClientLogs.schedulingOrchestration(this._logger, req.getInstanceid(), name, inputSizeInBytes);
 
     try {
       const res = await callWithMetadata<pb.CreateInstanceRequest, pb.CreateInstanceResponse>(
@@ -340,7 +343,7 @@ export class TaskHubGrpcClient {
     req.setInstanceid(instanceId);
     req.setGetinputsandoutputs(fetchPayloads);
 
-    this._logger.info(`Waiting ${timeout} seconds for instance ${instanceId} to complete...`);
+    ClientLogs.waitingForInstanceCompletion(this._logger, instanceId);
 
     const callPromise = callWithMetadata<pb.GetInstanceRequest, pb.GetInstanceResponse>(
       this._stub.waitForInstanceCompletion.bind(this._stub),
@@ -364,11 +367,11 @@ export class TaskHubGrpcClient {
 
     if (state.runtimeStatus === OrchestrationStatus.FAILED && state.failureDetails) {
       details = state.failureDetails;
-      this._logger.info(`Instance ${instanceId} failed: [${details.errorType}] ${details.message}`);
+      ClientLogs.instanceFailed(this._logger, instanceId, details.errorType, details.message);
     } else if (state.runtimeStatus === OrchestrationStatus.TERMINATED) {
-      this._logger.info(`Instance ${instanceId} was terminated`);
+      ClientLogs.instanceTerminated(this._logger, instanceId);
     } else if (state.runtimeStatus === OrchestrationStatus.COMPLETED) {
-      this._logger.info(`Instance ${instanceId} completed`);
+      ClientLogs.instanceCompleted(this._logger, instanceId);
     }
 
     return state;
@@ -397,7 +400,7 @@ export class TaskHubGrpcClient {
     // Create a tracing span for the raised event (if OTEL is available)
     const span = startSpanForEventRaisedFromClient(eventName, instanceId);
 
-    this._logger.info(`Raising event '${eventName}' for instance '${instanceId}'`);
+    ClientLogs.raisingEvent(this._logger, instanceId, eventName);
 
     try {
       await callWithMetadata<pb.RaiseEventRequest, pb.RaiseEventResponse>(
@@ -461,7 +464,7 @@ export class TaskHubGrpcClient {
     req.setOutput(i);
     req.setRecursive(recursive);
 
-    this._logger.info(`Terminating '${instanceId}'${recursive ? ' (recursive)' : ''}`);
+    ClientLogs.terminatingInstance(this._logger, instanceId);
 
     await callWithMetadata<pb.TerminateRequest, pb.TerminateResponse>(
       this._stub.terminateInstance.bind(this._stub),
@@ -474,7 +477,7 @@ export class TaskHubGrpcClient {
     const req = new pb.SuspendRequest();
     req.setInstanceid(instanceId);
 
-    this._logger.info(`Suspending '${instanceId}'`);
+    ClientLogs.suspendingInstance(this._logger, instanceId);
 
     await callWithMetadata<pb.SuspendRequest, pb.SuspendResponse>(
       this._stub.suspendInstance.bind(this._stub),
@@ -487,7 +490,7 @@ export class TaskHubGrpcClient {
     const req = new pb.ResumeRequest();
     req.setInstanceid(instanceId);
 
-    this._logger.info(`Resuming '${instanceId}'`);
+    ClientLogs.resumingInstance(this._logger, instanceId);
 
     await callWithMetadata<pb.ResumeRequest, pb.ResumeResponse>(
       this._stub.resumeInstance.bind(this._stub),
@@ -525,7 +528,7 @@ export class TaskHubGrpcClient {
       req.setReason(reasonValue);
     }
 
-    this._logger.info(`Rewinding '${instanceId}' with reason: ${reason}`);
+    ClientLogs.rewindingInstance(this._logger, instanceId, reason);
 
     try {
       await callWithMetadata<pb.RewindInstanceRequest, pb.RewindInstanceResponse>(
@@ -582,7 +585,7 @@ export class TaskHubGrpcClient {
     req.setInstanceid(instanceId);
     req.setRestartwithnewinstanceid(restartWithNewInstanceId);
 
-    this._logger.info(`Restarting '${instanceId}' with restartWithNewInstanceId=${restartWithNewInstanceId}`);
+    ClientLogs.restartingInstance(this._logger, instanceId, restartWithNewInstanceId);
 
     try {
       const res = await callWithMetadata<pb.RestartInstanceRequest, pb.RestartInstanceResponse>(
@@ -637,7 +640,7 @@ export class TaskHubGrpcClient {
       req.setInstanceid(instanceId);
       req.setRecursive(options?.recursive ?? false);
 
-      this._logger.info(`Purging Instance '${instanceId}'${options?.recursive ? ' (recursive)' : ''}`);
+      ClientLogs.purgingInstanceMetadata(this._logger, instanceId);
 
       res = await callWithMetadata<pb.PurgeInstancesRequest, pb.PurgeInstancesResponse>(
         this._stub.purgeInstances.bind(this._stub),
@@ -668,7 +671,7 @@ export class TaskHubGrpcClient {
       req.setRecursive(options?.recursive ?? false);
       const timeout = purgeInstanceCriteria.getTimeout();
 
-      this._logger.info(`Purging Instances using purging criteria${options?.recursive ? " (recursive)" : ""}`);
+      ClientLogs.purgingInstances(this._logger, createdTimeFrom, createdTimeTo, runtimeStatusList.map(String).join(", "));
 
       const callPromise = callWithMetadata<pb.PurgeInstancesRequest, pb.PurgeInstancesResponse>(
         this._stub.purgeInstances.bind(this._stub),

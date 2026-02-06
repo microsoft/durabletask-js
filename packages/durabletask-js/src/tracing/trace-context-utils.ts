@@ -39,8 +39,15 @@ export function parseTraceparent(
  * @param spanId - The 16-character hex span ID.
  * @param traceFlags - The trace flags byte (0-255).
  * @returns The formatted traceparent string.
+ * @throws {Error} If traceId or spanId have invalid format.
  */
 export function createTraceparent(traceId: string, spanId: string, traceFlags: number = 1): string {
+  if (!/^[0-9a-fA-F]{32}$/.test(traceId)) {
+    throw new Error(`Invalid traceId: expected 32 hex characters, got '${traceId}'`);
+  }
+  if (!/^[0-9a-fA-F]{16}$/.test(spanId)) {
+    throw new Error(`Invalid spanId: expected 16 hex characters, got '${spanId}'`);
+  }
   const normalizedTraceId = traceId.toLowerCase();
   const normalizedSpanId = spanId.toLowerCase();
   const flagsByte = traceFlags & 0xff;
@@ -84,6 +91,11 @@ export function createPbTraceContext(traceparent: string, tracestate?: string): 
 /**
  * Attempts to load the OpenTelemetry API module.
  * Returns undefined if the module is not installed (it's an optional peer dependency).
+ *
+ * Note: Uses synchronous `require()` because the result is cached and callers
+ * throughout the tracing layer depend on synchronous access. The compiled output
+ * targets CommonJS, so `require()` is safe. If the project migrates to ESM output
+ * in the future, this should be changed to an async initialization pattern.
  */
 let _otelApi: typeof import("@opentelemetry/api") | undefined;
 let _otelApiLoaded = false;

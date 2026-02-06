@@ -45,8 +45,8 @@ console.log(`OpenTelemetry SDK started – exporting traces to ${otlpEndpoint}`)
 import {
   DurableTaskAzureManagedClientBuilder,
   DurableTaskAzureManagedWorkerBuilder,
-  createAzureLogger,
 } from "@microsoft/durabletask-js-azuremanaged";
+import { ConsoleLogger } from "@microsoft/durabletask-js";
 import { ActivityContext } from "@microsoft/durabletask-js/dist/task/context/activity-context";
 import { OrchestrationContext } from "@microsoft/durabletask-js/dist/task/context/orchestration-context";
 import { TOrchestrator } from "@microsoft/durabletask-js/dist/types/orchestrator.type";
@@ -56,10 +56,11 @@ import { whenAll } from "@microsoft/durabletask-js/dist/task";
 // 3. Application code
 // --------------------------------------------------------------------------
 (async () => {
-  // Use the Azure logger adapter for the SDK internals – it respects AZURE_LOG_LEVEL
-  // and suppresses debug/verbose messages by default, keeping the console output clean.
-  // Set AZURE_LOG_LEVEL=verbose to see internal SDK logs.
-  const sdkLogger = createAzureLogger();
+  // Use ConsoleLogger so structured log events (with event IDs and categories) are
+  // printed to the console by default, similar to .NET's default ILogger<T> output.
+  // For production, consider using createAzureLogger() which integrates with @azure/logger
+  // and respects the AZURE_LOG_LEVEL environment variable.
+  const sdkLogger = new ConsoleLogger();
 
   // --- Configuration ---
   const connectionString = process.env.DURABLE_TASK_SCHEDULER_CONNECTION_STRING;
@@ -204,6 +205,9 @@ import { whenAll } from "@microsoft/durabletask-js/dist/task";
     // --- Start worker ---
     console.log("Starting worker...");
     await worker.start();
+    // Allow the worker time to establish the gRPC stream with the scheduler.
+    // worker.start() returns before the connection is fully established.
+    await new Promise((r) => setTimeout(r, 2000));
     console.log("Worker started.");
 
     // --- Run orchestrations ---
@@ -212,14 +216,14 @@ import { whenAll } from "@microsoft/durabletask-js/dist/task";
     console.log("\n=== Sequence Orchestration ===");
     const seqId = await client.scheduleNewOrchestration(sequenceOrchestrator);
     console.log(`Scheduled: ${seqId}`);
-    const seqState = await client.waitForOrchestrationCompletion(seqId, undefined, 60);
+    const seqState = await client.waitForOrchestrationCompletion(seqId, true, 60);
     console.log(`Completed – result: ${seqState?.serializedOutput}`);
 
     // 2) Data pipeline orchestration (fan-out/fan-in)
     console.log("\n=== Data Pipeline Orchestration ===");
     const pipelineId = await client.scheduleNewOrchestration(dataPipelineOrchestrator);
     console.log(`Scheduled: ${pipelineId}`);
-    const pipelineState = await client.waitForOrchestrationCompletion(pipelineId, undefined, 60);
+    const pipelineState = await client.waitForOrchestrationCompletion(pipelineId, true, 60);
     console.log(`Completed – result: ${pipelineState?.serializedOutput}`);
 
     console.log("\n=== All orchestrations completed! ===");
