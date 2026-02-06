@@ -107,9 +107,7 @@ export abstract class RetryTaskBase<T> extends CompletableTask<T> {
   recordFailure(message: string, details?: pb.TaskFailureDetails): void {
     details = details ?? new pb.TaskFailureDetails();
     this._lastFailure = details;
-
-    // Store the exception for later if we exhaust retries
-    this._exception = new TaskFailedError(message, details);
+    // Defer _exception creation to fail() - only create it when retry is exhausted
   }
 
   /**

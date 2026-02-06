@@ -578,9 +578,7 @@ export class OrchestrationExecutor {
         delete ctx._pendingTasks[taskId];
         return true;
       }
-    }
-
-    if (task instanceof RetryHandlerTask) {
+    } else if (task instanceof RetryHandlerTask) {
       task.recordFailure(errorMessage, failureDetails);
       const keepRetrying = await task.shouldRetry(ctx._currentUtcDatetime);
 
