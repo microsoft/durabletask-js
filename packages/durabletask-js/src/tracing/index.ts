@@ -8,10 +8,13 @@ export {
   createTraceparent,
   generateSpanId,
   createPbTraceContext,
-  getOtelApi,
   extractTraceparentFromSpan,
   createParentContextFromPb,
 } from "./trace-context-utils";
+
+// Internal-only exports (not re-exported from package index.ts):
+// getOtelApi, getTracer, OrchestrationSpanInfo, startSpanForEventRaisedFromClient
+export { getOtelApi } from "./trace-context-utils";
 
 export {
   getTracer,

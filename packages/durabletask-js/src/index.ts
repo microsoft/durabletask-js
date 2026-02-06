@@ -100,8 +100,4 @@ export {
   TaskType,
   createSpanName,
   createTimerSpanName,
-  getOtelApi,
-  getTracer,
-  OrchestrationSpanInfo,
-  startSpanForEventRaisedFromClient,
 } from "./tracing";
