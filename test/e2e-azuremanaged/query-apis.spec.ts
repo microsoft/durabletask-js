@@ -426,14 +426,13 @@ describe("Query APIs E2E Tests", () => {
       taskHubWorker.addOrchestrator(simpleOrchestrator);
       await taskHubWorker.start();
 
-      const beforeTime = new Date();
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // Use a wide time window to account for clock differences between client and server
+      const beforeTime = new Date(Date.now() - 60000); // 1 minute ago
 
       const id = await taskHubClient.scheduleNewOrchestration(simpleOrchestrator);
       await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
 
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      const afterTime = new Date();
+      const afterTime = new Date(Date.now() + 60000); // 1 minute from now
 
       // List with completed time filter
       const page = await taskHubClient.listInstanceIds({
