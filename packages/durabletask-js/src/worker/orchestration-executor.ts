@@ -90,6 +90,8 @@ export class OrchestrationExecutor {
     ) {
       if (ctx._completionStatus === pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED) {
         WorkerLogs.orchestrationFailed(this._logger, instanceId, this._orchestratorName);
+      } else if (ctx._completionStatus === pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED) {
+        WorkerLogs.orchestrationTerminated(this._logger, instanceId);
       } else {
         WorkerLogs.orchestrationCompleted(this._logger, instanceId, this._orchestratorName);
       }
