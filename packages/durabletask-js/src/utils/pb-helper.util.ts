@@ -183,7 +183,8 @@ export function newSubOrchestrationFailedEvent(eventId: number, ex: Error): pb.H
 
 export function newFailureDetails(e: any): pb.TaskFailureDetails {
   const failure = new pb.TaskFailureDetails();
-  failure.setErrortype(e.constructor.name);
+  // Use error.name if set (allows custom error names), otherwise fall back to constructor name
+  failure.setErrortype(e.name || e.constructor.name);
   failure.setErrormessage(e.message);
 
   // Construct a google_protobuf_wrappers_pb.StringValue

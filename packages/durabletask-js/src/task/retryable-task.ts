@@ -156,6 +156,7 @@ export class RetryableTask<T> extends CompletableTask<T> {
    *
    * @remarks
    * Returns undefined if:
+   * - The handleFailure predicate returns false for the last failure
    * - The maximum number of attempts has been reached
    * - The retry timeout has been exceeded
    *
@@ -165,6 +166,19 @@ export class RetryableTask<T> extends CompletableTask<T> {
    * The delay is capped at maxRetryInterval.
    */
   computeNextDelayInMilliseconds(currentTime: Date): number | undefined {
+    // Check if handleFailure predicate says we should NOT retry this failure type
+    if (this._lastFailure) {
+      const failureDetails = {
+        errorType: this._lastFailure.getErrortype() || "Error",
+        message: this._lastFailure.getErrormessage() || "",
+        stackTrace: this._lastFailure.getStacktrace()?.getValue(),
+      };
+
+      if (!this._retryPolicy.shouldRetry(failureDetails)) {
+        return undefined;
+      }
+    }
+
     // Check if we've exhausted max attempts
     if (this._attemptCount >= this._retryPolicy.maxNumberOfAttempts) {
       return undefined;

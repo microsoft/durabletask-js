@@ -8,6 +8,7 @@ export class OrchestrationFailedError extends Error {
 
   constructor(message: string, details: FailureDetails) {
     super(message);
+    this.name = "OrchestrationFailedError";
     this._failureDetails = details;
   }
 
