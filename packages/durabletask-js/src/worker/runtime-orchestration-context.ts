@@ -8,7 +8,7 @@ import { ParentOrchestrationInstance } from "../types/parent-orchestration-insta
 import * as pb from "../proto/orchestrator_service_pb";
 import * as ph from "../utils/pb-helper.util";
 import { CompletableTask } from "../task/completable-task";
-import { RetryTaskBase } from "../task/retry-task-base";
+import { RetryTaskBase, RetryTaskType } from "../task/retry-task-base";
 import { RetryableTask } from "../task/retryable-task";
 import { RetryHandlerTask } from "../task/retry-handler-task";
 import { RetryTimerTask } from "../task/retry-timer-task";
@@ -518,7 +518,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     action: pb.OrchestratorAction,
     id: number,
     options: TaskOptions | SubOrchestrationOptions | undefined,
-    taskType: "activity" | "subOrchestration",
+    taskType: RetryTaskType
   ): CompletableTask<TOutput> {
     if (options?.retry && isRetryPolicy(options.retry)) {
       const retryableTask = new RetryableTask<TOutput>(

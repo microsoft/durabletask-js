@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 import * as pb from "../proto/orchestrator_service_pb";
-import { RetryTaskBase } from "./retry-task-base";
+import { RetryTaskBase, RetryTaskType } from "./retry-task-base";
 import { AsyncRetryHandler } from "./retry/retry-handler";
 import { createRetryContext } from "./retry/retry-context";
 import { TaskFailureDetails } from "./failure-details";
@@ -34,7 +34,7 @@ export class RetryHandlerTask<T> extends RetryTaskBase<T> {
     handler: AsyncRetryHandler,
     action: pb.OrchestratorAction,
     startTime: Date,
-    taskType: "activity" | "subOrchestration",
+    taskType: RetryTaskType,
   ) {
     super(action, startTime, taskType);
     this._handler = handler;

@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { RetryTaskBase } from "./retry-task-base";
+import { RetryTaskBase, RetryTaskType } from "./retry-task-base";
 import { RetryPolicy } from "./retry/retry-policy";
 import * as pb from "../proto/orchestrator_service_pb";
 
@@ -28,7 +28,7 @@ export class RetryableTask<T> extends RetryTaskBase<T> {
     retryPolicy: RetryPolicy,
     action: pb.OrchestratorAction,
     startTime: Date,
-    taskType: "activity" | "subOrchestration",
+    taskType: RetryTaskType,
   ) {
     super(action, startTime, taskType);
     this._retryPolicy = retryPolicy;
