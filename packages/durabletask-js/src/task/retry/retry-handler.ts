@@ -75,10 +75,15 @@ export type RetryHandler = (retryContext: RetryContext) => boolean;
 export type AsyncRetryHandler = (retryContext: RetryContext) => Promise<boolean>;
 
 /**
- * Creates an AsyncRetryHandler from a synchronous RetryHandler.
+ * Normalizes a retry handler to an {@link AsyncRetryHandler}.
  *
- * @param handler - The synchronous retry handler to wrap
- * @returns An AsyncRetryHandler that wraps the synchronous handler
+ * If the handler is already an {@link AsyncRetryHandler}, wrapping it with
+ * `Promise.resolve` is a no-op since `Promise.resolve(promise)` returns the
+ * same promise.  If it is a synchronous {@link RetryHandler}, the boolean
+ * result is lifted into a resolved `Promise`.
+ *
+ * @param handler - A synchronous or asynchronous retry handler
+ * @returns An AsyncRetryHandler
  *
  * @example
  * ```typescript
@@ -86,6 +91,6 @@ export type AsyncRetryHandler = (retryContext: RetryContext) => Promise<boolean>
  * const asyncHandler = toAsyncRetryHandler(syncHandler);
  * ```
  */
-export function toAsyncRetryHandler(handler: RetryHandler): AsyncRetryHandler {
+export function toAsyncRetryHandler(handler: RetryHandler | AsyncRetryHandler): AsyncRetryHandler {
   return (context: RetryContext) => Promise.resolve(handler(context));
 }

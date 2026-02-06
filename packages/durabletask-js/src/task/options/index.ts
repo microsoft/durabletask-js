@@ -12,5 +12,5 @@ export {
   subOrchestrationOptionsFromRetryPolicy,
   subOrchestrationOptionsFromRetryHandler,
   isRetryPolicy,
-  isAsyncRetryHandler,
+  isRetryHandler,
 } from "./task-options";

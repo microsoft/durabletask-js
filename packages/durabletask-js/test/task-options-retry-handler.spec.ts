@@ -14,7 +14,7 @@ import {
   subOrchestrationOptionsFromRetryPolicy,
   subOrchestrationOptionsFromRetryHandler,
   isRetryPolicy,
-  isAsyncRetryHandler,
+  isRetryHandler,
 } from "../src/task/options/task-options";
 
 describe("TaskOptions with RetryHandler", () => {
@@ -40,6 +40,11 @@ describe("TaskOptions with RetryHandler", () => {
     it("should accept AsyncRetryHandler", () => {
       const options: TaskRetryOptions = mockAsyncRetryHandler;
       expect(options).toBe(mockAsyncRetryHandler);
+    });
+
+    it("should accept synchronous RetryHandler directly", () => {
+      const options: TaskRetryOptions = mockSyncRetryHandler;
+      expect(options).toBe(mockSyncRetryHandler);
     });
   });
 
@@ -146,22 +151,26 @@ describe("TaskOptions with RetryHandler", () => {
     });
   });
 
-  describe("isAsyncRetryHandler type guard", () => {
+  describe("isRetryHandler type guard", () => {
     it("should return true for AsyncRetryHandler", () => {
-      expect(isAsyncRetryHandler(mockAsyncRetryHandler)).toBe(true);
+      expect(isRetryHandler(mockAsyncRetryHandler)).toBe(true);
+    });
+
+    it("should return true for sync RetryHandler", () => {
+      expect(isRetryHandler(mockSyncRetryHandler)).toBe(true);
     });
 
     it("should return true for wrapped sync handler", () => {
       const wrapped = toAsyncRetryHandler(mockSyncRetryHandler);
-      expect(isAsyncRetryHandler(wrapped)).toBe(true);
+      expect(isRetryHandler(wrapped)).toBe(true);
     });
 
     it("should return false for RetryPolicy instances", () => {
-      expect(isAsyncRetryHandler(mockRetryPolicy)).toBe(false);
+      expect(isRetryHandler(mockRetryPolicy)).toBe(false);
     });
 
     it("should return false for undefined", () => {
-      expect(isAsyncRetryHandler(undefined)).toBe(false);
+      expect(isRetryHandler(undefined)).toBe(false);
     });
   });
 
@@ -179,7 +188,15 @@ describe("TaskOptions with RetryHandler", () => {
         retry: mockAsyncRetryHandler,
       };
 
-      expect(isAsyncRetryHandler(options.retry)).toBe(true);
+      expect(isRetryHandler(options.retry)).toBe(true);
+    });
+
+    it("should allow synchronous RetryHandler as retry option", () => {
+      const options: TaskOptions = {
+        retry: mockSyncRetryHandler,
+      };
+
+      expect(isRetryHandler(options.retry)).toBe(true);
     });
 
     it("should allow combination with other options", () => {
@@ -212,8 +229,18 @@ describe("TaskOptions with RetryHandler", () => {
         instanceId: "sub-orch-2",
       };
 
-      expect(isAsyncRetryHandler(options.retry)).toBe(true);
+      expect(isRetryHandler(options.retry)).toBe(true);
       expect(options.instanceId).toBe("sub-orch-2");
+    });
+
+    it("should allow synchronous RetryHandler with instanceId", () => {
+      const options: SubOrchestrationOptions = {
+        retry: mockSyncRetryHandler,
+        instanceId: "sub-orch-3",
+      };
+
+      expect(isRetryHandler(options.retry)).toBe(true);
+      expect(options.instanceId).toBe("sub-orch-3");
     });
   });
 });

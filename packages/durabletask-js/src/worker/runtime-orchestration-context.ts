@@ -12,7 +12,8 @@ import { RetryTaskBase, RetryTaskType } from "../task/retry-task-base";
 import { RetryableTask } from "../task/retryable-task";
 import { RetryHandlerTask } from "../task/retry-handler-task";
 import { RetryTimerTask } from "../task/retry-timer-task";
-import { TaskOptions, SubOrchestrationOptions, isRetryPolicy, isAsyncRetryHandler } from "../task/options";
+import { TaskOptions, SubOrchestrationOptions, isRetryPolicy, isRetryHandler } from "../task/options";
+import { toAsyncRetryHandler } from "../task/retry/retry-handler";
 import { TActivity } from "../types/activity.type";
 import { TOrchestrator } from "../types/orchestrator.type";
 import { Task } from "../task/task";
@@ -531,9 +532,13 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
       return retryableTask;
     }
 
-    if (options?.retry && isAsyncRetryHandler(options.retry)) {
+    if (options?.retry && isRetryHandler(options.retry)) {
+      // Normalize to AsyncRetryHandler — wraps sync handlers via Promise.resolve,
+      // and is a no-op for handlers that already return a Promise.
+      const handler = toAsyncRetryHandler(options.retry);
       const retryHandlerTask = new RetryHandlerTask<TOutput>(
-        options.retry,
+        handler,
+        this,
         action,
         this._currentUtcDatetime,
         taskType,

@@ -3,10 +3,55 @@
 
 import { RetryHandlerTask } from "../src/task/retry-handler-task";
 import { AsyncRetryHandler } from "../src/task/retry/retry-handler";
+import { OrchestrationContext } from "../src/task/context/orchestration-context";
 import * as pb from "../src/proto/orchestrator_service_pb";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 
+/**
+ * Creates a minimal mock OrchestrationContext for testing.
+ */
+function createMockOrchestrationContext(overrides?: { isReplaying?: boolean }): OrchestrationContext {
+  return {
+    instanceId: "test-instance-id",
+    parent: undefined,
+    currentUtcDateTime: new Date(),
+    isReplaying: overrides?.isReplaying ?? false,
+    version: "",
+    compareVersionTo: () => 0,
+    createTimer: () => {
+      throw new Error("Not implemented");
+    },
+    callActivity: () => {
+      throw new Error("Not implemented");
+    },
+    callSubOrchestrator: () => {
+      throw new Error("Not implemented");
+    },
+    waitForExternalEvent: () => {
+      throw new Error("Not implemented");
+    },
+    continueAsNew: () => {
+      throw new Error("Not implemented");
+    },
+    createReplaySafeLogger: () => {
+      throw new Error("Not implemented");
+    },
+    setCustomStatus: () => {
+      throw new Error("Not implemented");
+    },
+    sendEvent: () => {
+      throw new Error("Not implemented");
+    },
+  } as unknown as OrchestrationContext;
+}
+
 describe("RetryHandlerTask", () => {
+  let mockCtx: OrchestrationContext;
+
+  beforeEach(() => {
+    mockCtx = createMockOrchestrationContext();
+  });
+
   describe("constructor", () => {
     it("should create a retry handler task with correct initial state", () => {
       // Arrange
@@ -15,7 +60,7 @@ describe("RetryHandlerTask", () => {
       const startTime = new Date();
 
       // Act
-      const task = new RetryHandlerTask<string>(handler, action, startTime, "activity");
+      const task = new RetryHandlerTask<string>(handler, mockCtx, action, startTime, "activity");
 
       // Assert
       expect(task.attemptCount).toBe(1);
@@ -33,7 +78,7 @@ describe("RetryHandlerTask", () => {
       const startTime = new Date();
 
       // Act
-      const task = new RetryHandlerTask<number>(handler, action, startTime, "subOrchestration");
+      const task = new RetryHandlerTask<number>(handler, mockCtx, action, startTime, "subOrchestration");
 
       // Assert
       expect(task.taskType).toBe("subOrchestration");
@@ -45,7 +90,7 @@ describe("RetryHandlerTask", () => {
       // Arrange
       const handler: AsyncRetryHandler = async () => true;
       const action = new pb.OrchestratorAction();
-      const task = new RetryHandlerTask<string>(handler, action, new Date(), "activity");
+      const task = new RetryHandlerTask<string>(handler, mockCtx, action, new Date(), "activity");
 
       const failureDetails = new pb.TaskFailureDetails();
       failureDetails.setErrortype("TransientError");
@@ -62,7 +107,7 @@ describe("RetryHandlerTask", () => {
       // Arrange
       const handler: AsyncRetryHandler = async () => true;
       const action = new pb.OrchestratorAction();
-      const task = new RetryHandlerTask<string>(handler, action, new Date(), "activity");
+      const task = new RetryHandlerTask<string>(handler, mockCtx, action, new Date(), "activity");
 
       // Act
       task.recordFailure("Something failed");
@@ -77,7 +122,7 @@ describe("RetryHandlerTask", () => {
       // Arrange
       const handler: AsyncRetryHandler = async () => true;
       const action = new pb.OrchestratorAction();
-      const task = new RetryHandlerTask<string>(handler, action, new Date(), "activity");
+      const task = new RetryHandlerTask<string>(handler, mockCtx, action, new Date(), "activity");
 
       // Act
       task.incrementAttemptCount();
@@ -93,7 +138,7 @@ describe("RetryHandlerTask", () => {
       // Arrange
       const handler: AsyncRetryHandler = async () => true;
       const action = new pb.OrchestratorAction();
-      const task = new RetryHandlerTask<string>(handler, action, new Date(), "activity");
+      const task = new RetryHandlerTask<string>(handler, mockCtx, action, new Date(), "activity");
 
       const failureDetails = new pb.TaskFailureDetails();
       failureDetails.setErrortype("TransientError");
@@ -115,7 +160,7 @@ describe("RetryHandlerTask", () => {
       // Arrange
       const handler: AsyncRetryHandler = async () => true;
       const action = new pb.OrchestratorAction();
-      const task = new RetryHandlerTask<string>(handler, action, new Date(), "activity");
+      const task = new RetryHandlerTask<string>(handler, mockCtx, action, new Date(), "activity");
 
       const failureDetails = new pb.TaskFailureDetails();
       failureDetails.setErrortype("PermanentError");
@@ -133,7 +178,7 @@ describe("RetryHandlerTask", () => {
       // Arrange
       const handler: AsyncRetryHandler = async () => true;
       const action = new pb.OrchestratorAction();
-      const task = new RetryHandlerTask<string>(handler, action, new Date(), "activity");
+      const task = new RetryHandlerTask<string>(handler, mockCtx, action, new Date(), "activity");
       task.complete("done");
 
       // Act & Assert
@@ -146,7 +191,7 @@ describe("RetryHandlerTask", () => {
       // Arrange
       const handler: AsyncRetryHandler = async () => true;
       const action = new pb.OrchestratorAction();
-      const task = new RetryHandlerTask<string>(handler, action, new Date(), "activity");
+      const task = new RetryHandlerTask<string>(handler, mockCtx, action, new Date(), "activity");
 
       // Act
       const result = await task.shouldRetry(new Date());
@@ -159,7 +204,7 @@ describe("RetryHandlerTask", () => {
       // Arrange
       const handler: AsyncRetryHandler = async () => true;
       const action = new pb.OrchestratorAction();
-      const task = new RetryHandlerTask<string>(handler, action, new Date(), "activity");
+      const task = new RetryHandlerTask<string>(handler, mockCtx, action, new Date(), "activity");
 
       const failureDetails = new pb.TaskFailureDetails();
       failureDetails.setErrortype("NotFoundError");
@@ -181,7 +226,7 @@ describe("RetryHandlerTask", () => {
       };
       const action = new pb.OrchestratorAction();
       const startTime = new Date(2025, 0, 1);
-      const task = new RetryHandlerTask<string>(handler, action, startTime, "activity");
+      const task = new RetryHandlerTask<string>(handler, mockCtx, action, startTime, "activity");
 
       const failureDetails = new pb.TaskFailureDetails();
       failureDetails.setErrortype("TransientError");
@@ -203,7 +248,7 @@ describe("RetryHandlerTask", () => {
         return ctx.lastFailure.errorType !== "PermanentError";
       };
       const action = new pb.OrchestratorAction();
-      const task = new RetryHandlerTask<string>(handler, action, new Date(), "activity");
+      const task = new RetryHandlerTask<string>(handler, mockCtx, action, new Date(), "activity");
 
       const failureDetails = new pb.TaskFailureDetails();
       failureDetails.setErrortype("PermanentError");
@@ -226,7 +271,7 @@ describe("RetryHandlerTask", () => {
       };
       const action = new pb.OrchestratorAction();
       const startTime = new Date(2025, 0, 1, 0, 0, 0);
-      const task = new RetryHandlerTask<string>(handler, action, startTime, "activity");
+      const task = new RetryHandlerTask<string>(handler, mockCtx, action, startTime, "activity");
 
       // Simulate 2 previous failures
       task.incrementAttemptCount(); // attempt count = 2
@@ -246,12 +291,36 @@ describe("RetryHandlerTask", () => {
 
       // Assert
       expect(capturedContext).toBeDefined();
+      expect(capturedContext.orchestrationContext).toBe(mockCtx);
       expect(capturedContext.lastAttemptNumber).toBe(2);
       expect(capturedContext.lastFailure.errorType).toBe("TransientError");
       expect(capturedContext.lastFailure.message).toBe("Connection timeout");
       expect(capturedContext.lastFailure.stackTrace).toBe("Error: Connection timeout\n    at line 1");
       expect(capturedContext.totalRetryTimeInMilliseconds).toBe(5000);
       expect(capturedContext.isCancelled).toBe(false);
+    });
+
+    it("should expose orchestrationContext.isReplaying in retry context", async () => {
+      // Arrange
+      const replayingCtx = createMockOrchestrationContext({ isReplaying: true });
+      let capturedIsReplaying: boolean | undefined;
+      const handler: AsyncRetryHandler = async (ctx) => {
+        capturedIsReplaying = ctx.orchestrationContext.isReplaying;
+        return true;
+      };
+      const action = new pb.OrchestratorAction();
+      const task = new RetryHandlerTask<string>(handler, replayingCtx, action, new Date(), "activity");
+
+      const failureDetails = new pb.TaskFailureDetails();
+      failureDetails.setErrortype("TransientError");
+      failureDetails.setErrormessage("Timeout");
+      task.recordFailure("Timeout", failureDetails);
+
+      // Act
+      await task.shouldRetry(new Date());
+
+      // Assert
+      expect(capturedIsReplaying).toBe(true);
     });
 
     it("should allow handler to make decisions based on totalRetryTime", async () => {
@@ -261,7 +330,7 @@ describe("RetryHandlerTask", () => {
       };
       const action = new pb.OrchestratorAction();
       const startTime = new Date(2025, 0, 1, 0, 0, 0);
-      const task = new RetryHandlerTask<string>(handler, action, startTime, "activity");
+      const task = new RetryHandlerTask<string>(handler, mockCtx, action, startTime, "activity");
 
       const failureDetails = new pb.TaskFailureDetails();
       failureDetails.setErrortype("TransientError");

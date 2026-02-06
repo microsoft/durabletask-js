@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 import * as pb from "../proto/orchestrator_service_pb";
+import { OrchestrationContext } from "./context/orchestration-context";
 import { RetryTaskBase, RetryTaskType } from "./retry-task-base";
 import { AsyncRetryHandler } from "./retry/retry-handler";
 import { createRetryContext } from "./retry/retry-context";
@@ -21,23 +22,27 @@ import { TaskFailureDetails } from "./failure-details";
  */
 export class RetryHandlerTask<T> extends RetryTaskBase<T> {
   private readonly _handler: AsyncRetryHandler;
+  private readonly _orchestrationContext: OrchestrationContext;
 
   /**
    * Creates a new RetryHandlerTask instance.
    *
    * @param handler - The async retry handler for imperative retry decisions
+   * @param orchestrationContext - The orchestration context for the current execution
    * @param action - The orchestrator action associated with this task
    * @param startTime - The time when the task was first scheduled
    * @param taskType - The type of task (activity or sub-orchestration)
    */
   constructor(
     handler: AsyncRetryHandler,
+    orchestrationContext: OrchestrationContext,
     action: pb.OrchestratorAction,
     startTime: Date,
     taskType: RetryTaskType,
   ) {
     super(action, startTime, taskType);
     this._handler = handler;
+    this._orchestrationContext = orchestrationContext;
   }
 
   /**
@@ -72,6 +77,7 @@ export class RetryHandlerTask<T> extends RetryTaskBase<T> {
     const totalRetryTimeMs = currentTime.getTime() - this.startTime.getTime();
 
     const retryContext = createRetryContext(
+      this._orchestrationContext,
       this.attemptCount,
       failureDetails,
       totalRetryTimeMs,

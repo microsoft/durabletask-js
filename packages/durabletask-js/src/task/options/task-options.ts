@@ -5,9 +5,16 @@ import { RetryPolicy } from "../retry/retry-policy";
 import { AsyncRetryHandler, RetryHandler, toAsyncRetryHandler } from "../retry/retry-handler";
 
 /**
- * Union type representing either a RetryPolicy for declarative retry or an AsyncRetryHandler for imperative retry.
+ * Union type representing the available retry strategies for a task.
+ *
+ * - {@link RetryPolicy} for declarative retry control (with backoff, max attempts, etc.)
+ * - {@link AsyncRetryHandler} for asynchronous imperative retry control
+ * - {@link RetryHandler} for synchronous imperative retry control
+ *
+ * When a synchronous {@link RetryHandler} is provided, it is automatically
+ * wrapped into an {@link AsyncRetryHandler} internally.
  */
-export type TaskRetryOptions = RetryPolicy | AsyncRetryHandler;
+export type TaskRetryOptions = RetryPolicy | AsyncRetryHandler | RetryHandler;
 
 /**
  * Options that can be used to control the behavior of orchestrator task execution.
@@ -15,8 +22,9 @@ export type TaskRetryOptions = RetryPolicy | AsyncRetryHandler;
 export interface TaskOptions {
   /**
    * The retry options for the task.
-   * Can be either a RetryPolicy for declarative retry control,
-   * or an AsyncRetryHandler for imperative (programmatic) retry control.
+   * Can be a RetryPolicy for declarative retry control,
+   * an AsyncRetryHandler for async imperative retry control,
+   * or a RetryHandler for sync imperative retry control.
    */
   retry?: TaskRetryOptions;
   /**
@@ -188,11 +196,12 @@ export function isRetryPolicy(retry: TaskRetryOptions | undefined): retry is Ret
 }
 
 /**
- * Type guard to check if the retry option is an AsyncRetryHandler.
+ * Type guard to check if the retry option is a retry handler function
+ * (either {@link AsyncRetryHandler} or {@link RetryHandler}).
  *
  * @param retry - The retry option to check
- * @returns true if the retry option is an AsyncRetryHandler, false otherwise
+ * @returns true if the retry option is a handler function, false otherwise
  */
-export function isAsyncRetryHandler(retry: TaskRetryOptions | undefined): retry is AsyncRetryHandler {
+export function isRetryHandler(retry: TaskRetryOptions | undefined): retry is AsyncRetryHandler | RetryHandler {
   return typeof retry === "function";
 }

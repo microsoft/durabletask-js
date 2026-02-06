@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+import { OrchestrationContext } from "../context/orchestration-context";
 import { TaskFailureDetails } from "../failure-details";
 
 /**
@@ -12,11 +13,17 @@ import { TaskFailureDetails } from "../failure-details";
  * to continue retrying.
  *
  * Retry handler code is an extension of the orchestrator code and must therefore
- * comply with all the determinism requirements of orchestrator code.
+ * comply with all the determinism requirements of orchestrator code. The
+ * {@link orchestrationContext} property can be used to check
+ * {@link OrchestrationContext.isReplaying} to guard side-effects such as logging.
  *
  * @example
  * ```typescript
  * const retryHandler: RetryHandler = (context: RetryContext) => {
+ *   // Guard side-effects with isReplaying
+ *   if (!context.orchestrationContext.isReplaying) {
+ *     console.log(`Retry attempt ${context.lastAttemptNumber}`);
+ *   }
  *   // Don't retry after 5 attempts
  *   if (context.lastAttemptNumber >= 5) {
  *     return false;
@@ -34,6 +41,16 @@ import { TaskFailureDetails } from "../failure-details";
  * ```
  */
 export interface RetryContext {
+  /**
+   * The orchestration context for the currently executing orchestration.
+   *
+   * @remarks
+   * This is primarily useful for checking {@link OrchestrationContext.isReplaying}
+   * to guard side-effects like logging or counter increments inside retry handlers,
+   * since retry handler code runs as part of the orchestrator and is subject to replay.
+   */
+  readonly orchestrationContext: OrchestrationContext;
+
   /**
    * The previous retry attempt number.
    * This is 1 after the first failure, 2 after the second, etc.
@@ -62,6 +79,7 @@ export interface RetryContext {
 /**
  * Creates a new RetryContext object.
  *
+ * @param orchestrationContext - The orchestration context for the current execution
  * @param lastAttemptNumber - The previous retry attempt number
  * @param lastFailure - The details of the previous task failure
  * @param totalRetryTimeInMilliseconds - The total time spent retrying
@@ -69,12 +87,14 @@ export interface RetryContext {
  * @returns A RetryContext object
  */
 export function createRetryContext(
+  orchestrationContext: OrchestrationContext,
   lastAttemptNumber: number,
   lastFailure: TaskFailureDetails,
   totalRetryTimeInMilliseconds: number,
   isCancelled: boolean = false,
 ): RetryContext {
   return {
+    orchestrationContext,
     lastAttemptNumber,
     lastFailure,
     totalRetryTimeInMilliseconds,
