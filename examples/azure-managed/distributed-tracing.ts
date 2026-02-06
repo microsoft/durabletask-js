@@ -14,7 +14,7 @@
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { Resource } from "@opentelemetry/resources";
+import { resourceFromAttributes } from "@opentelemetry/resources";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 
 // Load environment variables from .env file
@@ -30,7 +30,7 @@ const traceExporter = new OTLPTraceExporter({
 });
 
 const sdk = new NodeSDK({
-  resource: new Resource({
+  resource: resourceFromAttributes({
     [ATTR_SERVICE_NAME]: "durabletask-js-tracing-example",
   }),
   spanProcessors: [new SimpleSpanProcessor(traceExporter)],
@@ -43,8 +43,8 @@ console.log(`OpenTelemetry SDK started – exporting traces to ${otlpEndpoint}`)
 // 2. Durable Task imports (after OTel is initialised)
 // --------------------------------------------------------------------------
 import {
-  createAzureManagedClient,
-  createAzureManagedWorkerBuilder,
+  DurableTaskAzureManagedClientBuilder,
+  DurableTaskAzureManagedWorkerBuilder,
   createAzureLogger,
 } from "@microsoft/durabletask-js-azuremanaged";
 import { ActivityContext } from "@microsoft/durabletask-js/dist/task/context/activity-context";
@@ -56,7 +56,10 @@ import { whenAll } from "@microsoft/durabletask-js/dist/task";
 // 3. Application code
 // --------------------------------------------------------------------------
 (async () => {
-  const logger = createAzureLogger("tracing-example");
+  // Use the Azure logger adapter for the SDK internals – it respects AZURE_LOG_LEVEL
+  // and suppresses debug/verbose messages by default, keeping the console output clean.
+  // Set AZURE_LOG_LEVEL=verbose to see internal SDK logs.
+  const sdkLogger = createAzureLogger();
 
   // --- Configuration ---
   const connectionString = process.env.DURABLE_TASK_SCHEDULER_CONNECTION_STRING;
@@ -64,11 +67,11 @@ import { whenAll } from "@microsoft/durabletask-js/dist/task";
   const taskHubName = process.env.AZURE_DTS_TASKHUB;
 
   if (!connectionString && (!endpoint || !taskHubName)) {
-    logger.error(
+    console.error(
       "Error: Either DURABLE_TASK_SCHEDULER_CONNECTION_STRING or both AZURE_DTS_ENDPOINT and AZURE_DTS_TASKHUB must be set.",
     );
-    logger.info("\nFor the DTS emulator, set:");
-    logger.info(
+    console.log("\nFor the DTS emulator, set:");
+    console.log(
       '  DURABLE_TASK_SCHEDULER_CONNECTION_STRING="Endpoint=http://localhost:8080;Authentication=None;TaskHub=default"',
     );
     process.exit(1);
@@ -78,7 +81,7 @@ import { whenAll } from "@microsoft/durabletask-js/dist/task";
 
   /** Simulates fetching data from an external service. */
   const fetchData = async (_ctx: ActivityContext, source: string): Promise<string> => {
-    logger.info(`[fetchData] Fetching data from "${source}"...`);
+    console.log(`  [fetchData] Fetching data from "${source}"...`);
     // Simulate network latency
     await new Promise((r) => setTimeout(r, 300 + Math.random() * 200));
     return `data-from-${source}`;
@@ -86,14 +89,14 @@ import { whenAll } from "@microsoft/durabletask-js/dist/task";
 
   /** Simulates transforming a piece of data. */
   const transformData = async (_ctx: ActivityContext, input: string): Promise<string> => {
-    logger.info(`[transformData] Transforming "${input}"...`);
+    console.log(`  [transformData] Transforming "${input}"...`);
     await new Promise((r) => setTimeout(r, 200));
     return `transformed(${input})`;
   };
 
   /** Simulates persisting results to a database. */
   const saveResults = async (_ctx: ActivityContext, results: string[]): Promise<number> => {
-    logger.info(`[saveResults] Saving ${results.length} results...`);
+    console.log(`  [saveResults] Saving ${results.length} results...`);
     await new Promise((r) => setTimeout(r, 150));
     return results.length;
   };
@@ -163,7 +166,7 @@ import { whenAll } from "@microsoft/durabletask-js/dist/task";
   };
 
   const greetCity = async (_ctx: ActivityContext, city: string): Promise<string> => {
-    logger.info(`[greetCity] Greeting ${city}`);
+    console.log(`  [greetCity] Greeting ${city}`);
     await new Promise((r) => setTimeout(r, 100));
     return `Hello, ${city}!`;
   };
@@ -174,69 +177,66 @@ import { whenAll } from "@microsoft/durabletask-js/dist/task";
   let worker;
 
   try {
+    const clientBuilder = new DurableTaskAzureManagedClientBuilder().logger(sdkLogger);
+    const workerBuilder = new DurableTaskAzureManagedWorkerBuilder().logger(sdkLogger);
+
     if (connectionString) {
-      logger.info("Using connection string...");
-      client = createAzureManagedClient(connectionString);
-      worker = createAzureManagedWorkerBuilder(connectionString)
-        .addOrchestrator(dataPipelineOrchestrator)
-        .addOrchestrator(sequenceOrchestrator)
-        .addActivity(fetchData)
-        .addActivity(transformData)
-        .addActivity(saveResults)
-        .addActivity(getDataSources)
-        .addActivity(greetCity)
-        .build();
+      clientBuilder.connectionString(connectionString);
+      workerBuilder.connectionString(connectionString);
     } else {
       const { DefaultAzureCredential } = await import("@azure/identity");
       const credential = new DefaultAzureCredential();
-      client = createAzureManagedClient(endpoint!, taskHubName!, credential);
-      worker = createAzureManagedWorkerBuilder(endpoint!, taskHubName!, credential)
-        .addOrchestrator(dataPipelineOrchestrator)
-        .addOrchestrator(sequenceOrchestrator)
-        .addActivity(fetchData)
-        .addActivity(transformData)
-        .addActivity(saveResults)
-        .addActivity(getDataSources)
-        .addActivity(greetCity)
-        .build();
+      clientBuilder.endpoint(endpoint!, taskHubName!, credential);
+      workerBuilder.endpoint(endpoint!, taskHubName!, credential);
     }
 
+    client = clientBuilder.build();
+    worker = workerBuilder
+      .addOrchestrator(dataPipelineOrchestrator)
+      .addOrchestrator(sequenceOrchestrator)
+      .addActivity(fetchData)
+      .addActivity(transformData)
+      .addActivity(saveResults)
+      .addActivity(getDataSources)
+      .addActivity(greetCity)
+      .build();
+
     // --- Start worker ---
-    logger.info("Starting worker...");
+    console.log("Starting worker...");
     await worker.start();
-    logger.info("Worker started.");
+    console.log("Worker started.");
 
     // --- Run orchestrations ---
 
     // 1) Sequence orchestration
-    logger.info("\n=== Sequence Orchestration ===");
+    console.log("\n=== Sequence Orchestration ===");
     const seqId = await client.scheduleNewOrchestration(sequenceOrchestrator);
-    logger.info(`Scheduled: ${seqId}`);
+    console.log(`Scheduled: ${seqId}`);
     const seqState = await client.waitForOrchestrationCompletion(seqId, undefined, 60);
-    logger.info(`Completed – result: ${seqState?.serializedOutput}`);
+    console.log(`Completed – result: ${seqState?.serializedOutput}`);
 
     // 2) Data pipeline orchestration (fan-out/fan-in)
-    logger.info("\n=== Data Pipeline Orchestration ===");
+    console.log("\n=== Data Pipeline Orchestration ===");
     const pipelineId = await client.scheduleNewOrchestration(dataPipelineOrchestrator);
-    logger.info(`Scheduled: ${pipelineId}`);
+    console.log(`Scheduled: ${pipelineId}`);
     const pipelineState = await client.waitForOrchestrationCompletion(pipelineId, undefined, 60);
-    logger.info(`Completed – result: ${pipelineState?.serializedOutput}`);
+    console.log(`Completed – result: ${pipelineState?.serializedOutput}`);
 
-    logger.info("\n=== All orchestrations completed! ===");
-    logger.info(
+    console.log("\n=== All orchestrations completed! ===");
+    console.log(
       `Open Jaeger UI at http://localhost:16686 and search for service "durabletask-js-tracing-example" to view traces.`,
     );
   } catch (error) {
-    logger.error("Error:", error);
+    console.error("Error:", error);
     process.exit(1);
   } finally {
-    logger.info("\nShutting down...");
+    console.log("\nShutting down...");
     if (worker) await worker.stop();
     if (client) await client.stop();
 
     // Flush remaining spans before exit
     await sdk.shutdown();
-    logger.info("Done.");
+    console.log("Done.");
     process.exit(0);
   }
 })();

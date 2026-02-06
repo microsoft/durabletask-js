@@ -15,7 +15,7 @@ services:
   # No Azure subscription required – perfect for development and testing.
   # ---------------------------------------------------------------------------
   dts-emulator:
-    image: mcr.microsoft.com/dts/emulator:latest
+    image: mcr.microsoft.com/dts/dts-emulator:latest
     container_name: dts-emulator
     ports:
       - "8080:8080"       # gRPC endpoint
@@ -29,7 +29,7 @@ services:
   # on port 16686 for exploring traces.
   # ---------------------------------------------------------------------------
   jaeger:
-    image: jaegertracing/jaeger:2
+    image: jaegertracing/jaeger:latest
     container_name: jaeger
     ports:
       - "4317:4317"       # OTLP gRPC receiver

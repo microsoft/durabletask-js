@@ -61,7 +61,7 @@ This starts:
 > **Tip:** You can also run just the DTS Emulator standalone:
 > ```bash
 > docker run -d --name dts-emulator -p 8080:8080 -p 8082:8082 \
->   mcr.microsoft.com/dts/emulator:latest
+>   mcr.microsoft.com/dts/dts-emulator:latest
 > ```
 
 ### 2. Configure Environment Variables
