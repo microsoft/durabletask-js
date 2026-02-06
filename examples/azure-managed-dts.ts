@@ -35,23 +35,23 @@ import { Task } from "../src/task/task";
   // These values should be set as environment variables
   const endpoint = process.env.AZURE_DTS_ENDPOINT;
   const taskHubName = process.env.AZURE_DTS_TASKHUB;
-  const connectionString = process.env.AZURE_DTS_CONNECTION_STRING;
+  const connectionString = process.env.DURABLE_TASK_SCHEDULER_CONNECTION_STRING;
 
   // Validate configuration
   if (!connectionString && (!endpoint || !taskHubName)) {
     logger.error(
-      "Error: Either AZURE_DTS_CONNECTION_STRING or both AZURE_DTS_ENDPOINT and AZURE_DTS_TASKHUB must be set.",
+      "Error: Either DURABLE_TASK_SCHEDULER_CONNECTION_STRING or both AZURE_DTS_ENDPOINT and AZURE_DTS_TASKHUB must be set.",
     );
     logger.info("\nUsage:");
     logger.info("  Option 1: Create a .env file in the examples directory (recommended):");
     logger.info(
-      "    AZURE_DTS_CONNECTION_STRING=Endpoint=https://myservice.durabletask.io;Authentication=DefaultAzure;TaskHub=myTaskHub",
+      "    DURABLE_TASK_SCHEDULER_CONNECTION_STRING=Endpoint=https://myservice.durabletask.io;Authentication=DefaultAzure;TaskHub=myTaskHub",
     );
     logger.info("    or");
     logger.info("    AZURE_DTS_ENDPOINT=https://myservice.durabletask.io");
     logger.info("    AZURE_DTS_TASKHUB=myTaskHub");
     logger.info("\n  Option 2: Set environment variables directly");
-    logger.info("    export AZURE_DTS_CONNECTION_STRING=...");
+    logger.info("    export DURABLE_TASK_SCHEDULER_CONNECTION_STRING=...");
     process.exit(1);
   }
 

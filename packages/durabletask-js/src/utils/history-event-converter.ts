@@ -46,6 +46,7 @@ export function convertProtoHistoryEvent(protoEvent: pb.HistoryEvent): HistoryEv
       const parentInfo = event.getParentinstance();
       const scheduledTime = event.getScheduledstarttimestamp();
       const tagsMap = event.getTagsMap();
+      const traceCtx = event.getParenttracecontext();
       
       return {
         eventId,
@@ -58,6 +59,8 @@ export function convertProtoHistoryEvent(protoEvent: pb.HistoryEvent): HistoryEv
         parentInstance: parentInfo ? convertParentInstanceInfo(parentInfo) : undefined,
         scheduledStartTimestamp: scheduledTime ? scheduledTime.toDate() : undefined,
         tags: tagsMap ? convertTagsMap(tagsMap) : undefined,
+        parentTraceContext: traceCtx ? convertTraceContext(traceCtx) : undefined,
+        orchestrationSpanId: event.getOrchestrationspanid()?.getValue(),
       };
     }
 
@@ -141,6 +144,7 @@ export function convertProtoHistoryEvent(protoEvent: pb.HistoryEvent): HistoryEv
       if (!event) return undefined;
       
       const tagsMap = event.getTagsMap();
+      const traceCtx = event.getParenttracecontext();
       
       return {
         eventId,
@@ -150,6 +154,7 @@ export function convertProtoHistoryEvent(protoEvent: pb.HistoryEvent): HistoryEv
         version: event.getVersion()?.getValue(),
         input: event.getInput()?.getValue(),
         tags: tagsMap ? convertTagsMap(tagsMap) : undefined,
+        parentTraceContext: traceCtx ? convertTraceContext(traceCtx) : undefined,
       };
     }
 
@@ -184,6 +189,7 @@ export function convertProtoHistoryEvent(protoEvent: pb.HistoryEvent): HistoryEv
       if (!event) return undefined;
       
       const tagsMap = event.getTagsMap();
+      const traceCtx = event.getParenttracecontext();
       
       return {
         eventId,
@@ -194,6 +200,7 @@ export function convertProtoHistoryEvent(protoEvent: pb.HistoryEvent): HistoryEv
         instanceId: event.getInstanceid(),
         input: event.getInput()?.getValue(),
         tags: tagsMap ? convertTagsMap(tagsMap) : undefined,
+        parentTraceContext: traceCtx ? convertTraceContext(traceCtx) : undefined,
       };
     }
 

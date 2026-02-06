@@ -145,9 +145,7 @@ export class TestOrchestrationWorker {
       const result = await executor.execute(instanceId, instance.history, instance.pendingEvents);
 
       this.backend.completeOrchestration(instanceId, completionToken, result.actions, result.customStatus);
-    } catch (error: any) {
-      console.error(`Error executing orchestration '${instanceId}':`, error);
-
+    } catch (error: unknown) {
       // Create a failure action
       const failureDetails = pbh.newFailureDetails(error);
       const failAction = pbh.newCompleteOrchestrationAction(
@@ -171,9 +169,9 @@ export class TestOrchestrationWorker {
       const executor = new ActivityExecutor(this.registry);
       const result = await executor.execute(instanceId, name, taskId, input);
       this.backend.completeActivity(instanceId, taskId, result);
-    } catch (error: any) {
-      console.error(`Error executing activity '${name}':`, error);
-      this.backend.completeActivity(instanceId, taskId, undefined, error);
+    } catch (error: unknown) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      this.backend.completeActivity(instanceId, taskId, undefined, err);
     }
   }
 

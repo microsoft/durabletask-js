@@ -61,6 +61,7 @@ export class InMemoryOrchestrationBackend {
   private readonly orchestrationQueueSet: Set<string> = new Set();
   private readonly activityQueue: ActivityWorkItem[] = [];
   private readonly stateWaiters: Map<string, StateWaiter[]> = new Map();
+  private readonly pendingTimers: Set<ReturnType<typeof setTimeout>> = new Set();
   private nextCompletionToken: number = 1;
   private readonly maxHistorySize: number;
 
@@ -388,6 +389,10 @@ export class InMemoryOrchestrationBackend {
       }
     }
     this.stateWaiters.clear();
+    for (const timer of this.pendingTimers) {
+      clearTimeout(timer);
+    }
+    this.pendingTimers.clear();
   }
 
   /**
@@ -450,7 +455,10 @@ export class InMemoryOrchestrationBackend {
         this.processSendEventAction(action.getSendevent()!);
         break;
       default:
-        console.warn(`Unknown action type: ${actionType}`);
+        throw new Error(
+          `Unknown orchestrator action type '${actionType}' for orchestration '${instance.instanceId}'. ` +
+            `This likely means the in-memory backend needs to be updated to handle a newly introduced action type.`,
+        );
     }
   }
 
@@ -531,7 +539,8 @@ export class InMemoryOrchestrationBackend {
     const now = new Date();
     const delay = Math.max(0, fireAt.getTime() - now.getTime());
 
-    setTimeout(() => {
+    const timerHandle = setTimeout(() => {
+      this.pendingTimers.delete(timerHandle);
       const currentInstance = this.instances.get(instance.instanceId);
       if (currentInstance && !this.isTerminalStatus(currentInstance.status)) {
         const timerFiredEvent = pbh.newTimerFiredEvent(timerId, fireAt);
@@ -540,6 +549,7 @@ export class InMemoryOrchestrationBackend {
         this.enqueueOrchestration(instance.instanceId);
       }
     }, delay);
+    this.pendingTimers.add(timerHandle);
   }
 
   private processCreateSubOrchestrationAction(instance: OrchestrationInstance, action: pb.OrchestratorAction): void {
@@ -564,9 +574,10 @@ export class InMemoryOrchestrationBackend {
 
       // Watch for sub-orchestration completion
       this.watchSubOrchestration(instance.instanceId, subInstanceId, taskId);
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Sub-orchestration creation failed
-      const failedEvent = pbh.newSubOrchestrationFailedEvent(taskId, error);
+      const err = error instanceof Error ? error : new Error(String(error));
+      const failedEvent = pbh.newSubOrchestrationFailedEvent(taskId, err);
       instance.pendingEvents.push(failedEvent);
       this.enqueueOrchestration(instance.instanceId);
     }

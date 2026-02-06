@@ -499,11 +499,11 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
    * Formats a GUID byte buffer as a string in standard GUID format (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).
    */
   private formatGuidBytes(bytes: Buffer): string {
-    const data1 = bytes.slice(0, 4).reverse().toString("hex");
-    const data2 = bytes.slice(4, 6).reverse().toString("hex");
-    const data3 = bytes.slice(6, 8).reverse().toString("hex");
-    const data4 = bytes.slice(8, 10).toString("hex");
-    const data5 = bytes.slice(10, 16).toString("hex");
+    const data1 = Buffer.from(bytes.subarray(0, 4)).reverse().toString("hex");
+    const data2 = Buffer.from(bytes.subarray(4, 6)).reverse().toString("hex");
+    const data3 = Buffer.from(bytes.subarray(6, 8)).reverse().toString("hex");
+    const data4 = bytes.subarray(8, 10).toString("hex");
+    const data5 = bytes.subarray(10, 16).toString("hex");
 
     return `${data1}-${data2}-${data3}-${data4}-${data5}`;
   }

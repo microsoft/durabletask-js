@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { NoOpLogger } from "../src/types/logger.type";
+import { NoOpLogger, isStructuredLogger, LogEvent } from "../src/types/logger.type";
 
 describe("NoOpLogger", () => {
   let logger: NoOpLogger;
@@ -70,12 +70,54 @@ describe("NoOpLogger", () => {
     });
   });
 
+  describe("logEvent (StructuredLogger)", () => {
+    it("should be recognized as a StructuredLogger", () => {
+      expect(isStructuredLogger(logger)).toBe(true);
+    });
+
+    it("should not throw when called", () => {
+      const event: LogEvent = {
+        eventId: 600,
+        category: "Microsoft.DurableTask.Worker.Orchestrations",
+        properties: { instanceId: "abc123" },
+      };
+
+      expect(() => logger.logEvent("info", event, "test message")).not.toThrow();
+    });
+
+    it("should not call any console methods", () => {
+      const infoSpy = jest.spyOn(console, "info").mockImplementation();
+      const errorSpy = jest.spyOn(console, "error").mockImplementation();
+      const warnSpy = jest.spyOn(console, "warn").mockImplementation();
+      const debugSpy = jest.spyOn(console, "debug").mockImplementation();
+
+      const event: LogEvent = {
+        eventId: 600,
+        category: "Microsoft.DurableTask.Worker.Orchestrations",
+      };
+
+      logger.logEvent("info", event, "test");
+      logger.logEvent("error", event, "test");
+      logger.logEvent("warn", event, "test");
+      logger.logEvent("debug", event, "test");
+
+      expect(infoSpy).not.toHaveBeenCalled();
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(warnSpy).not.toHaveBeenCalled();
+      expect(debugSpy).not.toHaveBeenCalled();
+    });
+  });
+
   describe("Logger interface", () => {
     it("should implement Logger interface correctly", () => {
       expect(typeof logger.error).toBe("function");
       expect(typeof logger.warn).toBe("function");
       expect(typeof logger.info).toBe("function");
       expect(typeof logger.debug).toBe("function");
+    });
+
+    it("should implement StructuredLogger interface correctly", () => {
+      expect(typeof logger.logEvent).toBe("function");
     });
   });
 
@@ -88,6 +130,7 @@ describe("NoOpLogger", () => {
       silentLogger.warn("This warning is silently discarded");
       silentLogger.info("This info is silently discarded");
       silentLogger.debug("This debug is silently discarded");
+      silentLogger.logEvent("info", { eventId: 600, category: "Test" }, "discarded");
 
       // If we got here, the test passes
       expect(true).toBe(true);
