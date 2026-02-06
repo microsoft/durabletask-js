@@ -211,8 +211,9 @@ export interface RetryPolicyOptions {
    *
    * @remarks
    * This predicate receives TaskFailureDetails and should return true to retry
-   * or false to stop retrying. Time and attempt count constraints take precedence
-   * over this predicate for determining if retry attempts are performed.
+   * or false to stop retrying. The predicate is evaluated first to enable fail-fast
+   * behavior for non-retriable errors, but any retry that it allows is still subject
+   * to the overall time and attempt count constraints of this policy.
    *
    * @default A function that always returns true (all failures are retried)
    *
