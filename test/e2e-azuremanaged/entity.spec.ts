@@ -453,7 +453,7 @@ describe("Durable Entities E2E Tests (DTS)", () => {
       expect(counts).toEqual([10, 20, 30]);
     }, 60000);
 
-    it("should query entities page by page using byPage()", async () => {
+    it("should query entities page by page using asPages()", async () => {
       // Arrange
       const prefix = `page-query-${Date.now()}`;
       const entityIds = [];
@@ -480,7 +480,7 @@ describe("Durable Entities E2E Tests (DTS)", () => {
         instanceIdStartsWith: `@CounterEntity@${prefix}`,
         includeState: true,
         pageSize: 2, // Small page size to force multiple pages
-      }).byPage()) {
+      }).asPages()) {
         pageCount++;
         for (const metadata of page.values) {
           allResults.push({
