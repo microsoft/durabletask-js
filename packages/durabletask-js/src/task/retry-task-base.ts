@@ -74,6 +74,17 @@ export abstract class RetryTaskBase<T> extends CompletableTask<T> {
   }
 
   /**
+   * Gets the name of the task from the underlying action.
+   * For activities, this is the activity name; for sub-orchestrations, the orchestrator name.
+   */
+  get taskName(): string {
+    if (this._taskType === "activity") {
+      return this._action.getScheduletask()?.getName() ?? "(unknown)";
+    }
+    return this._action.getCreatesuborchestration()?.getName() ?? "(unknown)";
+  }
+
+  /**
    * Gets the last failure details.
    */
   get lastFailure(): pb.TaskFailureDetails | undefined {

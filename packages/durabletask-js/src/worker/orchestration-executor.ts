@@ -572,6 +572,7 @@ export class OrchestrationExecutor {
       const nextDelayMs = task.computeNextDelayInMilliseconds(ctx._currentUtcDatetime);
 
       if (nextDelayMs !== undefined) {
+        WorkerLogs.retryingTask(this._logger, ctx._instanceId, task.taskName, task.attemptCount);
         task.incrementAttemptCount();
         ctx.createRetryTimer(task, nextDelayMs);
         delete ctx._pendingTasks[taskId];
@@ -581,6 +582,7 @@ export class OrchestrationExecutor {
 
     if (task instanceof RetryHandlerTask) {
       task.recordFailure(errorMessage, failureDetails);
+      WorkerLogs.retryingTask(this._logger, ctx._instanceId, task.taskName, task.attemptCount);
       const keepRetrying = await task.shouldRetry(ctx._currentUtcDatetime);
 
       if (keepRetrying) {
