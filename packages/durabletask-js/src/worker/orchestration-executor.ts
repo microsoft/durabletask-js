@@ -76,8 +76,8 @@ export class OrchestrationExecutor {
       for (const newEvent of newEvents) {
         await this.processEvent(ctx, newEvent);
       }
-    } catch (e: any) {
-      ctx.setFailed(e);
+    } catch (e: unknown) {
+      ctx.setFailed(e instanceof Error ? e : new Error(String(e)));
     }
 
     if (!ctx._isComplete) {
@@ -363,7 +363,7 @@ export class OrchestrationExecutor {
               throw getWrongActionNameError(
                 taskId,
                 getName(ctx.callSubOrchestrator),
-                action.getCreatesuborchestration()?.getName(),
+                event.getSuborchestrationinstancecreated()?.getName(),
                 action.getCreatesuborchestration()?.getName(),
               );
             }
@@ -479,7 +479,7 @@ export class OrchestrationExecutor {
                 eventTask.complete(decodedResult);
               }
 
-              if (!taskList && eventName) {
+              if ((taskList?.length ?? 0) === 0 && eventName) {
                 delete ctx._pendingEvents[eventName];
               }
 
@@ -549,7 +549,7 @@ export class OrchestrationExecutor {
           WorkerLogs.orchestrationUnknownEvent(this._logger, eventTypeName, eventType);
         // throw new OrchestrationStateError(`Unknown history event type: ${eventTypeName} (value: ${eventType})`);
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       // StopIteration is thrown when the generator is finished and didn't return a task as its next action
       if (e instanceof StopIterationError) {
         ctx.setComplete(e.value, pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);

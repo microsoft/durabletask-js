@@ -14,7 +14,7 @@ import { newOrchestrationState } from "../orchestration";
 import { OrchestrationState } from "../orchestration/orchestration-state";
 import { GrpcClient } from "./client-grpc";
 import { OrchestrationStatus, toProtobuf, fromProtobuf } from "../orchestration/enum/orchestration-status.enum";
-import { TimeoutError } from "../exception/timeout-error";
+import { raceWithTimeout } from "../utils/timeout.util";
 import { PurgeResult } from "../orchestration/orchestration-purge-result";
 import { PurgeInstanceCriteria } from "../orchestration/orchestration-purge-criteria";
 import { PurgeInstanceOptions } from "../orchestration/orchestration-purge-options";
@@ -242,7 +242,7 @@ export class TaskHubGrpcClient {
 
       setSpanOk(span);
       return res.getInstanceid();
-    } catch (e: any) {
+    } catch (e: unknown) {
       setSpanError(span, e);
       throw e;
     } finally {
@@ -309,10 +309,11 @@ export class TaskHubGrpcClient {
     );
 
     // Execute the request and wait for the first response or timeout
-    const res = (await Promise.race([
+    const res = await raceWithTimeout(
       callPromise,
-      new Promise((_, reject) => setTimeout(() => reject(new TimeoutError()), timeout * 1000)),
-    ])) as pb.GetInstanceResponse;
+      timeout * 1000,
+      () => `Timed out waiting for orchestration '${instanceId}' to start after ${timeout}s`,
+    );
 
     return newOrchestrationState(req.getInstanceid(), res);
   }
@@ -352,10 +353,11 @@ export class TaskHubGrpcClient {
     );
 
     // Execute the request and wait for the first response or timeout
-    const res = (await Promise.race([
+    const res = await raceWithTimeout(
       callPromise,
-      new Promise((_, reject) => setTimeout(() => reject(new TimeoutError()), timeout * 1000)),
-    ])) as pb.GetInstanceResponse;
+      timeout * 1000,
+      () => `Timed out waiting for orchestration '${instanceId}' to complete after ${timeout}s`,
+    );
 
     const state = newOrchestrationState(req.getInstanceid(), res);
 
@@ -388,6 +390,13 @@ export class TaskHubGrpcClient {
    * @param {any} [data] - An optional serializable data payload to include with the event.
    */
   async raiseOrchestrationEvent(instanceId: string, eventName: string, data: any = null): Promise<void> {
+    if (!instanceId) {
+      throw new Error("raiseOrchestrationEvent: 'instanceId' is required.");
+    }
+
+    if (!eventName) {
+      throw new Error("raiseOrchestrationEvent: 'eventName' is required and cannot be empty.");
+    }
     const req = new pb.RaiseEventRequest();
     req.setInstanceid(instanceId);
     req.setName(eventName);
@@ -410,7 +419,7 @@ export class TaskHubGrpcClient {
       );
 
       setSpanOk(span);
-    } catch (e: any) {
+    } catch (e: unknown) {
       setSpanError(span, e);
       throw e;
     } finally {
@@ -443,6 +452,10 @@ export class TaskHubGrpcClient {
     instanceId: string,
     outputOrOptions: any | TerminateInstanceOptions = null,
   ): Promise<void> {
+    if (!instanceId) {
+      throw new Error("instanceId is required");
+    }
+
     const req = new pb.TerminateRequest();
     req.setInstanceid(instanceId);
 
@@ -474,6 +487,10 @@ export class TaskHubGrpcClient {
   }
 
   async suspendOrchestration(instanceId: string): Promise<void> {
+    if (!instanceId) {
+      throw new Error("instanceId is required");
+    }
+
     const req = new pb.SuspendRequest();
     req.setInstanceid(instanceId);
 
@@ -487,6 +504,10 @@ export class TaskHubGrpcClient {
   }
 
   async resumeOrchestration(instanceId: string): Promise<void> {
+    if (!instanceId) {
+      throw new Error("instanceId is required");
+    }
+
     const req = new pb.ResumeRequest();
     req.setInstanceid(instanceId);
 
@@ -679,10 +700,11 @@ export class TaskHubGrpcClient {
         this._metadataGenerator,
       );
       // Execute the request and wait for the first response or timeout
-      res = (await Promise.race([
+      res = await raceWithTimeout(
         callPromise,
-        new Promise((_, reject) => setTimeout(() => reject(new TimeoutError()), timeout)),
-      ])) as pb.PurgeInstancesResponse;
+        timeout,
+        () => `Timed out waiting for purge operation after ${timeout}ms`,
+      );
     }
     if (!res) {
       return;

@@ -50,10 +50,11 @@ export class ActivityExecutor {
       WorkerLogs.activityCompleted(this._logger, orchestrationId, name);
 
       return encodedOutput;
-    } catch (e: any) {
+    } catch (e: unknown) {
+      const err = e instanceof Error ? e : new Error(String(e));
       // Log activity failure (matching .NET EventId 605)
-      WorkerLogs.activityFailed(this._logger, orchestrationId, name, e instanceof Error ? e : new Error(String(e)));
-      throw e;
+      WorkerLogs.activityFailed(this._logger, orchestrationId, name, err);
+      throw err;
     }
   }
 }

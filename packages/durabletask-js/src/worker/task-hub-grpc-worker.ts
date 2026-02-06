@@ -343,9 +343,10 @@ export class TaskHubGrpcWorker {
         // ignoring the error because the worker has been stopped
         return;
       }
-      WorkerLogs.streamError(this._logger, err);
+      const error = err instanceof Error ? err : new Error(String(err));
+      WorkerLogs.streamError(this._logger, error);
       if (!isRetry) {
-        throw err;
+        throw error;
       }
       WorkerLogs.connectionRetry(this._logger, this._backoff.peekNextDelay());
       await this._createNewClientAndRetry();
@@ -403,7 +404,8 @@ export class TaskHubGrpcWorker {
         );
         WorkerLogs.shutdownCompleted(this._logger);
       } catch (e) {
-        WorkerLogs.shutdownTimeout(this._logger, (e as Error).message);
+        const error = e instanceof Error ? e : new Error(String(e));
+        WorkerLogs.shutdownTimeout(this._logger, error.message);
       }
     }
 
@@ -562,8 +564,9 @@ export class TaskHubGrpcWorker {
 
         try {
           await callWithMetadata(stub.completeOrchestratorTask.bind(stub), res, this._metadataGenerator);
-        } catch (e: any) {
-          WorkerLogs.completionError(this._logger, instanceId, e);
+        } catch (e: unknown) {
+          const error = e instanceof Error ? e : new Error(String(e));
+          WorkerLogs.completionError(this._logger, instanceId, error);
         }
         return;
       } else {
@@ -579,8 +582,9 @@ export class TaskHubGrpcWorker {
           const abandonRequest = new pb.AbandonOrchestrationTaskRequest();
           abandonRequest.setCompletiontoken(completionToken);
           await callWithMetadata(stub.abandonTaskOrchestratorWorkItem.bind(stub), abandonRequest, this._metadataGenerator);
-        } catch (e: any) {
-          WorkerLogs.completionError(this._logger, instanceId, e);
+        } catch (e: unknown) {
+          const error = e instanceof Error ? e : new Error(String(e));
+          WorkerLogs.completionError(this._logger, instanceId, error);
         }
         return;
       }
@@ -629,21 +633,23 @@ export class TaskHubGrpcWorker {
 
         setSpanOk(tracingResult.span);
       }
-    } catch (e: any) {
-      WorkerLogs.executionError(this._logger, req.getInstanceid(), e);
+    } catch (e: unknown) {
+      const error = e instanceof Error ? e : new Error(String(e));
+      WorkerLogs.executionError(this._logger, req.getInstanceid(), error);
 
       // Record the failure on the tracing span
       if (tracingResult) {
-        setSpanError(tracingResult.span, e);
+        setSpanError(tracingResult.span, error);
       }
 
-      const failureDetails = pbh.newFailureDetails(e);
+      const failureDetails = pbh.newFailureDetails(error);
 
       const actions = [
         pbh.newCompleteOrchestrationAction(
           -1,
           pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
-          failureDetails?.toString(),
+          undefined,
+          failureDetails,
         ),
       ];
 
@@ -659,8 +665,9 @@ export class TaskHubGrpcWorker {
 
     try {
       await callWithMetadata(stub.completeOrchestratorTask.bind(stub), res, this._metadataGenerator);
-    } catch (e: any) {
-      WorkerLogs.completionError(this._logger, req.getInstanceid(), e);
+    } catch (e: unknown) {
+      const error = e instanceof Error ? e : new Error(String(e));
+      WorkerLogs.completionError(this._logger, req.getInstanceid(), error);
     }
   }
 
@@ -717,12 +724,13 @@ export class TaskHubGrpcWorker {
       res.setResult(s);
 
       setSpanOk(activitySpan);
-    } catch (e: any) {
-      WorkerLogs.activityExecutionError(this._logger, req.getName(), e);
+    } catch (e: unknown) {
+      const error = e instanceof Error ? e : new Error(String(e));
+      WorkerLogs.activityExecutionError(this._logger, req.getName(), error);
 
-      setSpanError(activitySpan, e);
+      setSpanError(activitySpan, error);
 
-      const failureDetails = pbh.newFailureDetails(e);
+      const failureDetails = pbh.newFailureDetails(error);
 
       res = new pb.ActivityResponse();
       res.setTaskid(req.getTaskid());
@@ -738,8 +746,9 @@ export class TaskHubGrpcWorker {
 
     try {
       await callWithMetadata(stub.completeActivityTask.bind(stub), res, this._metadataGenerator);
-    } catch (e: any) {
-      WorkerLogs.activityResponseError(this._logger, req.getName(), req.getTaskid(), instanceId!, e);
+    } catch (e: unknown) {
+      const error = e instanceof Error ? e : new Error(String(e));
+      WorkerLogs.activityResponseError(this._logger, req.getName(), req.getTaskid(), instanceId!, error);
     }
   }
 }

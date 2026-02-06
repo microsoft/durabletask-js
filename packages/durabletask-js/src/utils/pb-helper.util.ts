@@ -181,15 +181,30 @@ export function newSubOrchestrationFailedEvent(eventId: number, ex: Error): pb.H
   return event;
 }
 
-export function newFailureDetails(e: any): pb.TaskFailureDetails {
+export function newFailureDetails(e: unknown): pb.TaskFailureDetails {
   const failure = new pb.TaskFailureDetails();
-  failure.setErrortype(e.constructor.name);
-  failure.setErrormessage(e.message);
 
-  // Construct a google_protobuf_wrappers_pb.StringValue
-  const stringValueStackTrace = new StringValue();
-  stringValueStackTrace.setValue(e.stack?.toString() ?? "");
-  failure.setStacktrace(stringValueStackTrace);
+  if (e instanceof Error) {
+    failure.setErrortype(e.constructor.name);
+    failure.setErrormessage(e.message);
+
+    const stringValueStackTrace = new StringValue();
+    stringValueStackTrace.setValue(e.stack ?? "");
+    failure.setStacktrace(stringValueStackTrace);
+  } else {
+    failure.setErrortype("UnknownError");
+    failure.setErrormessage(String(e));
+
+    let stack = "";
+    if (typeof e === "object" && e !== null && "stack" in e) {
+      const possibleStack = (e as { stack?: unknown }).stack;
+      stack = possibleStack != null ? String(possibleStack) : "";
+    }
+
+    const stringValueStackTrace = new StringValue();
+    stringValueStackTrace.setValue(stack);
+    failure.setStacktrace(stringValueStackTrace);
+  }
 
   return failure;
 }
@@ -407,19 +422,20 @@ export function isEmpty(v?: StringValue | null): boolean {
   return v == null || v.getValue() === "";
 }
 
+// Pre-built reverse map for O(1) orchestration status string lookups
+const orchestrationStatusStrMap = new Map<number, string>();
+for (const [name, value] of Object.entries(pb.OrchestrationStatus)) {
+  if (typeof value === "number" && name.startsWith("ORCHESTRATION_STATUS_")) {
+    orchestrationStatusStrMap.set(value, name.slice("ORCHESTRATION_STATUS_".length));
+  }
+}
+
 /**
- * Get the orchstration status by the enum value of the status
+ * Get the orchestration status string by the enum value of the status
  *
  * @param status
  * @returns
  */
 export function getOrchestrationStatusStr(status: number): string {
-  const idx = Object.values(pb.OrchestrationStatus).indexOf(status);
-  const name = Object.keys(pb.OrchestrationStatus)[idx];
-
-  if (name?.startsWith("ORCHESTRATION_STATUS_")) {
-    return name.slice("ORCHESTRATION_STATUS_".length);
-  }
-
-  return "UNKNOWN";
+  return orchestrationStatusStrMap.get(status) ?? "UNKNOWN";
 }
