@@ -9,7 +9,7 @@
  *
  * Event ID ranges:
  * - 40–46: Client operations (from .NET)
- * - 47–55: JS-specific client operations
+ * - 100–199: JS-specific client operations
  */
 
 import { Logger } from "../types/logger.type";
@@ -29,16 +29,16 @@ const CATEGORY_CLIENT = "Microsoft.DurableTask.Client";
 /** @internal */ export const EVENT_PURGING_INSTANCE_METADATA = 45;
 /** @internal */ export const EVENT_PURGING_INSTANCES = 46;
 
-// ── JS-specific Event IDs ────────────────────────────────────────────────────
+// ── JS-specific Event IDs (start at 100 to leave buffer for .NET additions) ──
 
-/** @internal */ export const EVENT_RAISING_EVENT = 47;
-/** @internal */ export const EVENT_SUSPENDING_INSTANCE = 48;
-/** @internal */ export const EVENT_RESUMING_INSTANCE = 49;
-/** @internal */ export const EVENT_REWINDING_INSTANCE = 50;
-/** @internal */ export const EVENT_RESTARTING_INSTANCE = 51;
-/** @internal */ export const EVENT_INSTANCE_COMPLETED = 52;
-/** @internal */ export const EVENT_INSTANCE_FAILED = 53;
-/** @internal */ export const EVENT_INSTANCE_TERMINATED = 54;
+/** @internal */ export const EVENT_RAISING_EVENT = 100;
+/** @internal */ export const EVENT_SUSPENDING_INSTANCE = 101;
+/** @internal */ export const EVENT_RESUMING_INSTANCE = 102;
+/** @internal */ export const EVENT_REWINDING_INSTANCE = 103;
+/** @internal */ export const EVENT_RESTARTING_INSTANCE = 104;
+/** @internal */ export const EVENT_INSTANCE_COMPLETED = 105;
+/** @internal */ export const EVENT_INSTANCE_FAILED = 106;
+/** @internal */ export const EVENT_INSTANCE_TERMINATED = 107;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Client Operation Logs (Event IDs 40–46, matching .NET)
@@ -127,7 +127,7 @@ export function purgingInstances(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// JS-specific Client Logs (Event IDs 47–54)
+// JS-specific Client Logs (Event IDs 100+)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export function raisingEvent(logger: Logger, instanceId: string, eventName: string): void {

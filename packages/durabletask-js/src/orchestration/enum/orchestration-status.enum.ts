@@ -36,9 +36,19 @@ export enum OrchestrationStatus {
 
 // Initialize the reverse maps now that both enums are defined.
 // Both enums share the same numeric values; cast through number to satisfy TypeScript.
-for (const [, value] of Object.entries(OrchestrationStatus)) {
+// An invariant check guards against silent drift between the two enums.
+for (const [name, value] of Object.entries(OrchestrationStatus)) {
   if (typeof value === "number") {
     const numValue = value as number;
+    const expectedProtoKey = `ORCHESTRATION_STATUS_${name}`;
+    // Verify the proto enum has this key with the same numeric value (plain object, no reverse mapping)
+    const protoValue = (pb.OrchestrationStatus as unknown as Record<string, number>)[expectedProtoKey];
+    if (protoValue !== numValue) {
+      throw new Error(
+        `Enum drift detected: OrchestrationStatus.${name} (${numValue}) does not match ` +
+        `pb.OrchestrationStatus.${expectedProtoKey} (${protoValue}).`,
+      );
+    }
     protoToClient.set(numValue as pb.OrchestrationStatus, numValue as OrchestrationStatus);
     clientToProto.set(numValue as OrchestrationStatus, numValue as pb.OrchestrationStatus);
   }
