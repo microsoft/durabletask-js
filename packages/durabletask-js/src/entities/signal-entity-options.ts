@@ -24,7 +24,7 @@ export interface SignalEntityOptions {
  * Keeping this interface so we can ship with options in the API
  * and add properties later without breaking changes.
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-interface
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface CallEntityOptions {
   // No call options at the moment. Keeping this interface so we can ship with options in the API.
   // This will allow us to easily add them later without adjusting API surface.
