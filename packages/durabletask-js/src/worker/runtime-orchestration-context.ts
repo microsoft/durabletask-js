@@ -8,9 +8,11 @@ import { ParentOrchestrationInstance } from "../types/parent-orchestration-insta
 import * as pb from "../proto/orchestrator_service_pb";
 import * as ph from "../utils/pb-helper.util";
 import { CompletableTask } from "../task/completable-task";
+import { RetryTaskBase } from "../task/retry-task-base";
 import { RetryableTask } from "../task/retryable-task";
+import { RetryHandlerTask } from "../task/retry-handler-task";
 import { RetryTimerTask } from "../task/retry-timer-task";
-import { TaskOptions, SubOrchestrationOptions, isRetryPolicy } from "../task/options";
+import { TaskOptions, SubOrchestrationOptions, isRetryPolicy, isAsyncRetryHandler } from "../task/options";
 import { TActivity } from "../types/activity.type";
 import { TOrchestrator } from "../types/orchestrator.type";
 import { Task } from "../task/task";
@@ -294,21 +296,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     const action = ph.newScheduleTaskAction(id, name, encodedInput, options?.tags, options?.version);
     this._pendingActions[action.getId()] = action;
 
-    // If a retry policy is provided, create a RetryableTask
-    // Note: AsyncRetryHandler support requires more infrastructure and is not yet implemented
-    if (options?.retry && isRetryPolicy(options.retry)) {
-      const retryableTask = new RetryableTask<TOutput>(
-        options.retry,
-        action,
-        this._currentUtcDatetime,
-        "activity",
-      );
-      this._pendingTasks[id] = retryableTask;
-      return retryableTask;
-    }
-
-    const task = new CompletableTask<TOutput>();
-    this._pendingTasks[id] = task;
+    const task = this.createRetryTaskOrDefault<TOutput>(action, id, options, "activity");
     return task;
   }
 
@@ -339,21 +327,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     const action = ph.newCreateSubOrchestrationAction(id, name, instanceId, encodedInput, options?.tags, options?.version);
     this._pendingActions[action.getId()] = action;
 
-    // If a retry policy is provided, create a RetryableTask
-    // Note: AsyncRetryHandler support requires more infrastructure and is not yet implemented
-    if (options?.retry && isRetryPolicy(options.retry)) {
-      const retryableTask = new RetryableTask<TOutput>(
-        options.retry,
-        action,
-        this._currentUtcDatetime,
-        "subOrchestration",
-      );
-      this._pendingTasks[id] = retryableTask;
-      return retryableTask;
-    }
-
-    const task = new CompletableTask<TOutput>();
-    this._pendingTasks[id] = task;
+    const task = this.createRetryTaskOrDefault<TOutput>(action, id, options, "subOrchestration");
     return task;
   }
 
@@ -532,22 +506,64 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   }
 
   /**
-   * Reschedules a retryable task for retry by creating a new action with a new ID.
-   * This is called when a retry timer fires and the task needs to be retried.
+   * Creates the appropriate retry task or a plain CompletableTask based on the options.
    *
-   * @param retryableTask - The retryable task to reschedule
+   * @param action - The orchestrator action
+   * @param id - The sequence ID for task tracking
+   * @param options - The task options (may contain retry configuration)
+   * @param taskType - Whether this is an activity or sub-orchestration
+   * @returns The created task
    */
-  rescheduleRetryableTask(retryableTask: RetryableTask<any>): void {
-    const originalAction = retryableTask.action;
+  private createRetryTaskOrDefault<TOutput>(
+    action: pb.OrchestratorAction,
+    id: number,
+    options: TaskOptions | SubOrchestrationOptions | undefined,
+    taskType: "activity" | "subOrchestration",
+  ): CompletableTask<TOutput> {
+    if (options?.retry && isRetryPolicy(options.retry)) {
+      const retryableTask = new RetryableTask<TOutput>(
+        options.retry,
+        action,
+        this._currentUtcDatetime,
+        taskType,
+      );
+      this._pendingTasks[id] = retryableTask;
+      return retryableTask;
+    }
+
+    if (options?.retry && isAsyncRetryHandler(options.retry)) {
+      const retryHandlerTask = new RetryHandlerTask<TOutput>(
+        options.retry,
+        action,
+        this._currentUtcDatetime,
+        taskType,
+      );
+      this._pendingTasks[id] = retryHandlerTask;
+      return retryHandlerTask;
+    }
+
+    const task = new CompletableTask<TOutput>();
+    this._pendingTasks[id] = task;
+    return task;
+  }
+
+  /**
+   * Reschedules a retry task for retry by creating a new action with a new ID.
+   * This is called when a retry timer fires or a retry handler returns true.
+   *
+   * @param retryTask - The retry task to reschedule (RetryableTask or RetryHandlerTask)
+   */
+  rescheduleRetryTask(retryTask: RetryTaskBase<any>): void {
+    const originalAction = retryTask.action;
     const newId = this.nextSequenceNumber();
 
     let newAction: pb.OrchestratorAction;
 
-    if (retryableTask.taskType === "activity") {
+    if (retryTask.taskType === "activity") {
       // Reschedule an activity task
       const scheduleTask = originalAction.getScheduletask();
       if (!scheduleTask) {
-        throw new Error("Expected ScheduleTaskAction on activity retryable task");
+        throw new Error("Expected ScheduleTaskAction on activity retry task");
       }
       const name = scheduleTask.getName();
       const input = scheduleTask.getInput()?.getValue();
@@ -557,7 +573,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
       // Reschedule a sub-orchestration task
       const subOrch = originalAction.getCreatesuborchestration();
       if (!subOrch) {
-        throw new Error("Expected CreateSubOrchestrationAction on sub-orchestration retryable task");
+        throw new Error("Expected CreateSubOrchestrationAction on sub-orchestration retry task");
       }
       const name = subOrch.getName();
       const instanceId = subOrch.getInstanceid();
@@ -569,7 +585,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     // Register the new action
     this._pendingActions[newAction.getId()] = newAction;
 
-    // Map the retryable task to the new action ID
-    this._pendingTasks[newId] = retryableTask;
+    // Map the retry task to the new action ID
+    this._pendingTasks[newId] = retryTask;
   }
 }

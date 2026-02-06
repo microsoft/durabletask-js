@@ -840,181 +840,290 @@ describe("Orchestration Executor", () => {
     expect(completeAction?.getResult()?.getValue()).toEqual(encodedOutput);
   });
 
+  // ==================== Retry Tests (shared helpers) ====================
+
+  /**
+   * Helper that registers an orchestrator, starts it, and returns the accumulated
+   * event log together with a convenience function for replaying subsequent steps.
+   */
+  async function startOrchestration(
+    orchestrator: TOrchestrator,
+    input?: unknown,
+    startTime?: Date,
+  ) {
+    const registry = new Registry();
+    const name = registry.addOrchestrator(orchestrator);
+    const allEvents = [
+      newOrchestratorStartedEvent(startTime),
+      newExecutionStartedEvent(name, TEST_INSTANCE_ID, input !== undefined ? JSON.stringify(input) : undefined),
+    ];
+
+    const result = await new OrchestrationExecutor(registry, testLogger)
+      .execute(TEST_INSTANCE_ID, [], allEvents);
+
+    /** Append old-events, create a fresh executor, and replay with newEvents. */
+    const replay = async (...oldAndNew: [old: pb.HistoryEvent[], newEvts: pb.HistoryEvent[]]) => {
+      const [old, newEvts] = oldAndNew;
+      old.forEach((e) => allEvents.push(e));
+      return new OrchestrationExecutor(registry, testLogger)
+        .execute(TEST_INSTANCE_ID, allEvents, newEvts);
+    };
+
+    return { registry, result, allEvents, replay };
+  }
+
   // ==================== Retry Policy Tests ====================
   describe("Retry Policy", () => {
     it("should schedule retry timer when activity fails with retry policy", async () => {
-      // Arrange
       const { RetryPolicy } = await import("../src/task/retry/retry-policy");
-      
-      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: number): any {
-        const retryPolicy = new RetryPolicy({
-          maxNumberOfAttempts: 3,
-          firstRetryIntervalInMilliseconds: 1000,
-          backoffCoefficient: 1.0,
-        });
-        const result = yield ctx.callActivity("flakyActivity", input, { retry: retryPolicy });
-        return result;
-      };
 
-      const registry = new Registry();
-      const name = registry.addOrchestrator(orchestrator);
+      const { result: startResult, replay } = await startOrchestration(
+        async function* (ctx: OrchestrationContext, input: number): any {
+          const retryPolicy = new RetryPolicy({
+            maxNumberOfAttempts: 3, firstRetryIntervalInMilliseconds: 1000, backoffCoefficient: 1.0,
+          });
+          return yield ctx.callActivity("flakyActivity", input, { retry: retryPolicy });
+        },
+        21,
+      );
 
-      // Act - Step 1: Start orchestration
-      let executor = new OrchestrationExecutor(registry, testLogger);
-      let newEvents = [
-        newOrchestratorStartedEvent(),
-        newExecutionStartedEvent(name, TEST_INSTANCE_ID, JSON.stringify(21)),
-      ];
-      let result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+      expect(startResult.actions.length).toBe(1);
+      expect(startResult.actions[0].hasScheduletask()).toBe(true);
+      expect(startResult.actions[0].getScheduletask()?.getName()).toBe("flakyActivity");
 
-      // Assert - Step 1: Should schedule activity
-      expect(result.actions.length).toBe(1);
-      expect(result.actions[0].hasScheduletask()).toBe(true);
-      expect(result.actions[0].getScheduletask()?.getName()).toBe("flakyActivity");
+      // Activity fails → should schedule a retry timer
+      const result = await replay(
+        [newTaskScheduledEvent(1, "flakyActivity")],
+        [newTaskFailedEvent(1, new Error("Transient failure"))],
+      );
 
-      // Act - Step 2: Activity scheduled, then fails
-      const oldEvents = [
-        ...newEvents,
-        newTaskScheduledEvent(1, "flakyActivity"),
-      ];
-      executor = new OrchestrationExecutor(registry, testLogger);
-      newEvents = [
-        newTaskFailedEvent(1, new Error("Transient failure on attempt 1")),
-      ];
-      result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
-
-      // Assert - Step 2: Should schedule a retry timer
       expect(result.actions.length).toBe(1);
       expect(result.actions[0].hasCreatetimer()).toBe(true);
     });
 
     it("should complete successfully after retry timer fires and activity succeeds", async () => {
-      // Arrange
       const { RetryPolicy } = await import("../src/task/retry/retry-policy");
-      
-      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: number): any {
-        const retryPolicy = new RetryPolicy({
-          maxNumberOfAttempts: 3,
-          firstRetryIntervalInMilliseconds: 1000,
-          backoffCoefficient: 1.0,
-        });
-        const result = yield ctx.callActivity("flakyActivity", input, {
-          retry: retryPolicy,
-          tags: { env: "test" },
-        });
-        return result;
-      };
 
-      const registry = new Registry();
-      const name = registry.addOrchestrator(orchestrator);
-      const startTime = new Date();
+      const { result: startResult, replay } = await startOrchestration(
+        async function* (ctx: OrchestrationContext, input: number): any {
+          const retryPolicy = new RetryPolicy({
+            maxNumberOfAttempts: 3, firstRetryIntervalInMilliseconds: 1000, backoffCoefficient: 1.0,
+          });
+          return yield ctx.callActivity("flakyActivity", input, { retry: retryPolicy, tags: { env: "test" } });
+        },
+        21,
+        new Date(),
+      );
 
-      // Step 1: Start orchestration
-      let executor = new OrchestrationExecutor(registry, testLogger);
-      const allEvents = [
-        newOrchestratorStartedEvent(startTime),
-        newExecutionStartedEvent(name, TEST_INSTANCE_ID, JSON.stringify(21)),
-      ];
-      let result = await executor.execute(TEST_INSTANCE_ID, [], allEvents);
-      expect(result.actions.length).toBe(1);
-      expect(result.actions[0].hasScheduletask()).toBe(true);
+      expect(startResult.actions.length).toBe(1);
+      expect(startResult.actions[0].hasScheduletask()).toBe(true);
 
-      // Step 2: Activity scheduled, then fails
-      allEvents.push(newTaskScheduledEvent(1, "flakyActivity"));
-      executor = new OrchestrationExecutor(registry, testLogger);
-      result = await executor.execute(TEST_INSTANCE_ID, allEvents, [
-        newTaskFailedEvent(1, new Error("Transient failure on attempt 1")),
-      ]);
-      expect(result.actions.length).toBe(1);
+      // Activity fails → timer created
+      let result = await replay(
+        [newTaskScheduledEvent(1, "flakyActivity")],
+        [newTaskFailedEvent(1, new Error("Transient failure"))],
+      );
       expect(result.actions[0].hasCreatetimer()).toBe(true);
       const timerFireAt = result.actions[0].getCreatetimer()?.getFireat()?.toDate();
       expect(timerFireAt).toBeDefined();
 
-      // Step 3: Timer created, then fires
-      allEvents.push(newTaskFailedEvent(1, new Error("Transient failure on attempt 1")));
-      allEvents.push(newTimerCreatedEvent(2, timerFireAt!));
-      executor = new OrchestrationExecutor(registry, testLogger);
-      result = await executor.execute(TEST_INSTANCE_ID, allEvents, [
-        newTimerFiredEvent(2, timerFireAt!),
-      ]);
-      // Should reschedule the activity with a new ID
-      expect(result.actions.length).toBe(1);
+      // Timer fires → activity rescheduled with new ID + preserved tags
+      result = await replay(
+        [newTaskFailedEvent(1, new Error("Transient failure")), newTimerCreatedEvent(2, timerFireAt!)],
+        [newTimerFiredEvent(2, timerFireAt!)],
+      );
       expect(result.actions[0].hasScheduletask()).toBe(true);
       expect(result.actions[0].getScheduletask()?.getName()).toBe("flakyActivity");
       expect(result.actions[0].getScheduletask()?.getTagsMap().get("env")).toBe("test");
-      expect(result.actions[0].getId()).toBe(3); // New ID after timer
+      expect(result.actions[0].getId()).toBe(3);
 
-      // Step 4: Retried activity scheduled, then completes
-      allEvents.push(newTimerFiredEvent(2, timerFireAt!));
-      allEvents.push(newTaskScheduledEvent(3, "flakyActivity"));
-      executor = new OrchestrationExecutor(registry, testLogger);
-      result = await executor.execute(TEST_INSTANCE_ID, allEvents, [
-        newTaskCompletedEvent(3, JSON.stringify(42)),
-      ]);
-      
-      // Assert: Orchestration should complete successfully
+      // Retried activity completes
+      result = await replay(
+        [newTimerFiredEvent(2, timerFireAt!), newTaskScheduledEvent(3, "flakyActivity")],
+        [newTaskCompletedEvent(3, JSON.stringify(42))],
+      );
       const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
       expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
       expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify(42));
     });
 
     it("should fail after exhausting all retry attempts", async () => {
-      // Arrange
       const { RetryPolicy } = await import("../src/task/retry/retry-policy");
-      
-      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: number): any {
-        const retryPolicy = new RetryPolicy({
-          maxNumberOfAttempts: 2,
-          firstRetryIntervalInMilliseconds: 100,
-          backoffCoefficient: 1.0,
-        });
-        const result = yield ctx.callActivity("alwaysFailsActivity", input, { retry: retryPolicy });
-        return result;
-      };
 
-      const registry = new Registry();
-      const name = registry.addOrchestrator(orchestrator);
-      const startTime = new Date();
+      const { result: startResult, replay } = await startOrchestration(
+        async function* (ctx: OrchestrationContext, input: number): any {
+          const retryPolicy = new RetryPolicy({
+            maxNumberOfAttempts: 2, firstRetryIntervalInMilliseconds: 100, backoffCoefficient: 1.0,
+          });
+          return yield ctx.callActivity("alwaysFailsActivity", input, { retry: retryPolicy });
+        },
+        21,
+        new Date(),
+      );
 
-      // Step 1: Start orchestration
-      let executor = new OrchestrationExecutor(registry, testLogger);
-      const allEvents = [
-        newOrchestratorStartedEvent(startTime),
-        newExecutionStartedEvent(name, TEST_INSTANCE_ID, JSON.stringify(21)),
-      ];
-      let result = await executor.execute(TEST_INSTANCE_ID, [], allEvents);
-      expect(result.actions.length).toBe(1);
-      expect(result.actions[0].hasScheduletask()).toBe(true);
+      expect(startResult.actions[0].hasScheduletask()).toBe(true);
 
-      // Step 2: Activity fails - first attempt
-      allEvents.push(newTaskScheduledEvent(1, "alwaysFailsActivity"));
-      executor = new OrchestrationExecutor(registry, testLogger);
-      result = await executor.execute(TEST_INSTANCE_ID, allEvents, [
-        newTaskFailedEvent(1, new Error("Failure on attempt 1")),
-      ]);
-      expect(result.actions.length).toBe(1);
+      // First failure → timer
+      let result = await replay(
+        [newTaskScheduledEvent(1, "alwaysFailsActivity")],
+        [newTaskFailedEvent(1, new Error("Failure 1"))],
+      );
       expect(result.actions[0].hasCreatetimer()).toBe(true);
       const timerFireAt = result.actions[0].getCreatetimer()?.getFireat()?.toDate();
 
-      // Step 3: Timer fires, activity is rescheduled
-      allEvents.push(newTaskFailedEvent(1, new Error("Failure on attempt 1")));
-      allEvents.push(newTimerCreatedEvent(2, timerFireAt!));
-      executor = new OrchestrationExecutor(registry, testLogger);
-      result = await executor.execute(TEST_INSTANCE_ID, allEvents, [
-        newTimerFiredEvent(2, timerFireAt!),
-      ]);
-      expect(result.actions.length).toBe(1);
+      // Timer fires → rescheduled
+      result = await replay(
+        [newTaskFailedEvent(1, new Error("Failure 1")), newTimerCreatedEvent(2, timerFireAt!)],
+        [newTimerFiredEvent(2, timerFireAt!)],
+      );
       expect(result.actions[0].hasScheduletask()).toBe(true);
 
-      // Step 4: Second activity attempt fails - max attempts reached
-      allEvents.push(newTimerFiredEvent(2, timerFireAt!));
-      allEvents.push(newTaskScheduledEvent(3, "alwaysFailsActivity"));
-      executor = new OrchestrationExecutor(registry, testLogger);
-      result = await executor.execute(TEST_INSTANCE_ID, allEvents, [
-        newTaskFailedEvent(3, new Error("Failure on attempt 2")),
-      ]);
+      // Second failure → max attempts exhausted → orchestration fails
+      result = await replay(
+        [newTimerFiredEvent(2, timerFireAt!), newTaskScheduledEvent(3, "alwaysFailsActivity")],
+        [newTaskFailedEvent(3, new Error("Failure 2"))],
+      );
+      const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+      expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    });
+  });
 
-      // Assert: Orchestration should fail
+  // ==================== Retry Handler Tests ====================
+  describe("Retry Handler (AsyncRetryHandler)", () => {
+    it("should reschedule activity when retry handler returns true", async () => {
+      const { result: startResult, replay } = await startOrchestration(
+        async function* (ctx: OrchestrationContext, input: number): any {
+          const retryHandler = async (retryCtx: any) => retryCtx.lastAttemptNumber < 3;
+          return yield ctx.callActivity("flakyActivity", input, { retry: retryHandler });
+        },
+        21,
+      );
+
+      expect(startResult.actions[0].hasScheduletask()).toBe(true);
+      expect(startResult.actions[0].getScheduletask()?.getName()).toBe("flakyActivity");
+
+      // Activity fails → handler returns true → rescheduled immediately (no timer)
+      const result = await replay(
+        [newTaskScheduledEvent(1, "flakyActivity")],
+        [newTaskFailedEvent(1, new Error("Transient failure"))],
+      );
+      expect(result.actions.length).toBe(1);
+      expect(result.actions[0].hasScheduletask()).toBe(true);
+      expect(result.actions[0].getScheduletask()?.getName()).toBe("flakyActivity");
+    });
+
+    it("should complete successfully after retry handler reschedules and activity succeeds", async () => {
+      const { result: startResult, replay } = await startOrchestration(
+        async function* (ctx: OrchestrationContext, input: number): any {
+          const retryHandler = async (retryCtx: any) => retryCtx.lastAttemptNumber < 5;
+          return yield ctx.callActivity("flakyActivity", input, { retry: retryHandler, tags: { env: "test" } });
+        },
+        21,
+        new Date(),
+      );
+
+      expect(startResult.actions[0].hasScheduletask()).toBe(true);
+
+      // Activity fails → rescheduled immediately with new ID + preserved tags
+      let result = await replay(
+        [newTaskScheduledEvent(1, "flakyActivity")],
+        [newTaskFailedEvent(1, new Error("Transient failure"))],
+      );
+      expect(result.actions[0].hasScheduletask()).toBe(true);
+      expect(result.actions[0].getScheduletask()?.getTagsMap().get("env")).toBe("test");
+      expect(result.actions[0].getId()).toBe(2);
+
+      // Retried activity completes
+      result = await replay(
+        [newTaskFailedEvent(1, new Error("Transient failure")), newTaskScheduledEvent(2, "flakyActivity")],
+        [newTaskCompletedEvent(2, JSON.stringify(42))],
+      );
+      const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+      expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify(42));
+    });
+
+    it("should fail when retry handler returns false", async () => {
+      const { result: startResult, replay } = await startOrchestration(
+        async function* (ctx: OrchestrationContext): any {
+          const retryHandler = async (retryCtx: any) => retryCtx.lastFailure.errorType !== "PermanentError";
+          return yield ctx.callActivity("failingActivity", undefined, { retry: retryHandler });
+        },
+      );
+
+      expect(startResult.actions[0].hasScheduletask()).toBe(true);
+
+      // Activity fails with PermanentError → handler returns false → orchestration fails
+      const failureDetails = new pb.TaskFailureDetails();
+      failureDetails.setErrortype("PermanentError");
+      failureDetails.setErrormessage("This is permanent");
+
+      const result = await replay(
+        [newTaskScheduledEvent(1, "failingActivity")],
+        [newTaskFailedEvent(1, new Error("This is permanent"), failureDetails)],
+      );
+      const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+      expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    });
+
+    it("should handle sub-orchestration retry with handler", async () => {
+      const { registry, result: startResult, replay } = await startOrchestration(
+        async function* (ctx: OrchestrationContext, input: number): any {
+          const retryHandler = async (retryCtx: any) => retryCtx.lastAttemptNumber < 3;
+          return yield ctx.callSubOrchestrator("subOrch", input, { retry: retryHandler });
+        },
+        21,
+      );
+      registry.addNamedOrchestrator("subOrch", async function* () { yield; });
+
+      expect(startResult.actions[0].hasCreatesuborchestration()).toBe(true);
+
+      // Sub-orchestration fails → rescheduled immediately
+      let result = await replay(
+        [newSubOrchestrationCreatedEvent(1, "subOrch", "sub-orch-1")],
+        [newSubOrchestrationFailedEvent(1, new Error("Sub-orch failed"))],
+      );
+      expect(result.actions[0].hasCreatesuborchestration()).toBe(true);
+
+      // Retried sub-orchestration completes
+      result = await replay(
+        [newSubOrchestrationFailedEvent(1, new Error("Sub-orch failed")), newSubOrchestrationCreatedEvent(2, "subOrch", "sub-orch-2")],
+        [newSubOrchestrationCompletedEvent(2, JSON.stringify(42))],
+      );
+      const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+      expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify(42));
+    });
+
+    it("should fail after handler returns false on third attempt", async () => {
+      const { result: startResult, replay } = await startOrchestration(
+        async function* (ctx: OrchestrationContext): any {
+          const retryHandler = async (retryCtx: any) => retryCtx.lastAttemptNumber < 3;
+          return yield ctx.callActivity("flakyActivity", undefined, { retry: retryHandler });
+        },
+      );
+
+      expect(startResult.actions[0].hasScheduletask()).toBe(true);
+
+      // Failure 1 → rescheduled (attempt 1 < 3)
+      let result = await replay(
+        [newTaskScheduledEvent(1, "flakyActivity")],
+        [newTaskFailedEvent(1, new Error("Failure 1"))],
+      );
+      expect(result.actions[0].hasScheduletask()).toBe(true);
+
+      // Failure 2 → rescheduled (attempt 2 < 3)
+      result = await replay(
+        [newTaskFailedEvent(1, new Error("Failure 1")), newTaskScheduledEvent(2, "flakyActivity")],
+        [newTaskFailedEvent(2, new Error("Failure 2"))],
+      );
+      expect(result.actions[0].hasScheduletask()).toBe(true);
+
+      // Failure 3 → handler returns false (3 < 3 is false) → orchestration fails
+      result = await replay(
+        [newTaskFailedEvent(2, new Error("Failure 2")), newTaskScheduledEvent(3, "flakyActivity")],
+        [newTaskFailedEvent(3, new Error("Failure 3"))],
+      );
       const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
       expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
     });

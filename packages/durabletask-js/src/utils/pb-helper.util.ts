@@ -115,11 +115,15 @@ export function newTaskCompletedEvent(eventId: number, encodedOutput?: string): 
   return event;
 }
 
-export function newTaskFailedEvent(eventId: number, ex: Error): pb.HistoryEvent {
+export function newTaskFailedEvent(
+  eventId: number,
+  ex: Error,
+  failureDetails?: pb.TaskFailureDetails,
+): pb.HistoryEvent {
   const ts = new Timestamp();
 
   const taskFailedEvent = new pb.TaskFailedEvent();
-  taskFailedEvent.setFailuredetails(newFailureDetails(ex));
+  taskFailedEvent.setFailuredetails(failureDetails ?? newFailureDetails(ex));
   taskFailedEvent.setTaskscheduledid(eventId);
 
   const event = new pb.HistoryEvent();
