@@ -31,7 +31,7 @@ import { RetryContext } from "./retry-context";
  *   return true;
  * };
  *
- * const options = taskOptionsFromRetryHandler(handler);
+ * const options = taskOptionsFromSyncRetryHandler(handler);
  * await ctx.callActivity("myActivity", input, options);
  * ```
  */
