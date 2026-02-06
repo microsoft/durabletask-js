@@ -148,7 +148,8 @@ export class RetryPolicy {
    *
    * @remarks
    * This predicate is called for each failure to determine if a retry should be attempted.
-   * Time and attempt count constraints take precedence over this predicate.
+   * Even if this predicate allows a retry, time-based and attempt-count constraints may still
+   * prevent another attempt from being scheduled.
    * Defaults to a function that always returns true (all failures are retried).
    *
    * @returns A function that takes TaskFailureDetails and returns true to retry, false to stop.
