@@ -582,10 +582,10 @@ export class OrchestrationExecutor {
 
     if (task instanceof RetryHandlerTask) {
       task.recordFailure(errorMessage, failureDetails);
-      WorkerLogs.retryingTask(this._logger, ctx._instanceId, task.taskName, task.attemptCount);
       const keepRetrying = await task.shouldRetry(ctx._currentUtcDatetime);
 
       if (keepRetrying) {
+        WorkerLogs.retryingTask(this._logger, ctx._instanceId, task.taskName, task.attemptCount);
         task.incrementAttemptCount();
         ctx.rescheduleRetryTask(task);
         delete ctx._pendingTasks[taskId];
