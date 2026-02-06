@@ -4,6 +4,7 @@
 import { RetryPolicy } from "../src/task/retry/retry-policy";
 import { RetryHandler, AsyncRetryHandler, toAsyncRetryHandler } from "../src/task/retry/retry-handler";
 import { createRetryContext } from "../src/task/retry/retry-context";
+import { OrchestrationContext } from "../src/task/context/orchestration-context";
 import {
   TaskOptions,
   SubOrchestrationOptions,
@@ -30,6 +31,8 @@ describe("TaskOptions with RetryHandler", () => {
   const mockSyncRetryHandler: RetryHandler = (context) => {
     return context.lastAttemptNumber < 3;
   };
+
+  const mockOrchCtx = {} as OrchestrationContext;
 
   describe("TaskRetryOptions type", () => {
     it("should accept RetryPolicy", () => {
@@ -90,6 +93,7 @@ describe("TaskOptions with RetryHandler", () => {
 
       const handler = options.retry as AsyncRetryHandler;
       const context = createRetryContext(
+        mockOrchCtx,
         1,
         { errorType: "Error", message: "Error", stackTrace: "" },
         1000,

@@ -3,9 +3,11 @@
 
 import { RetryHandler, AsyncRetryHandler, toAsyncRetryHandler } from "../src/task/retry/retry-handler";
 import { RetryContext, createRetryContext } from "../src/task/retry/retry-context";
+import { OrchestrationContext } from "../src/task/context/orchestration-context";
 import { TaskFailureDetails } from "../src/task/failure-details";
 
 describe("RetryHandler", () => {
+  const mockOrchCtx = {} as OrchestrationContext;
   const mockFailureDetails: TaskFailureDetails = {
     errorType: "TestError",
     message: "Test error message",
@@ -14,6 +16,7 @@ describe("RetryHandler", () => {
 
   const createTestContext = (attemptNumber: number, errorType: string = "TestError"): RetryContext => {
     return createRetryContext(
+      mockOrchCtx,
       attemptNumber,
       { ...mockFailureDetails, errorType },
       attemptNumber * 1000,
@@ -62,16 +65,16 @@ describe("RetryHandler", () => {
         return context.totalRetryTimeInMilliseconds < 5000;
       };
 
-      expect(handler(createRetryContext(1, mockFailureDetails, 1000))).toBe(true);
-      expect(handler(createRetryContext(3, mockFailureDetails, 4999))).toBe(true);
-      expect(handler(createRetryContext(5, mockFailureDetails, 5000))).toBe(false);
+      expect(handler(createRetryContext(mockOrchCtx, 1, mockFailureDetails, 1000))).toBe(true);
+      expect(handler(createRetryContext(mockOrchCtx, 3, mockFailureDetails, 4999))).toBe(true);
+      expect(handler(createRetryContext(mockOrchCtx, 5, mockFailureDetails, 5000))).toBe(false);
     });
 
     it("should be able to check cancellation status", () => {
       const handler: RetryHandler = (context) => !context.isCancelled;
 
-      expect(handler(createRetryContext(1, mockFailureDetails, 1000, false))).toBe(true);
-      expect(handler(createRetryContext(1, mockFailureDetails, 1000, true))).toBe(false);
+      expect(handler(createRetryContext(mockOrchCtx, 1, mockFailureDetails, 1000, false))).toBe(true);
+      expect(handler(createRetryContext(mockOrchCtx, 1, mockFailureDetails, 1000, true))).toBe(false);
     });
 
     it("should support complex retry logic", () => {
@@ -92,12 +95,13 @@ describe("RetryHandler", () => {
       };
 
       // Should retry for normal errors under limits
-      expect(handler(createRetryContext(1, mockFailureDetails, 1000, false))).toBe(true);
+      expect(handler(createRetryContext(mockOrchCtx, 1, mockFailureDetails, 1000, false))).toBe(true);
 
       // Should not retry validation errors
       expect(
         handler(
           createRetryContext(
+            mockOrchCtx,
             1,
             { ...mockFailureDetails, errorType: "ValidationError" },
             1000,
@@ -107,13 +111,13 @@ describe("RetryHandler", () => {
       ).toBe(false);
 
       // Should not retry after 5 attempts
-      expect(handler(createRetryContext(5, mockFailureDetails, 5000, false))).toBe(false);
+      expect(handler(createRetryContext(mockOrchCtx, 5, mockFailureDetails, 5000, false))).toBe(false);
 
       // Should not retry after 30 seconds
-      expect(handler(createRetryContext(3, mockFailureDetails, 31000, false))).toBe(false);
+      expect(handler(createRetryContext(mockOrchCtx, 3, mockFailureDetails, 31000, false))).toBe(false);
 
       // Should not retry when cancelled
-      expect(handler(createRetryContext(1, mockFailureDetails, 1000, true))).toBe(false);
+      expect(handler(createRetryContext(mockOrchCtx, 1, mockFailureDetails, 1000, true))).toBe(false);
     });
   });
 
