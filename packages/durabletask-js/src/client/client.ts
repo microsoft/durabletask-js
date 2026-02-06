@@ -14,7 +14,7 @@ import { newOrchestrationState } from "../orchestration";
 import { OrchestrationState } from "../orchestration/orchestration-state";
 import { GrpcClient } from "./client-grpc";
 import { OrchestrationStatus, toProtobuf, fromProtobuf } from "../orchestration/enum/orchestration-status.enum";
-import { TimeoutError } from "../exception/timeout-error";
+import { raceWithTimeout } from "../utils/timeout.util";
 import { PurgeResult } from "../orchestration/orchestration-purge-result";
 import { PurgeInstanceCriteria } from "../orchestration/orchestration-purge-criteria";
 import { PurgeInstanceOptions } from "../orchestration/orchestration-purge-options";
@@ -38,6 +38,14 @@ import {
   CleanEntityStorageResult,
   defaultCleanEntityStorageRequest,
 } from "../entities/clean-entity-storage";
+import * as ClientLogs from "./logs";
+import {
+  startSpanForNewOrchestration,
+  startSpanForEventRaisedFromClient,
+  setSpanError,
+  setSpanOk,
+  endSpan,
+} from "../tracing";
 
 // Re-export MetadataGenerator for backward compatibility
 export { MetadataGenerator } from "../utils/grpc-helper.util";
@@ -227,15 +235,28 @@ export class TaskHubGrpcClient {
 
     populateTagsMap(req.getTagsMap(), tags);
 
-    this._logger.info(`Starting new ${name} instance with ID = ${req.getInstanceid()}${effectiveVersion ? ` (version: ${effectiveVersion})` : ""}`);
+    // Create a tracing span for the new orchestration (if OTEL is available)
+    const span = startSpanForNewOrchestration(req);
 
-    const res = await callWithMetadata<pb.CreateInstanceRequest, pb.CreateInstanceResponse>(
-      this._stub.startInstance.bind(this._stub),
-      req,
-      this._metadataGenerator,
-    );
+    const serializedInput = i.getValue() ?? "";
+    const inputSizeInBytes = Buffer.byteLength(serializedInput, "utf8");
+    ClientLogs.schedulingOrchestration(this._logger, req.getInstanceid(), name, inputSizeInBytes);
 
-    return res.getInstanceid();
+    try {
+      const res = await callWithMetadata<pb.CreateInstanceRequest, pb.CreateInstanceResponse>(
+        this._stub.startInstance.bind(this._stub),
+        req,
+        this._metadataGenerator,
+      );
+
+      setSpanOk(span);
+      return res.getInstanceid();
+    } catch (e: unknown) {
+      setSpanError(span, e);
+      throw e;
+    } finally {
+      endSpan(span);
+    }
   }
 
   /**
@@ -297,10 +318,11 @@ export class TaskHubGrpcClient {
     );
 
     // Execute the request and wait for the first response or timeout
-    const res = (await Promise.race([
+    const res = await raceWithTimeout(
       callPromise,
-      new Promise((_, reject) => setTimeout(() => reject(new TimeoutError()), timeout * 1000)),
-    ])) as pb.GetInstanceResponse;
+      timeout * 1000,
+      () => `Timed out waiting for orchestration '${instanceId}' to start after ${timeout}s`,
+    );
 
     return newOrchestrationState(req.getInstanceid(), res);
   }
@@ -331,7 +353,7 @@ export class TaskHubGrpcClient {
     req.setInstanceid(instanceId);
     req.setGetinputsandoutputs(fetchPayloads);
 
-    this._logger.info(`Waiting ${timeout} seconds for instance ${instanceId} to complete...`);
+    ClientLogs.waitingForInstanceCompletion(this._logger, instanceId);
 
     const callPromise = callWithMetadata<pb.GetInstanceRequest, pb.GetInstanceResponse>(
       this._stub.waitForInstanceCompletion.bind(this._stub),
@@ -340,10 +362,11 @@ export class TaskHubGrpcClient {
     );
 
     // Execute the request and wait for the first response or timeout
-    const res = (await Promise.race([
+    const res = await raceWithTimeout(
       callPromise,
-      new Promise((_, reject) => setTimeout(() => reject(new TimeoutError()), timeout * 1000)),
-    ])) as pb.GetInstanceResponse;
+      timeout * 1000,
+      () => `Timed out waiting for orchestration '${instanceId}' to complete after ${timeout}s`,
+    );
 
     const state = newOrchestrationState(req.getInstanceid(), res);
 
@@ -355,11 +378,11 @@ export class TaskHubGrpcClient {
 
     if (state.runtimeStatus === OrchestrationStatus.FAILED && state.failureDetails) {
       details = state.failureDetails;
-      this._logger.info(`Instance ${instanceId} failed: [${details.errorType}] ${details.message}`);
+      ClientLogs.instanceFailed(this._logger, instanceId, details.errorType, details.message);
     } else if (state.runtimeStatus === OrchestrationStatus.TERMINATED) {
-      this._logger.info(`Instance ${instanceId} was terminated`);
+      ClientLogs.instanceTerminated(this._logger, instanceId);
     } else if (state.runtimeStatus === OrchestrationStatus.COMPLETED) {
-      this._logger.info(`Instance ${instanceId} completed`);
+      ClientLogs.instanceCompleted(this._logger, instanceId);
     }
 
     return state;
@@ -376,6 +399,13 @@ export class TaskHubGrpcClient {
    * @param {any} [data] - An optional serializable data payload to include with the event.
    */
   async raiseOrchestrationEvent(instanceId: string, eventName: string, data: any = null): Promise<void> {
+    if (!instanceId) {
+      throw new Error("raiseOrchestrationEvent: 'instanceId' is required.");
+    }
+
+    if (!eventName) {
+      throw new Error("raiseOrchestrationEvent: 'eventName' is required and cannot be empty.");
+    }
     const req = new pb.RaiseEventRequest();
     req.setInstanceid(instanceId);
     req.setName(eventName);
@@ -385,13 +415,25 @@ export class TaskHubGrpcClient {
 
     req.setInput(i);
 
-    this._logger.info(`Raising event '${eventName}' for instance '${instanceId}'`);
+    // Create a tracing span for the raised event (if OTEL is available)
+    const span = startSpanForEventRaisedFromClient(eventName, instanceId);
 
-    await callWithMetadata<pb.RaiseEventRequest, pb.RaiseEventResponse>(
-      this._stub.raiseEvent.bind(this._stub),
-      req,
-      this._metadataGenerator,
-    );
+    ClientLogs.raisingEvent(this._logger, instanceId, eventName);
+
+    try {
+      await callWithMetadata<pb.RaiseEventRequest, pb.RaiseEventResponse>(
+        this._stub.raiseEvent.bind(this._stub),
+        req,
+        this._metadataGenerator,
+      );
+
+      setSpanOk(span);
+    } catch (e: unknown) {
+      setSpanError(span, e);
+      throw e;
+    } finally {
+      endSpan(span);
+    }
   }
 
   /**
@@ -419,6 +461,10 @@ export class TaskHubGrpcClient {
     instanceId: string,
     outputOrOptions: any | TerminateInstanceOptions = null,
   ): Promise<void> {
+    if (!instanceId) {
+      throw new Error("instanceId is required");
+    }
+
     const req = new pb.TerminateRequest();
     req.setInstanceid(instanceId);
 
@@ -440,7 +486,7 @@ export class TaskHubGrpcClient {
     req.setOutput(i);
     req.setRecursive(recursive);
 
-    this._logger.info(`Terminating '${instanceId}'${recursive ? ' (recursive)' : ''}`);
+    ClientLogs.terminatingInstance(this._logger, instanceId);
 
     await callWithMetadata<pb.TerminateRequest, pb.TerminateResponse>(
       this._stub.terminateInstance.bind(this._stub),
@@ -450,10 +496,14 @@ export class TaskHubGrpcClient {
   }
 
   async suspendOrchestration(instanceId: string): Promise<void> {
+    if (!instanceId) {
+      throw new Error("instanceId is required");
+    }
+
     const req = new pb.SuspendRequest();
     req.setInstanceid(instanceId);
 
-    this._logger.info(`Suspending '${instanceId}'`);
+    ClientLogs.suspendingInstance(this._logger, instanceId);
 
     await callWithMetadata<pb.SuspendRequest, pb.SuspendResponse>(
       this._stub.suspendInstance.bind(this._stub),
@@ -463,10 +513,14 @@ export class TaskHubGrpcClient {
   }
 
   async resumeOrchestration(instanceId: string): Promise<void> {
+    if (!instanceId) {
+      throw new Error("instanceId is required");
+    }
+
     const req = new pb.ResumeRequest();
     req.setInstanceid(instanceId);
 
-    this._logger.info(`Resuming '${instanceId}'`);
+    ClientLogs.resumingInstance(this._logger, instanceId);
 
     await callWithMetadata<pb.ResumeRequest, pb.ResumeResponse>(
       this._stub.resumeInstance.bind(this._stub),
@@ -504,7 +558,7 @@ export class TaskHubGrpcClient {
       req.setReason(reasonValue);
     }
 
-    this._logger.info(`Rewinding '${instanceId}' with reason: ${reason}`);
+    ClientLogs.rewindingInstance(this._logger, instanceId, reason);
 
     try {
       await callWithMetadata<pb.RewindInstanceRequest, pb.RewindInstanceResponse>(
@@ -561,7 +615,7 @@ export class TaskHubGrpcClient {
     req.setInstanceid(instanceId);
     req.setRestartwithnewinstanceid(restartWithNewInstanceId);
 
-    this._logger.info(`Restarting '${instanceId}' with restartWithNewInstanceId=${restartWithNewInstanceId}`);
+    ClientLogs.restartingInstance(this._logger, instanceId, restartWithNewInstanceId);
 
     try {
       const res = await callWithMetadata<pb.RestartInstanceRequest, pb.RestartInstanceResponse>(
@@ -616,7 +670,7 @@ export class TaskHubGrpcClient {
       req.setInstanceid(instanceId);
       req.setRecursive(options?.recursive ?? false);
 
-      this._logger.info(`Purging Instance '${instanceId}'${options?.recursive ? ' (recursive)' : ''}`);
+      ClientLogs.purgingInstanceMetadata(this._logger, instanceId);
 
       res = await callWithMetadata<pb.PurgeInstancesRequest, pb.PurgeInstancesResponse>(
         this._stub.purgeInstances.bind(this._stub),
@@ -647,7 +701,7 @@ export class TaskHubGrpcClient {
       req.setRecursive(options?.recursive ?? false);
       const timeout = purgeInstanceCriteria.getTimeout();
 
-      this._logger.info(`Purging Instances using purging criteria${options?.recursive ? " (recursive)" : ""}`);
+      ClientLogs.purgingInstances(this._logger, createdTimeFrom, createdTimeTo, runtimeStatusList.map(String).join(", "));
 
       const callPromise = callWithMetadata<pb.PurgeInstancesRequest, pb.PurgeInstancesResponse>(
         this._stub.purgeInstances.bind(this._stub),
@@ -655,10 +709,11 @@ export class TaskHubGrpcClient {
         this._metadataGenerator,
       );
       // Execute the request and wait for the first response or timeout
-      res = (await Promise.race([
+      res = await raceWithTimeout(
         callPromise,
-        new Promise((_, reject) => setTimeout(() => reject(new TimeoutError()), timeout)),
-      ])) as pb.PurgeInstancesResponse;
+        timeout,
+        () => `Timed out waiting for purge operation after ${timeout}ms`,
+      );
     }
     if (!res) {
       return;

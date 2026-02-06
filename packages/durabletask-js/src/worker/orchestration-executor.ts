@@ -11,12 +11,13 @@ import {
 import * as pb from "../proto/orchestrator_service_pb";
 import { Logger, ConsoleLogger } from "../types/logger.type";
 import { getName } from "../task";
+import * as WorkerLogs from "./logs";
 import { OrchestrationStateError } from "../task/exception/orchestration-state-error";
 import { RetryableTask } from "../task/retryable-task";
 import { RetryTimerTask } from "../task/retry-timer-task";
 import { TOrchestrator } from "../types/orchestrator.type";
 import { enumValueToKey } from "../utils/enum.util";
-import { getOrchestrationStatusStr, isEmpty } from "../utils/pb-helper.util";
+import { isEmpty } from "../utils/pb-helper.util";
 import { OrchestratorNotRegisteredError } from "./exception/orchestrator-not-registered-error";
 import { StopIterationError } from "./exception/stop-iteration-error";
 import { Registry } from "./registry";
@@ -40,6 +41,7 @@ export class OrchestrationExecutor {
   private _isSuspended: boolean;
   private _suspendedEvents: pb.HistoryEvent[];
   private _logger: Logger;
+  private _orchestratorName: string;
 
   constructor(registry: Registry, logger?: Logger) {
     this._registry = registry;
@@ -47,6 +49,7 @@ export class OrchestrationExecutor {
     this._isSuspended = false;
     this._suspendedEvents = [];
     this._logger = logger ?? new ConsoleLogger();
+    this._orchestratorName = "(unknown)";
   }
 
   async execute(
@@ -62,7 +65,7 @@ export class OrchestrationExecutor {
 
     try {
       // Rebuild the local state by replaying the history events into the orchestrator function
-      this._logger.info(`${instanceId}: Rebuilding local state with ${oldEvents.length} history event...`);
+      WorkerLogs.orchestrationRebuilding(this._logger, instanceId, oldEvents.length);
       ctx._isReplaying = true;
 
       for (const oldEvent of oldEvents) {
@@ -71,30 +74,35 @@ export class OrchestrationExecutor {
 
       // Get new actions by executing newly received events into the orchestrator function
       const summary = getNewEventSummary(newEvents);
-      this._logger.info(`${instanceId}: Processing ${newEvents.length} new history event(s): ${summary}`);
+      WorkerLogs.orchestrationProcessing(this._logger, instanceId, newEvents.length, summary);
       ctx._isReplaying = false;
 
       for (const newEvent of newEvents) {
         await this.processEvent(ctx, newEvent);
       }
-    } catch (e: any) {
-      ctx.setFailed(e);
+    } catch (e: unknown) {
+      ctx.setFailed(e instanceof Error ? e : new Error(String(e)));
     }
 
     if (!ctx._isComplete) {
       const taskCount = Object.keys(ctx._pendingTasks).length;
       const eventCount = Object.keys(ctx._pendingEvents).length;
-      this._logger.info(`${instanceId}: Waiting for ${taskCount} task(s) and ${eventCount} event(s) to complete...`);
+      WorkerLogs.orchestrationWaiting(this._logger, instanceId, taskCount, eventCount);
     } else if (
       ctx._completionStatus &&
       ctx._completionStatus !== pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW
     ) {
-      const completionStatusStr = getOrchestrationStatusStr(ctx._completionStatus);
-      this._logger.info(`${instanceId}: Orchestration completed with status ${completionStatusStr}`);
+      if (ctx._completionStatus === pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED) {
+        WorkerLogs.orchestrationFailed(this._logger, instanceId, this._orchestratorName);
+      } else if (ctx._completionStatus === pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED) {
+        WorkerLogs.orchestrationTerminated(this._logger, instanceId);
+      } else {
+        WorkerLogs.orchestrationCompleted(this._logger, instanceId, this._orchestratorName);
+      }
     }
 
     const actions = ctx.getActions();
-    this._logger.info(`${instanceId}: Returning ${actions.length} action(s)`);
+    WorkerLogs.orchestrationReturningActions(this._logger, instanceId, actions.length);
 
     return {
       actions,
@@ -105,15 +113,15 @@ export class OrchestrationExecutor {
   private async processEvent(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
     // Check if we are suspended to see if we need to buffer the event until we are resumed
     if (this._isSuspended && isSuspendable(event)) {
-      this._logger.info("Suspended, buffering event");
+      WorkerLogs.orchestrationSuspendedBuffering(this._logger);
       this._suspendedEvents.push(event);
       return;
     }
 
     const eventType = event.getEventtypeCase();
-    const eventTypeName = enumValueToKey(pb.HistoryEvent.EventtypeCase, eventType);
+    const eventTypeName = enumValueToKey(pb.HistoryEvent.EventtypeCase, eventType) ?? "Unknown";
 
-    this._logger.debug(`Processing event type ${eventTypeName} (${event.getEventtypeCase()})`);
+    WorkerLogs.orchestrationProcessingEvent(this._logger, eventTypeName, event.getEventtypeCase());
 
     // Process the event type
     try {
@@ -138,6 +146,12 @@ export class OrchestrationExecutor {
             if (executionId) {
               ctx._executionId = executionId;
             }
+
+            // Track the orchestrator name for lifecycle logs
+            this._orchestratorName = executionStartedEvent?.getName() ?? "(unknown)";
+
+            // Log orchestration start (EventId 600)
+            WorkerLogs.orchestrationStarted(this._logger, ctx._instanceId, this._orchestratorName);
 
             // Set the version from the execution started event
             ctx._version = executionStartedEvent?.getVersion()?.getValue() ?? "";
@@ -170,7 +184,7 @@ export class OrchestrationExecutor {
               await ctx.run(result);
             } else {
               const resultType = Object.prototype.toString.call(result);
-            this._logger.info(`An orchestrator was returned that doesn't schedule any tasks (type = ${resultType})`);
+              WorkerLogs.orchestrationNoTasks(this._logger, resultType);
 
               // This is an orchestrator that doesn't schedule any tasks
               ctx.setComplete(result, pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
@@ -203,7 +217,7 @@ export class OrchestrationExecutor {
 
             if (timerId === undefined) {
               if (!ctx._isReplaying) {
-                this._logger.warn(`${ctx._instanceId}: Ignoring timerFired event with undefined ID`);
+                WorkerLogs.orchestrationUnexpectedEvent(this._logger, ctx._instanceId, "timerFired");
               }
               return;
             }
@@ -214,7 +228,7 @@ export class OrchestrationExecutor {
             if (!timerTask) {
               // TODO: Should this be an error? When would it ever happen?
               if (!ctx._isReplaying) {
-                this._logger.warn(`${ctx._instanceId}: Ignoring unexpected timerFired event with ID = ${timerId}`);
+                WorkerLogs.orchestrationUnexpectedEvent(this._logger, ctx._instanceId, "timerFired", timerId);
               }
               return;
             }
@@ -274,7 +288,7 @@ export class OrchestrationExecutor {
             if (!activityTask) {
               // TODO: Should this be an error? When would it ever happen?
               if (!ctx._isReplaying) {
-                this._logger.warn(`${ctx._instanceId}: Ignoring unexpected taskCompleted event with ID = ${taskId}`);
+                WorkerLogs.orchestrationUnexpectedEvent(this._logger, ctx._instanceId, "taskCompleted", taskId);
               }
 
               return;
@@ -297,7 +311,7 @@ export class OrchestrationExecutor {
 
             if (taskId === undefined) {
               if (!ctx._isReplaying) {
-                this._logger.warn(`${ctx._instanceId}: Ignoring taskFailed event with undefined ID`);
+                WorkerLogs.orchestrationUnexpectedEvent(this._logger, ctx._instanceId, "taskFailed");
               }
               return;
             }
@@ -310,7 +324,7 @@ export class OrchestrationExecutor {
 
             if (!activityTask) {
               if (!ctx._isReplaying) {
-                this._logger.warn(`${ctx._instanceId}: Ignoring unexpected taskFailed event with ID = ${taskId}`);
+                WorkerLogs.orchestrationUnexpectedEvent(this._logger, ctx._instanceId, "taskFailed", taskId);
               }
               return;
             }
@@ -361,7 +375,7 @@ export class OrchestrationExecutor {
               throw getWrongActionNameError(
                 taskId,
                 getName(ctx.callSubOrchestrator),
-                action.getCreatesuborchestration()?.getName(),
+                event.getSuborchestrationinstancecreated()?.getName(),
                 action.getCreatesuborchestration()?.getName(),
               );
             }
@@ -403,7 +417,7 @@ export class OrchestrationExecutor {
 
             if (taskId === undefined) {
               if (!ctx._isReplaying) {
-                this._logger.warn(`${ctx._instanceId}: Ignoring subOrchestrationInstanceFailed event with undefined ID`);
+                WorkerLogs.orchestrationUnexpectedEvent(this._logger, ctx._instanceId, "subOrchestrationInstanceFailed");
               }
               return;
             }
@@ -416,8 +430,8 @@ export class OrchestrationExecutor {
 
             if (!subOrchTask) {
               if (!ctx._isReplaying) {
-                this._logger.warn(
-                  `${ctx._instanceId}: Ignoring unexpected subOrchestrationInstanceFailed event with ID = ${taskId}`,
+                WorkerLogs.orchestrationUnexpectedEvent(
+                  this._logger, ctx._instanceId, "subOrchestrationInstanceFailed", taskId,
                 );
               }
               return;
@@ -455,7 +469,7 @@ export class OrchestrationExecutor {
             const eventName = event.getEventraised()?.getName()?.toLowerCase();
 
             if (!ctx._isReplaying) {
-              this._logger.info(`${ctx._instanceId}: Event raised: ${eventName}`);
+              WorkerLogs.orchestrationEventRaised(this._logger, ctx._instanceId, eventName!);
             }
 
             let taskList;
@@ -477,7 +491,7 @@ export class OrchestrationExecutor {
                 eventTask.complete(decodedResult);
               }
 
-              if (!taskList && eventName) {
+              if ((taskList?.length ?? 0) === 0 && eventName) {
                 delete ctx._pendingEvents[eventName];
               }
 
@@ -502,9 +516,7 @@ export class OrchestrationExecutor {
               eventList?.push(decodedResult);
 
               if (!ctx._isReplaying) {
-                this._logger.info(
-                  `${ctx._instanceId}: Event ${eventName} has been buffered as there are no tasks waiting for it.`,
-                );
+                WorkerLogs.orchestrationEventBuffered(this._logger, ctx._instanceId, eventName!);
               }
             }
           }
@@ -512,7 +524,7 @@ export class OrchestrationExecutor {
         case pb.HistoryEvent.EventtypeCase.EXECUTIONSUSPENDED:
           {
             if (!this._isSuspended && !ctx._isReplaying) {
-              this._logger.info(`${ctx._instanceId}: Execution suspended`);
+              WorkerLogs.orchestrationSuspended(this._logger, ctx._instanceId);
             }
 
             this._isSuspended = true;
@@ -533,7 +545,7 @@ export class OrchestrationExecutor {
           break;
         case pb.HistoryEvent.EventtypeCase.EXECUTIONTERMINATED: {
           if (!ctx._isReplaying) {
-            this._logger.info(`${ctx._instanceId}: Execution terminated`);
+            WorkerLogs.orchestrationTerminated(this._logger, ctx._instanceId);
           }
 
           let encodedOutput;
@@ -715,10 +727,10 @@ export class OrchestrationExecutor {
           }
           break;
         default:
-          this._logger.info(`Unknown history event type: ${eventTypeName} (value: ${eventType}), skipping...`);
+          WorkerLogs.orchestrationUnknownEvent(this._logger, eventTypeName, eventType);
         // throw new OrchestrationStateError(`Unknown history event type: ${eventTypeName} (value: ${eventType})`);
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       // StopIteration is thrown when the generator is finished and didn't return a task as its next action
       if (e instanceof StopIterationError) {
         ctx.setComplete(e.value, pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
@@ -727,7 +739,7 @@ export class OrchestrationExecutor {
 
       // For the rest we don't do anything
       // Else we throw it upwards
-      this._logger.error(`Could not process the event ${eventTypeName} due to error ${e}`);
+      WorkerLogs.orchestrationEventError(this._logger, eventTypeName, e);
       throw e;
     }
   }

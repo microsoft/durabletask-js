@@ -55,8 +55,8 @@ export class GrpcClient {
       "grpc.primary_user_agent": "durabletask-js",
     };
     return {
-      ...options,
       ...defaultOptions,
+      ...options,
     };
   }
 }

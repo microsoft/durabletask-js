@@ -2,10 +2,11 @@
 // Licensed under the MIT License.
 
 import { ReplaySafeLogger, ReplayContext } from "../src/types/replay-safe-logger";
-import { Logger } from "../src/types/logger.type";
+import { Logger, StructuredLogger, LogEvent, isStructuredLogger } from "../src/types/logger.type";
 
 describe("ReplaySafeLogger", () => {
   let mockLogger: jest.Mocked<Logger>;
+  let mockStructuredLogger: jest.Mocked<StructuredLogger>;
   let mockContext: ReplayContext;
 
   beforeEach(() => {
@@ -14,6 +15,13 @@ describe("ReplaySafeLogger", () => {
       warn: jest.fn(),
       info: jest.fn(),
       debug: jest.fn(),
+    };
+    mockStructuredLogger = {
+      error: jest.fn(),
+      warn: jest.fn(),
+      info: jest.fn(),
+      debug: jest.fn(),
+      logEvent: jest.fn(),
     };
   });
 
@@ -123,6 +131,62 @@ describe("ReplaySafeLogger", () => {
     });
   });
 
+  describe("logEvent (StructuredLogger)", () => {
+    const testEvent: LogEvent = {
+      eventId: 600,
+      category: "Microsoft.DurableTask.Worker.Orchestrations",
+      properties: { instanceId: "abc123", name: "MyOrch" },
+    };
+
+    it("should be recognized as a StructuredLogger", () => {
+      mockContext = { isReplaying: false };
+      const logger = new ReplaySafeLogger(mockContext, mockLogger);
+      expect(isStructuredLogger(logger)).toBe(true);
+    });
+
+    it("should delegate logEvent to inner StructuredLogger when not replaying", () => {
+      mockContext = { isReplaying: false };
+      const logger = new ReplaySafeLogger(mockContext, mockStructuredLogger);
+
+      logger.logEvent("info", testEvent, "test structured message");
+
+      expect(mockStructuredLogger.logEvent).toHaveBeenCalledWith("info", testEvent, "test structured message");
+    });
+
+    it("should NOT delegate logEvent when replaying", () => {
+      mockContext = { isReplaying: true };
+      const logger = new ReplaySafeLogger(mockContext, mockStructuredLogger);
+
+      logger.logEvent("info", testEvent, "test structured message");
+
+      expect(mockStructuredLogger.logEvent).not.toHaveBeenCalled();
+    });
+
+    it("should fall back to plain log method if inner logger is not a StructuredLogger", () => {
+      mockContext = { isReplaying: false };
+      const logger = new ReplaySafeLogger(mockContext, mockLogger);
+
+      logger.logEvent("info", testEvent, "test fallback message");
+
+      // Should call the plain info method on the non-structured logger
+      expect(mockLogger.info).toHaveBeenCalledWith("test fallback message");
+    });
+
+    it("should fall back to correct level for each log level", () => {
+      mockContext = { isReplaying: false };
+      const logger = new ReplaySafeLogger(mockContext, mockLogger);
+
+      logger.logEvent("error", testEvent, "error msg");
+      expect(mockLogger.error).toHaveBeenCalledWith("error msg");
+
+      logger.logEvent("warn", testEvent, "warn msg");
+      expect(mockLogger.warn).toHaveBeenCalledWith("warn msg");
+
+      logger.logEvent("debug", testEvent, "debug msg");
+      expect(mockLogger.debug).toHaveBeenCalledWith("debug msg");
+    });
+  });
+
   describe("dynamic replay state changes", () => {
     it("should respect changes in isReplaying state", () => {
       // Start with replaying = true
@@ -151,6 +215,13 @@ describe("ReplaySafeLogger", () => {
       expect(typeof logger.warn).toBe("function");
       expect(typeof logger.info).toBe("function");
       expect(typeof logger.debug).toBe("function");
+    });
+
+    it("should implement StructuredLogger interface correctly", () => {
+      mockContext = { isReplaying: false };
+      const logger = new ReplaySafeLogger(mockContext, mockLogger);
+
+      expect(typeof logger.logEvent).toBe("function");
     });
   });
 });
