@@ -15,25 +15,12 @@ describe("RetryContext", () => {
 
   describe("createRetryContext", () => {
     it("should create a RetryContext with all required properties", () => {
-      const context = createRetryContext(mockOrchCtx, 1, mockFailureDetails, 5000, false);
+      const context = createRetryContext(mockOrchCtx, 1, mockFailureDetails, 5000);
 
       expect(context.orchestrationContext).toBe(mockOrchCtx);
       expect(context.lastAttemptNumber).toBe(1);
       expect(context.lastFailure).toBe(mockFailureDetails);
       expect(context.totalRetryTimeInMilliseconds).toBe(5000);
-      expect(context.isCancelled).toBe(false);
-    });
-
-    it("should default isCancelled to false when not provided", () => {
-      const context = createRetryContext(mockOrchCtx, 2, mockFailureDetails, 10000);
-
-      expect(context.isCancelled).toBe(false);
-    });
-
-    it("should allow isCancelled to be true", () => {
-      const context = createRetryContext(mockOrchCtx, 3, mockFailureDetails, 15000, true);
-
-      expect(context.isCancelled).toBe(true);
     });
 
     it("should preserve failure details correctly", () => {
@@ -78,7 +65,6 @@ describe("RetryContext", () => {
       expect(Object.keys(context)).toContain("lastAttemptNumber");
       expect(Object.keys(context)).toContain("lastFailure");
       expect(Object.keys(context)).toContain("totalRetryTimeInMilliseconds");
-      expect(Object.keys(context)).toContain("isCancelled");
     });
   });
 });

@@ -297,7 +297,6 @@ describe("RetryHandlerTask", () => {
       expect(capturedContext.lastFailure.message).toBe("Connection timeout");
       expect(capturedContext.lastFailure.stackTrace).toBe("Error: Connection timeout\n    at line 1");
       expect(capturedContext.totalRetryTimeInMilliseconds).toBe(5000);
-      expect(capturedContext.isCancelled).toBe(false);
     });
 
     it("should expose orchestrationContext.isReplaying in retry context", async () => {

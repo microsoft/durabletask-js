@@ -81,7 +81,6 @@ export class RetryHandlerTask<T> extends RetryTaskBase<T> {
       this.attemptCount,
       failureDetails,
       totalRetryTimeMs,
-      false, // isCancelled - not yet supported
     );
 
     return this._handler(retryContext);

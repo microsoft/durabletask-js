@@ -20,7 +20,6 @@ describe("RetryHandler", () => {
       attemptNumber,
       { ...mockFailureDetails, errorType },
       attemptNumber * 1000,
-      false,
     );
   };
 
@@ -70,18 +69,8 @@ describe("RetryHandler", () => {
       expect(handler(createRetryContext(mockOrchCtx, 5, mockFailureDetails, 5000))).toBe(false);
     });
 
-    it("should be able to check cancellation status", () => {
-      const handler: RetryHandler = (context) => !context.isCancelled;
-
-      expect(handler(createRetryContext(mockOrchCtx, 1, mockFailureDetails, 1000, false))).toBe(true);
-      expect(handler(createRetryContext(mockOrchCtx, 1, mockFailureDetails, 1000, true))).toBe(false);
-    });
-
     it("should support complex retry logic", () => {
       const handler: RetryHandler = (context) => {
-        // Don't retry if cancelled
-        if (context.isCancelled) return false;
-
         // Don't retry validation errors
         if (context.lastFailure.errorType === "ValidationError") return false;
 
@@ -95,7 +84,7 @@ describe("RetryHandler", () => {
       };
 
       // Should retry for normal errors under limits
-      expect(handler(createRetryContext(mockOrchCtx, 1, mockFailureDetails, 1000, false))).toBe(true);
+      expect(handler(createRetryContext(mockOrchCtx, 1, mockFailureDetails, 1000))).toBe(true);
 
       // Should not retry validation errors
       expect(
@@ -105,19 +94,15 @@ describe("RetryHandler", () => {
             1,
             { ...mockFailureDetails, errorType: "ValidationError" },
             1000,
-            false,
           ),
         ),
       ).toBe(false);
 
       // Should not retry after 5 attempts
-      expect(handler(createRetryContext(mockOrchCtx, 5, mockFailureDetails, 5000, false))).toBe(false);
+      expect(handler(createRetryContext(mockOrchCtx, 5, mockFailureDetails, 5000))).toBe(false);
 
       // Should not retry after 30 seconds
-      expect(handler(createRetryContext(mockOrchCtx, 3, mockFailureDetails, 31000, false))).toBe(false);
-
-      // Should not retry when cancelled
-      expect(handler(createRetryContext(mockOrchCtx, 1, mockFailureDetails, 1000, true))).toBe(false);
+      expect(handler(createRetryContext(mockOrchCtx, 3, mockFailureDetails, 31000))).toBe(false);
     });
   });
 

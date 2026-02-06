@@ -68,12 +68,6 @@ export interface RetryContext {
    * This includes the time spent executing the task and waiting between retries.
    */
   readonly totalRetryTimeInMilliseconds: number;
-
-  /**
-   * Whether the retry operation has been cancelled.
-   * Handlers should check this and return false if cancellation is requested.
-   */
-  readonly isCancelled: boolean;
 }
 
 /**
@@ -83,7 +77,6 @@ export interface RetryContext {
  * @param lastAttemptNumber - The previous retry attempt number
  * @param lastFailure - The details of the previous task failure
  * @param totalRetryTimeInMilliseconds - The total time spent retrying
- * @param isCancelled - Whether cancellation has been requested
  * @returns A RetryContext object
  */
 export function createRetryContext(
@@ -91,13 +84,11 @@ export function createRetryContext(
   lastAttemptNumber: number,
   lastFailure: TaskFailureDetails,
   totalRetryTimeInMilliseconds: number,
-  isCancelled: boolean = false,
 ): RetryContext {
   return {
     orchestrationContext,
     lastAttemptNumber,
     lastFailure,
     totalRetryTimeInMilliseconds,
-    isCancelled,
   };
 }
