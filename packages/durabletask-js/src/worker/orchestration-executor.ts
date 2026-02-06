@@ -138,7 +138,7 @@ export class OrchestrationExecutor {
             // Track the orchestrator name for lifecycle logs
             this._orchestratorName = executionStartedEvent?.getName() ?? "(unknown)";
 
-            // Log orchestration start (matching .NET EventId 600)
+            // Log orchestration start (EventId 600)
             WorkerLogs.orchestrationStarted(this._logger, ctx._instanceId, this._orchestratorName);
 
             // Set the version from the execution started event

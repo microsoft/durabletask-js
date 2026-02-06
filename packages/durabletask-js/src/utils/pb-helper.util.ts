@@ -184,26 +184,17 @@ export function newSubOrchestrationFailedEvent(eventId: number, ex: Error): pb.H
 export function newFailureDetails(e: unknown): pb.TaskFailureDetails {
   const failure = new pb.TaskFailureDetails();
 
-  if (e instanceof Error) {
-    failure.setErrortype(e.constructor.name);
-    failure.setErrormessage(e.message);
+  const errorType = e instanceof Error ? e.constructor.name : "UnknownError";
+  const errorMessage = e instanceof Error ? e.message : String(e);
+  const stack = e instanceof Error ? e.stack : undefined;
 
-    const stringValueStackTrace = new StringValue();
-    stringValueStackTrace.setValue(e.stack ?? "");
-    failure.setStacktrace(stringValueStackTrace);
-  } else {
-    failure.setErrortype("UnknownError");
-    failure.setErrormessage(String(e));
+  failure.setErrortype(errorType);
+  failure.setErrormessage(errorMessage);
 
-    let stack = "";
-    if (typeof e === "object" && e !== null && "stack" in e) {
-      const possibleStack = (e as { stack?: unknown }).stack;
-      stack = possibleStack != null ? String(possibleStack) : "";
-    }
-
-    const stringValueStackTrace = new StringValue();
-    stringValueStackTrace.setValue(stack);
-    failure.setStacktrace(stringValueStackTrace);
+  if (stack !== undefined) {
+    const sv = new StringValue();
+    sv.setValue(stack);
+    failure.setStacktrace(sv);
   }
 
   return failure;

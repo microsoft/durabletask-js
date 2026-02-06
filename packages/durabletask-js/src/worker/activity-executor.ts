@@ -29,7 +29,7 @@ export class ActivityExecutor {
       throw new ActivityNotRegisteredError(name);
     }
 
-    // Log activity start (matching .NET EventId 603)
+    // Log activity start (EventId 603)
     WorkerLogs.activityStarted(this._logger, orchestrationId, name);
 
     const activityInput = encodedInput ? JSON.parse(encodedInput) : undefined;
@@ -46,13 +46,13 @@ export class ActivityExecutor {
       // Return the output
       const encodedOutput = activityOutput ? JSON.stringify(activityOutput) : undefined;
 
-      // Log activity completion (matching .NET EventId 604)
+      // Log activity completion (EventId 604)
       WorkerLogs.activityCompleted(this._logger, orchestrationId, name);
 
       return encodedOutput;
     } catch (e: unknown) {
       const err = e instanceof Error ? e : new Error(String(e));
-      // Log activity failure (matching .NET EventId 605)
+      // Log activity failure (EventId 605)
       WorkerLogs.activityFailed(this._logger, orchestrationId, name, err);
       throw err;
     }
