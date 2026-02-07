@@ -85,11 +85,6 @@ export {
   SubOrchestrationOptions,
   StartOrchestrationOptions,
   TaskRetryOptions,
-  taskOptionsFromRetryPolicy,
-  taskOptionsFromRetryHandler,
-  taskOptionsFromSyncRetryHandler,
-  subOrchestrationOptionsFromRetryPolicy,
-  subOrchestrationOptionsFromRetryHandler,
   isRetryPolicy,
   isRetryHandler,
 } from "./task/options";

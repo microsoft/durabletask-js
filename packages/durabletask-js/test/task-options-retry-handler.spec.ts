@@ -3,17 +3,10 @@
 
 import { RetryPolicy } from "../src/task/retry/retry-policy";
 import { RetryHandler, AsyncRetryHandler, toAsyncRetryHandler } from "../src/task/retry/retry-handler";
-import { createRetryContext } from "../src/task/retry/retry-context";
-import { OrchestrationContext } from "../src/task/context/orchestration-context";
 import {
   TaskOptions,
   SubOrchestrationOptions,
   TaskRetryOptions,
-  taskOptionsFromRetryPolicy,
-  taskOptionsFromRetryHandler,
-  taskOptionsFromSyncRetryHandler,
-  subOrchestrationOptionsFromRetryPolicy,
-  subOrchestrationOptionsFromRetryHandler,
   isRetryPolicy,
   isRetryHandler,
 } from "../src/task/options/task-options";
@@ -32,8 +25,6 @@ describe("TaskOptions with RetryHandler", () => {
     return context.lastAttemptNumber < 3;
   };
 
-  const mockOrchCtx = {} as OrchestrationContext;
-
   describe("TaskRetryOptions type", () => {
     it("should accept RetryPolicy", () => {
       const options: TaskRetryOptions = mockRetryPolicy;
@@ -48,92 +39,6 @@ describe("TaskOptions with RetryHandler", () => {
     it("should accept synchronous RetryHandler directly", () => {
       const options: TaskRetryOptions = mockSyncRetryHandler;
       expect(options).toBe(mockSyncRetryHandler);
-    });
-  });
-
-  describe("taskOptionsFromRetryPolicy", () => {
-    it("should create TaskOptions with retry policy", () => {
-      const options = taskOptionsFromRetryPolicy(mockRetryPolicy);
-
-      expect(options.retry).toBe(mockRetryPolicy);
-    });
-
-    it("should not have other properties", () => {
-      const options = taskOptionsFromRetryPolicy(mockRetryPolicy);
-
-      expect(options.tags).toBeUndefined();
-      expect(options.version).toBeUndefined();
-    });
-  });
-
-  describe("taskOptionsFromRetryHandler", () => {
-    it("should create TaskOptions with async retry handler", () => {
-      const options = taskOptionsFromRetryHandler(mockAsyncRetryHandler);
-
-      expect(options.retry).toBe(mockAsyncRetryHandler);
-    });
-
-    it("should not have other properties", () => {
-      const options = taskOptionsFromRetryHandler(mockAsyncRetryHandler);
-
-      expect(options.tags).toBeUndefined();
-      expect(options.version).toBeUndefined();
-    });
-  });
-
-  describe("taskOptionsFromSyncRetryHandler", () => {
-    it("should create TaskOptions with wrapped sync handler", () => {
-      const options = taskOptionsFromSyncRetryHandler(mockSyncRetryHandler);
-
-      expect(typeof options.retry).toBe("function");
-    });
-
-    it("should wrap sync handler to return Promise", async () => {
-      const options = taskOptionsFromSyncRetryHandler(mockSyncRetryHandler);
-
-      const handler = options.retry as AsyncRetryHandler;
-      const context = createRetryContext(
-        mockOrchCtx,
-        1,
-        { errorType: "Error", message: "Error", stackTrace: "" },
-        1000,
-      );
-
-      const result = handler(context);
-      expect(result).toBeInstanceOf(Promise);
-      expect(await result).toBe(true);
-    });
-  });
-
-  describe("subOrchestrationOptionsFromRetryPolicy", () => {
-    it("should create SubOrchestrationOptions with retry policy", () => {
-      const options = subOrchestrationOptionsFromRetryPolicy(mockRetryPolicy);
-
-      expect(options.retry).toBe(mockRetryPolicy);
-      expect(options.instanceId).toBeUndefined();
-    });
-
-    it("should include instanceId when provided", () => {
-      const options = subOrchestrationOptionsFromRetryPolicy(mockRetryPolicy, "test-instance");
-
-      expect(options.retry).toBe(mockRetryPolicy);
-      expect(options.instanceId).toBe("test-instance");
-    });
-  });
-
-  describe("subOrchestrationOptionsFromRetryHandler", () => {
-    it("should create SubOrchestrationOptions with retry handler", () => {
-      const options = subOrchestrationOptionsFromRetryHandler(mockAsyncRetryHandler);
-
-      expect(options.retry).toBe(mockAsyncRetryHandler);
-      expect(options.instanceId).toBeUndefined();
-    });
-
-    it("should include instanceId when provided", () => {
-      const options = subOrchestrationOptionsFromRetryHandler(mockAsyncRetryHandler, "test-instance");
-
-      expect(options.retry).toBe(mockAsyncRetryHandler);
-      expect(options.instanceId).toBe("test-instance");
     });
   });
 

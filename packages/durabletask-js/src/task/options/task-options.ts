@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 import { RetryPolicy } from "../retry/retry-policy";
-import { AsyncRetryHandler, RetryHandler, toAsyncRetryHandler } from "../retry/retry-handler";
+import { AsyncRetryHandler, RetryHandler } from "../retry/retry-handler";
 
 /**
  * Union type representing the available retry strategies for a task.
@@ -74,115 +74,6 @@ export interface StartOrchestrationOptions {
    * via the OrchestrationContext.version property.
    */
   version?: string;
-}
-
-/**
- * Creates a TaskOptions instance from a RetryPolicy.
- *
- * @param policy - The retry policy to use
- * @returns A TaskOptions instance configured with the retry policy
- *
- * @example
- * ```typescript
- * const retryPolicy = new RetryPolicy({
- *   maxNumberOfAttempts: 3,
- *   firstRetryIntervalInMilliseconds: 1000
- * });
- *
- * const options = taskOptionsFromRetryPolicy(retryPolicy);
- * ```
- */
-export function taskOptionsFromRetryPolicy(policy: RetryPolicy): TaskOptions {
-  return { retry: policy };
-}
-
-/**
- * Creates a TaskOptions instance from an AsyncRetryHandler.
- *
- * @param handler - The async retry handler to use
- * @returns A TaskOptions instance configured with the retry handler
- *
- * @example
- * ```typescript
- * const handler: AsyncRetryHandler = async (context) => {
- *   if (context.lastAttemptNumber >= 5) return false;
- *   if (context.lastFailure.errorType === "ValidationError") return false;
- *   return true;
- * };
- *
- * const options = taskOptionsFromRetryHandler(handler);
- * await ctx.callActivity("myActivity", input, options);
- * ```
- */
-export function taskOptionsFromRetryHandler(handler: AsyncRetryHandler): TaskOptions {
-  return { retry: handler };
-}
-
-/**
- * Creates a TaskOptions instance from a synchronous RetryHandler.
- *
- * @param handler - The sync retry handler to use (will be wrapped in a Promise)
- * @returns A TaskOptions instance configured with the retry handler
- *
- * @example
- * ```typescript
- * const handler: RetryHandler = (context) => {
- *   return context.lastAttemptNumber < 3;
- * };
- *
- * const options = taskOptionsFromSyncRetryHandler(handler);
- * await ctx.callActivity("myActivity", input, options);
- * ```
- */
-export function taskOptionsFromSyncRetryHandler(handler: RetryHandler): TaskOptions {
-  return { retry: toAsyncRetryHandler(handler) };
-}
-
-/**
- * Creates a SubOrchestrationOptions instance from a RetryPolicy and optional instance ID.
- *
- * @param policy - The retry policy to use
- * @param instanceId - Optional instance ID for the sub-orchestration
- * @returns A SubOrchestrationOptions instance configured with the retry policy
- *
- * @example
- * ```typescript
- * const retryPolicy = new RetryPolicy({
- *   maxNumberOfAttempts: 3,
- *   firstRetryIntervalInMilliseconds: 1000
- * });
- *
- * const options = subOrchestrationOptionsFromRetryPolicy(retryPolicy, "my-sub-orch-123");
- * ```
- */
-export function subOrchestrationOptionsFromRetryPolicy(
-  policy: RetryPolicy,
-  instanceId?: string,
-): SubOrchestrationOptions {
-  return { retry: policy, instanceId };
-}
-
-/**
- * Creates a SubOrchestrationOptions instance from an AsyncRetryHandler and optional instance ID.
- *
- * @param handler - The async retry handler to use
- * @param instanceId - Optional instance ID for the sub-orchestration
- * @returns A SubOrchestrationOptions instance configured with the retry handler
- *
- * @example
- * ```typescript
- * const handler: AsyncRetryHandler = async (context) => {
- *   return context.lastAttemptNumber < 3;
- * };
- *
- * const options = subOrchestrationOptionsFromRetryHandler(handler, "my-sub-orch-123");
- * ```
- */
-export function subOrchestrationOptionsFromRetryHandler(
-  handler: AsyncRetryHandler,
-  instanceId?: string,
-): SubOrchestrationOptions {
-  return { retry: handler, instanceId };
 }
 
 /**

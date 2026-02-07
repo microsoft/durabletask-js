@@ -31,8 +31,7 @@ import { RetryContext } from "./retry-context";
  *   return true;
  * };
  *
- * const options = taskOptionsFromSyncRetryHandler(handler);
- * await ctx.callActivity("myActivity", input, options);
+ * await ctx.callActivity("myActivity", input, { retry: handler });
  * ```
  */
 export type RetryHandler = (retryContext: RetryContext) => boolean;
@@ -68,8 +67,7 @@ export type RetryHandler = (retryContext: RetryContext) => boolean;
  *   return true;
  * };
  *
- * const options = taskOptionsFromRetryHandler(asyncHandler);
- * await ctx.callActivity("myActivity", input, options);
+ * await ctx.callActivity("myActivity", input, { retry: asyncHandler });
  * ```
  */
 export type AsyncRetryHandler = (retryContext: RetryContext) => Promise<boolean>;
