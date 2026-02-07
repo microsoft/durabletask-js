@@ -594,6 +594,9 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     // Register the new action
     this._pendingActions[newAction.getId()] = newAction;
 
+    // Update the task's action reference so it stays in sync with the new ID
+    retryTask.updateAction(newAction);
+
     // Map the retry task to the new action ID
     this._pendingTasks[newId] = retryTask;
   }

@@ -20,7 +20,7 @@ export type RetryTaskType = "activity" | "subOrchestration";
  * common to both retry strategies.
  */
 export abstract class RetryTaskBase<T> extends CompletableTask<T> {
-  private readonly _action: pb.OrchestratorAction;
+  private _action: pb.OrchestratorAction;
   private readonly _startTime: Date;
   private readonly _taskType: RetryTaskType;
   private _attemptCount: number;
@@ -96,6 +96,16 @@ export abstract class RetryTaskBase<T> extends CompletableTask<T> {
    */
   incrementAttemptCount(): void {
     this._attemptCount++;
+  }
+
+  /**
+   * Updates the action associated with this task.
+   * This is called when the task is rescheduled for retry with a new sequence ID.
+   *
+   * @param action - The new orchestrator action
+   */
+  updateAction(action: pb.OrchestratorAction): void {
+    this._action = action;
   }
 
   /**
