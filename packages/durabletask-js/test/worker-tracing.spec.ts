@@ -337,7 +337,7 @@ describe("Worker Tracing - Scheduled Actions Trace Context Injection", () => {
     // Verify the scheduling span was created
     const spans = exporter.getFinishedSpans();
     const subOrchScheduleSpan = spans.find(
-      (s) => s.attributes[DurableTaskAttributes.TYPE] === TaskType.CREATE_ORCHESTRATION,
+      (s) => s.attributes[DurableTaskAttributes.TYPE] === TaskType.ORCHESTRATION && s.kind === otel.SpanKind.CLIENT,
     );
     expect(subOrchScheduleSpan).toBeDefined();
     expect(subOrchScheduleSpan!.kind).toBe(otel.SpanKind.CLIENT);

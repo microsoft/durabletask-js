@@ -14,6 +14,7 @@ import {
 
 import {
   createPbTraceContext,
+  createPbTraceContextFromSpan,
   getOtelApi,
   extractTraceparentFromSpan,
   createParentContextFromPb,
@@ -111,7 +112,7 @@ describe("createSpanName", () => {
 
 describe("createTimerSpanName", () => {
   it("should create a timer span name", () => {
-    expect(createTimerSpanName("MyOrch")).toBe("timer:MyOrch");
+    expect(createTimerSpanName("MyOrch")).toBe("orchestration:MyOrch:timer");
   });
 });
 
@@ -270,7 +271,7 @@ describe("Trace Helper - startSpanForNewOrchestration", () => {
     expect(spans.length).toBe(1);
     expect(spans[0].name).toBe("create_orchestration:MyOrchestration");
     expect(spans[0].kind).toBe(otel.SpanKind.PRODUCER);
-    expect(spans[0].attributes[DurableTaskAttributes.TYPE]).toBe(TaskType.CREATE_ORCHESTRATION);
+    expect(spans[0].attributes[DurableTaskAttributes.TYPE]).toBe(TaskType.ORCHESTRATION);
     expect(spans[0].attributes[DurableTaskAttributes.TASK_NAME]).toBe("MyOrchestration");
     expect(spans[0].attributes[DurableTaskAttributes.TASK_INSTANCE_ID]).toBe("test-instance-123");
   });
@@ -588,7 +589,7 @@ describe("Trace Helper - processActionsForTracing", () => {
     parentSpan.end();
 
     const spans = exporter.getFinishedSpans();
-    const childSpan = spans.find((s: any) => s.name === "create_orchestration:SubOrch");
+    const childSpan = spans.find((s: any) => s.name === "orchestration:SubOrch");
     expect(childSpan).toBeDefined();
     expect(childSpan!.kind).toBe(otel.SpanKind.CLIENT);
   });
@@ -611,7 +612,7 @@ describe("Trace Helper - processActionsForTracing", () => {
     parentSpan.end();
 
     const spans = exporter.getFinishedSpans();
-    const timerSpan = spans.find((s: any) => s.name === "timer:MyOrchestration");
+    const timerSpan = spans.find((s: any) => s.name === "orchestration:MyOrchestration:timer");
     expect(timerSpan).toBeDefined();
     expect(timerSpan!.kind).toBe(otel.SpanKind.INTERNAL);
   });
@@ -637,7 +638,7 @@ describe("Trace Helper - processActionsForTracing", () => {
     const eventSpan = spans.find((s: any) => s.name === "orchestration_event:ApprovalEvent");
     expect(eventSpan).toBeDefined();
     expect(eventSpan!.kind).toBe(otel.SpanKind.PRODUCER);
-    expect(eventSpan!.attributes[DurableTaskAttributes.TYPE]).toBe(TaskType.ORCHESTRATION_EVENT);
+    expect(eventSpan!.attributes[DurableTaskAttributes.TYPE]).toBe(TaskType.EVENT);
     expect(eventSpan!.attributes[DurableTaskAttributes.TASK_NAME]).toBe("ApprovalEvent");
     expect(eventSpan!.attributes[DurableTaskAttributes.EVENT_TARGET_INSTANCE_ID]).toBe("target-instance-1");
   });
@@ -799,7 +800,7 @@ describe("Trace Helper - emitSpanForTimer", () => {
     parentSpan.end();
 
     const spans = exporter.getFinishedSpans();
-    const timerSpan = spans.find((s: any) => s.name === "timer:TimerOrch");
+    const timerSpan = spans.find((s: any) => s.name === "orchestration:TimerOrch:timer");
     expect(timerSpan).toBeDefined();
     expect(timerSpan!.kind).toBe(otel.SpanKind.INTERNAL);
     expect(timerSpan!.attributes[DurableTaskAttributes.TYPE]).toBe(TaskType.TIMER);
@@ -820,7 +821,7 @@ describe("Trace Helper - emitSpanForEventSent", () => {
     const eventSpan = spans.find((s: any) => s.name === "orchestration_event:ApprovalEvent");
     expect(eventSpan).toBeDefined();
     expect(eventSpan!.kind).toBe(otel.SpanKind.PRODUCER);
-    expect(eventSpan!.attributes[DurableTaskAttributes.TYPE]).toBe(TaskType.ORCHESTRATION_EVENT);
+    expect(eventSpan!.attributes[DurableTaskAttributes.TYPE]).toBe(TaskType.EVENT);
     expect(eventSpan!.attributes[DurableTaskAttributes.TASK_NAME]).toBe("ApprovalEvent");
     expect(eventSpan!.attributes[DurableTaskAttributes.EVENT_TARGET_INSTANCE_ID]).toBe("target-instance-1");
   });
@@ -849,9 +850,117 @@ describe("Trace Helper - startSpanForEventRaisedFromClient", () => {
     expect(spans.length).toBe(1);
     expect(spans[0].name).toBe("orchestration_event:MyEvent");
     expect(spans[0].kind).toBe(otel.SpanKind.PRODUCER);
-    expect(spans[0].attributes[DurableTaskAttributes.TYPE]).toBe(TaskType.ORCHESTRATION_EVENT);
+    expect(spans[0].attributes[DurableTaskAttributes.TYPE]).toBe(TaskType.EVENT);
     expect(spans[0].attributes[DurableTaskAttributes.TASK_NAME]).toBe("MyEvent");
     expect(spans[0].attributes[DurableTaskAttributes.EVENT_TARGET_INSTANCE_ID]).toBe("target-instance-42");
+  });
+});
+
+describe("createPbTraceContextFromSpan", () => {
+  it("should return undefined when OTEL reports an invalid span context", () => {
+    // Create a span with an explicitly invalid (all-zeros) span context
+    const invalidSpanContext: otel.SpanContext = {
+      traceId: "00000000000000000000000000000000",
+      spanId: "0000000000000000",
+      traceFlags: otel.TraceFlags.NONE,
+    };
+    const nonRecordingSpan = otel.trace.wrapSpanContext(invalidSpanContext);
+
+    const result = createPbTraceContextFromSpan(nonRecordingSpan);
+    expect(result).toBeUndefined();
+  });
+
+  it("should correctly format traceparent with hex-padded flags (flags=0)", () => {
+    const tracer = otel.trace.getTracer(TRACER_NAME);
+    // Start a span; the default traceFlags from the SDK is SAMPLED (0x01),
+    // but we verify the hex padding by checking the formatted string.
+    const span = tracer.startSpan("pb-from-span-flags-test");
+    const spanCtx = span.spanContext();
+
+    const result = createPbTraceContextFromSpan(span);
+    expect(result).toBeDefined();
+    expect(result).toBeInstanceOf(pb.TraceContext);
+
+    const traceparent = result!.getTraceparent();
+    // Verify full W3C traceparent format
+    expect(traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/);
+    // Verify components match the span context
+    expect(traceparent).toContain(spanCtx.traceId);
+    expect(traceparent).toContain(spanCtx.spanId);
+    // Verify flags are zero-padded to 2 hex chars
+    const flagsHex = (spanCtx.traceFlags & 0xff).toString(16).padStart(2, "0");
+    expect(traceparent).toBe(`00-${spanCtx.traceId}-${spanCtx.spanId}-${flagsHex}`);
+
+    span.end();
+  });
+
+  it("should set spanId on the protobuf trace context", () => {
+    const tracer = otel.trace.getTracer(TRACER_NAME);
+    const span = tracer.startSpan("pb-from-span-spanid-test");
+    const spanCtx = span.spanContext();
+
+    const result = createPbTraceContextFromSpan(span);
+    expect(result).toBeDefined();
+    expect(result!.getSpanid()).toBe(spanCtx.spanId);
+
+    span.end();
+  });
+
+  it("should include tracestate when present on the span context", () => {
+    // Create a span context with a tracestate
+    const traceState = otel.createTraceState("vendor1=value1,vendor2=value2");
+    const parentSpanContext: otel.SpanContext = {
+      traceId: "aaaabbbbccccdddd1111222233334444",
+      spanId: "1122334455667788",
+      traceFlags: otel.TraceFlags.SAMPLED,
+      isRemote: true,
+      traceState,
+    };
+    const parentContext = otel.trace.setSpanContext(otel.ROOT_CONTEXT, parentSpanContext);
+    const tracer = otel.trace.getTracer(TRACER_NAME);
+    const childSpan = tracer.startSpan("pb-from-span-tracestate-test", {}, parentContext);
+
+    const result = createPbTraceContextFromSpan(childSpan);
+    expect(result).toBeDefined();
+
+    // The child span inherits the parent traceId but gets a new spanId.
+    // Tracestate should propagate from the parent.
+    const tracestateValue = result!.getTracestate()?.getValue();
+    expect(tracestateValue).toBeDefined();
+    expect(tracestateValue).toContain("vendor1=value1");
+    expect(tracestateValue).toContain("vendor2=value2");
+
+    childSpan.end();
+  });
+
+  it("should exclude tracestate when not present on the span context", () => {
+    const tracer = otel.trace.getTracer(TRACER_NAME);
+    const span = tracer.startSpan("pb-from-span-no-tracestate-test");
+
+    const result = createPbTraceContextFromSpan(span);
+    expect(result).toBeDefined();
+    // No tracestate was set, so the protobuf field should be absent
+    expect(result!.getTracestate()).toBeUndefined();
+
+    span.end();
+  });
+
+  it("should produce a result consistent with createPbTraceContext + extractTraceparentFromSpan", () => {
+    const tracer = otel.trace.getTracer(TRACER_NAME);
+    const span = tracer.startSpan("pb-from-span-roundtrip-test");
+
+    // Method under test: direct path
+    const direct = createPbTraceContextFromSpan(span);
+
+    // Reference path: extract then create
+    const extracted = extractTraceparentFromSpan(span);
+    const reference = createPbTraceContext(extracted!.traceparent, extracted!.tracestate);
+
+    expect(direct).toBeDefined();
+    expect(direct!.getTraceparent()).toBe(reference.getTraceparent());
+    expect(direct!.getSpanid()).toBe(reference.getSpanid());
+
+    span.end();
   });
 });
 
