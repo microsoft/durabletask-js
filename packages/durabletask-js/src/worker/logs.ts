@@ -77,15 +77,15 @@ const CATEGORY_ENTITIES = "Microsoft.DurableTask.Worker.Entities";
 /** @internal */ export const EVENT_ACTIVITY_RESPONSE_ERROR = 735;
 /** @internal */ export const EVENT_STREAM_ERROR_INFO = 736;
 
-// ── Entity-specific Event IDs (740+ range) ──────────────────────────────────
+// ── Entity-specific Event IDs (800+ range) ──────────────────────────────────
 
-/** @internal */ export const EVENT_ENTITY_REQUEST_RECEIVED = 740;
-/** @internal */ export const EVENT_ENTITY_INSTANCE_ID_PARSE_ERROR = 741;
-/** @internal */ export const EVENT_ENTITY_NOT_FOUND = 742;
-/** @internal */ export const EVENT_ENTITY_EXECUTION_FAILED = 743;
-/** @internal */ export const EVENT_ENTITY_RESPONSE_DELIVERY_FAILED = 744;
-/** @internal */ export const EVENT_ENTITY_UNKNOWN_OPERATION_EVENT = 745;
-/** @internal */ export const EVENT_ENTITY_EVENT_IGNORED = 746;
+/** @internal */ export const EVENT_ENTITY_REQUEST_RECEIVED = 800;
+/** @internal */ export const EVENT_ENTITY_INSTANCE_ID_PARSE_ERROR = 801;
+/** @internal */ export const EVENT_ENTITY_NOT_FOUND = 802;
+/** @internal */ export const EVENT_ENTITY_EXECUTION_FAILED = 803;
+/** @internal */ export const EVENT_ENTITY_RESPONSE_DELIVERY_FAILED = 804;
+/** @internal */ export const EVENT_ENTITY_UNKNOWN_OPERATION_EVENT = 805;
+/** @internal */ export const EVENT_ENTITY_EVENT_IGNORED = 806;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Orchestration Lifecycle Logs (Event IDs 600–602, matching .NET)
