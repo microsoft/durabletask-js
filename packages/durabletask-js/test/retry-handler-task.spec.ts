@@ -348,5 +348,80 @@ describe("RetryHandlerTask", () => {
       // Assert
       expect(result2).toBe(false);
     });
+
+    it("should return a delay in milliseconds when handler returns a number", async () => {
+      // Arrange - handler that returns exponential backoff delay
+      const handler: AsyncRetryHandler = async (ctx) => {
+        return 1000 * Math.pow(2, ctx.lastAttemptNumber - 1);
+      };
+      const action = new pb.OrchestratorAction();
+      const startTime = new Date(2025, 0, 1);
+      const task = new RetryHandlerTask<string>(handler, mockCtx, action, startTime, "activity");
+
+      const failureDetails = new pb.TaskFailureDetails();
+      failureDetails.setErrortype("TransientError");
+      failureDetails.setErrormessage("Connection timeout");
+      task.recordFailure("Connection timeout", failureDetails);
+
+      const currentTime = new Date(2025, 0, 1, 0, 0, 1);
+
+      // Act
+      const result = await task.shouldRetry(currentTime);
+
+      // Assert - first attempt → 1000 * 2^0 = 1000ms
+      expect(result).toBe(1000);
+    });
+
+    it("should support sync handler returning a number", async () => {
+      // Arrange
+      const handler = (_ctx: any) => 5000;
+      const action = new pb.OrchestratorAction();
+      const task = new RetryHandlerTask<string>(handler as any, mockCtx, action, new Date(), "activity");
+
+      const failureDetails = new pb.TaskFailureDetails();
+      failureDetails.setErrortype("TransientError");
+      failureDetails.setErrormessage("Timeout");
+      task.recordFailure("Timeout", failureDetails);
+
+      // Act
+      const result = await task.shouldRetry(new Date());
+
+      // Assert
+      expect(result).toBe(5000);
+    });
+
+    it("should support handler switching from delay to immediate retry", async () => {
+      // Arrange - handler that returns delay for first 2 attempts, then true for immediate retry
+      const handler: AsyncRetryHandler = async (ctx) => {
+        if (ctx.lastAttemptNumber <= 2) {
+          return 2000; // delay 2 seconds
+        }
+        return true; // retry immediately after that
+      };
+      const action = new pb.OrchestratorAction();
+      const startTime = new Date(2025, 0, 1, 0, 0, 0);
+      const task = new RetryHandlerTask<string>(handler, mockCtx, action, startTime, "activity");
+
+      const failureDetails = new pb.TaskFailureDetails();
+      failureDetails.setErrortype("TransientError");
+      failureDetails.setErrormessage("Timeout");
+      task.recordFailure("Timeout", failureDetails);
+
+      // Act - first attempt (attempt count = 1)
+      const result1 = await task.shouldRetry(new Date(2025, 0, 1, 0, 0, 1));
+
+      // Assert - should return delay
+      expect(result1).toBe(2000);
+
+      // Simulate progressing past attempt 2
+      task.incrementAttemptCount(); // attempt 2
+      task.incrementAttemptCount(); // attempt 3
+
+      // Act - third attempt
+      const result2 = await task.shouldRetry(new Date(2025, 0, 1, 0, 0, 5));
+
+      // Assert - should return immediate retry
+      expect(result2).toBe(true);
+    });
   });
 });

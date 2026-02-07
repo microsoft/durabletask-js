@@ -227,10 +227,10 @@ export class OrchestrationExecutor {
 
             // Check if this is a retry timer
             if (timerTask instanceof RetryTimerTask) {
-              // Get the retryable parent task and reschedule it
-              const retryableTask = timerTask.retryableParent;
+              // Get the parent retry task and reschedule it
+              const retryTask = timerTask.retryableParent;
               // Reschedule the original action - this will add it back to pendingActions
-              ctx.rescheduleRetryTask(retryableTask);
+              ctx.rescheduleRetryTask(retryTask);
               // Don't resume the orchestrator - we're just rescheduling the task
               return;
             }
@@ -551,7 +551,8 @@ export class OrchestrationExecutor {
 
   /**
    * Checks if a failed task supports retry and handles the retry if applicable.
-   * Supports both RetryableTask (policy-based with timer delay) and RetryHandlerTask (handler-based with immediate reschedule).
+   * Supports both RetryableTask (policy-based with timer delay) and RetryHandlerTask
+   * (handler-based: returns true for immediate reschedule, or a number for delayed retry via timer).
    *
    * @param task - The task that failed
    * @param errorMessage - The failure error message
@@ -580,12 +581,20 @@ export class OrchestrationExecutor {
       }
     } else if (task instanceof RetryHandlerTask) {
       task.recordFailure(errorMessage, failureDetails);
-      const keepRetrying = await task.shouldRetry(ctx._currentUtcDatetime);
+      const retryResult = await task.shouldRetry(ctx._currentUtcDatetime);
 
-      if (keepRetrying) {
+      if (retryResult !== false) {
         WorkerLogs.retryingTask(this._logger, ctx._instanceId, task.taskName, task.attemptCount);
         task.incrementAttemptCount();
-        ctx.rescheduleRetryTask(task);
+
+        if (typeof retryResult === "number") {
+          // Handler returned a delay in milliseconds — use a timer
+          ctx.createRetryTimer(task, retryResult);
+        } else {
+          // Handler returned true — retry immediately
+          ctx.rescheduleRetryTask(task);
+        }
+
         delete ctx._pendingTasks[taskId];
         return true;
       }

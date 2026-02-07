@@ -78,6 +78,7 @@ export {
   createRetryContext,
   RetryHandler,
   AsyncRetryHandler,
+  RetryHandlerResult,
   toAsyncRetryHandler,
 } from "./task/retry";
 export {

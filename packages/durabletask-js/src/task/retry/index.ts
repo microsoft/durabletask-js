@@ -3,4 +3,4 @@
 
 export { RetryPolicy, RetryPolicyOptions, FailureHandlerPredicate } from "./retry-policy";
 export { RetryContext, createRetryContext } from "./retry-context";
-export { RetryHandler, AsyncRetryHandler, toAsyncRetryHandler } from "./retry-handler";
+export { RetryHandler, AsyncRetryHandler, RetryHandlerResult, toAsyncRetryHandler } from "./retry-handler";

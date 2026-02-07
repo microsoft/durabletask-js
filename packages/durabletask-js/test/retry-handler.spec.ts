@@ -173,5 +173,17 @@ describe("RetryHandler", () => {
 
       expect(result).toBeInstanceOf(Promise);
     });
+
+    it("should wrap a sync handler that returns a delay number", async () => {
+      const syncHandler: RetryHandler = (context) => {
+        if (context.lastAttemptNumber >= 3) return false;
+        return 1000 * context.lastAttemptNumber;
+      };
+      const asyncHandler = toAsyncRetryHandler(syncHandler);
+
+      expect(await asyncHandler(createTestContext(1))).toBe(1000);
+      expect(await asyncHandler(createTestContext(2))).toBe(2000);
+      expect(await asyncHandler(createTestContext(3))).toBe(false);
+    });
   });
 });

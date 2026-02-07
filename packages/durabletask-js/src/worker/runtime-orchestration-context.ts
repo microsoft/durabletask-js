@@ -493,7 +493,11 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
    * @param delayMs - The delay in milliseconds before the timer fires
    * @returns The timer task
    */
-  createRetryTimer(retryableTask: RetryableTask<any>, delayMs: number): RetryTimerTask<any> {
+  createRetryTimer(retryableTask: RetryTaskBase<any>, delayMs: number): RetryTimerTask<any> {
+    if (delayMs <= 0) {
+      throw new Error(`delayMs must be a positive number, but received ${delayMs}`);
+    }
+
     const timerId = this.nextSequenceNumber();
     const fireAt = new Date(this._currentUtcDatetime.getTime() + delayMs);
     const timerAction = ph.newCreateTimerAction(timerId, fireAt);

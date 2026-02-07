@@ -4,7 +4,7 @@
 import * as pb from "../proto/orchestrator_service_pb";
 import { OrchestrationContext } from "./context/orchestration-context";
 import { RetryTaskBase, RetryTaskType } from "./retry-task-base";
-import { AsyncRetryHandler } from "./retry/retry-handler";
+import { AsyncRetryHandler, RetryHandlerResult } from "./retry/retry-handler";
 import { createRetryContext } from "./retry/retry-context";
 import { TaskFailureDetails } from "./failure-details";
 
@@ -59,9 +59,11 @@ export class RetryHandlerTask<T> extends RetryTaskBase<T> {
    * Invokes the async retry handler to determine whether to retry.
    *
    * @param currentTime - The current orchestration time (for deterministic replay)
-   * @returns A Promise that resolves to true if the handler says to retry, false otherwise
+   * @returns A Promise that resolves to `true` to retry immediately,
+   *   `false` to stop retrying, or a positive number indicating the
+   *   delay in milliseconds before the next retry attempt
    */
-  async shouldRetry(currentTime: Date): Promise<boolean> {
+  async shouldRetry(currentTime: Date): Promise<RetryHandlerResult> {
     if (!this.lastFailure) {
       return false;
     }
