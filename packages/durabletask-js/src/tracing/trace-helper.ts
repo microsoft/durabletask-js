@@ -481,6 +481,167 @@ export function processActionsForTracing(
     } else if (action.hasSendevent()) {
       const sendEvent = action.getSendevent()!;
       emitSpanForEventSent(orchestrationSpan, sendEvent.getName(), sendEvent.getInstance()?.getInstanceid());
+    } else if (action.hasSendentitymessage()) {
+      const sendEntityMsg = action.getSendentitymessage()!;
+      if (sendEntityMsg.hasEntityoperationcalled()) {
+        const callEvent = sendEntityMsg.getEntityoperationcalled()!;
+        emitSpanForEntityCall(
+          orchestrationSpan,
+          callEvent.getOperation(),
+          callEvent.getTargetinstanceid()?.getValue(),
+          action.getId(),
+        );
+      } else if (sendEntityMsg.hasEntityoperationsignaled()) {
+        const signalEvent = sendEntityMsg.getEntityoperationsignaled()!;
+        emitSpanForEntitySignal(
+          orchestrationSpan,
+          signalEvent.getOperation(),
+          signalEvent.getTargetinstanceid()?.getValue(),
+          action.getId(),
+        );
+      } else if (sendEntityMsg.hasEntitylockrequested()) {
+        emitSpanForEntityLockRequest(
+          orchestrationSpan,
+          action.getId(),
+        );
+      }
     }
   }
+}
+
+/**
+ * Emits a span for calling an entity from an orchestration (request/response).
+ *
+ * @param orchestrationSpan - The parent orchestration span.
+ * @param operationName - The entity operation name.
+ * @param targetInstanceId - The target entity instance ID.
+ * @param taskId - The sequential task ID.
+ */
+export function emitSpanForEntityCall(
+  orchestrationSpan: Span,
+  operationName: string,
+  targetInstanceId?: string,
+  taskId?: number,
+): void {
+  const otel = getOtelApi();
+  const tracer = getTracer();
+  if (!otel || !tracer) return;
+
+  const spanName = createSpanName(TaskType.CALL_ENTITY, operationName);
+  const parentContext = otel.trace.setSpan(otel.context.active(), orchestrationSpan);
+
+  const span = tracer.startSpan(
+    spanName,
+    {
+      kind: otel.SpanKind.CLIENT,
+      attributes: {
+        [DurableTaskAttributes.TYPE]: TaskType.CALL_ENTITY,
+        [DurableTaskAttributes.ENTITY_OPERATION]: operationName,
+        ...(targetInstanceId ? { [DurableTaskAttributes.ENTITY_INSTANCE_ID]: targetInstanceId } : {}),
+        ...(taskId !== undefined ? { [DurableTaskAttributes.TASK_TASK_ID]: taskId } : {}),
+      },
+    },
+    parentContext,
+  );
+
+  span.end();
+}
+
+/**
+ * Emits a span for signaling an entity from an orchestration (fire-and-forget).
+ *
+ * @param orchestrationSpan - The parent orchestration span.
+ * @param operationName - The entity operation name.
+ * @param targetInstanceId - The target entity instance ID.
+ * @param taskId - The sequential task ID.
+ */
+export function emitSpanForEntitySignal(
+  orchestrationSpan: Span,
+  operationName: string,
+  targetInstanceId?: string,
+  taskId?: number,
+): void {
+  const otel = getOtelApi();
+  const tracer = getTracer();
+  if (!otel || !tracer) return;
+
+  const spanName = createSpanName(TaskType.SIGNAL_ENTITY, operationName);
+  const parentContext = otel.trace.setSpan(otel.context.active(), orchestrationSpan);
+
+  const span = tracer.startSpan(
+    spanName,
+    {
+      kind: otel.SpanKind.PRODUCER,
+      attributes: {
+        [DurableTaskAttributes.TYPE]: TaskType.SIGNAL_ENTITY,
+        [DurableTaskAttributes.ENTITY_OPERATION]: operationName,
+        ...(targetInstanceId ? { [DurableTaskAttributes.ENTITY_INSTANCE_ID]: targetInstanceId } : {}),
+        ...(taskId !== undefined ? { [DurableTaskAttributes.TASK_TASK_ID]: taskId } : {}),
+      },
+    },
+    parentContext,
+  );
+
+  span.end();
+}
+
+/**
+ * Emits a span for requesting entity locks from an orchestration.
+ *
+ * @param orchestrationSpan - The parent orchestration span.
+ * @param taskId - The sequential task ID.
+ */
+export function emitSpanForEntityLockRequest(
+  orchestrationSpan: Span,
+  taskId: number,
+): void {
+  const otel = getOtelApi();
+  const tracer = getTracer();
+  if (!otel || !tracer) return;
+
+  const spanName = `${TaskType.ENTITY}:lock_request`;
+  const parentContext = otel.trace.setSpan(otel.context.active(), orchestrationSpan);
+
+  const span = tracer.startSpan(
+    spanName,
+    {
+      kind: otel.SpanKind.INTERNAL,
+      attributes: {
+        [DurableTaskAttributes.TYPE]: TaskType.ENTITY,
+        [DurableTaskAttributes.TASK_TASK_ID]: taskId,
+      },
+    },
+    parentContext,
+  );
+
+  span.end();
+}
+
+/**
+ * Creates a Producer span for signaling an entity from the client.
+ *
+ * @param entityId - The target entity instance ID string.
+ * @param operationName - The entity operation name.
+ * @returns The span (or undefined if OTEL is not available). Caller must end it.
+ */
+export function startSpanForSignalEntityFromClient(
+  entityId: string,
+  operationName: string,
+): Span | undefined {
+  const otel = getOtelApi();
+  const tracer = getTracer();
+  if (!otel || !tracer) return undefined;
+
+  const spanName = createSpanName(TaskType.SIGNAL_ENTITY, operationName);
+
+  const span = tracer.startSpan(spanName, {
+    kind: otel.SpanKind.PRODUCER,
+    attributes: {
+      [DurableTaskAttributes.TYPE]: TaskType.SIGNAL_ENTITY,
+      [DurableTaskAttributes.ENTITY_OPERATION]: operationName,
+      [DurableTaskAttributes.ENTITY_INSTANCE_ID]: entityId,
+    },
+  });
+
+  return span;
 }

@@ -39,6 +39,8 @@ const CATEGORY_CLIENT = "Microsoft.DurableTask.Client";
 /** @internal */ export const EVENT_INSTANCE_COMPLETED = 105;
 /** @internal */ export const EVENT_INSTANCE_FAILED = 106;
 /** @internal */ export const EVENT_INSTANCE_TERMINATED = 107;
+/** @internal */ export const EVENT_SIGNALING_ENTITY = 108;
+/** @internal */ export const EVENT_GETTING_ENTITY = 109;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Client Operation Logs (Event IDs 40–46, matching .NET)
@@ -201,4 +203,24 @@ export function instanceTerminated(logger: Logger, instanceId: string): void {
     category: CATEGORY_CLIENT,
     properties: { instanceId },
   }, `Instance '${instanceId}' was terminated.`);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Entity Client Logs (Event IDs 108+)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export function signalingEntity(logger: Logger, entityId: string, operationName: string): void {
+  emitLog(logger, "info", {
+    eventId: EVENT_SIGNALING_ENTITY,
+    category: CATEGORY_CLIENT,
+    properties: { entityId, operationName },
+  }, `Signaling entity '${entityId}' with operation '${operationName}'.`);
+}
+
+export function gettingEntity(logger: Logger, entityId: string): void {
+  emitLog(logger, "info", {
+    eventId: EVENT_GETTING_ENTITY,
+    category: CATEGORY_CLIENT,
+    properties: { entityId },
+  }, `Getting entity '${entityId}'.`);
 }
