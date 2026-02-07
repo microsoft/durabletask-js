@@ -577,7 +577,8 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
       const name = scheduleTask.getName();
       const input = scheduleTask.getInput()?.getValue();
       const tags = mapToRecord(scheduleTask.getTagsMap());
-      newAction = ph.newScheduleTaskAction(newId, name, input, tags);
+      const version = scheduleTask.getVersion()?.getValue();
+      newAction = ph.newScheduleTaskAction(newId, name, input, tags, version);
     } else {
       // Reschedule a sub-orchestration task
       const subOrch = originalAction.getCreatesuborchestration();
@@ -588,7 +589,8 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
       const instanceId = subOrch.getInstanceid();
       const input = subOrch.getInput()?.getValue();
       const tags = mapToRecord(subOrch.getTagsMap());
-      newAction = ph.newCreateSubOrchestrationAction(newId, name, instanceId, input, tags);
+      const version = subOrch.getVersion()?.getValue();
+      newAction = ph.newCreateSubOrchestrationAction(newId, name, instanceId, input, tags, version);
     }
 
     // Register the new action

@@ -299,6 +299,238 @@ describe("Retry Handler E2E Tests", () => {
     }, 31000);
   });
 
+  // ==================== Retry Handler with Delay (number return) Tests ====================
+
+  describe("retry handler returning delay in milliseconds", () => {
+    it("should retry activity after specified delay when handler returns a positive number", async () => {
+      let attemptCount = 0;
+      const attemptTimes: number[] = [];
+
+      const flakyActivity = async (_: ActivityContext, input: number) => {
+        attemptCount++;
+        attemptTimes.push(Date.now());
+        if (attemptCount < 3) {
+          throw new Error(`Transient failure on attempt ${attemptCount}`);
+        }
+        return input * 2;
+      };
+
+      // Retry handler returning delay in ms (fixed 500ms delay)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const retryHandler: any = async (ctx: RetryContext): Promise<boolean | number> => {
+        if (ctx.lastAttemptNumber >= 5) {
+          return false;
+        }
+        return 500; // retry after 500ms
+      };
+
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: number): any {
+        const result = yield ctx.callActivity(flakyActivity, input, { retry: retryHandler });
+        return result;
+      };
+
+      taskHubWorker.addActivity(flakyActivity);
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator, 21);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.failureDetails).toBeUndefined();
+      expect(state?.serializedOutput).toEqual(JSON.stringify(42));
+      expect(attemptCount).toBe(3);
+
+      // Verify delays are approximately 500ms
+      if (attemptTimes.length >= 3) {
+        const delay1 = attemptTimes[1] - attemptTimes[0];
+        const delay2 = attemptTimes[2] - attemptTimes[1];
+        // Allow generous tolerance for timer scheduling overhead
+        expect(delay1).toBeGreaterThanOrEqual(400);
+        expect(delay2).toBeGreaterThanOrEqual(400);
+      }
+    }, 31000);
+
+    it("should support exponential backoff via handler returning increasing delays", async () => {
+      let attemptCount = 0;
+      const attemptTimes: number[] = [];
+
+      const flakyActivity = async (_: ActivityContext) => {
+        attemptCount++;
+        attemptTimes.push(Date.now());
+        if (attemptCount < 4) {
+          throw new Error(`Failure on attempt ${attemptCount}`);
+        }
+        return "success";
+      };
+
+      // Retry handler implementing manual exponential backoff: 200ms, 400ms, 800ms
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const retryHandler: any = async (ctx: RetryContext): Promise<boolean | number> => {
+        if (ctx.lastAttemptNumber >= 5) {
+          return false;
+        }
+        return 200 * Math.pow(2, ctx.lastAttemptNumber - 1);
+      };
+
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        const result = yield ctx.callActivity(flakyActivity, undefined, { retry: retryHandler });
+        return result;
+      };
+
+      taskHubWorker.addActivity(flakyActivity);
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.failureDetails).toBeUndefined();
+      expect(state?.serializedOutput).toEqual(JSON.stringify("success"));
+      expect(attemptCount).toBe(4);
+
+      // Verify delays are increasing
+      if (attemptTimes.length >= 4) {
+        const delay1 = attemptTimes[1] - attemptTimes[0];
+        const delay2 = attemptTimes[2] - attemptTimes[1];
+        const delay3 = attemptTimes[3] - attemptTimes[2];
+
+        // Each delay should be roughly double the previous (with tolerance)
+        expect(delay2).toBeGreaterThan(delay1 * 0.8);
+        expect(delay3).toBeGreaterThan(delay2 * 0.8);
+      }
+    }, 31000);
+
+    it("should retry sub-orchestration with delay when handler returns a number", async () => {
+      let attemptCount = 0;
+
+      // eslint-disable-next-line require-yield
+      const failingSubOrch: TOrchestrator = async function* (_ctx: OrchestrationContext): any {
+        attemptCount++;
+        if (attemptCount < 3) {
+          throw new Error(`Sub-orch failure on attempt ${attemptCount}`);
+        }
+        return "sub-orch-result";
+      };
+
+      // Retry handler returning fixed delay
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const retryHandler: any = async (ctx: RetryContext): Promise<boolean | number> => {
+        if (ctx.lastAttemptNumber >= 5) {
+          return false;
+        }
+        return 300; // 300ms delay
+      };
+
+      const parentOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        const result = yield ctx.callSubOrchestrator(failingSubOrch, undefined, {
+          retry: retryHandler,
+        });
+        return result;
+      };
+
+      taskHubWorker.addOrchestrator(failingSubOrch);
+      taskHubWorker.addOrchestrator(parentOrchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(parentOrchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.failureDetails).toBeUndefined();
+      expect(state?.serializedOutput).toEqual(JSON.stringify("sub-orch-result"));
+      expect(attemptCount).toBe(3);
+    }, 31000);
+
+    it("should handle handler switching between delay and false (stop)", async () => {
+      let attemptCount = 0;
+
+      const activityWithMixedErrors = async (_: ActivityContext) => {
+        attemptCount++;
+        if (attemptCount === 1) {
+          const error = new Error("Transient error");
+          error.name = "TransientError";
+          throw error;
+        } else {
+          const error = new Error("Fatal error");
+          error.name = "FatalError";
+          throw error;
+        }
+      };
+
+      // Handler: returns delay for TransientError, false for FatalError
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const retryHandler: any = async (ctx: RetryContext): Promise<boolean | number> => {
+        if (ctx.lastFailure.errorType === "TransientError") {
+          return 200; // retry after 200ms
+        }
+        return false; // don't retry
+      };
+
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        const result = yield ctx.callActivity(activityWithMixedErrors, undefined, { retry: retryHandler });
+        return result;
+      };
+
+      taskHubWorker.addActivity(activityWithMixedErrors);
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+      expect(state?.failureDetails).toBeDefined();
+      // First: TransientError (retry with 200ms delay), Second: FatalError (stop)
+      expect(attemptCount).toBe(2);
+    }, 31000);
+
+    it("should use sync RetryHandler returning a delay number", async () => {
+      let attemptCount = 0;
+
+      const flakyActivity = async (_: ActivityContext) => {
+        attemptCount++;
+        if (attemptCount < 3) {
+          throw new Error(`Failure on attempt ${attemptCount}`);
+        }
+        return "success";
+      };
+
+      // Sync handler returning a delay
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const syncHandler: any = (ctx: RetryContext): boolean | number => {
+        if (ctx.lastAttemptNumber >= 5) {
+          return false;
+        }
+        return 300;
+      };
+      const retryHandler = toAsyncRetryHandler(syncHandler);
+
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        const result = yield ctx.callActivity(flakyActivity, undefined, { retry: retryHandler });
+        return result;
+      };
+
+      taskHubWorker.addActivity(flakyActivity);
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.failureDetails).toBeUndefined();
+      expect(state?.serializedOutput).toEqual(JSON.stringify("success"));
+      expect(attemptCount).toBe(3);
+    }, 31000);
+  });
+
   // ==================== Sync RetryHandler Tests ====================
 
   describe("sync RetryHandler support", () => {

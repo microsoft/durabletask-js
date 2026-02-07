@@ -588,8 +588,13 @@ export class OrchestrationExecutor {
         task.incrementAttemptCount();
 
         if (typeof retryResult === "number") {
-          // Handler returned a delay in milliseconds — use a timer
-          ctx.createRetryTimer(task, retryResult);
+          if (retryResult <= 0) {
+            // Handler returned true — retry immediately
+            ctx.rescheduleRetryTask(task);
+          } else {
+            // Handler returned a delay in milliseconds — use a timer
+            ctx.createRetryTimer(task, retryResult);
+          }
         } else {
           // Handler returned true — retry immediately
           ctx.rescheduleRetryTask(task);

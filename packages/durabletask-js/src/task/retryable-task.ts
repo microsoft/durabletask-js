@@ -59,6 +59,11 @@ export class RetryableTask<T> extends RetryTaskBase<T> {
    * The delay is capped at maxRetryInterval.
    */
   computeNextDelayInMilliseconds(currentTime: Date): number | undefined {
+    // Check for non-retriable failures first (e.g., activity not found, version mismatch)
+    if (this.lastFailure?.getIsnonretriable()) {
+      return undefined;
+    }
+
     // Check if handleFailure predicate says we should NOT retry this failure type
     if (this.lastFailure) {
       const failureDetails = {
