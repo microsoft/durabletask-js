@@ -41,6 +41,9 @@ export class RetryHandlerTask<T> extends RetryTaskBase<T> {
     taskType: RetryTaskType,
   ) {
     super(action, startTime, taskType);
+    if (!handler) {  
+        throw new Error("RetryHandlerTask requires a non-null handler");  
+    }
     this._handler = handler;
     this._orchestrationContext = orchestrationContext;
   }
