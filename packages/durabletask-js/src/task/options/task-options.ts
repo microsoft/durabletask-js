@@ -2,16 +2,31 @@
 // Licensed under the MIT License.
 
 import { RetryPolicy } from "../retry/retry-policy";
+import { AsyncRetryHandler, RetryHandler } from "../retry/retry-handler";
+
+/**
+ * Union type representing the available retry strategies for a task.
+ *
+ * - {@link RetryPolicy} for declarative retry control (with backoff, max attempts, etc.)
+ * - {@link AsyncRetryHandler} for asynchronous imperative retry control
+ * - {@link RetryHandler} for synchronous imperative retry control
+ *
+ * When a synchronous {@link RetryHandler} is provided, it is automatically
+ * wrapped into an {@link AsyncRetryHandler} internally.
+ */
+export type TaskRetryOptions = RetryPolicy | AsyncRetryHandler | RetryHandler;
 
 /**
  * Options that can be used to control the behavior of orchestrator task execution.
  */
 export interface TaskOptions {
   /**
-   * The retry policy for the task.
-   * Controls how many times a task is retried and the delay between retries.
+   * The retry options for the task.
+   * Can be a RetryPolicy for declarative retry control,
+   * an AsyncRetryHandler for async imperative retry control,
+   * or a RetryHandler for sync imperative retry control.
    */
-  retry?: RetryPolicy;
+  retry?: TaskRetryOptions;
   /**
    * The tags to associate with the task.
    */
@@ -62,45 +77,22 @@ export interface StartOrchestrationOptions {
 }
 
 /**
- * Creates a TaskOptions instance from a RetryPolicy.
+ * Type guard to check if the retry option is a RetryPolicy.
  *
- * @param policy - The retry policy to use
- * @returns A TaskOptions instance configured with the retry policy
- *
- * @example
- * ```typescript
- * const retryPolicy = new RetryPolicy({
- *   maxNumberOfAttempts: 3,
- *   firstRetryIntervalInMilliseconds: 1000
- * });
- *
- * const options = taskOptionsFromRetryPolicy(retryPolicy);
- * ```
+ * @param retry - The retry option to check
+ * @returns true if the retry option is a RetryPolicy, false otherwise
  */
-export function taskOptionsFromRetryPolicy(policy: RetryPolicy): TaskOptions {
-  return { retry: policy };
+export function isRetryPolicy(retry: TaskRetryOptions | undefined): retry is RetryPolicy {
+  return retry instanceof RetryPolicy;
 }
 
 /**
- * Creates a SubOrchestrationOptions instance from a RetryPolicy and optional instance ID.
+ * Type guard to check if the retry option is a retry handler function
+ * (either {@link AsyncRetryHandler} or {@link RetryHandler}).
  *
- * @param policy - The retry policy to use
- * @param instanceId - Optional instance ID for the sub-orchestration
- * @returns A SubOrchestrationOptions instance configured with the retry policy
- *
- * @example
- * ```typescript
- * const retryPolicy = new RetryPolicy({
- *   maxNumberOfAttempts: 3,
- *   firstRetryIntervalInMilliseconds: 1000
- * });
- *
- * const options = subOrchestrationOptionsFromRetryPolicy(retryPolicy, "my-sub-orch-123");
- * ```
+ * @param retry - The retry option to check
+ * @returns true if the retry option is a handler function, false otherwise
  */
-export function subOrchestrationOptionsFromRetryPolicy(
-  policy: RetryPolicy,
-  instanceId?: string,
-): SubOrchestrationOptions {
-  return { retry: policy, instanceId };
+export function isRetryHandler(retry: TaskRetryOptions | undefined): retry is AsyncRetryHandler | RetryHandler {
+  return typeof retry === "function";
 }

@@ -1,6 +1,14 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+import { TaskFailureDetails } from "../failure-details";
+
+/**
+ * Type for a predicate function that determines whether a failure should be retried.
+ * Receives the failure details and returns true to retry, false to stop.
+ */
+export type FailureHandlerPredicate = (failure: TaskFailureDetails) => boolean;
+
 /**
  * A declarative retry policy that can be configured for activity or sub-orchestration calls.
  *
@@ -18,6 +26,19 @@
  *   retryTimeoutInMilliseconds: 300000
  * });
  * ```
+ *
+ * @example
+ * ```typescript
+ * // With handleFailure predicate to filter which errors to retry
+ * const retryPolicy = new RetryPolicy({
+ *   maxNumberOfAttempts: 3,
+ *   firstRetryIntervalInMilliseconds: 1000,
+ *   handleFailure: (failure) => {
+ *     // Only retry transient errors, not validation errors
+ *     return failure.errorType !== "ValidationError";
+ *   }
+ * });
+ * ```
  */
 export class RetryPolicy {
   private readonly _maxNumberOfAttempts: number;
@@ -25,6 +46,7 @@ export class RetryPolicy {
   private readonly _backoffCoefficient: number;
   private readonly _maxRetryIntervalInMilliseconds: number;
   private readonly _retryTimeoutInMilliseconds: number;
+  private readonly _handleFailure: FailureHandlerPredicate;
 
   /**
    * Creates a new RetryPolicy instance.
@@ -39,6 +61,7 @@ export class RetryPolicy {
       backoffCoefficient = 1.0,
       maxRetryIntervalInMilliseconds,
       retryTimeoutInMilliseconds,
+      handleFailure,
     } = options;
 
     // Validation aligned with .NET SDK
@@ -77,6 +100,8 @@ export class RetryPolicy {
     this._maxRetryIntervalInMilliseconds = maxRetryIntervalInMilliseconds ?? 3600000;
     // Default to -1 (infinite) if not specified
     this._retryTimeoutInMilliseconds = retryTimeoutInMilliseconds ?? -1;
+    // Default to always retry (return true for all failures)
+    this._handleFailure = handleFailure ?? (() => true);
   }
 
   /**
@@ -117,6 +142,31 @@ export class RetryPolicy {
   get retryTimeoutInMilliseconds(): number {
     return this._retryTimeoutInMilliseconds;
   }
+
+  /**
+   * Gets the predicate function that determines whether a specific failure should be retried.
+   *
+   * @remarks
+   * This predicate is called for each failure to determine if a retry should be attempted.
+   * Even if this predicate allows a retry, time-based and attempt-count constraints may still
+   * prevent another attempt from being scheduled.
+   * Defaults to a function that always returns true (all failures are retried).
+   *
+   * @returns A function that takes TaskFailureDetails and returns true to retry, false to stop.
+   */
+  get handleFailure(): FailureHandlerPredicate {
+    return this._handleFailure;
+  }
+
+  /**
+   * Evaluates whether a failure should be retried based on the handleFailure predicate.
+   *
+   * @param failure - The failure details to evaluate
+   * @returns true if the failure should be retried, false otherwise
+   */
+  shouldRetry(failure: TaskFailureDetails): boolean {
+    return this._handleFailure(failure);
+  }
 }
 
 /**
@@ -156,4 +206,33 @@ export interface RetryPolicyOptions {
    * @default -1 (infinite)
    */
   retryTimeoutInMilliseconds?: number;
+
+  /**
+   * Optional predicate to determine if a specific failure should be retried.
+   *
+   * @remarks
+   * This predicate receives TaskFailureDetails and should return true to retry
+   * or false to stop retrying. The predicate is evaluated first to enable fail-fast
+   * behavior for non-retriable errors, but any retry that it allows is still subject
+   * to the overall time and attempt count constraints of this policy.
+   *
+   * @default A function that always returns true (all failures are retried)
+   *
+   * @example
+   * ```typescript
+   * const policy = new RetryPolicy({
+   *   maxNumberOfAttempts: 5,
+   *   firstRetryIntervalInMilliseconds: 1000,
+   *   handleFailure: (failure) => {
+   *     // Don't retry validation errors
+   *     if (failure.errorType === "ValidationError") {
+   *       return false;
+   *     }
+   *     // Retry all other errors
+   *     return true;
+   *   }
+   * });
+   * ```
+   */
+  handleFailure?: FailureHandlerPredicate;
 }

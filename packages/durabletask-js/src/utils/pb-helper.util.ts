@@ -115,11 +115,15 @@ export function newTaskCompletedEvent(eventId: number, encodedOutput?: string): 
   return event;
 }
 
-export function newTaskFailedEvent(eventId: number, ex: Error): pb.HistoryEvent {
+export function newTaskFailedEvent(
+  eventId: number,
+  ex: Error,
+  failureDetails?: pb.TaskFailureDetails,
+): pb.HistoryEvent {
   const ts = new Timestamp();
 
   const taskFailedEvent = new pb.TaskFailedEvent();
-  taskFailedEvent.setFailuredetails(newFailureDetails(ex));
+  taskFailedEvent.setFailuredetails(failureDetails ?? newFailureDetails(ex));
   taskFailedEvent.setTaskscheduledid(eventId);
 
   const event = new pb.HistoryEvent();
@@ -183,8 +187,9 @@ export function newSubOrchestrationFailedEvent(eventId: number, ex: Error): pb.H
 
 export function newFailureDetails(e: unknown): pb.TaskFailureDetails {
   const failure = new pb.TaskFailureDetails();
-
-  const errorType = e instanceof Error ? e.constructor.name : "UnknownError";
+  // Use e.name (which can be customized) over constructor.name (which is always the class name)
+  // This allows users to set error.name = "CustomError" and have it preserved in failure details
+  const errorType = e instanceof Error ? e.name : "UnknownError";
   const errorMessage = e instanceof Error ? e.message : String(e);
   const stack = e instanceof Error ? e.stack : undefined;
 

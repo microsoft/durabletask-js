@@ -1,7 +1,20 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-export class FailureDetails {
+/**
+ * Interface representing task failure details.
+ * This is used for retry handlers to inspect failure information.
+ */
+export interface TaskFailureDetails {
+  /** The type/class name of the error */
+  readonly errorType: string;
+  /** The error message */
+  readonly message: string;
+  /** The stack trace, if available */
+  readonly stackTrace?: string;
+}
+
+export class FailureDetails implements TaskFailureDetails {
   private _message: string;
   private _errorType: string;
   private _stackTrace: string | undefined;

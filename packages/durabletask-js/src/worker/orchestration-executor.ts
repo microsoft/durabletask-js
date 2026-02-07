@@ -13,7 +13,9 @@ import { Logger, ConsoleLogger } from "../types/logger.type";
 import { getName } from "../task";
 import * as WorkerLogs from "./logs";
 import { OrchestrationStateError } from "../task/exception/orchestration-state-error";
+import { CompletableTask } from "../task/completable-task";
 import { RetryableTask } from "../task/retryable-task";
+import { RetryHandlerTask } from "../task/retry-handler-task";
 import { RetryTimerTask } from "../task/retry-timer-task";
 import { TOrchestrator } from "../types/orchestrator.type";
 import { enumValueToKey } from "../utils/enum.util";
@@ -225,10 +227,10 @@ export class OrchestrationExecutor {
 
             // Check if this is a retry timer
             if (timerTask instanceof RetryTimerTask) {
-              // Get the retryable parent task and reschedule it
-              const retryableTask = timerTask.retryableParent;
+              // Get the parent retry task and reschedule it
+              const retryTask = timerTask.retryableParent;
               // Reschedule the original action - this will add it back to pendingActions
-              ctx.rescheduleRetryableTask(retryableTask);
+              ctx.rescheduleRetryTask(retryTask);
               // Don't resume the orchestrator - we're just rescheduling the task
               return;
             }
@@ -319,19 +321,10 @@ export class OrchestrationExecutor {
               return;
             }
 
-            // Check if this is a retryable task and if we should retry
-            if (activityTask instanceof RetryableTask) {
-              activityTask.recordFailure(errorMessage, failureDetails);
-              const nextDelayMs = activityTask.computeNextDelayInMilliseconds(ctx._currentUtcDatetime);
-
-              if (nextDelayMs !== undefined) {
-                // Schedule a retry timer
-                activityTask.incrementAttemptCount();
-                ctx.createRetryTimer(activityTask, nextDelayMs);
-                // Remove from pendingTasks - the task will be re-added with a new ID when rescheduled
-                delete ctx._pendingTasks[taskId];
-                return;
-              }
+            // Check if this task supports retry and handle it
+            const retried = await this.tryHandleRetry(activityTask, errorMessage, failureDetails, taskId, ctx);
+            if (retried) {
+              return;
             }
 
             // No retry - fail the task
@@ -427,19 +420,10 @@ export class OrchestrationExecutor {
               return;
             }
 
-            // Check if this is a retryable task and if we should retry
-            if (subOrchTask instanceof RetryableTask) {
-              subOrchTask.recordFailure(errorMessage, failureDetails);
-              const nextDelayMs = subOrchTask.computeNextDelayInMilliseconds(ctx._currentUtcDatetime);
-
-              if (nextDelayMs !== undefined) {
-                // Schedule a retry timer
-                subOrchTask.incrementAttemptCount();
-                ctx.createRetryTimer(subOrchTask, nextDelayMs);
-                // Remove from pendingTasks - the task will be re-added with a new ID when rescheduled
-                delete ctx._pendingTasks[taskId];
-                return;
-              }
+            // Check if this task supports retry and handle it
+            const retried = await this.tryHandleRetry(subOrchTask, errorMessage, failureDetails, taskId, ctx);
+            if (retried) {
+              return;
             }
 
             // No retry - fail the task
@@ -563,5 +547,64 @@ export class OrchestrationExecutor {
       WorkerLogs.orchestrationEventError(this._logger, eventTypeName, e);
       throw e;
     }
+  }
+
+  /**
+   * Checks if a failed task supports retry and handles the retry if applicable.
+   * Supports both RetryableTask (policy-based with timer delay) and RetryHandlerTask
+   * (handler-based: returns true for immediate reschedule, or a number for delayed retry via timer).
+   *
+   * @param task - The task that failed
+   * @param errorMessage - The failure error message
+   * @param failureDetails - The protobuf failure details
+   * @param taskId - The task's sequence ID in pendingTasks
+   * @param ctx - The orchestration context
+   * @returns true if the task was retried, false otherwise
+   */
+  private async tryHandleRetry(
+    task: CompletableTask<any>,
+    errorMessage: string,
+    failureDetails: pb.TaskFailureDetails | undefined,
+    taskId: number,
+    ctx: RuntimeOrchestrationContext,
+  ): Promise<boolean> {
+    if (task instanceof RetryableTask) {
+      task.recordFailure(errorMessage, failureDetails);
+      const nextDelayMs = task.computeNextDelayInMilliseconds(ctx._currentUtcDatetime);
+
+      if (nextDelayMs !== undefined) {
+        WorkerLogs.retryingTask(this._logger, ctx._instanceId, task.taskName, task.attemptCount);
+        task.incrementAttemptCount();
+        ctx.createRetryTimer(task, nextDelayMs);
+        delete ctx._pendingTasks[taskId];
+        return true;
+      }
+    } else if (task instanceof RetryHandlerTask) {
+      task.recordFailure(errorMessage, failureDetails);
+      const retryResult = await task.shouldRetry(ctx._currentUtcDatetime);
+
+      if (retryResult !== false) {
+        WorkerLogs.retryingTask(this._logger, ctx._instanceId, task.taskName, task.attemptCount);
+        task.incrementAttemptCount();
+
+        if (typeof retryResult === "number") {
+          if (retryResult <= 0) {
+            // Handler returned true — retry immediately
+            ctx.rescheduleRetryTask(task);
+          } else {
+            // Handler returned a delay in milliseconds — use a timer
+            ctx.createRetryTimer(task, retryResult);
+          }
+        } else {
+          // Handler returned true — retry immediately
+          ctx.rescheduleRetryTask(task);
+        }
+
+        delete ctx._pendingTasks[taskId];
+        return true;
+      }
+    }
+
+    return false;
   }
 }

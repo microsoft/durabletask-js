@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 import { CompletableTask } from "./completable-task";
-import { RetryableTask } from "./retryable-task";
+import { RetryTaskBase } from "./retry-task-base";
 
 /**
  * A timer task that is associated with a retryable task for retry purposes.
@@ -10,14 +10,14 @@ import { RetryableTask } from "./retryable-task";
  * When this timer fires, the retryable task should be rescheduled for another attempt.
  */
 export class RetryTimerTask<T> extends CompletableTask<T> {
-  private readonly _retryableParent: RetryableTask<any>;
+  private readonly _retryableParent: RetryTaskBase<any>;
 
   /**
    * Creates a new RetryTimerTask.
    *
    * @param retryableParent - The retryable task that this timer is associated with
    */
-  constructor(retryableParent: RetryableTask<any>) {
+  constructor(retryableParent: RetryTaskBase<any>) {
     super();
     this._retryableParent = retryableParent;
   }
@@ -25,7 +25,7 @@ export class RetryTimerTask<T> extends CompletableTask<T> {
   /**
    * Gets the retryable task that this timer is associated with.
    */
-  get retryableParent(): RetryableTask<any> {
+  get retryableParent(): RetryTaskBase<any> {
     return this._retryableParent;
   }
 }

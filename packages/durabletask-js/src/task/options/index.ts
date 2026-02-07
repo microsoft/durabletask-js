@@ -5,6 +5,7 @@ export {
   TaskOptions,
   SubOrchestrationOptions,
   StartOrchestrationOptions,
-  taskOptionsFromRetryPolicy,
-  subOrchestrationOptionsFromRetryPolicy,
+  TaskRetryOptions,
+  isRetryPolicy,
+  isRetryHandler,
 } from "./task-options";
