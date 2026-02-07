@@ -44,6 +44,10 @@ export const DurableTaskAttributes = {
    * a reference to the original execution start.
    */
   REPLAY_START_TIME: "durabletask.task.replay_start_time",
+  /** The name of the entity operation (e.g., "add", "get"). */
+  ENTITY_OPERATION: "durabletask.entity.operation",
+  /** The target entity instance ID for entity operations. */
+  ENTITY_INSTANCE_ID: "durabletask.entity.instance_id",
 } as const;
 
 /**
@@ -56,6 +60,9 @@ export const TaskType = {
   TIMER: "timer",
   CREATE_ORCHESTRATION: "create_orchestration",
   ORCHESTRATION_EVENT: "orchestration_event",
+  ENTITY: "entity",
+  SIGNAL_ENTITY: "signal_entity",
+  CALL_ENTITY: "call_entity",
 } as const;
 
 /**

@@ -350,11 +350,11 @@ export class TaskHubGrpcWorker {
           this._executeActivity(workItem.getActivityrequest() as any, completionToken, client.stub);
         } else if (workItem.hasEntityrequest()) {
           const entityRequest = workItem.getEntityrequest() as pb.EntityBatchRequest;
-          console.log(`Received "Entity Request" work item for entity '${entityRequest.getInstanceid()}'`);
+          WorkerLogs.entityRequestReceived(this._logger, entityRequest.getInstanceid(), "Entity Request");
           this._executeEntity(entityRequest, completionToken, client.stub);
         } else if (workItem.hasEntityrequestv2()) {
           const entityRequestV2 = workItem.getEntityrequestv2() as pb.EntityRequest;
-          console.log(`Received "Entity Request V2" work item for entity '${entityRequestV2.getInstanceid()}'`);
+          WorkerLogs.entityRequestReceived(this._logger, entityRequestV2.getInstanceid(), "Entity Request V2");
           this._executeEntityV2(entityRequestV2, completionToken, client.stub);
         } else if (workItem.hasHealthping()) {
           // Health ping - no-op, just a keep-alive message from the server
@@ -828,7 +828,7 @@ export class TaskHubGrpcWorker {
     try {
       entityId = EntityInstanceId.fromString(instanceIdString);
     } catch (e: any) {
-      console.error(`Failed to parse entity instance id '${instanceIdString}': ${e.message}`);
+      WorkerLogs.entityInstanceIdParseError(this._logger, instanceIdString, e);
       // Return error result for all operations
       const batchResult = this._createEntityNotFoundResult(
         req,
@@ -853,7 +853,7 @@ export class TaskHubGrpcWorker {
         batchResult.setCompletiontoken(completionToken);
       } else {
         // Entity not found - return error result for all operations
-        console.log(`No entity named '${entityId.name}' was found.`);
+        WorkerLogs.entityNotFound(this._logger, entityId.name);
         batchResult = this._createEntityNotFoundResult(
           req,
           completionToken,
@@ -863,8 +863,7 @@ export class TaskHubGrpcWorker {
     } catch (e: any) {
       // Framework-level error - return result with failure details
       // This will cause the batch to be abandoned and retried
-      console.error(e);
-      console.log(`An error occurred while trying to execute entity '${entityId.name}': ${e.message}`);
+      WorkerLogs.entityExecutionFailed(this._logger, entityId.name, e);
 
       const failureDetails = pbh.newFailureDetails(e);
 
@@ -973,7 +972,7 @@ export class TaskHubGrpcWorker {
           operationInfos.push(opInfo);
         }
       } else {
-        console.log(`Skipping unknown entity operation event type: ${eventType}`);
+        WorkerLogs.entityUnknownOperationEventType(this._logger, eventType.toString());
       }
     }
 
@@ -1037,7 +1036,7 @@ export class TaskHubGrpcWorker {
     try {
       await callWithMetadata(stub.completeEntityTask.bind(stub), batchResult, this._metadataGenerator);
     } catch (e: any) {
-      console.error(`Failed to deliver entity response to sidecar: ${e?.message}`);
+      WorkerLogs.entityResponseDeliveryFailed(this._logger, e);
     }
   }
 }

@@ -42,6 +42,7 @@ import * as ClientLogs from "./logs";
 import {
   startSpanForNewOrchestration,
   startSpanForEventRaisedFromClient,
+  startSpanForSignalEntityFromClient,
   setSpanError,
   setSpanOk,
   endSpan,
@@ -1014,13 +1015,25 @@ export class TaskHubGrpcClient {
     requestTime.fromDate(new Date());
     req.setRequesttime(requestTime);
 
-    console.log(`Signaling entity '${id.toString()}' with operation '${operationName}'`);
+    // Create a tracing span for the entity signal (if OTEL is available)
+    const span = startSpanForSignalEntityFromClient(id.toString(), operationName);
 
-    await callWithMetadata<pb.SignalEntityRequest, pb.SignalEntityResponse>(
-      this._stub.signalEntity.bind(this._stub),
-      req,
-      this._metadataGenerator,
-    );
+    ClientLogs.signalingEntity(this._logger, id.toString(), operationName);
+
+    try {
+      await callWithMetadata<pb.SignalEntityRequest, pb.SignalEntityResponse>(
+        this._stub.signalEntity.bind(this._stub),
+        req,
+        this._metadataGenerator,
+      );
+
+      setSpanOk(span);
+    } catch (e: unknown) {
+      setSpanError(span, e);
+      throw e;
+    } finally {
+      endSpan(span);
+    }
   }
 
   /**
@@ -1038,7 +1051,7 @@ export class TaskHubGrpcClient {
     req.setInstanceid(id.toString());
     req.setIncludestate(includeState);
 
-    console.log(`Getting entity '${id.toString()}'`);
+    ClientLogs.gettingEntity(this._logger, id.toString());
 
     const res = await callWithMetadata<pb.GetEntityRequest, pb.GetEntityResponse>(
       this._stub.getEntity.bind(this._stub),

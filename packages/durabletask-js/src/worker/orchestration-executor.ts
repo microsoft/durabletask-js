@@ -621,7 +621,12 @@ export class OrchestrationExecutor {
             const requestId = completedEvent?.getRequestid();
 
             if (!requestId) {
-              console.warn(`${ctx._instanceId}: Ignoring EntityOperationCompletedEvent with no requestId`);
+              WorkerLogs.entityEventIgnored(
+                this._logger,
+                ctx._instanceId,
+                "EntityOperationCompletedEvent",
+                "no requestId",
+              );
               return;
             }
 
@@ -630,8 +635,11 @@ export class OrchestrationExecutor {
             if (!pendingCall) {
               // This could happen during replay or if the call was already processed
               if (!ctx._isReplaying) {
-                console.warn(
-                  `${ctx._instanceId}: Ignoring unexpected EntityOperationCompletedEvent with requestId = ${requestId}`,
+                WorkerLogs.entityEventIgnored(
+                  this._logger,
+                  ctx._instanceId,
+                  "EntityOperationCompletedEvent",
+                  `unexpected requestId = ${requestId}`,
                 );
               }
               return;
@@ -659,7 +667,12 @@ export class OrchestrationExecutor {
             const requestId = failedEvent?.getRequestid();
 
             if (!requestId) {
-              console.warn(`${ctx._instanceId}: Ignoring EntityOperationFailedEvent with no requestId`);
+              WorkerLogs.entityEventIgnored(
+                this._logger,
+                ctx._instanceId,
+                "EntityOperationFailedEvent",
+                "no requestId",
+              );
               return;
             }
 
@@ -668,8 +681,11 @@ export class OrchestrationExecutor {
             if (!pendingCall) {
               // This could happen during replay or if the call was already processed
               if (!ctx._isReplaying) {
-                console.warn(
-                  `${ctx._instanceId}: Ignoring unexpected EntityOperationFailedEvent with requestId = ${requestId}`,
+                WorkerLogs.entityEventIgnored(
+                  this._logger,
+                  ctx._instanceId,
+                  "EntityOperationFailedEvent",
+                  `unexpected requestId = ${requestId}`,
                 );
               }
               return;
@@ -705,7 +721,12 @@ export class OrchestrationExecutor {
             const criticalSectionId = lockGrantedEvent?.getCriticalsectionid();
 
             if (!criticalSectionId) {
-              console.warn(`${ctx._instanceId}: Ignoring EntityLockGrantedEvent with no criticalSectionId`);
+              WorkerLogs.entityEventIgnored(
+                this._logger,
+                ctx._instanceId,
+                "EntityLockGrantedEvent",
+                "no criticalSectionId",
+              );
               return;
             }
 
@@ -714,8 +735,11 @@ export class OrchestrationExecutor {
             if (!pendingRequest) {
               // This could happen during replay or if the lock was already acquired
               if (!ctx._isReplaying) {
-                console.warn(
-                  `${ctx._instanceId}: Ignoring unexpected EntityLockGrantedEvent with criticalSectionId = ${criticalSectionId}`,
+                WorkerLogs.entityEventIgnored(
+                  this._logger,
+                  ctx._instanceId,
+                  "EntityLockGrantedEvent",
+                  `unexpected criticalSectionId = ${criticalSectionId}`,
                 );
               }
               return;
