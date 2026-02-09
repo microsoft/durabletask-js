@@ -154,19 +154,26 @@ export abstract class TaskEntity<TState> implements ITaskEntity {
    * @returns The actual method name if found, undefined otherwise.
    */
   private findMethod(operationName: string): string | undefined {
-    // Get all own property names of this instance and its prototype chain
-    const proto = Object.getPrototypeOf(this);
-    const methodNames = Object.getOwnPropertyNames(proto);
+    // Walk the prototype chain to support multi-level inheritance
+    // (e.g., CounterEntity extends BaseEntity extends TaskEntity).
+    // This matches .NET behavior where GetMethod() traverses the full type hierarchy.
+    let proto = Object.getPrototypeOf(this);
+    const taskEntityProto = TaskEntity.prototype;
 
-    // Find a method that matches case-insensitively
-    for (const name of methodNames) {
-      if (name.toLowerCase() === operationName) {
-        const prop = (this as unknown as Record<string, unknown>)[name];
-        // Skip non-functions and built-in methods
-        if (typeof prop === "function" && name !== "constructor" && name !== "run") {
-          return name;
+    while (proto && proto !== taskEntityProto) {
+      const methodNames = Object.getOwnPropertyNames(proto);
+
+      for (const name of methodNames) {
+        if (name.toLowerCase() === operationName) {
+          const prop = (this as unknown as Record<string, unknown>)[name];
+          // Skip non-functions and built-in methods
+          if (typeof prop === "function" && name !== "constructor" && name !== "run") {
+            return name;
+          }
         }
       }
+
+      proto = Object.getPrototypeOf(proto);
     }
 
     return undefined;
