@@ -88,8 +88,16 @@ class StateShim implements TaskEntityState {
 
   setState(state: unknown): void {
     this.cachedValue = state;
-    this.serializedValue = state !== undefined && state !== null ? JSON.stringify(state) : undefined;
-    this.cacheValid = true;
+    try {
+      this.serializedValue =
+        state !== undefined && state !== null ? JSON.stringify(state) : undefined;
+
+      this.cacheValid = true;
+    } catch (e) {
+      throw new Error(
+        `Entity state is not JSON-serializable: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
   }
 
   /**

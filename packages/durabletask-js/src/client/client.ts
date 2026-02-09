@@ -1211,8 +1211,13 @@ export class TaskHubGrpcClient {
     const serializedState = protoMetadata.getSerializedstate()?.getValue();
 
     if (includeState && serializedState) {
-      const state = JSON.parse(serializedState) as T;
-      return createEntityMetadata<T>(entityId, lastModifiedTime, backlogQueueSize, lockedBy, state);
+      try {
+        const state = JSON.parse(serializedState) as T;
+        return createEntityMetadata<T>(entityId, lastModifiedTime, backlogQueueSize, lockedBy, state);
+      } catch {
+        // Return metadata without state if parsing fails
+        return createEntityMetadataWithoutState(entityId, lastModifiedTime, backlogQueueSize, lockedBy) as EntityMetadata<T>;
+      }
     } else {
       return createEntityMetadataWithoutState(entityId, lastModifiedTime, backlogQueueSize, lockedBy) as EntityMetadata<T>;
     }
