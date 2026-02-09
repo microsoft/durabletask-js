@@ -316,7 +316,6 @@ describe("Retry Handler E2E Tests", () => {
       };
 
       // Retry handler returning delay in ms (fixed 500ms delay)
-       
       const retryHandler: any = async (ctx: RetryContext): Promise<boolean | number> => {
         if (ctx.lastAttemptNumber >= 5) {
           return false;
