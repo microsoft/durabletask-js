@@ -41,6 +41,11 @@ const processItem = async (_ctx: ActivityContext, item: string): Promise<number>
   return item.length;
 };
 
+/** Return a greeting string for the given name. */
+const greet = async (_ctx: ActivityContext, name: string): Promise<string> => {
+  return `Hello, ${name}!`;
+};
+
 /** Child orchestration: adds two to the input via two plusOne activity calls. */
 const doubleOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, value: number): any {
   const doubled: number = yield ctx.callActivity(plusOne, value);
@@ -134,6 +139,7 @@ const guidOrchestrator: TOrchestrator = async function* (ctx: OrchestrationConte
     .addOrchestrator(guidOrchestrator)
     .addActivity(plusOne)
     .addActivity(processItem)
+    .addActivity(greet)
     .build();
 
   try {

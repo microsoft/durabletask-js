@@ -74,7 +74,6 @@ const simpleOrchestrator: TOrchestrator = async function* (ctx: OrchestrationCon
   // --- 1. Schedule with version ---
   console.log("\n=== 1. Schedule Orchestration with Version ===");
 
-  // Client with a default version
   const clientV1 = new DurableTaskAzureManagedClientBuilder()
     .connectionString(connectionString)
     .logger(logger)
