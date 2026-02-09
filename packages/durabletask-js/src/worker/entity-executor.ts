@@ -340,16 +340,15 @@ export class TaskEntityShim {
   private async executeOperation(opRequest: pb.OperationRequest): Promise<pb.OperationResult> {
     const startTime = new Date();
 
-    // Parse operation input
-    const inputValue = opRequest.getInput();
-    const input = inputValue ? JSON.parse(inputValue.getValue()) : undefined;
-
-    // Set operation details
-    this.operationShim.setNameAndInput(opRequest.getOperation(), input);
-
     const result = new pb.OperationResult();
 
     try {
+      const inputValue = opRequest.getInput();
+      const input = inputValue ? JSON.parse(inputValue.getValue()) : undefined;
+
+      // Set operation details
+      this.operationShim.setNameAndInput(opRequest.getOperation(), input);
+
       // Execute the entity operation
       const output = await Promise.resolve(this.entity.run(this.operationShim));
       const endTime = new Date();
