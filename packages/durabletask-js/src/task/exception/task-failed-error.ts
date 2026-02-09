@@ -9,6 +9,7 @@ export class TaskFailedError extends Error {
 
   constructor(message: string, details: pb.TaskFailureDetails) {
     super(message);
+    this.name = "TaskFailedError";
 
     this._details = new FailureDetails(
       details.getErrormessage(),

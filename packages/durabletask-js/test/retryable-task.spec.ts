@@ -194,6 +194,108 @@ describe("RetryableTask", () => {
       // Assert - should still allow retry (timeout is infinite)
       expect(delay).toBeGreaterThan(0);
     });
+
+    it("should return undefined when handleFailure predicate returns false", () => {
+      // Arrange
+      const retryPolicy = new RetryPolicy({
+        maxNumberOfAttempts: 10,
+        firstRetryIntervalInMilliseconds: 1000,
+        handleFailure: (failure) => failure.errorType !== "FatalError",
+      });
+      const action = new pb.OrchestratorAction();
+      const task = new RetryableTask<string>(retryPolicy, action, new Date(), "activity");
+
+      // Record a FatalError (should NOT be retried)
+      const failureDetails = new pb.TaskFailureDetails();
+      failureDetails.setErrortype("FatalError");
+      failureDetails.setErrormessage("This is a fatal error");
+      task.recordFailure("This is a fatal error", failureDetails);
+
+      const currentTime = new Date();
+
+      // Act
+      const delay = task.computeNextDelayInMilliseconds(currentTime);
+
+      // Assert - should return undefined because handleFailure returns false for FatalError
+      expect(delay).toBeUndefined();
+    });
+
+    it("should allow retry when handleFailure predicate returns true", () => {
+      // Arrange
+      const retryPolicy = new RetryPolicy({
+        maxNumberOfAttempts: 10,
+        firstRetryIntervalInMilliseconds: 1000,
+        handleFailure: (failure) => failure.errorType !== "FatalError",
+      });
+      const action = new pb.OrchestratorAction();
+      const task = new RetryableTask<string>(retryPolicy, action, new Date(), "activity");
+
+      // Record a TransientError (should be retried)
+      const failureDetails = new pb.TaskFailureDetails();
+      failureDetails.setErrortype("TransientError");
+      failureDetails.setErrormessage("This is a transient error");
+      task.recordFailure("This is a transient error", failureDetails);
+
+      const currentTime = new Date();
+
+      // Act
+      const delay = task.computeNextDelayInMilliseconds(currentTime);
+
+      // Assert - should return a delay because handleFailure returns true for TransientError
+      expect(delay).toBeDefined();
+      expect(delay).toBeGreaterThan(0);
+    });
+
+    it("should filter based on error message content in handleFailure", () => {
+      // Arrange
+      const retryPolicy = new RetryPolicy({
+        maxNumberOfAttempts: 10,
+        firstRetryIntervalInMilliseconds: 1000,
+        handleFailure: (failure) => failure.message?.includes("timeout") ?? false,
+      });
+      const action = new pb.OrchestratorAction();
+      const task = new RetryableTask<string>(retryPolicy, action, new Date(), "activity");
+
+      // Record a validation error (should NOT be retried - no "timeout" in message)
+      const failureDetails = new pb.TaskFailureDetails();
+      failureDetails.setErrortype("ValidationError");
+      failureDetails.setErrormessage("Invalid input: field is required");
+      task.recordFailure("Invalid input: field is required", failureDetails);
+
+      const currentTime = new Date();
+
+      // Act
+      const delay = task.computeNextDelayInMilliseconds(currentTime);
+
+      // Assert - should return undefined because message doesn't contain "timeout"
+      expect(delay).toBeUndefined();
+    });
+
+    it("should retry when error message matches handleFailure criteria", () => {
+      // Arrange
+      const retryPolicy = new RetryPolicy({
+        maxNumberOfAttempts: 10,
+        firstRetryIntervalInMilliseconds: 1000,
+        handleFailure: (failure) => failure.message?.includes("timeout") ?? false,
+      });
+      const action = new pb.OrchestratorAction();
+      const task = new RetryableTask<string>(retryPolicy, action, new Date(), "activity");
+
+      // Record a timeout error (should be retried - has "timeout" in message)
+      const failureDetails = new pb.TaskFailureDetails();
+      failureDetails.setErrortype("NetworkError");
+      failureDetails.setErrormessage("Connection timeout - please retry");
+      task.recordFailure("Connection timeout - please retry", failureDetails);
+
+      const currentTime = new Date();
+
+      // Act
+      const delay = task.computeNextDelayInMilliseconds(currentTime);
+
+      // Assert - should return a delay because message contains "timeout"
+      expect(delay).toBeDefined();
+      expect(delay).toBeGreaterThan(0);
+    });
   });
 
   describe("incrementAttemptCount", () => {
