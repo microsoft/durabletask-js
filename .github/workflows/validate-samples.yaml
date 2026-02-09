@@ -43,11 +43,11 @@ jobs:
         run: |
           SAMPLES_ROOT="examples/azure-managed"
 
-          # Find all sample.json files in subdirectories (not the root sample.json)
+          # Find all sample.json files under the samples root (including the root sample.json)
           emulator_samples="[]"
           no_emulator_samples="[]"
 
-          for sample_json in $(find "$SAMPLES_ROOT" -mindepth 2 -name "sample.json" | sort); do
+          for sample_json in $(find "$SAMPLES_ROOT" -mindepth 1 -name "sample.json" | sort); do
             dir=$(dirname "$sample_json")
             name=$(basename "$dir")
             requires_emulator=$(jq -r '.requiresEmulator // true' "$sample_json")
