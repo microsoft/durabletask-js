@@ -61,8 +61,8 @@ jobs:
             fi
           done
 
-          echo "emulator=$emulator_samples" >> "$GITHUB_OUTPUT"
-          echo "no_emulator=$no_emulator_samples" >> "$GITHUB_OUTPUT"
+          echo "emulator=$(echo "$emulator_samples" | jq -c .)" >> "$GITHUB_OUTPUT"
+          echo "no_emulator=$(echo "$no_emulator_samples" | jq -c .)" >> "$GITHUB_OUTPUT"
 
           echo "--- Emulator samples ---"
           echo "$emulator_samples" | jq .
