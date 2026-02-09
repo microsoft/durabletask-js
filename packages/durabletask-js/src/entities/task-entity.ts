@@ -106,8 +106,11 @@ export abstract class TaskEntity<TState> implements ITaskEntity {
    * @returns The initial entity state.
    *
    * @remarks
-   * The default implementation returns an empty object cast to TState.
-   * Override this method to provide custom initialization logic.
+   * The default implementation returns an empty object (`{}`) cast to TState.
+   * This is appropriate when TState is an object or record type, but will produce
+   * incorrect values for primitive types (`number`, `string`, `boolean`) or arrays.
+   * For non-object state types, override this method to return a proper default
+   * (e.g., `0` for number, `[]` for arrays).
    */
   protected initializeState(): TState {
     return {} as TState;
@@ -156,7 +159,6 @@ export abstract class TaskEntity<TState> implements ITaskEntity {
   private findMethod(operationName: string): string | undefined {
     // Walk the prototype chain to support multi-level inheritance
     // (e.g., CounterEntity extends BaseEntity extends TaskEntity).
-    // This matches .NET behavior where GetMethod() traverses the full type hierarchy.
     let proto = Object.getPrototypeOf(this);
     const taskEntityProto = TaskEntity.prototype;
 
