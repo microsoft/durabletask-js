@@ -144,8 +144,7 @@ export function createPbTraceContextFromSpan(span: Span): pb.TraceContext | unde
     return undefined;
   }
 
-  const flags = (spanContext.traceFlags & 0xff).toString(16).padStart(2, "0");
-  const traceparent = `00-${spanContext.traceId}-${spanContext.spanId}-${flags}`;
+  const traceparent = createTraceparent(spanContext.traceId, spanContext.spanId, spanContext.traceFlags);
 
   const ctx = new pb.TraceContext();
   ctx.setTraceparent(traceparent);
