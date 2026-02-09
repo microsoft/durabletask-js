@@ -85,11 +85,11 @@ export function createSpanName(type: string, name: string, version?: string): st
 /**
  * Creates a timer span name following the Durable Task naming convention.
  *
- * Format: "timer:{orchName}"
+ * Format: "orchestration:{orchName}:timer"
  *
  * @param orchestrationName - The name of the parent orchestration.
  * @returns The formatted timer span name.
  */
 export function createTimerSpanName(orchestrationName: string): string {
-  return `${TaskType.TIMER}:${orchestrationName}`;
+  return `${TaskType.ORCHESTRATION}:${orchestrationName}:${TaskType.TIMER}`;
 }

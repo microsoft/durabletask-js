@@ -7,20 +7,39 @@ import { Timestamp } from "google-protobuf/google/protobuf/timestamp_pb";
 import { TRACER_NAME, DurableTaskAttributes, TaskType, createSpanName, createTimerSpanName } from "./constants";
 import {
   getOtelApi,
-  extractTraceparentFromSpan,
-  createPbTraceContext,
+  createPbTraceContextFromSpan,
   createParentContextFromPb,
 } from "./trace-context-utils";
 import type { Span, Tracer } from "@opentelemetry/api";
+
+// Cached tracer instance to avoid repeated lookups. The tracer is created once
+// and reused for the lifetime of the process. This is safe because the OTEL JS
+// SDK returns a proxy tracer from `trace.getTracer()` that dynamically delegates
+// to the current global tracer provider, so provider swaps (e.g., in tests via
+// `setGlobalTracerProvider`) are handled transparently.
+let _cachedTracer: Tracer | undefined;
+
+/**
+ * Returns the OTEL API and tracer, or undefined if OTEL is not available.
+ * Caches the tracer instance for efficiency.
+ */
+function getTracingContext(): { otel: typeof import("@opentelemetry/api"); tracer: Tracer } | undefined {
+  const otel = getOtelApi();
+  if (!otel) return undefined;
+
+  if (!_cachedTracer) {
+    _cachedTracer = otel.trace.getTracer(TRACER_NAME);
+  }
+
+  return { otel, tracer: _cachedTracer };
+}
 
 /**
  * Gets the Durable Task tracer from the OpenTelemetry API.
  * Returns undefined if OpenTelemetry is not installed.
  */
 export function getTracer(): Tracer | undefined {
-  const otel = getOtelApi();
-  if (!otel) return undefined;
-  return otel.trace.getTracer(TRACER_NAME);
+  return getTracingContext()?.tracer;
 }
 
 /**
@@ -50,19 +69,18 @@ export interface OrchestrationSpanInfo {
  * @returns The span (or undefined if OTEL is not available). Caller must end it.
  */
 export function startSpanForNewOrchestration(req: pb.CreateInstanceRequest): Span | undefined {
-  const otel = getOtelApi();
-  const tracer = getTracer();
-  if (!otel || !tracer) return undefined;
+  const ctx = getTracingContext();
+  if (!ctx) return undefined;
 
   const name = req.getName();
   const version = req.getVersion()?.getValue();
   const instanceId = req.getInstanceid();
   const spanName = createSpanName(TaskType.CREATE_ORCHESTRATION, name, version);
 
-  const span = tracer.startSpan(spanName, {
-    kind: otel.SpanKind.PRODUCER,
+  const span = ctx.tracer.startSpan(spanName, {
+    kind: ctx.otel.SpanKind.PRODUCER,
     attributes: {
-      [DurableTaskAttributes.TYPE]: TaskType.CREATE_ORCHESTRATION,
+      [DurableTaskAttributes.TYPE]: TaskType.ORCHESTRATION,
       [DurableTaskAttributes.TASK_NAME]: name,
       [DurableTaskAttributes.TASK_INSTANCE_ID]: instanceId,
       ...(version ? { [DurableTaskAttributes.TASK_VERSION]: version } : {}),
@@ -70,9 +88,8 @@ export function startSpanForNewOrchestration(req: pb.CreateInstanceRequest): Spa
   });
 
   // Inject trace context into the proto request
-  const traceInfo = extractTraceparentFromSpan(span);
-  if (traceInfo) {
-    const pbCtx = createPbTraceContext(traceInfo.traceparent, traceInfo.tracestate);
+  const pbCtx = createPbTraceContextFromSpan(span);
+  if (pbCtx) {
     req.setParenttracecontext(pbCtx);
   }
 
@@ -93,9 +110,8 @@ export function startSpanForOrchestrationExecution(
   orchestrationTraceContext: pb.OrchestrationTraceContext | undefined,
   instanceId: string,
 ): { span: Span; spanInfo: OrchestrationSpanInfo } | undefined {
-  const otel = getOtelApi();
-  const tracer = getTracer();
-  if (!otel || !tracer) return undefined;
+  const ctx = getTracingContext();
+  if (!ctx) return undefined;
 
   const name = executionStartedEvent.getName();
   const version = executionStartedEvent.getVersion()?.getValue();
@@ -118,10 +134,10 @@ export function startSpanForOrchestrationExecution(
   // first-execution time for storage in OrchestrationTraceContext.
   const persistedStartTime = isReplay ? existingStartTime! : spanStartTime;
 
-  const span = tracer.startSpan(
+  const span = ctx.tracer.startSpan(
     spanName,
     {
-      kind: otel.SpanKind.SERVER,
+      kind: ctx.otel.SpanKind.SERVER,
       startTime: spanStartTime,
       attributes: {
         [DurableTaskAttributes.TYPE]: TaskType.ORCHESTRATION,
@@ -168,21 +184,20 @@ export function startSpanForSchedulingTask(
   action: pb.ScheduleTaskAction,
   taskId: number,
 ): void {
-  const otel = getOtelApi();
-  const tracer = getTracer();
-  if (!otel || !tracer) return;
+  const ctx = getTracingContext();
+  if (!ctx) return;
 
   const name = action.getName();
   const version = action.getVersion()?.getValue();
   const spanName = createSpanName(TaskType.ACTIVITY, name, version);
 
   // Create a context with the orchestration span as parent
-  const parentContext = otel.trace.setSpan(otel.context.active(), orchestrationSpan);
+  const parentContext = ctx.otel.trace.setSpan(ctx.otel.context.active(), orchestrationSpan);
 
-  const span = tracer.startSpan(
+  const span = ctx.tracer.startSpan(
     spanName,
     {
-      kind: otel.SpanKind.CLIENT,
+      kind: ctx.otel.SpanKind.CLIENT,
       attributes: {
         [DurableTaskAttributes.TYPE]: TaskType.ACTIVITY,
         [DurableTaskAttributes.TASK_NAME]: name,
@@ -194,9 +209,8 @@ export function startSpanForSchedulingTask(
   );
 
   // Inject trace context into the action
-  const traceInfo = extractTraceparentFromSpan(span);
-  if (traceInfo) {
-    const pbCtx = createPbTraceContext(traceInfo.traceparent, traceInfo.tracestate);
+  const pbCtx = createPbTraceContextFromSpan(span);
+  if (pbCtx) {
     action.setParenttracecontext(pbCtx);
   }
 
@@ -211,9 +225,8 @@ export function startSpanForSchedulingTask(
  * @returns The span (or undefined if OTEL is not available). Caller must end it.
  */
 export function startSpanForTaskExecution(req: pb.ActivityRequest): Span | undefined {
-  const otel = getOtelApi();
-  const tracer = getTracer();
-  if (!otel || !tracer) return undefined;
+  const ctx = getTracingContext();
+  if (!ctx) return undefined;
 
   const name = req.getName();
   const spanName = createSpanName(TaskType.ACTIVITY, name);
@@ -223,10 +236,10 @@ export function startSpanForTaskExecution(req: pb.ActivityRequest): Span | undef
 
   const instanceId = req.getOrchestrationinstance()?.getInstanceid() ?? "";
 
-  const span = tracer.startSpan(
+  const span = ctx.tracer.startSpan(
     spanName,
     {
-      kind: otel.SpanKind.SERVER,
+      kind: ctx.otel.SpanKind.SERVER,
       attributes: {
         [DurableTaskAttributes.TYPE]: TaskType.ACTIVITY,
         [DurableTaskAttributes.TASK_NAME]: name,
@@ -253,23 +266,22 @@ export function startSpanForSchedulingSubOrchestration(
   action: pb.CreateSubOrchestrationAction,
   taskId: number,
 ): void {
-  const otel = getOtelApi();
-  const tracer = getTracer();
-  if (!otel || !tracer) return;
+  const ctx = getTracingContext();
+  if (!ctx) return;
 
   const name = action.getName();
   const version = action.getVersion()?.getValue();
   const instanceId = action.getInstanceid();
-  const spanName = createSpanName(TaskType.CREATE_ORCHESTRATION, name, version);
+  const spanName = createSpanName(TaskType.ORCHESTRATION, name, version);
 
-  const parentContext = otel.trace.setSpan(otel.context.active(), orchestrationSpan);
+  const parentContext = ctx.otel.trace.setSpan(ctx.otel.context.active(), orchestrationSpan);
 
-  const span = tracer.startSpan(
+  const span = ctx.tracer.startSpan(
     spanName,
     {
-      kind: otel.SpanKind.CLIENT,
+      kind: ctx.otel.SpanKind.CLIENT,
       attributes: {
-        [DurableTaskAttributes.TYPE]: TaskType.CREATE_ORCHESTRATION,
+        [DurableTaskAttributes.TYPE]: TaskType.ORCHESTRATION,
         [DurableTaskAttributes.TASK_NAME]: name,
         [DurableTaskAttributes.TASK_INSTANCE_ID]: instanceId,
         [DurableTaskAttributes.TASK_TASK_ID]: taskId,
@@ -280,9 +292,8 @@ export function startSpanForSchedulingSubOrchestration(
   );
 
   // Inject trace context into the action
-  const traceInfo = extractTraceparentFromSpan(span);
-  if (traceInfo) {
-    const pbCtx = createPbTraceContext(traceInfo.traceparent, traceInfo.tracestate);
+  const pbCtx = createPbTraceContextFromSpan(span);
+  if (pbCtx) {
     action.setParenttracecontext(pbCtx);
   }
 
@@ -304,17 +315,16 @@ export function emitSpanForTimer(
   fireAt: Date,
   timerId: number,
 ): void {
-  const otel = getOtelApi();
-  const tracer = getTracer();
-  if (!otel || !tracer) return;
+  const ctx = getTracingContext();
+  if (!ctx) return;
 
   const spanName = createTimerSpanName(orchestrationName);
-  const parentContext = otel.trace.setSpan(otel.context.active(), orchestrationSpan);
+  const parentContext = ctx.otel.trace.setSpan(ctx.otel.context.active(), orchestrationSpan);
 
-  const span = tracer.startSpan(
+  const span = ctx.tracer.startSpan(
     spanName,
     {
-      kind: otel.SpanKind.INTERNAL,
+      kind: ctx.otel.SpanKind.INTERNAL,
       attributes: {
         [DurableTaskAttributes.TYPE]: TaskType.TIMER,
         [DurableTaskAttributes.TASK_TASK_ID]: timerId,
@@ -339,19 +349,18 @@ export function emitSpanForEventSent(
   eventName: string,
   targetInstanceId?: string,
 ): void {
-  const otel = getOtelApi();
-  const tracer = getTracer();
-  if (!otel || !tracer) return;
+  const ctx = getTracingContext();
+  if (!ctx) return;
 
   const spanName = createSpanName(TaskType.ORCHESTRATION_EVENT, eventName);
-  const parentContext = otel.trace.setSpan(otel.context.active(), orchestrationSpan);
+  const parentContext = ctx.otel.trace.setSpan(ctx.otel.context.active(), orchestrationSpan);
 
-  const span = tracer.startSpan(
+  const span = ctx.tracer.startSpan(
     spanName,
     {
-      kind: otel.SpanKind.PRODUCER,
+      kind: ctx.otel.SpanKind.PRODUCER,
       attributes: {
-        [DurableTaskAttributes.TYPE]: TaskType.ORCHESTRATION_EVENT,
+        [DurableTaskAttributes.TYPE]: TaskType.EVENT,
         [DurableTaskAttributes.TASK_NAME]: eventName,
         ...(targetInstanceId ? { [DurableTaskAttributes.EVENT_TARGET_INSTANCE_ID]: targetInstanceId } : {}),
       },
@@ -370,16 +379,15 @@ export function emitSpanForEventSent(
  * @returns The span (or undefined if OTEL is not available). Caller must end it.
  */
 export function startSpanForEventRaisedFromClient(eventName: string, instanceId: string): Span | undefined {
-  const otel = getOtelApi();
-  const tracer = getTracer();
-  if (!otel || !tracer) return undefined;
+  const ctx = getTracingContext();
+  if (!ctx) return undefined;
 
   const spanName = createSpanName(TaskType.ORCHESTRATION_EVENT, eventName);
 
-  const span = tracer.startSpan(spanName, {
-    kind: otel.SpanKind.PRODUCER,
+  const span = ctx.tracer.startSpan(spanName, {
+    kind: ctx.otel.SpanKind.PRODUCER,
     attributes: {
-      [DurableTaskAttributes.TYPE]: TaskType.ORCHESTRATION_EVENT,
+      [DurableTaskAttributes.TYPE]: TaskType.EVENT,
       [DurableTaskAttributes.TASK_NAME]: eventName,
       [DurableTaskAttributes.EVENT_TARGET_INSTANCE_ID]: instanceId,
     },

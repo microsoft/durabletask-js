@@ -131,6 +131,36 @@ export function extractTraceparentFromSpan(span: Span | undefined | null): { tra
 }
 
 /**
+ * Creates a protobuf TraceContext directly from a Span, avoiding the
+ * format→parse roundtrip of extractTraceparentFromSpan + createPbTraceContext.
+ * Returns undefined if the span context is not valid.
+ */
+export function createPbTraceContextFromSpan(span: Span | undefined | null): pb.TraceContext | undefined {
+  const otel = getOtelApi();
+  if (!otel || !span) return undefined;
+
+  const spanContext = span.spanContext();
+  if (!otel.isSpanContextValid(spanContext)) {
+    return undefined;
+  }
+
+  const traceparent = createTraceparent(spanContext.traceId, spanContext.spanId, spanContext.traceFlags);
+
+  const ctx = new pb.TraceContext();
+  ctx.setTraceparent(traceparent);
+  ctx.setSpanid(spanContext.spanId);
+
+  const tracestate = spanContext.traceState?.serialize();
+  if (tracestate) {
+    const sv = new StringValue();
+    sv.setValue(tracestate);
+    ctx.setTracestate(sv);
+  }
+
+  return ctx;
+}
+
+/**
  * Creates an OTEL Context with a remote parent span from a protobuf TraceContext.
  * Returns undefined if OTEL is not available or the pbTraceContext is not provided.
  * Returns ROOT_CONTEXT if the traceparent is missing or invalid.

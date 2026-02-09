@@ -10,6 +10,7 @@ export {
   createPbTraceContext,
   extractTraceparentFromSpan,
   createParentContextFromPb,
+  createPbTraceContextFromSpan,
 } from "./trace-context-utils";
 
 // Internal-only exports (not re-exported from package index.ts):
