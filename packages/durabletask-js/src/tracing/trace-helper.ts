@@ -403,12 +403,12 @@ export function startSpanForEventRaisedFromClient(eventName: string, instanceId:
  * @param error - The error to record.
  */
 export function setSpanError(span: Span | undefined | null, error: unknown): void {
-  const ctx = getTracingContext();
-  if (!ctx || !span) return;
+  const otel = getOtelApi();
+  if (!otel || !span) return;
 
   const message =
     typeof error === "string" ? error : error instanceof Error ? error.message : String(error);
-  span.setStatus({ code: ctx.otel.SpanStatusCode.ERROR, message });
+  span.setStatus({ code: otel.SpanStatusCode.ERROR, message });
   if (error instanceof Error) {
     span.recordException(error);
   }
@@ -420,10 +420,10 @@ export function setSpanError(span: Span | undefined | null, error: unknown): voi
  * @param span - The span to set OK status on.
  */
 export function setSpanOk(span: Span | undefined | null): void {
-  const ctx = getTracingContext();
-  if (!ctx || !span) return;
+  const otel = getOtelApi();
+  if (!otel || !span) return;
 
-  span.setStatus({ code: ctx.otel.SpanStatusCode.OK });
+  span.setStatus({ code: otel.SpanStatusCode.OK });
 }
 
 /**

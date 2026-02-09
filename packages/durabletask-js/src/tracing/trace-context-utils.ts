@@ -135,9 +135,9 @@ export function extractTraceparentFromSpan(span: Span | undefined | null): { tra
  * format→parse roundtrip of extractTraceparentFromSpan + createPbTraceContext.
  * Returns undefined if the span context is not valid.
  */
-export function createPbTraceContextFromSpan(span: Span): pb.TraceContext | undefined {
+export function createPbTraceContextFromSpan(span: Span | undefined | null): pb.TraceContext | undefined {
   const otel = getOtelApi();
-  if (!otel) return undefined;
+  if (!otel || !span) return undefined;
 
   const spanContext = span.spanContext();
   if (!otel.isSpanContextValid(spanContext)) {
