@@ -398,4 +398,104 @@ describe("TaskEntityShim", () => {
       expect(failure.getEndtimeutc()).toBeDefined();
     });
   });
+
+  describe("StateShim error handling", () => {
+    it("should throw when setting non-serializable state", async () => {
+      // Entity that sets state to a circular reference
+      class CircularStateEntity extends TaskEntity<unknown> {
+        makeCircular(): void {
+          const obj: Record<string, unknown> = {};
+          obj.self = obj; // Circular reference
+          this.state = obj;
+        }
+
+        protected initializeState(): unknown {
+          return {};
+        }
+      }
+
+      const entity = new CircularStateEntity();
+      const shim = new TaskEntityShim(entity, entityId);
+      const request = createBatchRequest(
+        entityId.toString(),
+        [{ name: "makeCircular" }],
+        {},
+      );
+
+      const result = await shim.executeAsync(request);
+
+      // The operation should fail because setState will throw on JSON.stringify
+      const opResult = result.getResultsList()[0];
+      expect(opResult.hasFailure()).toBe(true);
+
+      const failure = opResult.getFailure()!;
+      expect(failure.getFailuredetails()?.getErrormessage()).toContain(
+        "Entity state is not JSON-serializable",
+      );
+    });
+  });
+
+  describe("invalid operation input", () => {
+    it("should record failure when operation input is invalid JSON", async () => {
+      const entity = new CounterEntity();
+      const shim = new TaskEntityShim(entity, entityId);
+
+      // Manually create a batch request with invalid JSON input
+      const request = new pb.EntityBatchRequest();
+      request.setInstanceid(entityId.toString());
+
+      const stateValue = new StringValue();
+      stateValue.setValue(JSON.stringify({ count: 0 }));
+      request.setEntitystate(stateValue);
+
+      const opRequest = new pb.OperationRequest();
+      opRequest.setOperation("add");
+      const inputValue = new StringValue();
+      inputValue.setValue("{invalid json"); // Invalid JSON
+      opRequest.setInput(inputValue);
+      request.addOperations(opRequest);
+
+      const result = await shim.executeAsync(request);
+
+      const opResult = result.getResultsList()[0];
+      expect(opResult.hasFailure()).toBe(true);
+    });
+
+    it("should continue executing after invalid JSON input failure", async () => {
+      const entity = new CounterEntity();
+      const shim = new TaskEntityShim(entity, entityId);
+
+      // Create request with invalid JSON for first op, then a valid op
+      const request = new pb.EntityBatchRequest();
+      request.setInstanceid(entityId.toString());
+
+      const stateValue = new StringValue();
+      stateValue.setValue(JSON.stringify({ count: 10 }));
+      request.setEntitystate(stateValue);
+
+      // First op: invalid JSON input
+      const op1 = new pb.OperationRequest();
+      op1.setOperation("add");
+      const badInput = new StringValue();
+      badInput.setValue("not valid json!");
+      op1.setInput(badInput);
+      request.addOperations(op1);
+
+      // Second op: valid operation
+      const op2 = new pb.OperationRequest();
+      op2.setOperation("get");
+      request.addOperations(op2);
+
+      const result = await shim.executeAsync(request);
+
+      expect(result.getResultsList()).toHaveLength(2);
+
+      // First operation fails due to invalid JSON
+      expect(result.getResultsList()[0].hasFailure()).toBe(true);
+
+      // Second operation succeeds, state should be rolled back to 10
+      expect(result.getResultsList()[1].hasSuccess()).toBe(true);
+      expect(JSON.parse(result.getResultsList()[1].getSuccess()!.getResult()!.getValue())).toBe(10);
+    });
+  });
 });

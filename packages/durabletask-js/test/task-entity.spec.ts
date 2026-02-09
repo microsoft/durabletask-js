@@ -324,4 +324,102 @@ describe("TaskEntity", () => {
       expect((stateChanges[0] as { deleted: boolean }).deleted).toBe(true);
     });
   });
+
+  describe("multi-level inheritance", () => {
+    // Base entity class with shared operations
+    abstract class BaseEntity extends TaskEntity<{ value: number }> {
+      baseOp(): string {
+        return "from-base";
+      }
+
+      sharedOp(): string {
+        return "base-shared";
+      }
+
+      protected initializeState(): { value: number } {
+        return { value: 0 };
+      }
+    }
+
+    // Mid-level entity class
+    class MidEntity extends BaseEntity {
+      midOp(): string {
+        return "from-mid";
+      }
+
+      // Override sharedOp from BaseEntity
+      sharedOp(): string {
+        return "mid-shared";
+      }
+    }
+
+    // Leaf-level entity class (three levels deep)
+    class LeafEntity extends MidEntity {
+      leafOp(): string {
+        return "from-leaf";
+      }
+    }
+
+    it("should find methods defined on the immediate class", async () => {
+      const entity = new MidEntity();
+      const { operation } = createMockOperation("midOp", undefined, { value: 0 });
+
+      const result = await entity.run(operation);
+
+      expect(result).toBe("from-mid");
+    });
+
+    it("should find methods defined on a base class", async () => {
+      const entity = new MidEntity();
+      const { operation } = createMockOperation("baseOp", undefined, { value: 0 });
+
+      const result = await entity.run(operation);
+
+      expect(result).toBe("from-base");
+    });
+
+    it("should use overridden methods from derived class", async () => {
+      const entity = new MidEntity();
+      const { operation } = createMockOperation("sharedOp", undefined, { value: 0 });
+
+      const result = await entity.run(operation);
+
+      // MidEntity overrides sharedOp, so findMethod finds it on MidEntity's prototype first
+      expect(result).toBe("mid-shared");
+    });
+
+    it("should find methods across three-level inheritance chain", async () => {
+      const entity = new LeafEntity();
+
+      // Method on LeafEntity
+      const { operation: op1 } = createMockOperation("leafOp", undefined, { value: 0 });
+      expect(await entity.run(op1)).toBe("from-leaf");
+
+      // Method on MidEntity
+      const { operation: op2 } = createMockOperation("midOp", undefined, { value: 0 });
+      expect(await entity.run(op2)).toBe("from-mid");
+
+      // Method on BaseEntity
+      const { operation: op3 } = createMockOperation("baseOp", undefined, { value: 0 });
+      expect(await entity.run(op3)).toBe("from-base");
+    });
+
+    it("should be case-insensitive for inherited methods", async () => {
+      const entity = new LeafEntity();
+      const { operation } = createMockOperation("BASEOP", undefined, { value: 0 });
+
+      const result = await entity.run(operation);
+
+      expect(result).toBe("from-base");
+    });
+
+    it("should throw for unknown operations on inherited entities", async () => {
+      const entity = new LeafEntity();
+      const { operation } = createMockOperation("nonExistent", undefined, { value: 0 });
+
+      await expect(entity.run(operation)).rejects.toThrow(
+        "No suitable method found for entity operation 'nonExistent'",
+      );
+    });
+  });
 });

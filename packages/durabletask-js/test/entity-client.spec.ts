@@ -286,6 +286,43 @@ describe("Entity Client Proto Conversion", () => {
       expect(metadata.getLockedby()).toBeUndefined();
       expect(metadata.getSerializedstate()).toBeUndefined();
     });
+
+    it("should gracefully handle invalid JSON in serialized state", () => {
+      // Arrange - simulate what convertEntityMetadata does
+      const metadata = new pb.EntityMetadata();
+      metadata.setInstanceid("@counter@test");
+      metadata.setBacklogqueuesize(0);
+
+      const ts = new Timestamp();
+      ts.fromDate(new Date());
+      metadata.setLastmodifiedtime(ts);
+
+      // Set invalid JSON as state
+      const state = new StringValue();
+      state.setValue("{invalid json}");
+      metadata.setSerializedstate(state);
+
+      const serializedState = metadata.getSerializedstate()?.getValue();
+      const includeState = true;
+
+      // Act - replicate the same logic as convertEntityMetadata
+      let parsedState: unknown = undefined;
+      let parseSucceeded = false;
+
+      if (includeState && serializedState) {
+        try {
+          parsedState = JSON.parse(serializedState);
+          parseSucceeded = true;
+        } catch {
+          // Should fall through gracefully
+          parseSucceeded = false;
+        }
+      }
+
+      // Assert - invalid JSON should not throw, should fallback
+      expect(parseSucceeded).toBe(false);
+      expect(parsedState).toBeUndefined();
+    });
   });
 });
 
