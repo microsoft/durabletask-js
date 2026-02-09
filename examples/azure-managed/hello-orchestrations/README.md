@@ -1,6 +1,6 @@
 # Hello Orchestrations
 
-Demonstrates the five fundamental orchestration patterns every Durable Task developer needs.
+Demonstrates four fundamental orchestration patterns every Durable Task developer needs.
 
 ## Features Covered
 
@@ -10,7 +10,6 @@ Demonstrates the five fundamental orchestration patterns every Durable Task deve
 | Fan-out/fan-in | `whenAll()` with parallel `callActivity()` |
 | Sub-orchestrations | `ctx.callSubOrchestrator()` |
 | Race pattern | `whenAny()` |
-| Deterministic GUID | `ctx.newGuid()` |
 
 ## Prerequisites
 
@@ -49,9 +48,6 @@ Result: {"result1":12,"result2":22}
 === 4. whenAny (Race) ===
 Result: {"winnerResult":5}
 
-=== 5. Deterministic GUID ===
-Result: {"guid1":"<uuid>","guid2":"<uuid>","areDifferent":true}
-
 === All orchestrations completed successfully! ===
 ```
 
@@ -65,3 +61,35 @@ npm run example -- ./examples/azure-managed/hello-orchestrations/index.ts 2>&1 |
 
 - **Connection refused**: Ensure the DTS emulator is running (`docker compose up -d` from the `examples/azure-managed` directory).
 - **Worker timeout**: The emulator may need a few seconds to start. Retry the command.
+
+## Running Against Azure Managed DTS (Cloud)
+
+To run this sample against a real [Azure Managed Durable Task Scheduler](https://learn.microsoft.com/azure/durable-task-scheduler/) instead of the local emulator:
+
+1. **Create a scheduler and task hub** (if you haven't already) — see the [parent README](../README.md#quick-start-azure-managed-dts--cloud) for `az durabletask` commands.
+
+2. **Configure `.env`** for your cloud endpoint:
+
+   ```bash
+   cd examples/azure-managed
+   cp .env.example .env
+   # Edit .env with your scheduler endpoint and task hub name
+   ```
+
+   Example `.env`:
+
+   ```env
+   DURABLE_TASK_SCHEDULER_CONNECTION_STRING=Endpoint=https://your-scheduler.eastus.durabletask.io;Authentication=DefaultAzure;TaskHub=your-taskhub
+   ```
+
+3. **Authenticate** with Azure:
+
+   ```bash
+   az login
+   ```
+
+4. **Run** (no Docker needed):
+
+   ```bash
+   npm run example -- ./examples/azure-managed/hello-orchestrations/index.ts
+   ```

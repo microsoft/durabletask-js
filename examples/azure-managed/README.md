@@ -6,7 +6,7 @@ Runnable samples demonstrating every major feature of the Durable Task JavaScrip
 
 | Sample | Scenario | Key Features | Emulator Required |
 |--------|----------|-------------|-------------------|
-| [hello-orchestrations](hello-orchestrations/) | Core patterns | Activity sequence, fan-out/fan-in, sub-orchestrations, `whenAny`, deterministic GUID | Yes |
+| [hello-orchestrations](hello-orchestrations/) | Core patterns | Activity sequence, fan-out/fan-in, sub-orchestrations, `whenAny` | Yes |
 | [retry-and-error-handling](retry-and-error-handling/) | Fault tolerance | `RetryPolicy`, `handleFailure`, `AsyncRetryHandler`, sub-orchestration retry, `raiseIfFailed()` | Yes |
 | [human-interaction](human-interaction/) | Event-driven workflows | External events, timers, `whenAny` race, `sendEvent`, custom status | Yes |
 | [lifecycle-management](lifecycle-management/) | Orchestration control | Terminate (recursive), suspend/resume, restart, continue-as-new, purge, tags | Yes |
@@ -16,7 +16,7 @@ Runnable samples demonstrating every major feature of the Durable Task JavaScrip
 | [index.ts](index.ts) | Azure-managed basics | Connection strings, `DefaultAzureCredential`, `createAzureManagedClient` | Yes |
 | [distributed-tracing.ts](distributed-tracing.ts) | OpenTelemetry tracing | `NodeSDK`, OTLP export, Jaeger, `DurableTaskAzureManagedClientBuilder` | Yes |
 
-### Quick Start
+### Quick Start (Local Emulator)
 
 ```bash
 npm install && npm run build                              # build SDK
@@ -25,6 +25,74 @@ cp .env.emulator .env                                      # configure
 cd ../..
 npm run example -- ./examples/azure-managed/hello-orchestrations/index.ts
 ```
+
+### Quick Start (Azure Managed DTS — Cloud)
+
+To run samples against a **real Azure Managed Durable Task Scheduler** instead of the local emulator:
+
+#### 1. Create a Durable Task Scheduler resource
+
+If you haven't already, create a Durable Task Scheduler and a Task Hub in Azure:
+
+```bash
+# Install the Durable Task Scheduler CLI extension
+az extension add --name durabletask
+
+# Create a scheduler
+az durabletask scheduler create \
+  --resource-group <your-rg> \
+  --name <your-scheduler-name> \
+  --location <region> \
+  --sku free
+
+# Create a task hub
+az durabletask taskhub create \
+  --resource-group <your-rg> \
+  --scheduler-name <your-scheduler-name> \
+  --name <your-taskhub-name>
+```
+
+#### 2. Assign yourself the "Durable Task Data Contributor" role
+
+```bash
+SCHEDULER_ID=$(az durabletask scheduler show \
+  --resource-group <your-rg> \
+  --name <your-scheduler-name> \
+  --query id -o tsv)
+
+az role assignment create \
+  --assignee $(az ad signed-in-user show --query id -o tsv) \
+  --role "Durable Task Data Contributor" \
+  --scope $SCHEDULER_ID
+```
+
+#### 3. Configure your `.env` file
+
+```bash
+cd examples/azure-managed
+cp .env.example .env
+```
+
+Edit `.env` with your scheduler's endpoint and task hub name:
+
+```env
+# Option A: Connection string (recommended)
+DURABLE_TASK_SCHEDULER_CONNECTION_STRING=Endpoint=https://<your-scheduler>.eastus.durabletask.io;Authentication=DefaultAzure;TaskHub=<your-taskhub>
+
+# Option B: Explicit parameters
+# AZURE_DTS_ENDPOINT=https://<your-scheduler>.eastus.durabletask.io
+# AZURE_DTS_TASKHUB=<your-taskhub>
+```
+
+#### 4. Authenticate and run
+
+```bash
+az login                      # authenticate with Azure
+cd ../..                      # back to repo root
+npm run example -- ./examples/azure-managed/hello-orchestrations/index.ts
+```
+
+> **Supported authentication types** in the connection string: `DefaultAzure`, `ManagedIdentity`, `WorkloadIdentity`, `Environment`, `AzureCli`, `AzurePowerShell`, `VisualStudioCode`, `InteractiveBrowser`.
 
 See each sample's README for details. See [Feature Coverage Map](#feature-coverage-map) below for full feature mapping.
 
@@ -53,7 +121,7 @@ done
 | `whenAll()` | hello-orchestrations, unit-testing |
 | `whenAny()` | hello-orchestrations, human-interaction |
 | `ctx.callSubOrchestrator()` | hello-orchestrations, retry-and-error-handling, lifecycle-management |
-| `ctx.newGuid()` | hello-orchestrations |
+
 | `ctx.waitForExternalEvent()` | human-interaction, unit-testing |
 | `client.raiseOrchestrationEvent()` | human-interaction, unit-testing |
 | `ctx.createTimer()` | human-interaction, query-and-history, unit-testing |

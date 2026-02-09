@@ -7,7 +7,6 @@
 //   2. Fan-out/fan-in — run activities in parallel, aggregate results
 //   3. Sub-orchestrations — compose orchestrators hierarchically
 //   4. whenAny — race multiple tasks, use winner's result
-//   5. Deterministic GUID — generate replay-safe unique IDs
 
 import * as dotenv from "dotenv";
 import * as path from "path";
@@ -39,11 +38,6 @@ const plusOne = async (_ctx: ActivityContext, input: number): Promise<number> =>
 const processItem = async (_ctx: ActivityContext, item: string): Promise<number> => {
   console.log(`  [processItem] Processing "${item}"`);
   return item.length;
-};
-
-/** Return a greeting string for the given name. */
-const greet = async (_ctx: ActivityContext, name: string): Promise<string> => {
-  return `Hello, ${name}!`;
 };
 
 /** Child orchestration: adds two to the input via two plusOne activity calls. */
@@ -102,17 +96,6 @@ const raceOrchestrator: TOrchestrator = async function* (ctx: OrchestrationConte
   return { winnerResult: winner.getResult() };
 };
 
-/** 5. Deterministic GUID — generates replay-safe unique IDs. */
-const guidOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
-  // Call an activity so the generator has at least one yield point
-  const label: string = yield ctx.callActivity(greet, "GUID demo");
-  const guid1 = ctx.newGuid();
-  const guid2 = ctx.newGuid();
-
-  // These GUIDs are deterministic: same values across replays
-  return { label, guid1, guid2, areDifferent: guid1 !== guid2 };
-};
-
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -136,10 +119,8 @@ const guidOrchestrator: TOrchestrator = async function* (ctx: OrchestrationConte
     .addOrchestrator(parentOrchestrator)
     .addOrchestrator(doubleOrchestrator)
     .addOrchestrator(raceOrchestrator)
-    .addOrchestrator(guidOrchestrator)
     .addActivity(plusOne)
     .addActivity(processItem)
-    .addActivity(greet)
     .build();
 
   try {
@@ -173,13 +154,6 @@ const guidOrchestrator: TOrchestrator = async function* (ctx: OrchestrationConte
     const raceState = await client.waitForOrchestrationCompletion(raceId, true, 30);
     console.log(`Result: ${raceState?.serializedOutput}`);
     // Expected: {"winnerResult":<length of whichever completed first>}
-
-    // --- 5. Deterministic GUID ---
-    console.log("\n=== 5. Deterministic GUID ===");
-    const guidId = await client.scheduleNewOrchestration(guidOrchestrator);
-    const guidState = await client.waitForOrchestrationCompletion(guidId, true, 30);
-    console.log(`Result: ${guidState?.serializedOutput}`);
-    // Expected: {"guid1":"<uuid>","guid2":"<uuid>","areDifferent":true}
 
     console.log("\n=== All orchestrations completed successfully! ===");
   } catch (error) {

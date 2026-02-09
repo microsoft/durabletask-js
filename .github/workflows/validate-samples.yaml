@@ -212,9 +212,9 @@ jobs:
           echo "No-emulator result: ${{ needs.samples-no-emulator.result }}"
           echo "Emulator result: ${{ needs.samples-with-emulator.result }}"
 
-          if [[ "${{ needs.samples-no-emulator.result }}" == "failure" ]] || \
-             [[ "${{ needs.samples-with-emulator.result }}" == "failure" ]]; then
-            echo "❌ Some samples failed!"
+          if [[ ! "${{ needs.samples-no-emulator.result }}" =~ ^(success|skipped)$ ]] || \
+             [[ ! "${{ needs.samples-with-emulator.result }}" =~ ^(success|skipped)$ ]]; then
+            echo "❌ Some samples failed or were cancelled!"
             exit 1
           fi
 
