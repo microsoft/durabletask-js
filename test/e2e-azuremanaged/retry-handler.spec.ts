@@ -316,7 +316,7 @@ describe("Retry Handler E2E Tests", () => {
       };
 
       // Retry handler returning delay in ms (fixed 500ms delay)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const retryHandler: any = async (ctx: RetryContext): Promise<boolean | number> => {
         if (ctx.lastAttemptNumber >= 5) {
           return false;
@@ -366,7 +366,7 @@ describe("Retry Handler E2E Tests", () => {
       };
 
       // Retry handler implementing manual exponential backoff: 200ms, 400ms, 800ms
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const retryHandler: any = async (ctx: RetryContext): Promise<boolean | number> => {
         if (ctx.lastAttemptNumber >= 5) {
           return false;
@@ -417,7 +417,7 @@ describe("Retry Handler E2E Tests", () => {
       };
 
       // Retry handler returning fixed delay
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const retryHandler: any = async (ctx: RetryContext): Promise<boolean | number> => {
         if (ctx.lastAttemptNumber >= 5) {
           return false;
@@ -463,7 +463,7 @@ describe("Retry Handler E2E Tests", () => {
       };
 
       // Handler: returns delay for TransientError, false for FatalError
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const retryHandler: any = async (ctx: RetryContext): Promise<boolean | number> => {
         if (ctx.lastFailure.errorType === "TransientError") {
           return 200; // retry after 200ms
@@ -502,7 +502,7 @@ describe("Retry Handler E2E Tests", () => {
       };
 
       // Sync handler returning a delay
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const syncHandler: any = (ctx: RetryContext): boolean | number => {
         if (ctx.lastAttemptNumber >= 5) {
           return false;

@@ -1,0 +1,5 @@
+{
+  "name": "lifecycle-management",
+  "description": "Terminate, suspend/resume, restart, continue-as-new, purge, and orchestration tags",
+  "requiresEmulator": true
+}

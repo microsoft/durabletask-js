@@ -1,0 +1,5 @@
+{
+  "name": "retry-and-error-handling",
+  "description": "Retry policies, custom retry handlers, error handling, and failure predicates",
+  "requiresEmulator": true
+}

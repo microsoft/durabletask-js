@@ -1,3 +1,94 @@
+# Azure Managed Durable Task Scheduler — Samples
+
+Runnable samples demonstrating every major feature of the Durable Task JavaScript SDK with Azure Managed DTS.
+
+## Sample Index
+
+| Sample | Scenario | Key Features | Emulator Required |
+|--------|----------|-------------|-------------------|
+| [hello-orchestrations](hello-orchestrations/) | Core patterns | Activity sequence, fan-out/fan-in, sub-orchestrations, `whenAny`, deterministic GUID | Yes |
+| [retry-and-error-handling](retry-and-error-handling/) | Fault tolerance | `RetryPolicy`, `handleFailure`, `AsyncRetryHandler`, sub-orchestration retry, `raiseIfFailed()` | Yes |
+| [human-interaction](human-interaction/) | Event-driven workflows | External events, timers, `whenAny` race, `sendEvent`, custom status | Yes |
+| [lifecycle-management](lifecycle-management/) | Orchestration control | Terminate (recursive), suspend/resume, restart, continue-as-new, purge, tags | Yes |
+| [query-and-history](query-and-history/) | Monitoring & debugging | `getAllInstances`, pagination, `listInstanceIds`, `getOrchestrationHistory`, typed events | Yes |
+| [versioning](versioning/) | Safe deployments | Version match strategies, failure strategies, `ctx.version`, `ctx.compareVersionTo()` | Yes |
+| [unit-testing](unit-testing/) | Testing without infra | `InMemoryOrchestrationBackend`, `TestOrchestrationClient`, `TestOrchestrationWorker`, `ReplaySafeLogger` | **No** |
+| [index.ts](index.ts) | Azure-managed basics | Connection strings, `DefaultAzureCredential`, `createAzureManagedClient` | Yes |
+| [distributed-tracing.ts](distributed-tracing.ts) | OpenTelemetry tracing | `NodeSDK`, OTLP export, Jaeger, `DurableTaskAzureManagedClientBuilder` | Yes |
+
+### Quick Start
+
+```bash
+npm install && npm run build                              # build SDK
+cd examples/azure-managed && docker compose up -d          # start emulator
+cp .env.emulator .env                                      # configure
+cd ../..
+npm run example -- ./examples/azure-managed/hello-orchestrations/index.ts
+```
+
+See each sample's README for details. See [Feature Coverage Map](#feature-coverage-map) below for full feature mapping.
+
+### CI Validation
+
+Samples are validated automatically by [`.github/workflows/validate-samples.yaml`](../../.github/workflows/validate-samples.yaml). Any subfolder with a `sample.json` is auto-discovered and tested on every PR.
+
+To add a new sample: create a subfolder with `sample.json`, `index.ts`, and `README.md`. CI picks it up automatically.
+
+### Running All Samples Locally
+
+```bash
+for dir in examples/azure-managed/*/; do
+  if [ -f "$dir/sample.json" ] && [ -f "$dir/index.ts" ]; then
+    echo "--- Running $(basename $dir) ---"
+    npx ts-node --swc "$dir/index.ts"
+  fi
+done
+```
+
+### Feature Coverage Map
+
+| Feature | Sample(s) |
+|---------|-----------|
+| `ctx.callActivity()` | hello-orchestrations, retry-and-error-handling |
+| `whenAll()` | hello-orchestrations, unit-testing |
+| `whenAny()` | hello-orchestrations, human-interaction |
+| `ctx.callSubOrchestrator()` | hello-orchestrations, retry-and-error-handling, lifecycle-management |
+| `ctx.newGuid()` | hello-orchestrations |
+| `ctx.waitForExternalEvent()` | human-interaction, unit-testing |
+| `client.raiseOrchestrationEvent()` | human-interaction, unit-testing |
+| `ctx.createTimer()` | human-interaction, query-and-history, unit-testing |
+| `ctx.sendEvent()` | human-interaction |
+| `ctx.setCustomStatus()` | human-interaction |
+| `RetryPolicy` | retry-and-error-handling |
+| `handleFailure` predicate | retry-and-error-handling |
+| `AsyncRetryHandler` | retry-and-error-handling |
+| `state.raiseIfFailed()` | retry-and-error-handling |
+| `terminateOrchestration()` | lifecycle-management, unit-testing |
+| `terminateOptions()` (recursive) | lifecycle-management |
+| `suspendOrchestration()` / `resumeOrchestration()` | lifecycle-management, unit-testing |
+| `continueAsNew()` | lifecycle-management, unit-testing |
+| `restartOrchestration()` | lifecycle-management |
+| `purgeOrchestration()` | lifecycle-management |
+| Orchestration tags | lifecycle-management |
+| `getAllInstances()` / pagination | query-and-history |
+| `listInstanceIds()` | query-and-history |
+| `getOrchestrationHistory()` | query-and-history |
+| Typed `HistoryEvent` | query-and-history |
+| `VersionMatchStrategy` | versioning |
+| `VersionFailureStrategy` | versioning |
+| `ctx.version` / `ctx.compareVersionTo()` | versioning |
+| `InMemoryOrchestrationBackend` | unit-testing |
+| `TestOrchestrationClient/Worker` | unit-testing |
+| `ReplaySafeLogger` | unit-testing |
+| `NoOpLogger` | unit-testing |
+| Connection strings | index.ts, all samples |
+| `DefaultAzureCredential` | index.ts |
+| `createAzureLogger()` | index.ts |
+| Distributed tracing (OTel) | distributed-tracing.ts |
+| `ConsoleLogger` | all samples |
+
+---
+
 # Distributed Tracing with Azure Managed Durable Task Scheduler
 
 This example demonstrates **OpenTelemetry distributed tracing** with the Durable Task JavaScript SDK and Azure Managed Durable Task Scheduler (DTS). Traces are exported to [Jaeger](https://www.jaegertracing.io/) so you can visualize the full orchestration lifecycle as connected spans.

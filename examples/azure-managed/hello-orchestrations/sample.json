@@ -1,0 +1,5 @@
+{
+  "name": "hello-orchestrations",
+  "description": "Core orchestration patterns: activity sequences, fan-out/fan-in, sub-orchestrations, whenAny, and deterministic GUIDs",
+  "requiresEmulator": true
+}

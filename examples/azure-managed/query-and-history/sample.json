@@ -1,0 +1,5 @@
+{
+  "name": "query-and-history",
+  "description": "Query orchestration instances, pagination, filters, and history event inspection",
+  "requiresEmulator": true
+}

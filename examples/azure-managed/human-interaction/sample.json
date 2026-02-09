@@ -1,0 +1,5 @@
+{
+  "name": "human-interaction",
+  "description": "External events, timers, sendEvent (orchestration-to-orchestration), custom status, and approval patterns",
+  "requiresEmulator": true
+}

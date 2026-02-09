@@ -1,0 +1,5 @@
+{
+  "name": "unit-testing",
+  "description": "In-memory testing framework: TestOrchestrationClient, TestOrchestrationWorker, ReplaySafeLogger",
+  "requiresEmulator": false
+}

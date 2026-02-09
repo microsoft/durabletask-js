@@ -1,0 +1,5 @@
+{
+  "name": "versioning",
+  "description": "Orchestration versioning: match strategies, failure strategies, version comparison, and default version",
+  "requiresEmulator": true
+}
