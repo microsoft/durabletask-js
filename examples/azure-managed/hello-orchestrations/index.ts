@@ -18,10 +18,13 @@ import {
   DurableTaskAzureManagedWorkerBuilder,
   ConsoleLogger,
 } from "@microsoft/durabletask-js-azuremanaged";
-import { ActivityContext } from "@microsoft/durabletask-js/dist/task/context/activity-context";
-import { OrchestrationContext } from "@microsoft/durabletask-js/dist/task/context/orchestration-context";
-import { TOrchestrator } from "@microsoft/durabletask-js/dist/types/orchestrator.type";
-import { whenAll, whenAny } from "@microsoft/durabletask-js/dist/task";
+import {
+  ActivityContext,
+  OrchestrationContext,
+  TOrchestrator,
+  whenAll,
+  whenAny,
+} from "@microsoft/durabletask-js";
 
 // ---------------------------------------------------------------------------
 // Activities
