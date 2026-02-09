@@ -41,10 +41,10 @@ const processItem = async (_ctx: ActivityContext, item: string): Promise<number>
   return item.length;
 };
 
-/** Child orchestration: doubles each number via an activity. */
+/** Child orchestration: adds two to the input via two plusOne activity calls. */
 const doubleOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, value: number): any {
   const doubled: number = yield ctx.callActivity(plusOne, value);
-  // Call plusOne again so we get value + 2 (close to doubling for small ints)
+  // Call plusOne again so we get value + 2
   const result: number = yield ctx.callActivity(plusOne, doubled);
   return result;
 };
