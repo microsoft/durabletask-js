@@ -29,6 +29,9 @@ const CATEGORY_ACTIVITIES = "Microsoft.DurableTask.Worker.Activities";
 /** Category for general worker logs. */
 const CATEGORY_WORKER = "Microsoft.DurableTask.Worker";
 
+/** Category for entity-related logs. */
+const CATEGORY_ENTITIES = "Microsoft.DurableTask.Worker.Entities";
+
 // ── Event IDs (matching .NET) ────────────────────────────────────────────────
 
 /** @internal */ export const EVENT_RETRYING_TASK = 55;
@@ -73,6 +76,16 @@ const CATEGORY_WORKER = "Microsoft.DurableTask.Worker";
 /** @internal */ export const EVENT_ACTIVITY_EXECUTION_ERROR = 734;
 /** @internal */ export const EVENT_ACTIVITY_RESPONSE_ERROR = 735;
 /** @internal */ export const EVENT_STREAM_ERROR_INFO = 736;
+
+// ── Entity-specific Event IDs (800+ range) ──────────────────────────────────
+
+/** @internal */ export const EVENT_ENTITY_REQUEST_RECEIVED = 800;
+/** @internal */ export const EVENT_ENTITY_INSTANCE_ID_PARSE_ERROR = 801;
+/** @internal */ export const EVENT_ENTITY_NOT_FOUND = 802;
+/** @internal */ export const EVENT_ENTITY_EXECUTION_FAILED = 803;
+/** @internal */ export const EVENT_ENTITY_RESPONSE_DELIVERY_FAILED = 804;
+/** @internal */ export const EVENT_ENTITY_UNKNOWN_OPERATION_EVENT = 805;
+/** @internal */ export const EVENT_ENTITY_EVENT_IGNORED = 806;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Orchestration Lifecycle Logs (Event IDs 600–602, matching .NET)
@@ -463,4 +476,76 @@ export function streamErrorInfo(logger: Logger, error: unknown): void {
     category: CATEGORY_WORKER,
     properties: { error: msg },
   }, `Stream error: ${msg}`);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Entity Lifecycle Logs (Event IDs 740+)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export function entityRequestReceived(logger: Logger, instanceId: string, requestType: string): void {
+  emitLog(logger, "info", {
+    eventId: EVENT_ENTITY_REQUEST_RECEIVED,
+    category: CATEGORY_ENTITIES,
+    properties: { instanceId, requestType },
+  }, `Received "${requestType}" work item for entity '${instanceId}'`);
+}
+
+export function entityInstanceIdParseError(logger: Logger, instanceId: string, error: unknown): void {
+  const msg = toErrorMessage(error);
+  emitLog(logger, "error", {
+    eventId: EVENT_ENTITY_INSTANCE_ID_PARSE_ERROR,
+    category: CATEGORY_ENTITIES,
+    properties: { instanceId, error: msg },
+  }, `Failed to parse entity instance id '${instanceId}': ${msg}`);
+}
+
+export function entityNotFound(logger: Logger, entityName: string): void {
+  emitLog(logger, "warn", {
+    eventId: EVENT_ENTITY_NOT_FOUND,
+    category: CATEGORY_ENTITIES,
+    properties: { entityName },
+  }, `No entity named '${entityName}' was found.`);
+}
+
+export function entityExecutionFailed(logger: Logger, entityName: string, error: unknown): void {
+  const msg = toErrorMessage(error);
+  emitLog(logger, "error", {
+    eventId: EVENT_ENTITY_EXECUTION_FAILED,
+    category: CATEGORY_ENTITIES,
+    properties: {
+      entityName,
+      error: msg,
+      ...(error instanceof Error && error.stack ? { stack: error.stack } : {}),
+    },
+  }, `An error occurred while trying to execute entity '${entityName}': ${msg}`);
+}
+
+export function entityResponseDeliveryFailed(logger: Logger, error: unknown): void {
+  const msg = toErrorMessage(error);
+  emitLog(logger, "error", {
+    eventId: EVENT_ENTITY_RESPONSE_DELIVERY_FAILED,
+    category: CATEGORY_ENTITIES,
+    properties: { error: msg },
+  }, `Failed to deliver entity response to sidecar: ${msg}`);
+}
+
+export function entityUnknownOperationEventType(logger: Logger, eventType: string): void {
+  emitLog(logger, "info", {
+    eventId: EVENT_ENTITY_UNKNOWN_OPERATION_EVENT,
+    category: CATEGORY_ENTITIES,
+    properties: { eventType },
+  }, `Skipping unknown entity operation event type: ${eventType}`);
+}
+
+export function entityEventIgnored(
+  logger: Logger,
+  instanceId: string,
+  eventType: string,
+  reason: string,
+): void {
+  emitLog(logger, "warn", {
+    eventId: EVENT_ENTITY_EVENT_IGNORED,
+    category: CATEGORY_ENTITIES,
+    properties: { instanceId, eventType, reason },
+  }, `${instanceId}: Ignoring ${eventType}: ${reason}`);
 }

@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 import * as grpc from "@grpc/grpc-js";
-import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
+import { StringValue, Int32Value } from "google-protobuf/google/protobuf/wrappers_pb";
 import { Timestamp } from "google-protobuf/google/protobuf/timestamp_pb";
 import * as pb from "../proto/orchestrator_service_pb";
 import * as stubs from "../proto/orchestrator_service_grpc_pb";
@@ -29,10 +29,20 @@ import { Logger, ConsoleLogger } from "../types/logger.type";
 import { StartOrchestrationOptions } from "../task/options";
 import { mapToRecord } from "../utils/tags.util";
 import { populateTagsMap } from "../utils/pb-helper.util";
+import { EntityInstanceId } from "../entities/entity-instance-id";
+import { EntityMetadata, createEntityMetadata, createEntityMetadataWithoutState } from "../entities/entity-metadata";
+import { EntityQuery } from "../entities/entity-query";
+import { SignalEntityOptions } from "../entities/signal-entity-options";
+import {
+  CleanEntityStorageRequest,
+  CleanEntityStorageResult,
+  defaultCleanEntityStorageRequest,
+} from "../entities/clean-entity-storage";
 import * as ClientLogs from "./logs";
 import {
   startSpanForNewOrchestration,
   startSpanForEventRaisedFromClient,
+  startSpanForSignalEntityFromClient,
   setSpanError,
   setSpanOk,
   endSpan,
@@ -962,6 +972,255 @@ export class TaskHubGrpcClient {
         }
       });
     });
+  }
+
+  // ==================== Entity Methods ====================
+
+  /**
+   * Signals an entity to perform an operation.
+   *
+   * This method sends a one-way message to an entity, triggering the specified operation.
+   * The method returns as soon as the message has been reliably enqueued; it does not
+   * wait for the operation to be processed by the receiving entity.
+   *
+   * @param id - The ID of the entity to signal.
+   * @param operationName - The name of the operation to invoke.
+   * @param input - Optional input data for the operation.
+   * @param options - Optional signal options (e.g., scheduled time).
+   */
+  async signalEntity(
+    id: EntityInstanceId,
+    operationName: string,
+    input?: unknown,
+    options?: SignalEntityOptions,
+  ): Promise<void> {
+    const req = new pb.SignalEntityRequest();
+    req.setInstanceid(id.toString());
+    req.setRequestid(randomUUID());
+    req.setName(operationName);
+
+    if (input !== undefined) {
+      const inputValue = new StringValue();
+      inputValue.setValue(JSON.stringify(input));
+      req.setInput(inputValue);
+    }
+
+    if (options?.signalTime) {
+      const ts = new Timestamp();
+      ts.fromDate(options.signalTime);
+      req.setScheduledtime(ts);
+    }
+
+    const requestTime = new Timestamp();
+    requestTime.fromDate(new Date());
+    req.setRequesttime(requestTime);
+
+    // Create a tracing span for the entity signal (if OTEL is available)
+    const span = startSpanForSignalEntityFromClient(id.toString(), operationName);
+
+    ClientLogs.signalingEntity(this._logger, id.toString(), operationName);
+
+    try {
+      await callWithMetadata<pb.SignalEntityRequest, pb.SignalEntityResponse>(
+        this._stub.signalEntity.bind(this._stub),
+        req,
+        this._metadataGenerator,
+      );
+
+      setSpanOk(span);
+    } catch (e: unknown) {
+      setSpanError(span, e);
+      throw e;
+    } finally {
+      endSpan(span);
+    }
+  }
+
+  /**
+   * Gets the metadata for an entity, optionally including its state.
+   *
+   * @param id - The ID of the entity to get.
+   * @param includeState - Whether to include the entity's state in the response. Defaults to true.
+   * @returns The entity metadata, or undefined if the entity does not exist.
+   */
+  async getEntity<T = unknown>(
+    id: EntityInstanceId,
+    includeState: boolean = true,
+  ): Promise<EntityMetadata<T> | undefined> {
+    const req = new pb.GetEntityRequest();
+    req.setInstanceid(id.toString());
+    req.setIncludestate(includeState);
+
+    ClientLogs.gettingEntity(this._logger, id.toString());
+
+    const res = await callWithMetadata<pb.GetEntityRequest, pb.GetEntityResponse>(
+      this._stub.getEntity.bind(this._stub),
+      req,
+      this._metadataGenerator,
+    );
+
+    if (!res.getExists()) {
+      return undefined;
+    }
+
+    const protoMetadata = res.getEntity();
+    if (!protoMetadata) {
+      return undefined;
+    }
+
+    return this.convertEntityMetadata<T>(protoMetadata, includeState);
+  }
+
+  /**
+   * Queries for entities matching the specified filter criteria.
+   *
+   * @param query - Optional query filter. If not provided, returns all entities.
+   * @returns An AsyncPageable that can be iterated by items or by pages.
+   *
+   * @remarks
+   * This method handles pagination automatically when iterating by items.
+   * Use `.byPage()` to iterate page by page for more control.
+   *
+   * @example
+   * // Iterate by items
+   * for await (const entity of client.getEntities(query)) {
+   *   console.log(entity.id);
+   * }
+   *
+   * @example
+   * // Iterate by pages
+   * for await (const page of client.getEntities(query).byPage()) {
+   *   console.log(`Got ${page.values.length} items`);
+   *   for (const entity of page.values) {
+   *     console.log(entity.id);
+   *   }
+   * }
+   */
+  getEntities<T = unknown>(query?: EntityQuery): AsyncPageable<EntityMetadata<T>> {
+    const includeState = query?.includeState ?? true;
+
+    return createAsyncPageable(async (continuationToken?: string): Promise<Page<EntityMetadata<T>>> => {
+      const req = new pb.QueryEntitiesRequest();
+      const protoQuery = new pb.EntityQuery();
+
+      if (query?.instanceIdStartsWith) {
+        const prefix = new StringValue();
+        prefix.setValue(query.instanceIdStartsWith);
+        protoQuery.setInstanceidstartswith(prefix);
+      }
+
+      if (query?.lastModifiedFrom) {
+        const ts = new Timestamp();
+        ts.fromDate(query.lastModifiedFrom);
+        protoQuery.setLastmodifiedfrom(ts);
+      }
+
+      if (query?.lastModifiedTo) {
+        const ts = new Timestamp();
+        ts.fromDate(query.lastModifiedTo);
+        protoQuery.setLastmodifiedto(ts);
+      }
+
+      protoQuery.setIncludestate(includeState);
+      protoQuery.setIncludetransient(query?.includeTransient ?? false);
+
+      if (query?.pageSize) {
+        const pageSize = new Int32Value();
+        pageSize.setValue(query.pageSize);
+        protoQuery.setPagesize(pageSize);
+      }
+
+      // Use provided continuation token or fall back to query's initial token
+      const tokenToUse = continuationToken ?? query?.continuationToken;
+      if (tokenToUse) {
+        const token = new StringValue();
+        token.setValue(tokenToUse);
+        protoQuery.setContinuationtoken(token);
+      }
+
+      req.setQuery(protoQuery);
+
+      const res = await callWithMetadata<pb.QueryEntitiesRequest, pb.QueryEntitiesResponse>(
+        this._stub.queryEntities.bind(this._stub),
+        req,
+        this._metadataGenerator,
+      );
+
+      const entities = res.getEntitiesList();
+      const values = entities.map((protoMetadata) => this.convertEntityMetadata<T>(protoMetadata, includeState));
+
+      return new Page(values, res.getContinuationtoken()?.getValue());
+    });
+  }
+
+  /**
+   * Cleans entity storage by removing empty entities and/or releasing orphaned locks.
+   *
+   * @param request - The clean request specifying what to clean. Defaults to removing empty entities and releasing orphaned locks.
+   * @param continueUntilComplete - Whether to continue until all cleaning is done, or return after one batch.
+   * @returns The result of the clean operation.
+   */
+  async cleanEntityStorage(
+    request?: CleanEntityStorageRequest,
+    continueUntilComplete: boolean = true,
+  ): Promise<CleanEntityStorageResult> {
+    const req = request ?? defaultCleanEntityStorageRequest();
+    let continuationToken: string | undefined = req.continuationToken;
+    let emptyEntitiesRemoved = 0;
+    let orphanedLocksReleased = 0;
+
+    do {
+      const protoReq = new pb.CleanEntityStorageRequest();
+      protoReq.setRemoveemptyentities(req.removeEmptyEntities ?? true);
+      protoReq.setReleaseorphanedlocks(req.releaseOrphanedLocks ?? true);
+
+      if (continuationToken) {
+        const token = new StringValue();
+        token.setValue(continuationToken);
+        protoReq.setContinuationtoken(token);
+      }
+
+      const res = await callWithMetadata<pb.CleanEntityStorageRequest, pb.CleanEntityStorageResponse>(
+        this._stub.cleanEntityStorage.bind(this._stub),
+        protoReq,
+        this._metadataGenerator,
+      );
+
+      continuationToken = res.getContinuationtoken()?.getValue();
+      emptyEntitiesRemoved += res.getEmptyentitiesremoved();
+      orphanedLocksReleased += res.getOrphanedlocksreleased();
+    } while (continueUntilComplete && continuationToken);
+
+    return {
+      continuationToken,
+      emptyEntitiesRemoved,
+      orphanedLocksReleased,
+    };
+  }
+
+  /**
+   * Converts a protobuf EntityMetadata to a typed EntityMetadata.
+   */
+  private convertEntityMetadata<T>(protoMetadata: pb.EntityMetadata, includeState: boolean): EntityMetadata<T> {
+    const instanceIdStr = protoMetadata.getInstanceid();
+    const entityId = EntityInstanceId.fromString(instanceIdStr);
+
+    const lastModifiedTime = protoMetadata.getLastmodifiedtime()?.toDate() ?? new Date();
+    const backlogQueueSize = protoMetadata.getBacklogqueuesize();
+    const lockedBy = protoMetadata.getLockedby()?.getValue();
+    const serializedState = protoMetadata.getSerializedstate()?.getValue();
+
+    if (includeState && serializedState) {
+      try {
+        const state = JSON.parse(serializedState) as T;
+        return createEntityMetadata<T>(entityId, lastModifiedTime, backlogQueueSize, lockedBy, state);
+      } catch {
+        // Return metadata without state if parsing fails
+        return createEntityMetadataWithoutState(entityId, lastModifiedTime, backlogQueueSize, lockedBy) as EntityMetadata<T>;
+      }
+    } else {
+      return createEntityMetadataWithoutState(entityId, lastModifiedTime, backlogQueueSize, lockedBy) as EntityMetadata<T>;
+    }
   }
 
   /**

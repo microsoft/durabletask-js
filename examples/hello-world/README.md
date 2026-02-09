@@ -23,10 +23,10 @@ All the examples assume that you have a Durable Task-compatible sidecar running 
 
 ## Running the examples
 
-With one of the sidecars running, you can simply execute any of the examples in this directory using `python3`:
+With one of the sidecars running, you can simply execute any of the examples in this directory using `ts-node`:
 
 ```sh
-npm run example ./examples/activity-sequence.ts
+npm run example ./examples/hello-world/activity-sequence.ts
 ```
 
 In some cases, the sample may require command-line parameters or user inputs. In these cases, the sample will print out instructions on how to proceed.

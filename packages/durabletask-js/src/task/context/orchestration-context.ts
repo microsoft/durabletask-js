@@ -8,6 +8,7 @@ import { Logger } from "../../types/logger.type";
 import { ReplaySafeLogger } from "../../types/replay-safe-logger";
 import { TaskOptions, SubOrchestrationOptions } from "../options";
 import { Task } from "../task";
+import { OrchestrationEntityFeature } from "../../entities/orchestration-entity-feature";
 import { compareVersions } from "../../utils/versioning.util";
 
 export abstract class OrchestrationContext {
@@ -51,6 +52,17 @@ export abstract class OrchestrationContext {
    * @returns {boolean} `true` if the orchestrator function is replaying from history; otherwise, `false`.
    */
   abstract get isReplaying(): boolean;
+
+  /**
+   * Gets the entity feature for interacting with durable entities.
+   *
+   * @returns {OrchestrationEntityFeature} The entity feature for signaling entities.
+   *
+   * @remarks
+   * Use this property to signal entities from within an orchestration.
+   * Signaling is a one-way (fire-and-forget) operation.
+   */
+  abstract get entities(): OrchestrationEntityFeature;
 
   /**
    * Gets the version of the current orchestration instance.

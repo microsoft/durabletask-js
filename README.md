@@ -93,7 +93,34 @@ const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, 
 As an aside, you'll also notice that the example orchestration above works with custom business objects. Support for custom business objects includes support for custom classes, custom data classes, and named tuples. Serialization and deserialization of these objects is handled automatically by the SDK.
 
 You can find the full sample [here](./examples/human_interaction.ts).
+### Durable Entities (Stateful Actors)
 
+Durable entities provide a way to manage small pieces of state with a simple object-oriented programming model:
+
+```typescript
+import { TaskEntity, EntityInstanceId } from "durabletask-js";
+
+// Define an entity by extending TaskEntity
+class CounterEntity extends TaskEntity<{ value: number }> {
+  add(amount: number): number {
+    this.state.value += amount;
+    return this.state.value;
+  }
+
+  protected initializeState() {
+    return { value: 0 };
+  }
+}
+
+// From an orchestration, call the entity
+const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+  const entityId = new EntityInstanceId("Counter", "myCounter");
+  const value: number = yield* ctx.entities.callEntity(entityId, "add", 5);
+  return value;
+};
+```
+
+You can find full entity samples [here](./examples/hello-world/entity-counter.ts) and [here](./examples/hello-world/entity-orchestration.ts).
 ## Feature overview
 
 The following features are currently supported:
@@ -122,6 +149,10 @@ Orchestrations can wait for external events using the `wait_for_external_event` 
 
 Orchestrations can be continued as new using the `continue_as_new` API. This API allows an orchestration to restart itself from scratch, optionally with a new input.
 
+### Durable Entities
+
+Durable entities are stateful objects that can be accessed from orchestrations or directly from clients. They support operations that can read/modify state, and multiple entities can be locked together for atomic cross-entity transactions. See the detailed section below for more information.
+
 ### Suspend, resume, and terminate
 
 Orchestrations can be suspended using the `suspend_orchestration` client API and will remain suspended until resumed using the `resume_orchestration` client API. A suspended orchestration will stop processing new events, but will continue to buffer any that happen to arrive until resumed, ensuring that no data is lost. An orchestration can also be terminated using the `terminate_orchestration` client API. Terminated orchestrations will stop processing new events and will discard any buffered events.
@@ -129,6 +160,120 @@ Orchestrations can be suspended using the `suspend_orchestration` client API and
 ### Retry policies (TODO)
 
 Orchestrations can specify retry policies for activities and sub-orchestrations. These policies control how many times and how frequently an activity or sub-orchestration will be retried in the event of a transient error.
+
+### Durable Entities
+
+Durable entities are stateful objects that can be accessed and manipulated from orchestrations or directly from clients. Entities provide a way to manage small pieces of state that need to be accessed and updated reliably.
+
+#### Defining an Entity
+
+Entities are defined by extending the `TaskEntity` class:
+
+```typescript
+import { TaskEntity } from "durabletask-js";
+
+interface CounterState {
+  value: number;
+}
+
+class CounterEntity extends TaskEntity<CounterState> {
+  // Operations are just methods on the class
+  add(amount: number): number {
+    this.state.value += amount;
+    return this.state.value;
+  }
+
+  get(): number {
+    return this.state.value;
+  }
+
+  reset(): void {
+    this.state.value = 0;
+  }
+
+  // Required: Initialize the entity state
+  protected initializeState(): CounterState {
+    return { value: 0 };
+  }
+}
+
+// Register with the worker
+worker.addEntity("Counter", () => new CounterEntity());
+```
+
+#### Accessing Entities from a Client
+
+Entities can be signaled (fire-and-forget) or queried from a client:
+
+```typescript
+import { TaskHubGrpcClient, EntityInstanceId } from "durabletask-js";
+
+const client = new TaskHubGrpcClient("localhost:4001");
+const entityId = new EntityInstanceId("Counter", "myCounter");
+
+// Signal an operation (fire-and-forget)
+await client.signalEntity(entityId, "add", 5);
+
+// Get the entity state
+const response = await client.getEntity<CounterState>(entityId);
+console.log(`Current value: ${response.state?.value}`);
+```
+
+#### Calling Entities from Orchestrations
+
+Orchestrations can call entities and wait for results:
+
+```typescript
+const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+  const entityId = new EntityInstanceId("Counter", "myCounter");
+
+  // Call entity and wait for result
+  const currentValue: number = yield* ctx.entities.callEntity(entityId, "get");
+
+  // Signal entity (fire-and-forget)
+  ctx.entities.signalEntity(entityId, "add", 10);
+
+  return currentValue;
+};
+```
+
+#### Entity Locking (Critical Sections)
+
+Multiple entities can be locked together for atomic operations:
+
+```typescript
+const transferOrchestration: TOrchestrator = async function* (
+  ctx: OrchestrationContext,
+  input: { from: string; to: string; amount: number }
+): any {
+  const fromEntity = new EntityInstanceId("Account", input.from);
+  const toEntity = new EntityInstanceId("Account", input.to);
+
+  // Lock both entities atomically (sorted to prevent deadlocks)
+  const lock = yield* ctx.entities.lockEntities(fromEntity, toEntity);
+
+  try {
+    const fromBalance: number = yield* ctx.entities.callEntity(fromEntity, "getBalance");
+    if (fromBalance >= input.amount) {
+      yield* ctx.entities.callEntity(fromEntity, "withdraw", input.amount);
+      yield* ctx.entities.callEntity(toEntity, "deposit", input.amount);
+    }
+  } finally {
+    lock.release();
+  }
+};
+```
+
+#### Entity Management
+
+Clean up empty or unused entities:
+
+```typescript
+// Clean up entities that have been empty for 30 days
+await client.cleanEntityStorage({ removeEmptyEntities: true });
+```
+
+You can find full entity examples [here](./examples/hello-world/entity-counter.ts) and [here](./examples/hello-world/entity-orchestration.ts).
 
 ## Getting Started
 

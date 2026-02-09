@@ -15,6 +15,9 @@ import * as pbh from "../utils/pb-helper.util";
 import { callWithMetadata, MetadataGenerator } from "../utils/grpc-helper.util";
 import { OrchestrationExecutor } from "./orchestration-executor";
 import { ActivityExecutor } from "./activity-executor";
+import { TaskEntityShim } from "./entity-executor";
+import { EntityInstanceId } from "../entities/entity-instance-id";
+import { EntityFactory } from "../entities/task-entity";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 import { Logger, ConsoleLogger } from "../types/logger.type";
 import { ExponentialBackoff, sleep, withTimeout } from "../utils/backoff.util";
@@ -259,6 +262,42 @@ export class TaskHubGrpcWorker {
   }
 
   /**
+   * Registers an entity with the worker.
+   *
+   * @param factory - Factory function that creates entity instances.
+   * @returns The registered entity name (normalized to lowercase).
+   *
+   * @remarks
+   * Entity names are derived from the factory function name and normalized to lowercase.
+   */
+  addEntity(factory: EntityFactory): string {
+    if (this._isRunning) {
+      throw new Error("Cannot add entity while worker is running.");
+    }
+
+    return this._registry.addEntity(factory);
+  }
+
+  /**
+   * Registers a named entity with the worker.
+   *
+   * @param name - The name to register the entity under.
+   * @param factory - Factory function that creates entity instances.
+   * @returns The registered entity name (normalized to lowercase).
+   *
+   * @remarks
+   * Entity names are normalized to lowercase for case-insensitive matching.
+   */
+  addNamedEntity(name: string, factory: EntityFactory): string {
+    if (this._isRunning) {
+      throw new Error("Cannot add entity while worker is running.");
+    }
+
+    this._registry.addNamedEntity(name, factory);
+    return name.toLowerCase();
+  }
+
+  /**
    * In node.js we don't require a new thread as we have a main event loop
    * Therefore, we open the stream and simply listen through the eventemitter behind the scenes
    */
@@ -309,6 +348,14 @@ export class TaskHubGrpcWorker {
         } else if (workItem.hasActivityrequest()) {
           WorkerLogs.workItemReceived(this._logger, "Activity Request");
           this._executeActivity(workItem.getActivityrequest() as any, completionToken, client.stub);
+        } else if (workItem.hasEntityrequest()) {
+          const entityRequest = workItem.getEntityrequest() as pb.EntityBatchRequest;
+          WorkerLogs.entityRequestReceived(this._logger, entityRequest.getInstanceid(), "Entity Request");
+          this._executeEntity(entityRequest, completionToken, client.stub);
+        } else if (workItem.hasEntityrequestv2()) {
+          const entityRequestV2 = workItem.getEntityrequestv2() as pb.EntityRequest;
+          WorkerLogs.entityRequestReceived(this._logger, entityRequestV2.getInstanceid(), "Entity Request V2");
+          this._executeEntityV2(entityRequestV2, completionToken, client.stub);
         } else if (workItem.hasHealthping()) {
           // Health ping - no-op, just a keep-alive message from the server
         } else {
@@ -749,6 +796,247 @@ export class TaskHubGrpcWorker {
     } catch (e: unknown) {
       const error = e instanceof Error ? e : new Error(String(e));
       WorkerLogs.activityResponseError(this._logger, req.getName(), req.getTaskid(), instanceId!, error);
+    }
+  }
+
+  /**
+   * Executes an entity batch request.
+   *
+   * @param req - The entity batch request from the sidecar.
+   * @param completionToken - The completion token for the work item.
+   * @param stub - The gRPC stub for completing the task.
+   * @param operationInfos - Optional V2 operation info list to include in the result.
+   *
+   * @remarks
+   * This method looks up the entity by name, creates a TaskEntityShim, executes the batch,
+   * and sends the result back to the sidecar.
+   */
+  private async _executeEntity(
+    req: pb.EntityBatchRequest,
+    completionToken: string,
+    stub: stubs.TaskHubSidecarServiceClient,
+    operationInfos?: pb.OperationInfo[],
+  ): Promise<void> {
+    const instanceIdString = req.getInstanceid();
+
+    if (!instanceIdString) {
+      throw new Error("Entity request does not contain an instance id");
+    }
+
+    // Parse the entity instance ID (format: @name@key)
+    let entityId: EntityInstanceId;
+    try {
+      entityId = EntityInstanceId.fromString(instanceIdString);
+    } catch (e: any) {
+      WorkerLogs.entityInstanceIdParseError(this._logger, instanceIdString, e);
+      // Return error result for all operations
+      const batchResult = this._createEntityNotFoundResult(
+        req,
+        completionToken,
+        `Invalid entity instance id format: '${instanceIdString}'`,
+      );
+      await this._sendEntityResult(batchResult, stub);
+      return;
+    }
+
+    let batchResult: pb.EntityBatchResult;
+
+    try {
+      // Look up the entity factory by name
+      const factory = this._registry.getEntity(entityId.name);
+
+      if (factory) {
+        // Create the entity instance and execute the batch
+        const entity = factory();
+        const shim = new TaskEntityShim(entity, entityId);
+        batchResult = await shim.executeAsync(req);
+        batchResult.setCompletiontoken(completionToken);
+      } else {
+        // Entity not found - return error result for all operations
+        WorkerLogs.entityNotFound(this._logger, entityId.name);
+        batchResult = this._createEntityNotFoundResult(
+          req,
+          completionToken,
+          `No entity task named '${entityId.name}' was found.`,
+        );
+      }
+    } catch (e: any) {
+      // Framework-level error - return result with failure details
+      // This will cause the batch to be abandoned and retried
+      WorkerLogs.entityExecutionFailed(this._logger, entityId.name, e);
+
+      const failureDetails = pbh.newFailureDetails(e);
+
+      batchResult = new pb.EntityBatchResult();
+      batchResult.setCompletiontoken(completionToken);
+      batchResult.setFailuredetails(failureDetails);
+    }
+
+    // Add V2 operationInfos if provided (used by DTS backend)
+    if (operationInfos && operationInfos.length > 0) {
+      // Take only as many operationInfos as there are results
+      const resultsCount = batchResult.getResultsList().length;
+      const infosToInclude = operationInfos.slice(0, resultsCount || operationInfos.length);
+      batchResult.setOperationinfosList(infosToInclude);
+    }
+
+    await this._sendEntityResult(batchResult, stub);
+  }
+
+  /**
+   * Executes an entity request (V2 format).
+   *
+   * @param req - The entity request (V2) from the sidecar.
+   * @param completionToken - The completion token for the work item.
+   * @param stub - The gRPC stub for completing the task.
+   *
+   * @remarks
+   * This method handles the V2 entity request format which uses HistoryEvent
+   * instead of OperationRequest. It converts the V2 format to V1 format
+   * (EntityBatchRequest) and delegates to the existing execution logic.
+   */
+  private async _executeEntityV2(
+    req: pb.EntityRequest,
+    completionToken: string,
+    stub: stubs.TaskHubSidecarServiceClient,
+  ): Promise<void> {
+    // Convert EntityRequest (V2) to EntityBatchRequest (V1) format
+    const batchRequest = new pb.EntityBatchRequest();
+    batchRequest.setInstanceid(req.getInstanceid());
+
+    // Copy entity state
+    const entityState = req.getEntitystate();
+    if (entityState) {
+      batchRequest.setEntitystate(entityState);
+    }
+
+    // Convert HistoryEvent operations to OperationRequest format
+    // Also build the operationInfos list for V2 responses
+    const historyEvents = req.getOperationrequestsList();
+    const operations: pb.OperationRequest[] = [];
+    const operationInfos: pb.OperationInfo[] = [];
+
+    for (const event of historyEvents) {
+      const eventType = event.getEventtypeCase();
+
+      if (eventType === pb.HistoryEvent.EventtypeCase.ENTITYOPERATIONSIGNALED) {
+        const signaled = event.getEntityoperationsignaled();
+        if (signaled) {
+          const opRequest = new pb.OperationRequest();
+          opRequest.setOperation(signaled.getOperation());
+          opRequest.setRequestid(signaled.getRequestid());
+          const input = signaled.getInput();
+          if (input) {
+            opRequest.setInput(input);
+          }
+          operations.push(opRequest);
+
+          // Build OperationInfo for signaled operations (no response destination)
+          const opInfo = new pb.OperationInfo();
+          opInfo.setRequestid(signaled.getRequestid());
+          // Signals don't send a response, so responseDestination is null
+          operationInfos.push(opInfo);
+        }
+      } else if (eventType === pb.HistoryEvent.EventtypeCase.ENTITYOPERATIONCALLED) {
+        const called = event.getEntityoperationcalled();
+        if (called) {
+          const opRequest = new pb.OperationRequest();
+          opRequest.setOperation(called.getOperation());
+          opRequest.setRequestid(called.getRequestid());
+          const input = called.getInput();
+          if (input) {
+            opRequest.setInput(input);
+          }
+          operations.push(opRequest);
+
+          // Build OperationInfo for called operations (with response destination)
+          const opInfo = new pb.OperationInfo();
+          opInfo.setRequestid(called.getRequestid());
+
+          // Called operations send responses to the parent orchestration
+          const parentInstanceId = called.getParentinstanceid();
+          const parentExecutionId = called.getParentexecutionid();
+          if (parentInstanceId || parentExecutionId) {
+            const responseDestination = new pb.OrchestrationInstance();
+            if (parentInstanceId) {
+              responseDestination.setInstanceid(parentInstanceId.getValue());
+            }
+            if (parentExecutionId) {
+              // executionId needs to be wrapped in a StringValue
+              const execIdValue = new StringValue();
+              execIdValue.setValue(parentExecutionId.getValue());
+              responseDestination.setExecutionid(execIdValue);
+            }
+            opInfo.setResponsedestination(responseDestination);
+          }
+          operationInfos.push(opInfo);
+        }
+      } else {
+        WorkerLogs.entityUnknownOperationEventType(this._logger, eventType.toString());
+      }
+    }
+
+    batchRequest.setOperationsList(operations);
+
+    // Delegate to the V1 execution logic with V2 operationInfos
+    await this._executeEntity(batchRequest, completionToken, stub, operationInfos);
+  }
+
+  /**
+   * Creates an EntityBatchResult for when an entity is not found.
+   *
+   * @remarks
+   * Returns a non-retriable error for each operation in the batch.
+   */
+  private _createEntityNotFoundResult(
+    req: pb.EntityBatchRequest,
+    completionToken: string,
+    errorMessage: string,
+  ): pb.EntityBatchResult {
+    const batchResult = new pb.EntityBatchResult();
+    batchResult.setCompletiontoken(completionToken);
+
+    // State is unmodified - return the original state
+    const originalState = req.getEntitystate();
+    if (originalState) {
+      batchResult.setEntitystate(originalState);
+    }
+
+    // Create a failure result for each operation in the batch
+    const operations = req.getOperationsList();
+    const results: pb.OperationResult[] = [];
+
+    for (let i = 0; i < operations.length; i++) {
+      const result = new pb.OperationResult();
+      const failure = new pb.OperationResultFailure();
+      const failureDetails = new pb.TaskFailureDetails();
+
+      failureDetails.setErrortype("EntityTaskNotFound");
+      failureDetails.setErrormessage(errorMessage);
+      failureDetails.setIsnonretriable(true);
+
+      failure.setFailuredetails(failureDetails);
+      result.setFailure(failure);
+      results.push(result);
+    }
+
+    batchResult.setResultsList(results);
+    batchResult.setActionsList([]);
+
+    return batchResult;
+  }
+
+  /**
+   * Sends the entity batch result to the sidecar.
+   */
+  private async _sendEntityResult(
+    batchResult: pb.EntityBatchResult,
+    stub: stubs.TaskHubSidecarServiceClient,
+  ): Promise<void> {
+    try {
+      await callWithMetadata(stub.completeEntityTask.bind(stub), batchResult, this._metadataGenerator);
+    } catch (e: any) {
+      WorkerLogs.entityResponseDeliveryFailed(this._logger, e);
     }
   }
 }

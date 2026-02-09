@@ -5,14 +5,24 @@ import { TActivity } from "../types/activity.type";
 import { TInput } from "../types/input.type";
 import { TOrchestrator } from "../types/orchestrator.type";
 import { TOutput } from "../types/output.type";
+import { EntityFactory } from "../entities/task-entity";
 
+/**
+ * Registry for orchestrators, activities, and entities.
+ *
+ * @remarks
+ * This class is used by the worker to look up task implementations by name.
+ * Entity names are normalized to lowercase for case-insensitive matching.
+ */
 export class Registry {
   private _orchestrators: Record<string, TOrchestrator>;
   private _activities: Record<string, TActivity<TInput, TOutput>>;
+  private _entities: Record<string, EntityFactory>;
 
   constructor() {
     this._orchestrators = {};
     this._activities = {};
+    this._entities = {};
   }
 
   addOrchestrator(fn: TOrchestrator): string {
@@ -69,6 +79,73 @@ export class Registry {
 
   getActivity(name: string): TActivity<TInput, TOutput> | undefined {
     return this._activities[name];
+  }
+
+  /**
+   * Registers an entity factory with auto-detected name.
+   *
+   * @param factory - Factory function that creates entity instances.
+   * @returns The registered entity name (normalized to lowercase).
+   *
+   * @remarks
+   * The entity name is derived from the factory function name.
+   * Entity names are normalized to lowercase for case-insensitive matching.
+   */
+  addEntity(factory: EntityFactory): string {
+    if (!factory) {
+      throw new Error("An entity factory argument is required.");
+    }
+
+    const name = this._getFunctionName(factory);
+    this.addNamedEntity(name, factory);
+    return name.toLowerCase();
+  }
+
+  /**
+   * Registers an entity factory with a specific name.
+   *
+   * @param name - The name to register the entity under.
+   * @param factory - Factory function that creates entity instances.
+   *
+   * @remarks
+   * Entity names are normalized to lowercase for case-insensitive matching,
+   * consistent with EntityInstanceId's name normalization.
+   */
+  addNamedEntity(name: string, factory: EntityFactory): void {
+    if (!name) {
+      throw new Error("A non-empty entity name is required.");
+    }
+
+    if (!factory) {
+      throw new Error("An entity factory argument is required.");
+    }
+
+    // Normalize to lowercase for case-insensitive matching (like EntityInstanceId)
+    const normalizedName = name.toLowerCase();
+
+    if (normalizedName in this._entities) {
+      throw new Error(`An entity named '${name}' already exists.`);
+    }
+
+    this._entities[normalizedName] = factory;
+  }
+
+  /**
+   * Gets an entity factory by name.
+   *
+   * @param name - The name of the entity to look up.
+   * @returns The entity factory, or undefined if not found.
+   *
+   * @remarks
+   * The name is normalized to lowercase before lookup.
+   */
+  getEntity(name: string): EntityFactory | undefined {
+    if (!name) {
+      return undefined;
+    }
+
+    // Normalize to lowercase for case-insensitive matching
+    return this._entities[name.toLowerCase()];
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type

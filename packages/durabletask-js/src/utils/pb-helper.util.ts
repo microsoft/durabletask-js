@@ -435,3 +435,170 @@ for (const [name, value] of Object.entries(pb.OrchestrationStatus)) {
 export function getOrchestrationStatusStr(status: number): string {
   return orchestrationStatusStrMap.get(status) ?? "UNKNOWN";
 }
+
+/**
+ * Creates a SendEntityMessageAction for signaling an entity (one-way, fire-and-forget).
+ *
+ * @param id - The action ID (sequence number).
+ * @param instanceId - The target entity instance ID string (format: @name@key).
+ * @param operationName - The name of the operation to invoke.
+ * @param requestId - A unique request ID for this signal.
+ * @param encodedInput - Optional JSON-encoded input for the operation.
+ * @param scheduledTime - Optional scheduled time for delayed delivery.
+ * @returns The OrchestratorAction containing the SendEntityMessageAction.
+ *
+ * @remarks
+ * This creates an EntityOperationSignaledEvent which is a one-way message.
+ * The orchestration does not wait for a response.
+ */
+export function newSendEntityMessageSignalAction(
+  id: number,
+  instanceId: string,
+  operationName: string,
+  requestId: string,
+  encodedInput?: string,
+  scheduledTime?: Date,
+): pb.OrchestratorAction {
+  const signalEvent = new pb.EntityOperationSignaledEvent();
+  signalEvent.setRequestid(requestId);
+  signalEvent.setOperation(operationName);
+  signalEvent.setInput(getStringValue(encodedInput));
+  signalEvent.setTargetinstanceid(getStringValue(instanceId));
+
+  if (scheduledTime) {
+    const ts = new Timestamp();
+    ts.fromDate(scheduledTime);
+    signalEvent.setScheduledtime(ts);
+  }
+
+  const sendEntityMessage = new pb.SendEntityMessageAction();
+  sendEntityMessage.setEntityoperationsignaled(signalEvent);
+
+  const action = new pb.OrchestratorAction();
+  action.setId(id);
+  action.setSendentitymessage(sendEntityMessage);
+
+  return action;
+}
+
+/**
+ * Creates a SendEntityMessageAction for calling an entity (request/response).
+ *
+ * @param id - The action ID (sequence number).
+ * @param instanceId - The target entity instance ID string (format: @name@key).
+ * @param operationName - The name of the operation to invoke.
+ * @param requestId - A unique request ID for this call (used to correlate the response).
+ * @param parentInstanceId - The orchestration instance ID making the call.
+ * @param encodedInput - Optional JSON-encoded input for the operation.
+ * @param scheduledTime - Optional scheduled time for delayed delivery.
+ * @returns The OrchestratorAction containing the SendEntityMessageAction.
+ *
+ * @remarks
+ * This creates an EntityOperationCalledEvent which expects a response.
+ * The orchestration waits for EntityOperationCompletedEvent or EntityOperationFailedEvent
+ * with a matching requestId.
+ */
+export function newSendEntityMessageCallAction(
+  id: number,
+  instanceId: string,
+  operationName: string,
+  requestId: string,
+  parentInstanceId: string,
+  parentExecutionId?: string,
+  encodedInput?: string,
+  scheduledTime?: Date,
+): pb.OrchestratorAction {
+  const callEvent = new pb.EntityOperationCalledEvent();
+  callEvent.setRequestid(requestId);
+  callEvent.setOperation(operationName);
+  callEvent.setInput(getStringValue(encodedInput));
+  callEvent.setTargetinstanceid(getStringValue(instanceId));
+  callEvent.setParentinstanceid(getStringValue(parentInstanceId));
+  callEvent.setParentexecutionid(getStringValue(parentExecutionId));
+
+  if (scheduledTime) {
+    const ts = new Timestamp();
+    ts.fromDate(scheduledTime);
+    callEvent.setScheduledtime(ts);
+  }
+
+  const sendEntityMessage = new pb.SendEntityMessageAction();
+  sendEntityMessage.setEntityoperationcalled(callEvent);
+
+  const action = new pb.OrchestratorAction();
+  action.setId(id);
+  action.setSendentitymessage(sendEntityMessage);
+
+  return action;
+}
+
+/**
+ * Creates a SendEntityMessageAction for requesting entity locks.
+ *
+ * @param id - The action ID (sequence number).
+ * @param criticalSectionId - A unique ID for this critical section (used to correlate lock grant).
+ * @param lockSet - Array of entity instance ID strings (format: @name@key) to lock, in sorted order.
+ * @param parentInstanceId - The orchestration instance ID requesting the locks.
+ * @returns The OrchestratorAction containing the SendEntityMessageAction.
+ *
+ * @remarks
+ * This creates an EntityLockRequestedEvent which is sent to the first entity in the lock set.
+ * The entity framework will forward the lock request to subsequent entities.
+ * The orchestration waits for EntityLockGrantedEvent with a matching criticalSectionId.
+ */
+export function newSendEntityMessageLockAction(
+  id: number,
+  criticalSectionId: string,
+  lockSet: string[],
+  parentInstanceId: string,
+): pb.OrchestratorAction {
+  const lockEvent = new pb.EntityLockRequestedEvent();
+  lockEvent.setCriticalsectionid(criticalSectionId);
+  lockEvent.setLocksetList(lockSet);
+  lockEvent.setPosition(0);
+  lockEvent.setParentinstanceid(getStringValue(parentInstanceId));
+
+  const sendEntityMessage = new pb.SendEntityMessageAction();
+  sendEntityMessage.setEntitylockrequested(lockEvent);
+
+  const action = new pb.OrchestratorAction();
+  action.setId(id);
+  action.setSendentitymessage(sendEntityMessage);
+
+  return action;
+}
+
+/**
+ * Creates a SendEntityMessageAction for releasing entity locks.
+ *
+ * @param id - The action ID (sequence number).
+ * @param criticalSectionId - The ID of the critical section to release.
+ * @param targetInstanceId - The entity instance ID string to send the unlock to.
+ * @param parentInstanceId - The orchestration instance ID releasing the lock.
+ * @returns The OrchestratorAction containing the SendEntityMessageAction.
+ *
+ * @remarks
+ * This creates an EntityUnlockSentEvent to release a lock held by the orchestration.
+ * One unlock event should be sent to each entity in the lock set.
+ */
+export function newSendEntityMessageUnlockAction(
+  id: number,
+  criticalSectionId: string,
+  targetInstanceId: string,
+  parentInstanceId: string,
+): pb.OrchestratorAction {
+  const unlockEvent = new pb.EntityUnlockSentEvent();
+  unlockEvent.setCriticalsectionid(criticalSectionId);
+  unlockEvent.setTargetinstanceid(getStringValue(targetInstanceId));
+  unlockEvent.setParentinstanceid(getStringValue(parentInstanceId));
+
+  const sendEntityMessage = new pb.SendEntityMessageAction();
+  sendEntityMessage.setEntityunlocksent(unlockEvent);
+
+  const action = new pb.OrchestratorAction();
+  action.setId(id);
+  action.setSendentitymessage(sendEntityMessage);
+
+  return action;
+}
+
