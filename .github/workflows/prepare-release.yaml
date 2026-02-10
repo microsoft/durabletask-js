@@ -3,7 +3,7 @@
 # 1. Updates package versions in all package.json files
 # 2. Generates changelog from git diff between main and last release tag
 # 3. Creates a release branch and tag
-# 4. Opens a pull request for review
+# After the workflow completes, manually create a PR from the release branch to main.
 
 name: Prepare Release
 
@@ -17,7 +17,6 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
   prepare-release:
@@ -177,43 +176,6 @@ jobs:
           echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
           echo "Created branch $BRANCH_NAME and tag v${NEW_VERSION}"
 
-      - name: Create Pull Request
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NEW_VERSION: ${{ steps.calc-version.outputs.new_version }}
-          BRANCH_NAME: ${{ steps.create-branch.outputs.branch_name }}
-          CHANGELOG_FILE: ${{ steps.changelog-diff.outputs.changelog_file }}
-        run: |
-          CHANGELOG_CONTENT=$(cat "$CHANGELOG_FILE")
-          
-          # Write PR body to a temp file to avoid YAML escaping issues
-          cat > /tmp/pr_body.md << EOF
-          ## Release v${NEW_VERSION}
-          
-          This PR prepares the release of version **${NEW_VERSION}** for all packages.
-          
-          **Packages Updated:**
-          - @microsoft/durabletask-js@${NEW_VERSION}
-          - @microsoft/durabletask-js-azuremanaged@${NEW_VERSION}
-          
-          **Changes Since Last Release:**
-          ${CHANGELOG_CONTENT}
-          
-          **Release Checklist:**
-          - [ ] Review version bumps in package.json files
-          - [ ] Review CHANGELOG.md updates
-          - [ ] Verify CI passes
-          - [ ] Merge this PR
-          - [ ] After merge, the official build pipeline will produce signed artifacts
-          - [ ] Download artifacts and publish to npm with appropriate tag
-          EOF
-          
-          gh pr create \
-            --title "Release v${NEW_VERSION}" \
-            --body-file /tmp/pr_body.md \
-            --base main \
-            --head "$BRANCH_NAME"
-
       - name: Summary
         run: |
           NEW_VERSION="${{ steps.calc-version.outputs.new_version }}"
@@ -225,4 +187,8 @@ jobs:
           echo "- **Branch**: ${BRANCH_NAME}" >> $GITHUB_STEP_SUMMARY
           echo "- **Tag**: v${NEW_VERSION}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "A pull request has been created. Review and merge to complete the release." >> $GITHUB_STEP_SUMMARY
+          echo "### Next Step: Create a Pull Request" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Manually create a PR from **${BRANCH_NAME}** → **main** with title: **Release v${NEW_VERSION}**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "[Create PR](https://github.com/microsoft/durabletask-js/compare/main...${BRANCH_NAME}?expand=1&title=Release+v${NEW_VERSION})" >> $GITHUB_STEP_SUMMARY
