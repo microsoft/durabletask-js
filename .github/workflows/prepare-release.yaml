@@ -1,0 +1,263 @@
+# Prepare Release Workflow
+# This workflow automates the release preparation process:
+# 1. Updates package versions in all package.json files
+# 2. Generates changelog from git diff between main and last release tag
+# 3. Creates a release branch and tag
+# 4. Opens a pull request for review
+
+name: Prepare Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., 0.2.0-beta.1). Leave empty to auto-increment patch version.'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history needed for git diff and tags
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Get latest release tag
+        id: get-latest-tag
+        run: |
+          # Get the latest tag that looks like a version (v*)
+          LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -n 1)
+          if [ -z "$LATEST_TAG" ]; then
+            echo "No previous release tag found, using initial commit"
+            LATEST_TAG=$(git rev-list --max-parents=0 HEAD)
+          fi
+          echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          echo "Latest tag: $LATEST_TAG"
+
+      - name: Get current version
+        id: get-current-version
+        run: |
+          CURRENT_VERSION=$(node -p "require('./packages/durabletask-js/package.json').version")
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "Current version: $CURRENT_VERSION"
+
+      - name: Calculate next version
+        id: calc-version
+        run: |
+          INPUT_VERSION="${{ github.event.inputs.version }}"
+          CURRENT_VERSION="${{ steps.get-current-version.outputs.current_version }}"
+          
+          if [ -n "$INPUT_VERSION" ]; then
+            # Use the specified version
+            NEW_VERSION="$INPUT_VERSION"
+          else
+            # Auto-increment: parse current version and bump appropriately
+            # Handle pre-release versions like 0.1.0-alpha.2 -> 0.1.0-alpha.3
+            # Handle stable versions like 0.1.0 -> 0.1.1
+            NEW_VERSION=$(node -e "
+              const v = '$CURRENT_VERSION';
+              const match = v.match(/^(\d+)\.(\d+)\.(\d+)(?:-([a-z]+)\.(\d+))?$/);
+              if (!match) {
+                console.log(v);
+                process.exit(0);
+              }
+              const [, major, minor, patch, preType, preNum] = match;
+              if (preType && preNum) {
+                // Increment pre-release number
+                console.log(\`\${major}.\${minor}.\${patch}-\${preType}.\${parseInt(preNum) + 1}\`);
+              } else {
+                // Increment patch version
+                console.log(\`\${major}.\${minor}.\${parseInt(patch) + 1}\`);
+              }
+            ")
+          fi
+          
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "New version: $NEW_VERSION"
+
+      - name: Generate changelog diff
+        id: changelog-diff
+        run: |
+          LATEST_TAG="${{ steps.get-latest-tag.outputs.latest_tag }}"
+          NEW_VERSION="${{ steps.calc-version.outputs.new_version }}"
+          
+          echo "Generating changelog for changes between $LATEST_TAG and HEAD..."
+          
+          # Get merge commits (PRs) between last tag and HEAD
+          CHANGELOG_CONTENT=$(git log "$LATEST_TAG"..HEAD --merges --pretty=format:"- %s" | \
+            sed 's/Merge pull request #\([0-9]*\) from [^:]*:/\[#\1\](https:\/\/github.com\/microsoft\/durabletask-js\/pull\/\1):/' | \
+            sed 's/Merge branch .*//' | \
+            grep -v '^$' || echo "")
+          
+          # If no merge commits, get regular commits
+          if [ -z "$CHANGELOG_CONTENT" ]; then
+            CHANGELOG_CONTENT=$(git log "$LATEST_TAG"..HEAD --pretty=format:"- %s" --no-merges | head -20)
+          fi
+          
+          # Save to file for multi-line output
+          echo "$CHANGELOG_CONTENT" > /tmp/changelog_content.txt
+          echo "changelog_file=/tmp/changelog_content.txt" >> $GITHUB_OUTPUT
+          
+          echo "Generated changelog:"
+          cat /tmp/changelog_content.txt
+
+      - name: Update package versions
+        run: |
+          NEW_VERSION="${{ steps.calc-version.outputs.new_version }}"
+          
+          echo "Updating packages to version $NEW_VERSION..."
+          
+          # Update durabletask-js package.json
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('packages/durabletask-js/package.json', 'utf8'));
+            pkg.version = '$NEW_VERSION';
+            fs.writeFileSync('packages/durabletask-js/package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          
+          # Update durabletask-js-azuremanaged package.json
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('packages/durabletask-js-azuremanaged/package.json', 'utf8'));
+            pkg.version = '$NEW_VERSION';
+            // Also update peer dependency to the new version
+            if (pkg.peerDependencies && pkg.peerDependencies['@microsoft/durabletask-js']) {
+              pkg.peerDependencies['@microsoft/durabletask-js'] = '>=$NEW_VERSION';
+            }
+            fs.writeFileSync('packages/durabletask-js-azuremanaged/package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          
+          echo "Updated package.json files:"
+          grep '"version"' packages/durabletask-js/package.json
+          grep '"version"' packages/durabletask-js-azuremanaged/package.json
+
+      - name: Update CHANGELOG.md
+        run: |
+          NEW_VERSION="${{ steps.calc-version.outputs.new_version }}"
+          CHANGELOG_FILE="${{ steps.changelog-diff.outputs.changelog_file }}"
+          RELEASE_DATE=$(date +%Y-%m-%d)
+          
+          # Read the changelog content
+          CHANGELOG_CONTENT=$(cat "$CHANGELOG_FILE")
+          
+          # Create new changelog section
+          NEW_SECTION="## v${NEW_VERSION} (${RELEASE_DATE})
+
+### Changes
+
+${CHANGELOG_CONTENT}
+"
+          
+          # Insert new section after "## Upcoming" section
+          node -e "
+            const fs = require('fs');
+            let content = fs.readFileSync('CHANGELOG.md', 'utf8');
+            
+            const newSection = \`$NEW_SECTION\`;
+            
+            // Find the Upcoming section and insert after it
+            const upcomingMatch = content.match(/## Upcoming[\s\S]*?(?=\n## v|$)/);
+            if (upcomingMatch) {
+              const upcomingEnd = content.indexOf(upcomingMatch[0]) + upcomingMatch[0].length;
+              content = content.slice(0, upcomingEnd) + '\n' + newSection + content.slice(upcomingEnd);
+            } else {
+              // No Upcoming section, prepend
+              content = '## Upcoming\n\n' + newSection + content;
+            }
+            
+            // Reset the Upcoming section to empty
+            content = content.replace(/## Upcoming[\s\S]*?(?=\n## v)/, '## Upcoming\n\n### New\n\n### Fixes\n\n');
+            
+            fs.writeFileSync('CHANGELOG.md', content);
+          "
+          
+          echo "Updated CHANGELOG.md"
+
+      - name: Create release branch and commit
+        id: create-branch
+        run: |
+          NEW_VERSION="${{ steps.calc-version.outputs.new_version }}"
+          BRANCH_NAME="release/v${NEW_VERSION}"
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Create and checkout release branch
+          git checkout -b "$BRANCH_NAME"
+          
+          # Stage and commit changes
+          git add packages/durabletask-js/package.json
+          git add packages/durabletask-js-azuremanaged/package.json
+          git add CHANGELOG.md
+          git commit -m "Release v${NEW_VERSION}"
+          
+          # Create release tag
+          git tag "v${NEW_VERSION}"
+          
+          # Push branch and tag
+          git push origin "$BRANCH_NAME"
+          git push origin "v${NEW_VERSION}"
+          
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          echo "Created branch $BRANCH_NAME and tag v${NEW_VERSION}"
+
+      - name: Create Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NEW_VERSION="${{ steps.calc-version.outputs.new_version }}"
+          BRANCH_NAME="${{ steps.create-branch.outputs.branch_name }}"
+          CHANGELOG_FILE="${{ steps.changelog-diff.outputs.changelog_file }}"
+          
+          CHANGELOG_CONTENT=$(cat "$CHANGELOG_FILE")
+          
+          PR_BODY="## Release v${NEW_VERSION}
+
+This PR prepares the release of version **${NEW_VERSION}** for all packages.
+
+### Packages Updated
+- \`@microsoft/durabletask-js@${NEW_VERSION}\`
+- \`@microsoft/durabletask-js-azuremanaged@${NEW_VERSION}\`
+
+### Changes Since Last Release
+${CHANGELOG_CONTENT}
+
+### Release Checklist
+- [ ] Review version bumps in package.json files
+- [ ] Review CHANGELOG.md updates
+- [ ] Verify CI passes
+- [ ] Merge this PR
+- [ ] After merge, the official build pipeline will produce signed artifacts
+- [ ] Download artifacts and publish to npm with appropriate tag
+"
+          
+          gh pr create \
+            --title "Release v${NEW_VERSION}" \
+            --body "$PR_BODY" \
+            --base main \
+            --head "$BRANCH_NAME" \
+            --label "release"
+
+      - name: Summary
+        run: |
+          NEW_VERSION="${{ steps.calc-version.outputs.new_version }}"
+          BRANCH_NAME="${{ steps.create-branch.outputs.branch_name }}"
+          
+          echo "## Release Preparation Complete! :rocket:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: v${NEW_VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch**: ${BRANCH_NAME}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tag**: v${NEW_VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "A pull request has been created. Review and merge to complete the release." >> $GITHUB_STEP_SUMMARY
