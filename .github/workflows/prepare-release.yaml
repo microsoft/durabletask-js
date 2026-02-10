@@ -32,18 +32,6 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Get latest release tag
-        id: get-latest-tag
-        run: |
-          # Get the latest tag that looks like a version (v*)
-          LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -n 1)
-          if [ -z "$LATEST_TAG" ]; then
-            echo "No previous release tag found, using initial commit"
-            LATEST_TAG=$(git rev-list --max-parents=0 HEAD)
-          fi
-          echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
-          echo "Latest tag: $LATEST_TAG"
-
       - name: Get current version
         id: get-current-version
         run: |
@@ -85,6 +73,21 @@ jobs:
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "New version: $NEW_VERSION"
 
+      - name: Get latest release tag
+        id: get-latest-tag
+        run: |
+          NEW_VERSION="${{ steps.calc-version.outputs.new_version }}"
+          # Get the latest tag that looks like a version (v*), excluding the
+          # tag being created so that re-runs don't use it as the baseline.
+          LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | \
+            grep -v "^v${NEW_VERSION}$" | head -n 1)
+          if [ -z "$LATEST_TAG" ]; then
+            echo "No previous release tag found, using initial commit"
+            LATEST_TAG=$(git rev-list --max-parents=0 HEAD)
+          fi
+          echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          echo "Latest tag: $LATEST_TAG"
+
       - name: Generate changelog diff
         id: changelog-diff
         run: |
@@ -93,16 +96,13 @@ jobs:
           
           echo "Generating changelog for changes between $LATEST_TAG and HEAD..."
           
-          # Get merge commits (PRs) between last tag and HEAD
-          CHANGELOG_CONTENT=$(git log "$LATEST_TAG"..HEAD --merges --pretty=format:"- %s" | \
-            sed 's/Merge pull request #\([0-9]*\) from [^:]*:/\[#\1\](https:\/\/github.com\/microsoft\/durabletask-js\/pull\/\1):/' | \
-            sed 's/Merge branch .*//' | \
-            grep -v '^$' || echo "")
-          
-          # If no merge commits, get regular commits
-          if [ -z "$CHANGELOG_CONTENT" ]; then
-            CHANGELOG_CONTENT=$(git log "$LATEST_TAG"..HEAD --pretty=format:"- %s" --no-merges | head -20)
-          fi
+          # Get commits between last tag and HEAD.
+          # GitHub squash-merges put the PR number in parentheses, e.g. "Some change (#123)".
+          # We convert "(#N)" to a markdown link.
+          CHANGELOG_CONTENT=$(git log "$LATEST_TAG"..HEAD --pretty=format:"%s" --no-merges | \
+            sed 's/(#\([0-9]*\))/([#\1](https:\/\/github.com\/microsoft\/durabletask-js\/pull\/\1))/' | \
+            sed 's/^/- /' | \
+            grep -v '^- $' || echo "")
           
           # Save to file for multi-line output
           echo "$CHANGELOG_CONTENT" > /tmp/changelog_content.txt
