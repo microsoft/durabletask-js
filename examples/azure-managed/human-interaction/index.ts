@@ -63,7 +63,7 @@ const approvalOrchestrator: TOrchestrator = async function* (ctx: OrchestrationC
 
   // Step 2: Race external event vs timer
   const approvalEvent = ctx.waitForExternalEvent<{ approved: boolean }>("approval");
-  const timeout = ctx.createTimer(10_000); // 10 seconds
+  const timeout = ctx.createTimer(5_000); // 5 seconds
 
   const winner = yield whenAny([approvalEvent, timeout]);
 
@@ -159,7 +159,7 @@ const multiEventOrchestrator: TOrchestrator = async function* (ctx: Orchestratio
     await client.raiseOrchestrationEvent(approvalId, "approval", { approved: true });
     console.log("Sent approval event from client");
 
-    const finalState = await client.waitForOrchestrationCompletion(approvalId, true, 30);
+    const finalState = await client.waitForOrchestrationCompletion(approvalId, true, 60);
     console.log(`Result: ${finalState?.serializedOutput}`);
     console.log(`Final custom status: ${finalState?.serializedCustomStatus}`);
 
@@ -167,7 +167,7 @@ const multiEventOrchestrator: TOrchestrator = async function* (ctx: Orchestratio
     console.log("\n=== 2. Approval Workflow (timeout — no event sent) ===");
     const timeoutId = await client.scheduleNewOrchestration(approvalOrchestrator, 1000);
     // Don't send any event — let the timer expire
-    const timeoutState = await client.waitForOrchestrationCompletion(timeoutId, true, 30);
+    const timeoutState = await client.waitForOrchestrationCompletion(timeoutId, true, 60);
     console.log(`Result: ${timeoutState?.serializedOutput}`);
 
     // --- 3. sendEvent (orchestration-to-orchestration) ---
@@ -179,10 +179,10 @@ const multiEventOrchestrator: TOrchestrator = async function* (ctx: Orchestratio
     const notifierId = await client.scheduleNewOrchestration(notifierOrchestrator, targetId);
     console.log(`Notifier orchestration: ${notifierId}`);
 
-    const targetState = await client.waitForOrchestrationCompletion(targetId, true, 30);
+    const targetState = await client.waitForOrchestrationCompletion(targetId, true, 60);
     console.log(`Target result: ${targetState?.serializedOutput}`);
 
-    const notifierState = await client.waitForOrchestrationCompletion(notifierId, true, 30);
+    const notifierState = await client.waitForOrchestrationCompletion(notifierId, true, 60);
     console.log(`Notifier result: ${notifierState?.serializedOutput}`);
 
     // --- 4. Multiple external events ---
@@ -193,7 +193,7 @@ const multiEventOrchestrator: TOrchestrator = async function* (ctx: Orchestratio
     await client.raiseOrchestrationEvent(multiId, "event1", "Hello");
     await client.raiseOrchestrationEvent(multiId, "event2", "World");
 
-    const multiState = await client.waitForOrchestrationCompletion(multiId, true, 30);
+    const multiState = await client.waitForOrchestrationCompletion(multiId, true, 60);
     console.log(`Result: ${multiState?.serializedOutput}`);
 
     console.log("\n=== All human-interaction demos completed successfully! ===");

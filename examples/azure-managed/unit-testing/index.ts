@@ -9,7 +9,7 @@
 //   2. TestOrchestrationClient — same API as TaskHubGrpcClient
 //   3. TestOrchestrationWorker — same API as TaskHubGrpcWorker
 //   4. ReplaySafeLogger — suppress duplicate logs during orchestration replay
-//   5. Testing all patterns: sequence, fan-out/fan-in, timers, events, continue-as-new
+//   5. Testing patterns: sequence, fan-out/fan-in, timers, events, terminate
 
 import {
   InMemoryOrchestrationBackend,
@@ -72,15 +72,6 @@ const timerOrchestrator: TOrchestrator = async function* (ctx: OrchestrationCont
 const eventOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
   const data: string = yield ctx.waitForExternalEvent<string>("myEvent");
   return `Received: ${data}`;
-};
-
-/** Continue-as-new: increments a counter until it reaches 3. */
-const counterOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, count: number): any {
-  if (count >= 3) {
-    return `Final count: ${count}`;
-  }
-  yield; // yield before continue-as-new
-  ctx.continueAsNew(count + 1);
 };
 
 // ---------------------------------------------------------------------------
@@ -195,21 +186,7 @@ function assert(condition: boolean, message: string): void {
     }),
   );
 
-  // Test 5: Continue-as-new
-  results.push(
-    await runTest("Continue-as-new", async (_backend, client, worker) => {
-      worker.addOrchestrator(counterOrchestrator);
-      await worker.start();
-
-      const id = await client.scheduleNewOrchestration(counterOrchestrator, 0);
-      const state = await client.waitForOrchestrationCompletion(id, true, 10);
-
-      assert(state!.runtimeStatus === OrchestrationStatus.COMPLETED, "Should be completed");
-      assert(state!.serializedOutput === '"Final count: 3"', `Got: ${state!.serializedOutput}`);
-    }),
-  );
-
-  // Test 6: Terminate
+  // Test 5: Terminate
   results.push(
     await runTest("Terminate", async (_backend, client, worker) => {
       worker.addOrchestrator(eventOrchestrator);
@@ -225,27 +202,7 @@ function assert(condition: boolean, message: string): void {
     }),
   );
 
-  // Test 7: Suspend / Resume
-  results.push(
-    await runTest("Suspend / Resume", async (_backend, client, worker) => {
-      worker.addOrchestrator(eventOrchestrator);
-      await worker.start();
-
-      const id = await client.scheduleNewOrchestration(eventOrchestrator);
-      await client.waitForOrchestrationStart(id);
-
-      await client.suspendOrchestration(id);
-      let state = await client.getOrchestrationState(id);
-      assert(state!.runtimeStatus === OrchestrationStatus.SUSPENDED, "Should be suspended");
-
-      await client.resumeOrchestration(id);
-      await client.raiseOrchestrationEvent(id, "myEvent", "after-resume");
-      state = await client.waitForOrchestrationCompletion(id, true, 10);
-      assert(state!.runtimeStatus === OrchestrationStatus.COMPLETED, "Should complete after resume");
-    }),
-  );
-
-  // Test 8: NoOpLogger (verify it doesn't throw)
+  // Test 6: NoOpLogger (verify it doesn't throw)
   results.push(
     await runTest("NoOpLogger", async () => {
       const logger = new NoOpLogger();

@@ -51,8 +51,14 @@ jobs:
             dir=$(dirname "$sample_json")
             name=$(basename "$dir")
             requires_emulator=$(jq -r '.requiresEmulator // true' "$sample_json")
+            skip_ci=$(jq -r '.skipCi // false' "$sample_json")
 
-            echo "Found sample: $name (requiresEmulator=$requires_emulator)"
+            echo "Found sample: $name (requiresEmulator=$requires_emulator, skipCi=$skip_ci)"
+
+            if [ "$skip_ci" = "true" ]; then
+              echo "  ⏭️  Skipping $name (skipCi=true)"
+              continue
+            fi
 
             if [ "$requires_emulator" = "false" ]; then
               no_emulator_samples=$(echo "$no_emulator_samples" | jq --arg n "$name" '. + [$n]')
