@@ -246,8 +246,7 @@ ${CHANGELOG_CONTENT}
             --title "Release v${NEW_VERSION}" \
             --body "$PR_BODY" \
             --base main \
-            --head "$BRANCH_NAME" \
-            --label "release"
+            --head "$BRANCH_NAME"
 
       - name: Summary
         run: |

@@ -51,7 +51,58 @@ Use the **Prepare Release** GitHub Action to automate the release preparation pr
 6. **Creates a release tag**: `vX.Y.Z`
 7. **Opens a pull request**: For review before merging to `main`
 
-After the PR is merged, follow steps 7-9 in the manual process below to publish.
+After the PR is merged, follow the **Publishing** steps below to build and publish.
+
+## Publishing (After Release PR is Merged)
+
+After the release PR is merged to `main`, follow these steps to build, sign, and publish the packages.
+
+### Step 1: Run the Code Mirror Pipeline
+
+Manually trigger the code mirror pipeline to sync the release to the internal ADO repo:
+
+**Pipeline**: [durabletask-js code mirror](https://dev.azure.com/azfunc/internal/_build?definitionId=1004)
+
+Run it on the `main` branch (which now contains the release commit).
+
+### Step 2: Run the Official Build Pipeline
+
+Trigger the official build pipeline on the release tag/commit/branch to produce signed `.tgz` artifacts:
+
+**Pipeline**: [durabletask-js.official](https://dev.azure.com/azfunc/internal/_build?definitionId=1012&_a=summary)
+
+1. Click **Run pipeline**
+2. Select the release branch or tag (e.g., `release/vX.Y.Z` or tag `vX.Y.Z`)
+3. Wait for it to complete
+4. Verify the `drop` artifact contains correctly versioned `.tgz` files:
+   - `buildoutputs/durabletask-js/microsoft-durabletask-js-X.Y.Z.tgz`
+   - `buildoutputs/durabletask-js-azuremanaged/microsoft-durabletask-js-azuremanaged-X.Y.Z.tgz`
+
+### Step 3: Run the Release Pipeline
+
+Trigger the release pipeline to publish the signed packages to npm via ESRP. The pipeline has separate release jobs for each package:
+
+**Pipeline**: eng/ci/release.yml (link to update soon)
+
+1. Click **Run pipeline**
+2. Select the build from Step 2 as the source pipeline artifact
+3. Approve the ESRP release when prompted (one approval per package)
+
+### Step 4: Verify npm Publish
+
+```bash
+npm view @microsoft/durabletask-js versions
+npm view @microsoft/durabletask-js-azuremanaged versions
+```
+
+### Step 5: Create a GitHub Release
+
+Go to [GitHub Releases](https://github.com/microsoft/durabletask-js/releases) and create a new release:
+
+- **Tag**: `vX.Y.Z`
+- **Title**: `vX.Y.Z`
+- **Description**: Copy the relevant section from `CHANGELOG.md`
+- **Pre-release**: Check this box for alpha/beta/rc releases
 
 ## Manual Release Process (Alternative)
 
@@ -124,49 +175,7 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-### 7. Trigger the Official Build Pipeline
-
-The official build pipeline (`eng/ci/official-build.yml`) runs automatically on pushes to `main`, or can be triggered manually from Azure DevOps. This pipeline:
-
-1. Installs dependencies (`npm ci`)
-2. Runs `prebuild` (generates `version.ts` from `package.json`)
-3. Builds both packages
-4. Packs `.tgz` artifacts with ESRP code signing
-5. Publishes the `.tgz` files as pipeline artifact `drop`
-
-Wait for the pipeline to complete and verify the artifact contains the correctly versioned `.tgz` files.
-
-### 8. Publish to npm
-
-Download the signed `.tgz` artifacts from the pipeline's `drop` artifact and publish to npm:
-
-```bash
-# For pre-release versions, use the appropriate tag
-npm publish microsoft-durabletask-js-X.Y.Z-<prerelease>.tgz --tag <alpha|beta|next>
-npm publish microsoft-durabletask-js-azuremanaged-X.Y.Z-<prerelease>.tgz --tag <alpha|beta|next>
-
-# For stable releases, omit the tag (becomes "latest")
-npm publish microsoft-durabletask-js-X.Y.Z.tgz
-npm publish microsoft-durabletask-js-azuremanaged-X.Y.Z.tgz
-```
-
-> **Important**: Use `--tag alpha`, `--tag beta`, or `--tag next` for pre-release versions. This ensures `npm install @microsoft/durabletask-js` still installs the latest stable version, not the pre-release. Only omit the tag for GA releases.
-
-Verify the publish succeeded:
-
-```bash
-npm view @microsoft/durabletask-js versions
-npm view @microsoft/durabletask-js-azuremanaged versions
-```
-
-### 9. Create a GitHub Release
-
-Go to [GitHub Releases](https://github.com/microsoft/durabletask-js/releases) and create a new release:
-
-- **Tag**: `vX.Y.Z`
-- **Title**: `vX.Y.Z`
-- **Description**: Copy the relevant section from `CHANGELOG.md`
-- **Pre-release**: Check this box for alpha/beta/rc releases
+Then follow the **Publishing** steps above (Steps 1-5).
 
 ## Quick Reference: npm Dist Tags
 
