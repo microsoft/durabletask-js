@@ -1,6 +1,6 @@
 {
   "name": "@microsoft/durabletask-js",
-  "version": "0.1.0-alpha.2",
+  "version": "0.2.0-beta.1",
   "description": "A Durable Task Javascript SDK compatible with Dapr Workflow and its underlying Durable Task engine",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
