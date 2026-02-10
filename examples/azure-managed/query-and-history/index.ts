@@ -162,22 +162,21 @@ const simpleOrchestrator: TOrchestrator = async function* (ctx: OrchestrationCon
     const history: HistoryEvent[] = await client.getOrchestrationHistory(richId);
     console.log(`  History for ${richId}: ${history.length} events`);
     for (const event of history) {
-      const eventTypeName = HistoryEventType[event.eventType] || `Unknown(${event.eventType})`;
-      console.log(`    [${event.eventId}] ${eventTypeName} @ ${event.timestamp?.toISOString()}`);
+      console.log(`    [${event.eventId}] ${event.type} @ ${event.timestamp?.toISOString()}`);
     }
 
     // --- 4. Typed history events ---
     console.log("\n=== 4. Typed History Event Inspection ===");
 
     const executionStarted = history.find(
-      (e) => e.eventType === HistoryEventType.ExecutionStarted,
+      (e) => e.type === HistoryEventType.ExecutionStarted,
     ) as ExecutionStartedEvent | undefined;
     if (executionStarted) {
       console.log(`  ExecutionStarted: name=${executionStarted.name}, input=${executionStarted.input}`);
     }
 
     const taskScheduled = history.filter(
-      (e) => e.eventType === HistoryEventType.TaskScheduled,
+      (e) => e.type === HistoryEventType.TaskScheduled,
     ) as TaskScheduledEvent[];
     console.log(`  TaskScheduled events: ${taskScheduled.length}`);
     for (const ts of taskScheduled) {
@@ -185,12 +184,12 @@ const simpleOrchestrator: TOrchestrator = async function* (ctx: OrchestrationCon
     }
 
     const taskCompleted = history.filter(
-      (e) => e.eventType === HistoryEventType.TaskCompleted,
+      (e) => e.type === HistoryEventType.TaskCompleted,
     ) as TaskCompletedEvent[];
     console.log(`  TaskCompleted events: ${taskCompleted.length}`);
 
     const timerCreated = history.filter(
-      (e) => e.eventType === HistoryEventType.TimerCreated,
+      (e) => e.type === HistoryEventType.TimerCreated,
     ) as TimerCreatedEvent[];
     console.log(`  TimerCreated events: ${timerCreated.length}`);
     for (const tc of timerCreated) {
