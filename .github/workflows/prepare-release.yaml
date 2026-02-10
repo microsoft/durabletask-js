@@ -158,8 +158,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Create and checkout release branch
-          git checkout -b "$BRANCH_NAME"
+          # Create and checkout release branch (idempotent)
+          git checkout -B "$BRANCH_NAME"
           
           # Stage and commit changes
           git add packages/durabletask-js/package.json
@@ -167,12 +167,12 @@ jobs:
           git add CHANGELOG.md
           git commit -m "Release v${NEW_VERSION}"
           
-          # Create release tag
-          git tag "v${NEW_VERSION}"
+          # Create release tag (idempotent)
+          git tag -f "v${NEW_VERSION}"
           
-          # Push branch and tag
-          git push origin "$BRANCH_NAME"
-          git push origin "v${NEW_VERSION}"
+          # Push branch and tag (force to handle re-runs)
+          git push -f origin "$BRANCH_NAME"
+          git push -f origin "v${NEW_VERSION}"
           
           echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
           echo "Created branch $BRANCH_NAME and tag v${NEW_VERSION}"
@@ -212,8 +212,7 @@ jobs:
             --title "Release v${NEW_VERSION}" \
             --body-file /tmp/pr_body.md \
             --base main \
-            --head "$BRANCH_NAME" \
-            --label "release"
+            --head "$BRANCH_NAME"
 
       - name: Summary
         run: |
