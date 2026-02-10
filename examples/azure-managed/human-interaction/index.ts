@@ -163,15 +163,8 @@ const multiEventOrchestrator: TOrchestrator = async function* (ctx: Orchestratio
     console.log(`Result: ${finalState?.serializedOutput}`);
     console.log(`Final custom status: ${finalState?.serializedCustomStatus}`);
 
-    // --- 2. Approval with timeout (no event sent) ---
-    console.log("\n=== 2. Approval Workflow (timeout — no event sent) ===");
-    const timeoutId = await client.scheduleNewOrchestration(approvalOrchestrator, 1000);
-    // Don't send any event — let the timer expire
-    const timeoutState = await client.waitForOrchestrationCompletion(timeoutId, true, 60);
-    console.log(`Result: ${timeoutState?.serializedOutput}`);
-
-    // --- 3. sendEvent (orchestration-to-orchestration) ---
-    console.log("\n=== 3. sendEvent (orchestration → orchestration) ===");
+    // --- 2. sendEvent (orchestration-to-orchestration) ---
+    console.log("\n=== 2. sendEvent (orchestration → orchestration) ===");
     const targetId = await client.scheduleNewOrchestration(approvalOrchestrator, 250);
     console.log(`Target orchestration: ${targetId}`);
 
@@ -185,8 +178,8 @@ const multiEventOrchestrator: TOrchestrator = async function* (ctx: Orchestratio
     const notifierState = await client.waitForOrchestrationCompletion(notifierId, true, 60);
     console.log(`Notifier result: ${notifierState?.serializedOutput}`);
 
-    // --- 4. Multiple external events ---
-    console.log("\n=== 4. Multiple External Events ===");
+    // --- 3. Multiple external events ---
+    console.log("\n=== 3. Multiple External Events ===");
     const multiId = await client.scheduleNewOrchestration(multiEventOrchestrator);
     await new Promise((r) => setTimeout(r, 2000));
 
@@ -195,6 +188,13 @@ const multiEventOrchestrator: TOrchestrator = async function* (ctx: Orchestratio
 
     const multiState = await client.waitForOrchestrationCompletion(multiId, true, 60);
     console.log(`Result: ${multiState?.serializedOutput}`);
+
+    // --- 4. Approval with timeout (no event sent — timer wins the race) ---
+    console.log("\n=== 4. Approval Workflow (timeout — no event sent) ===");
+    const timeoutId = await client.scheduleNewOrchestration(approvalOrchestrator, 1000);
+    // Don't send any event — let the 5-second timer expire and auto-reject
+    const timeoutState = await client.waitForOrchestrationCompletion(timeoutId, true, 60);
+    console.log(`Result: ${timeoutState?.serializedOutput}`);
 
     console.log("\n=== All human-interaction demos completed successfully! ===");
   } catch (error) {
