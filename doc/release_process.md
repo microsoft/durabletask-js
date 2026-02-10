@@ -49,7 +49,15 @@ Use the **Prepare Release** GitHub Action to automate the release preparation pr
 4. **Updates CHANGELOG.md**: Adds a new version section with the discovered changes
 5. **Creates a release branch**: `release/vX.Y.Z`
 6. **Creates a release tag**: `vX.Y.Z`
-7. **Opens a pull request**: For review before merging to `main`
+
+### After the Workflow Completes
+
+The workflow summary will include a link to create a PR. You must **manually create a pull request** from the release branch (`release/vX.Y.Z`) to `main`:
+
+1. Go to the workflow run summary and click the **Create PR** link, or navigate to: `https://github.com/microsoft/durabletask-js/compare/main...release/vX.Y.Z`
+2. Set the PR title to `Release vX.Y.Z`
+3. Review the version bumps and changelog updates
+4. Merge the PR after CI passes
 
 After the PR is merged, follow the **Publishing** steps below to build and publish.
 
