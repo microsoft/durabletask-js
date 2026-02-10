@@ -4,7 +4,7 @@
 // This sample demonstrates retry and error handling in the Durable Task SDK:
 //   1. RetryPolicy — declarative retry with exponential backoff
 //   2. handleFailure predicate — selectively retry based on error type
-//   3. AsyncRetryHandler — imperative retry logic with custom delays
+//   3. RetryHandler — imperative retry logic with custom control
 //   4. Sub-orchestration retry — retry an entire sub-orchestration
 //   5. raiseIfFailed() — convenient error checking on orchestration state
 
@@ -24,7 +24,7 @@ import {
   RetryPolicy,
   OrchestrationStatus,
 } from "@microsoft/durabletask-js";
-import type { AsyncRetryHandler, RetryContext, TaskRetryOptions } from "@microsoft/durabletask-js";
+import type { RetryHandler, RetryContext } from "@microsoft/durabletask-js";
 
 // ---------------------------------------------------------------------------
 // Activities
@@ -105,24 +105,28 @@ const handleFailureOrchestrator: TOrchestrator = async function* (ctx: Orchestra
 };
 
 /**
- * 3. AsyncRetryHandler — custom imperative retry logic.
- * Implements a custom delay strategy: 100ms, 200ms, 400ms, then gives up.
+ * 3. RetryHandler — custom imperative retry logic.
+ * Uses a sync handler that retries up to maxAttempts times.
+ * Returns true for immediate retry, or false to stop.
  */
 const customRetryHandlerOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
   const maxAttempts = 4;
 
-  const customRetryHandler: AsyncRetryHandler = async (retryCtx: RetryContext) => {
+  const customRetryHandler: RetryHandler = (retryCtx: RetryContext) => {
     if (retryCtx.lastAttemptNumber >= maxAttempts) {
       return false; // give up
     }
-    // Exponential delay: 100ms, 200ms, 400ms
-    return 100 * Math.pow(2, retryCtx.lastAttemptNumber - 1);
+    // Only retry transient errors
+    if (!retryCtx.lastFailure.message?.includes("TransientError")) {
+      return false;
+    }
+    return true; // retry immediately
   };
 
   const result: string = yield ctx.callActivity(
     unreliableActivity,
     { key: `custom-handler-${ctx.instanceId}`, failCount: 2 },
-    { retry: customRetryHandler as TaskRetryOptions },
+    { retry: customRetryHandler },
   );
 
   return result;
@@ -206,8 +210,8 @@ const alwaysFailOrchestrator: TOrchestrator = async function* (ctx: Orchestratio
     console.log(`Status: ${OrchestrationStatus[state2!.runtimeStatus]}`);
     console.log(`Result: ${state2?.serializedOutput}`);
 
-    // --- 3. Custom AsyncRetryHandler ---
-    console.log("\n=== 3. Custom AsyncRetryHandler ===");
+    // --- 3. Custom RetryHandler ---
+    console.log("\n=== 3. Custom RetryHandler ===");
     const id3 = await client.scheduleNewOrchestration(customRetryHandlerOrchestrator);
     const state3 = await client.waitForOrchestrationCompletion(id3, true, 60);
     console.log(`Status: ${OrchestrationStatus[state3!.runtimeStatus]}`);
@@ -233,7 +237,7 @@ const alwaysFailOrchestrator: TOrchestrator = async function* (ctx: Orchestratio
     }
     if (state5?.failureDetails) {
       console.log(`Failure type: ${state5.failureDetails.errorType}`);
-      console.log(`Failure message: ${state5.failureDetails.errorMessage?.substring(0, 80)}`);
+      console.log(`Failure message: ${state5.failureDetails.message?.substring(0, 80)}`);
     }
 
     console.log("\n=== All retry/error demos completed successfully! ===");

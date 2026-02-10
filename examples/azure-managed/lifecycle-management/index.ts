@@ -23,6 +23,7 @@ import {
   ActivityContext,
   TOrchestrator,
   OrchestrationStatus,
+  terminateOptions,
 } from "@microsoft/durabletask-js";
 
 // ---------------------------------------------------------------------------
