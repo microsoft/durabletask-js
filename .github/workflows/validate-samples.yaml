@@ -149,23 +149,19 @@ jobs:
         sample: ${{ fromJson(needs.discover.outputs.emulator-samples) }}
         node-version: ["22.x"]
 
-    services:
-      dts-emulator:
-        image: mcr.microsoft.com/dts/dts-emulator:latest
-        ports:
-          - 8080:8080
-          - 8082:8082
-        options: >-
-          --health-cmd "curl -sf http://localhost:8082/ || exit 1"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
     env:
       DURABLE_TASK_SCHEDULER_CONNECTION_STRING: "Endpoint=http://localhost:8080;Authentication=None;TaskHub=default"
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: 🐳 Start DTS emulator
+        run: |
+          docker pull mcr.microsoft.com/dts/dts-emulator:latest
+          docker run --name dtsemulator -d -p 8080:8080 mcr.microsoft.com/dts/dts-emulator:latest
+
+      - name: ⏳ Wait for DTS emulator
+        run: sleep 10
 
       - name: ⚙️ Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
@@ -181,23 +177,15 @@ jobs:
             packages/*/node_modules
           key: sdk-build-${{ github.sha }}-node${{ matrix.node-version }}
 
-      - name: ⏳ Wait for DTS emulator
-        run: |
-          echo "Waiting for DTS emulator to be ready..."
-          for i in $(seq 1 30); do
-            if curl -sf http://localhost:8082/ > /dev/null 2>&1; then
-              echo "DTS emulator is ready!"
-              break
-            fi
-            echo "  Attempt $i/30 — waiting 2s..."
-            sleep 2
-          done
-
       - name: 🧪 Run sample — ${{ matrix.sample }}
         run: |
           echo "Running sample: ${{ matrix.sample }}"
           npx ts-node --swc ./examples/azure-managed/${{ matrix.sample }}/index.ts
         timeout-minutes: 5
+
+      - name: 🧹 Stop DTS emulator
+        if: always()
+        run: docker rm -f dtsemulator || true
 
   # -----------------------------------------------------------------------
   # 5. Summary gate — all samples must pass
