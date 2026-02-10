@@ -20,7 +20,7 @@ import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 // Load environment variables from .env file
 import * as dotenv from "dotenv";
 import * as path from "path";
-dotenv.config({ path: path.join(__dirname, ".env") });
+dotenv.config({ path: path.join(__dirname, "..", ".env") });
 
 // Read the OTLP endpoint from the environment (defaults to Jaeger's OTLP HTTP port)
 const otlpEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT || "http://localhost:4318";

@@ -64,7 +64,7 @@ const parallelSumOrchestrator: TOrchestrator = async function* (ctx: Orchestrati
 
 /** Timer: waits for a timer then returns. */
 const timerOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
-  yield ctx.createTimer(100); // 100ms timer
+  yield ctx.createTimer(1); // 1 second timer
   return "Timer fired";
 };
 

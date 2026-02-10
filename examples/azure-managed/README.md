@@ -13,8 +13,8 @@ Runnable samples demonstrating every major feature of the Durable Task JavaScrip
 | [query-and-history](query-and-history/) | Monitoring & debugging | `getAllInstances`, pagination, `listInstanceIds`, `getOrchestrationHistory`, typed events | Yes |
 | [versioning](versioning/) | Safe deployments | Version match strategies, failure strategies, `ctx.version`, `ctx.compareVersionTo()` | Yes |
 | [unit-testing](unit-testing/) | Testing without infra | `InMemoryOrchestrationBackend`, `TestOrchestrationClient`, `TestOrchestrationWorker`, `ReplaySafeLogger` | **No** |
-| [index.ts](index.ts) | Azure-managed basics | Connection strings, `DefaultAzureCredential`, `createAzureManagedClient` | Yes |
-| [distributed-tracing.ts](distributed-tracing.ts) | OpenTelemetry tracing | `NodeSDK`, OTLP export, Jaeger, `DurableTaskAzureManagedClientBuilder` | Yes |
+| [basics](basics/) | Azure-managed basics | Connection strings, `DefaultAzureCredential`, `createAzureManagedClient` | Yes |
+| [distributed-tracing](distributed-tracing/) | OpenTelemetry tracing | `NodeSDK`, OTLP export, Jaeger, `DurableTaskAzureManagedClientBuilder` | Yes |
 
 ### Quick Start (Local Emulator)
 
@@ -149,10 +149,10 @@ done
 | `TestOrchestrationClient/Worker` | unit-testing |
 | `ReplaySafeLogger` | unit-testing |
 | `NoOpLogger` | unit-testing |
-| Connection strings | index.ts, all samples |
-| `DefaultAzureCredential` | index.ts |
-| `createAzureLogger()` | index.ts |
-| Distributed tracing (OTel) | distributed-tracing.ts |
+| Connection strings | basics, all samples |
+| `DefaultAzureCredential` | basics |
+| `createAzureLogger()` | basics |
+| Distributed tracing (OTel) | distributed-tracing |
 | `ConsoleLogger` | all samples |
 
 ---
@@ -263,7 +263,7 @@ npm run build
 ### 5. Run the Example
 
 ```bash
-npm run example -- ./examples/azure-managed/distributed-tracing.ts
+npm run example -- ./examples/azure-managed/distributed-tracing/index.ts
 ```
 
 You should see output like:
@@ -321,7 +321,7 @@ az login
 ### 3. Run
 
 ```bash
-npm run example -- ./examples/azure-managed/distributed-tracing.ts
+npm run example -- ./examples/azure-managed/distributed-tracing/index.ts
 ```
 
 ---
@@ -334,7 +334,7 @@ To export traces to **Azure Monitor** instead of Jaeger, replace the OTLP export
 npm install --no-save @azure/monitor-opentelemetry-exporter
 ```
 
-Then modify the OpenTelemetry setup in `distributed-tracing.ts`:
+Then modify the OpenTelemetry setup in `distributed-tracing/index.ts`:
 
 ```typescript
 import { AzureMonitorTraceExporter } from "@azure/monitor-opentelemetry-exporter";
@@ -404,8 +404,8 @@ docker compose down
 
 | File | Description |
 |------|-------------|
-| `distributed-tracing.ts` | Main example – OTel setup + orchestrations |
+| `distributed-tracing/` | Distributed tracing sample – OTel setup + orchestrations |
+| `basics/` | Basic sample – connection strings, DefaultAzureCredential |
 | `docker-compose.yml` | DTS Emulator + Jaeger stack |
 | `.env.emulator` | Pre-configured env vars for the local emulator |
 | `.env.example` | Template for Azure Managed DTS (cloud) |
-| `index.ts` | Basic example (no tracing) |

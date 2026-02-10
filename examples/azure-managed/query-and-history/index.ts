@@ -42,8 +42,8 @@ const greet = async (_ctx: ActivityContext, name: string): Promise<string> => {
 
 /** Creates a timer and calls an activity — produces rich history. */
 const richOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, name: string): any {
-  // Create a short timer
-  yield ctx.createTimer(500);
+  // Create a short timer (createTimer takes seconds, not milliseconds)
+  yield ctx.createTimer(1);
 
   // Call an activity
   const greeting: string = yield ctx.callActivity(greet, name);

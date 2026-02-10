@@ -1,0 +1,5 @@
+{
+  "name": "distributed-tracing",
+  "description": "OpenTelemetry distributed tracing with Jaeger/OTLP export",
+  "requiresEmulator": true
+}
