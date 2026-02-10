@@ -147,42 +147,7 @@ jobs:
           NEW_VERSION="${{ steps.calc-version.outputs.new_version }}"
           CHANGELOG_FILE="${{ steps.changelog-diff.outputs.changelog_file }}"
           RELEASE_DATE=$(date +%Y-%m-%d)
-          
-          # Read the changelog content
-          CHANGELOG_CONTENT=$(cat "$CHANGELOG_FILE")
-          
-          # Create new changelog section
-          NEW_SECTION="## v${NEW_VERSION} (${RELEASE_DATE})
-
-### Changes
-
-${CHANGELOG_CONTENT}
-"
-          
-          # Insert new section after "## Upcoming" section
-          node -e "
-            const fs = require('fs');
-            let content = fs.readFileSync('CHANGELOG.md', 'utf8');
-            
-            const newSection = \`$NEW_SECTION\`;
-            
-            // Find the Upcoming section and insert after it
-            const upcomingMatch = content.match(/## Upcoming[\s\S]*?(?=\n## v|$)/);
-            if (upcomingMatch) {
-              const upcomingEnd = content.indexOf(upcomingMatch[0]) + upcomingMatch[0].length;
-              content = content.slice(0, upcomingEnd) + '\n' + newSection + content.slice(upcomingEnd);
-            } else {
-              // No Upcoming section, prepend
-              content = '## Upcoming\n\n' + newSection + content;
-            }
-            
-            // Reset the Upcoming section to empty
-            content = content.replace(/## Upcoming[\s\S]*?(?=\n## v)/, '## Upcoming\n\n### New\n\n### Fixes\n\n');
-            
-            fs.writeFileSync('CHANGELOG.md', content);
-          "
-          
-          echo "Updated CHANGELOG.md"
+          node scripts/update-changelog.js "$NEW_VERSION" "$RELEASE_DATE" "$CHANGELOG_FILE"
 
       - name: Create release branch and commit
         id: create-branch
@@ -215,36 +180,37 @@ ${CHANGELOG_CONTENT}
       - name: Create Pull Request
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_VERSION: ${{ steps.calc-version.outputs.new_version }}
+          BRANCH_NAME: ${{ steps.create-branch.outputs.branch_name }}
+          CHANGELOG_FILE: ${{ steps.changelog-diff.outputs.changelog_file }}
         run: |
-          NEW_VERSION="${{ steps.calc-version.outputs.new_version }}"
-          BRANCH_NAME="${{ steps.create-branch.outputs.branch_name }}"
-          CHANGELOG_FILE="${{ steps.changelog-diff.outputs.changelog_file }}"
-          
           CHANGELOG_CONTENT=$(cat "$CHANGELOG_FILE")
           
-          PR_BODY="## Release v${NEW_VERSION}
-
-This PR prepares the release of version **${NEW_VERSION}** for all packages.
-
-### Packages Updated
-- \`@microsoft/durabletask-js@${NEW_VERSION}\`
-- \`@microsoft/durabletask-js-azuremanaged@${NEW_VERSION}\`
-
-### Changes Since Last Release
-${CHANGELOG_CONTENT}
-
-### Release Checklist
-- [ ] Review version bumps in package.json files
-- [ ] Review CHANGELOG.md updates
-- [ ] Verify CI passes
-- [ ] Merge this PR
-- [ ] After merge, the official build pipeline will produce signed artifacts
-- [ ] Download artifacts and publish to npm with appropriate tag
-"
+          # Write PR body to a temp file to avoid YAML escaping issues
+          cat > /tmp/pr_body.md << EOF
+          ## Release v${NEW_VERSION}
+          
+          This PR prepares the release of version **${NEW_VERSION}** for all packages.
+          
+          **Packages Updated:**
+          - @microsoft/durabletask-js@${NEW_VERSION}
+          - @microsoft/durabletask-js-azuremanaged@${NEW_VERSION}
+          
+          **Changes Since Last Release:**
+          ${CHANGELOG_CONTENT}
+          
+          **Release Checklist:**
+          - [ ] Review version bumps in package.json files
+          - [ ] Review CHANGELOG.md updates
+          - [ ] Verify CI passes
+          - [ ] Merge this PR
+          - [ ] After merge, the official build pipeline will produce signed artifacts
+          - [ ] Download artifacts and publish to npm with appropriate tag
+          EOF
           
           gh pr create \
             --title "Release v${NEW_VERSION}" \
-            --body "$PR_BODY" \
+            --body-file /tmp/pr_body.md \
             --base main \
             --head "$BRANCH_NAME" \
             --label "release"
