@@ -30,14 +30,14 @@ jobs:
           
           # Build azure-managed extension package
           - script: |
-              cd extensions/durabletask-js-azuremanaged
+              cd packages/durabletask-js-azuremanaged
               npm ci
               npm run build
               npm run test
               npm prune --production
             displayName: "Build azure-managed extension"
           - script: |
-              cd extensions/durabletask-js-azuremanaged
+              cd packages/durabletask-js-azuremanaged
               npm pack
             displayName: "pack azure-managed extension"
           
@@ -50,6 +50,6 @@ jobs:
           - task: CopyFiles@2
             displayName: "Copy azure-managed extension to staging"
             inputs:
-                SourceFolder: $(System.DefaultWorkingDirectory)/extensions/durabletask-js-azuremanaged
+                SourceFolder: $(System.DefaultWorkingDirectory)/packages/durabletask-js-azuremanaged
                 Contents: "*.tgz"
                 TargetFolder: $(Build.ArtifactStagingDirectory)/buildoutputs
