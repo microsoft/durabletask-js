@@ -63,7 +63,7 @@ const approvalOrchestrator: TOrchestrator = async function* (ctx: OrchestrationC
 
   // Step 2: Race external event vs timer
   const approvalEvent = ctx.waitForExternalEvent<{ approved: boolean }>("approval");
-  const timeout = ctx.createTimer(5_000); // 5 seconds
+  const timeout = ctx.createTimer(5); // 5 seconds
 
   const winner = yield whenAny([approvalEvent, timeout]);
 
@@ -94,7 +94,7 @@ const notifierOrchestrator: TOrchestrator = async function* (
   targetInstanceId: string,
 ): any {
   // Wait a moment before sending (simulate some processing)
-  yield ctx.createTimer(1_000);
+  yield ctx.createTimer(1);
 
   // Send approval event to the target orchestration
   ctx.sendEvent(targetInstanceId, "approval", { approved: true });
