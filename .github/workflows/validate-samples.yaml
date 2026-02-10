@@ -1,0 +1,215 @@
+name: 🧪 Validate Samples
+
+# Validates all samples under examples/azure-managed/ on PRs and main pushes.
+# Samples are auto-discovered: any subfolder containing a sample.json is treated as a sample.
+# The "unit-testing" sample runs without emulator; emulator-dependent samples use Docker.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "examples/**"
+      - "packages/**"
+      - "package.json"
+      - "tsconfig.base.json"
+      - ".github/workflows/validate-samples.yaml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "examples/**"
+      - "packages/**"
+      - "package.json"
+      - "tsconfig.base.json"
+      - ".github/workflows/validate-samples.yaml"
+
+permissions:
+  contents: read
+
+jobs:
+  # -----------------------------------------------------------------------
+  # 1. Discover all samples dynamically
+  # -----------------------------------------------------------------------
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      # JSON arrays of sample directory names
+      emulator-samples: ${{ steps.find.outputs.emulator }}
+      no-emulator-samples: ${{ steps.find.outputs.no_emulator }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 🔍 Discover samples via sample.json
+        id: find
+        run: |
+          SAMPLES_ROOT="examples/azure-managed"
+
+          # Find all sample.json files under the samples root
+          emulator_samples="[]"
+          no_emulator_samples="[]"
+
+          for sample_json in $(find "$SAMPLES_ROOT" -mindepth 1 -name "sample.json" | sort); do
+            dir=$(dirname "$sample_json")
+            name=$(basename "$dir")
+            requires_emulator=$(jq -r '.requiresEmulator // true' "$sample_json")
+            skip_ci=$(jq -r '.skipCi // false' "$sample_json")
+
+            echo "Found sample: $name (requiresEmulator=$requires_emulator, skipCi=$skip_ci)"
+
+            if [ "$skip_ci" = "true" ]; then
+              echo "  ⏭️  Skipping $name (skipCi=true)"
+              continue
+            fi
+
+            if [ "$requires_emulator" = "false" ]; then
+              no_emulator_samples=$(echo "$no_emulator_samples" | jq --arg n "$name" '. + [$n]')
+            else
+              emulator_samples=$(echo "$emulator_samples" | jq --arg n "$name" '. + [$n]')
+            fi
+          done
+
+          echo "emulator=$(echo "$emulator_samples" | jq -c .)" >> "$GITHUB_OUTPUT"
+          echo "no_emulator=$(echo "$no_emulator_samples" | jq -c .)" >> "$GITHUB_OUTPUT"
+
+          echo "--- Emulator samples ---"
+          echo "$emulator_samples" | jq .
+          echo "--- No-emulator samples ---"
+          echo "$no_emulator_samples" | jq .
+
+  # -----------------------------------------------------------------------
+  # 2. Build the SDK (shared by all sample jobs)
+  # -----------------------------------------------------------------------
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: ["22.x"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ⚙️ Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: 🔨 Build SDK
+        run: npm run build
+
+      - name: 📁 Cache build output
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            node_modules
+            packages/*/dist
+            packages/*/node_modules
+          key: sdk-build-${{ github.sha }}-node${{ matrix.node-version }}
+
+  # -----------------------------------------------------------------------
+  # 3. Run samples that DON'T need the emulator (e.g., unit-testing)
+  # -----------------------------------------------------------------------
+  samples-no-emulator:
+    needs: [discover, build]
+    if: needs.discover.outputs.no-emulator-samples != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sample: ${{ fromJson(needs.discover.outputs.no-emulator-samples) }}
+        node-version: ["22.x"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ⚙️ Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: 📦 Restore build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            node_modules
+            packages/*/dist
+            packages/*/node_modules
+          key: sdk-build-${{ github.sha }}-node${{ matrix.node-version }}
+
+      - name: 🧪 Run sample — ${{ matrix.sample }}
+        run: |
+          echo "Running sample: ${{ matrix.sample }}"
+          npx ts-node --swc ./examples/azure-managed/${{ matrix.sample }}/index.ts
+        timeout-minutes: 2
+
+  # -----------------------------------------------------------------------
+  # 4. Run samples that need the DTS emulator (Docker)
+  # -----------------------------------------------------------------------
+  samples-with-emulator:
+    needs: [discover, build]
+    if: needs.discover.outputs.emulator-samples != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sample: ${{ fromJson(needs.discover.outputs.emulator-samples) }}
+        node-version: ["22.x"]
+
+    env:
+      DURABLE_TASK_SCHEDULER_CONNECTION_STRING: "Endpoint=http://localhost:8080;Authentication=None;TaskHub=default"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 🐳 Start DTS emulator
+        run: |
+          docker pull mcr.microsoft.com/dts/dts-emulator:latest
+          docker run --name dtsemulator -d -p 8080:8080 mcr.microsoft.com/dts/dts-emulator:latest
+
+      - name: ⏳ Wait for DTS emulator
+        run: sleep 10
+
+      - name: ⚙️ Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: 📦 Restore build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            node_modules
+            packages/*/dist
+            packages/*/node_modules
+          key: sdk-build-${{ github.sha }}-node${{ matrix.node-version }}
+
+      - name: 🧪 Run sample — ${{ matrix.sample }}
+        run: |
+          echo "Running sample: ${{ matrix.sample }}"
+          npx ts-node --swc ./examples/azure-managed/${{ matrix.sample }}/index.ts
+        timeout-minutes: 5
+
+      - name: 🧹 Stop DTS emulator
+        if: always()
+        run: docker rm -f dtsemulator || true
+
+  # -----------------------------------------------------------------------
+  # 5. Summary gate — all samples must pass
+  # -----------------------------------------------------------------------
+  samples-gate:
+    needs: [samples-no-emulator, samples-with-emulator]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: ✅ Check results
+        run: |
+          echo "No-emulator result: ${{ needs.samples-no-emulator.result }}"
+          echo "Emulator result: ${{ needs.samples-with-emulator.result }}"
+
+          if [[ ! "${{ needs.samples-no-emulator.result }}" =~ ^(success|skipped)$ ]] || \
+             [[ ! "${{ needs.samples-with-emulator.result }}" =~ ^(success|skipped)$ ]]; then
+            echo "❌ Some samples failed or were cancelled!"
+            exit 1
+          fi
+
+          echo "✅ All samples passed!"

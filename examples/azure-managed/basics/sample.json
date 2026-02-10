@@ -1,0 +1,6 @@
+{
+  "name": "azure-managed-basics",
+  "description": "Basic Azure-managed DTS usage with connection strings and DefaultAzureCredential",
+  "requiresEmulator": true,
+  "entrypoint": "index.ts"
+}

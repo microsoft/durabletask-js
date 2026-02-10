@@ -1,3 +1,162 @@
+# Azure Managed Durable Task Scheduler — Samples
+
+Runnable samples demonstrating every major feature of the Durable Task JavaScript SDK with Azure Managed DTS.
+
+## Sample Index
+
+| Sample | Scenario | Key Features | Emulator Required |
+|--------|----------|-------------|-------------------|
+| [hello-orchestrations](hello-orchestrations/) | Core patterns | Activity sequence, fan-out/fan-in, sub-orchestrations, `whenAny` | Yes |
+| [retry-and-error-handling](retry-and-error-handling/) | Fault tolerance | `RetryPolicy`, `handleFailure`, `AsyncRetryHandler`, sub-orchestration retry, `raiseIfFailed()` | Yes |
+| [human-interaction](human-interaction/) | Event-driven workflows | External events, timers, `whenAny` race, `sendEvent`, custom status | Yes |
+| [lifecycle-management](lifecycle-management/) | Orchestration control | Terminate (recursive), suspend/resume, restart, continue-as-new, purge, tags | Yes |
+| [query-and-history](query-and-history/) | Monitoring & debugging | `getAllInstances`, pagination, `listInstanceIds`, `getOrchestrationHistory`, typed events | Yes |
+| [versioning](versioning/) | Safe deployments | Version match strategies, failure strategies, `ctx.version`, `ctx.compareVersionTo()` | Yes |
+| [unit-testing](unit-testing/) | Testing without infra | `InMemoryOrchestrationBackend`, `TestOrchestrationClient`, `TestOrchestrationWorker`, `ReplaySafeLogger` | **No** |
+| [basics](basics/) | Azure-managed basics | Connection strings, `DefaultAzureCredential`, `createAzureManagedClient` | Yes |
+| [distributed-tracing](distributed-tracing/) | OpenTelemetry tracing | `NodeSDK`, OTLP export, Jaeger, `DurableTaskAzureManagedClientBuilder` | Yes |
+
+### Quick Start (Local Emulator)
+
+```bash
+npm install && npm run build                              # build SDK
+cd examples/azure-managed && docker compose up -d          # start emulator
+cp .env.emulator .env                                      # configure
+cd ../..
+npm run example -- ./examples/azure-managed/hello-orchestrations/index.ts
+```
+
+### Quick Start (Azure Managed DTS — Cloud)
+
+To run samples against a **real Azure Managed Durable Task Scheduler** instead of the local emulator:
+
+#### 1. Create a Durable Task Scheduler resource
+
+If you haven't already, create a Durable Task Scheduler and a Task Hub in Azure:
+
+```bash
+# Install the Durable Task Scheduler CLI extension
+az extension add --name durabletask
+
+# Create a scheduler
+az durabletask scheduler create \
+  --resource-group <your-rg> \
+  --name <your-scheduler-name> \
+  --location <region> \
+  --sku free
+
+# Create a task hub
+az durabletask taskhub create \
+  --resource-group <your-rg> \
+  --scheduler-name <your-scheduler-name> \
+  --name <your-taskhub-name>
+```
+
+#### 2. Assign yourself the "Durable Task Data Contributor" role
+
+```bash
+SCHEDULER_ID=$(az durabletask scheduler show \
+  --resource-group <your-rg> \
+  --name <your-scheduler-name> \
+  --query id -o tsv)
+
+az role assignment create \
+  --assignee $(az ad signed-in-user show --query id -o tsv) \
+  --role "Durable Task Data Contributor" \
+  --scope $SCHEDULER_ID
+```
+
+#### 3. Configure your `.env` file
+
+```bash
+cd examples/azure-managed
+cp .env.example .env
+```
+
+Edit `.env` with your scheduler's endpoint and task hub name:
+
+```env
+# Option A: Connection string (recommended)
+DURABLE_TASK_SCHEDULER_CONNECTION_STRING=Endpoint=https://<your-scheduler>.eastus.durabletask.io;Authentication=DefaultAzure;TaskHub=<your-taskhub>
+
+# Option B: Explicit parameters
+# AZURE_DTS_ENDPOINT=https://<your-scheduler>.eastus.durabletask.io
+# AZURE_DTS_TASKHUB=<your-taskhub>
+```
+
+#### 4. Authenticate and run
+
+```bash
+az login                      # authenticate with Azure
+cd ../..                      # back to repo root
+npm run example -- ./examples/azure-managed/hello-orchestrations/index.ts
+```
+
+> **Supported authentication types** in the connection string: `DefaultAzure`, `ManagedIdentity`, `WorkloadIdentity`, `Environment`, `AzureCli`, `AzurePowerShell`, `VisualStudioCode`, `InteractiveBrowser`.
+
+See each sample's README for details. See [Feature Coverage Map](#feature-coverage-map) below for full feature mapping.
+
+### CI Validation
+
+Samples are validated automatically by [`.github/workflows/validate-samples.yaml`](../../.github/workflows/validate-samples.yaml). Any subfolder with a `sample.json` is auto-discovered and tested on every PR.
+
+To add a new sample: create a subfolder with `sample.json`, `index.ts`, and `README.md`. CI picks it up automatically.
+
+### Running All Samples Locally
+
+```bash
+for dir in examples/azure-managed/*/; do
+  if [ -f "$dir/sample.json" ] && [ -f "$dir/index.ts" ]; then
+    echo "--- Running $(basename $dir) ---"
+    npx ts-node --swc "$dir/index.ts"
+  fi
+done
+```
+
+### Feature Coverage Map
+
+| Feature | Sample(s) |
+|---------|-----------|
+| `ctx.callActivity()` | hello-orchestrations, retry-and-error-handling |
+| `whenAll()` | hello-orchestrations, unit-testing |
+| `whenAny()` | hello-orchestrations, human-interaction |
+| `ctx.callSubOrchestrator()` | hello-orchestrations, retry-and-error-handling, lifecycle-management |
+
+| `ctx.waitForExternalEvent()` | human-interaction, unit-testing |
+| `client.raiseOrchestrationEvent()` | human-interaction, unit-testing |
+| `ctx.createTimer()` | human-interaction, query-and-history, unit-testing |
+| `ctx.sendEvent()` | human-interaction |
+| `ctx.setCustomStatus()` | human-interaction |
+| `RetryPolicy` | retry-and-error-handling |
+| `handleFailure` predicate | retry-and-error-handling |
+| `AsyncRetryHandler` | retry-and-error-handling |
+| `state.raiseIfFailed()` | retry-and-error-handling |
+| `terminateOrchestration()` | lifecycle-management, unit-testing |
+| `terminateOptions()` (recursive) | lifecycle-management |
+| `suspendOrchestration()` / `resumeOrchestration()` | lifecycle-management, unit-testing |
+| `continueAsNew()` | lifecycle-management, unit-testing |
+| `restartOrchestration()` | lifecycle-management |
+| `purgeOrchestration()` | lifecycle-management |
+| Orchestration tags | lifecycle-management |
+| `getAllInstances()` / pagination | query-and-history |
+| `listInstanceIds()` | query-and-history |
+| `getOrchestrationHistory()` | query-and-history |
+| Typed `HistoryEvent` | query-and-history |
+| `VersionMatchStrategy` | versioning |
+| `VersionFailureStrategy` | versioning |
+| `ctx.version` / `ctx.compareVersionTo()` | versioning |
+| `InMemoryOrchestrationBackend` | unit-testing |
+| `TestOrchestrationClient/Worker` | unit-testing |
+| `ReplaySafeLogger` | unit-testing |
+| `NoOpLogger` | unit-testing |
+| Connection strings | basics, all samples |
+| `DefaultAzureCredential` | basics |
+| `createAzureLogger()` | basics |
+| Distributed tracing (OTel) | distributed-tracing |
+| `ConsoleLogger` | all samples |
+
+---
+
 # Distributed Tracing with Azure Managed Durable Task Scheduler
 
 This example demonstrates **OpenTelemetry distributed tracing** with the Durable Task JavaScript SDK and Azure Managed Durable Task Scheduler (DTS). Traces are exported to [Jaeger](https://www.jaegertracing.io/) so you can visualize the full orchestration lifecycle as connected spans.
@@ -104,7 +263,7 @@ npm run build
 ### 5. Run the Example
 
 ```bash
-npm run example -- ./examples/azure-managed/distributed-tracing.ts
+npm run example -- ./examples/azure-managed/distributed-tracing/index.ts
 ```
 
 You should see output like:
@@ -162,7 +321,7 @@ az login
 ### 3. Run
 
 ```bash
-npm run example -- ./examples/azure-managed/distributed-tracing.ts
+npm run example -- ./examples/azure-managed/distributed-tracing/index.ts
 ```
 
 ---
@@ -175,7 +334,7 @@ To export traces to **Azure Monitor** instead of Jaeger, replace the OTLP export
 npm install --no-save @azure/monitor-opentelemetry-exporter
 ```
 
-Then modify the OpenTelemetry setup in `distributed-tracing.ts`:
+Then modify the OpenTelemetry setup in `distributed-tracing/index.ts`:
 
 ```typescript
 import { AzureMonitorTraceExporter } from "@azure/monitor-opentelemetry-exporter";
@@ -245,8 +404,8 @@ docker compose down
 
 | File | Description |
 |------|-------------|
-| `distributed-tracing.ts` | Main example – OTel setup + orchestrations |
+| `distributed-tracing/` | Distributed tracing sample – OTel setup + orchestrations |
+| `basics/` | Basic sample – connection strings, DefaultAzureCredential |
 | `docker-compose.yml` | DTS Emulator + Jaeger stack |
 | `.env.emulator` | Pre-configured env vars for the local emulator |
 | `.env.example` | Template for Azure Managed DTS (cloud) |
-| `index.ts` | Basic example (no tracing) |

@@ -8,7 +8,7 @@
 // Load environment variables from .env file (recommended for local development)
 import * as dotenv from "dotenv";
 import * as path from "path";
-dotenv.config({ path: path.join(__dirname, ".env") });
+dotenv.config({ path: path.join(__dirname, "..", ".env") });
 
 import { DefaultAzureCredential } from "@azure/identity";
 import {
