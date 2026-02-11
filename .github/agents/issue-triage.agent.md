@@ -72,7 +72,7 @@ Determine likely owners using:
 **Rules:**
 
 - Never assign without evidence.
-- If no clear owner exists, tag `area/unknown` and suggest candidates.
+- If no clear owner exists, do not add an `area/*` label; instead, optionally add `status/needs-info` and suggest candidate owners.
 
 ### 3. Issue Hygiene & Cleanup
 
