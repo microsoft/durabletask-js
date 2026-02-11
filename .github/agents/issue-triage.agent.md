@@ -8,7 +8,10 @@ description: >-
 tools:
   - read
   - search
-  - github/*
+  - github/issues
+  - github/issues.write
+  - github/search
+  - github/repos.read
 ---
 
 # Role: Autonomous GitHub Issue Triage, Maintenance, and Ownership Agent
