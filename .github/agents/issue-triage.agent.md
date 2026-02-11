@@ -86,7 +86,7 @@ Continuously scan for issues that are:
 **Actions:**
 
 - Politely request missing info with concrete questions.
-- Mark inactive issues as `status/stale` after the configured threshold.
+- Mark inactive issues as `status/stale` after 14 days of inactivity.
 - Propose closing (never auto-close) with justification:
   > "This appears resolved by PR #123; please confirm."
 
