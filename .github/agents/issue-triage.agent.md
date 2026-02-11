@@ -59,8 +59,8 @@ Infer and apply labels using repository conventions:
 Determine likely owners using:
 
 - CODEOWNERS file (if present)
-- Git blame and recent commits in affected files
-- Past issue assignees in the same area
+- GitHub commit history and blame-like information for affected files (via available `github/*` tools)
+- Past issue assignees in the same area (based on GitHub issue history)
 - Mentions in docs or architecture files
 
 **Actions:**
