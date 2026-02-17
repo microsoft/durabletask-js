@@ -43,10 +43,16 @@ extends:
             keyvaultname: 'durable-esrp-akv'
             signcertname: 'dts-esrp-cert'
             clientid: '0b3ed1a4-0727-4a50-b82a-02c2bd9dec89'
+            intent: 'PackageDistribution'
+            contenttype: 'npm'
+            contentsource: 'Folder'
             folderlocation: '$(System.DefaultWorkingDirectory)/drop/buildoutputs/durabletask-js'
+            waitforreleasecompletion: true
             owners: 'wangbill@microsoft.com'
             approvers: 'kaibocai@microsoft.com'
-            mainpublisher: 'durabletask-js'
+            serviceendpointurl: 'https://api.esrp.microsoft.com'
+            mainpublisher: 'durabletask-java'
+            domaintenantid: '33e01921-4d64-4f8c-a055-5bdaffd5e33d'
 
       - job: durabletask_js_azuremanaged
         displayName: 'Release @microsoft/durabletask-js-azuremanaged'
@@ -68,7 +74,13 @@ extends:
             keyvaultname: 'durable-esrp-akv'
             signcertname: 'dts-esrp-cert'
             clientid: '0b3ed1a4-0727-4a50-b82a-02c2bd9dec89'
+            intent: 'PackageDistribution'
+            contenttype: 'npm'
+            contentsource: 'Folder'
             folderlocation: '$(System.DefaultWorkingDirectory)/drop/buildoutputs/durabletask-js-azuremanaged'
+            waitforreleasecompletion: true
             owners: 'wangbill@microsoft.com'
             approvers: 'kaibocai@microsoft.com'
-            mainpublisher: 'durabletask-js'
+            serviceendpointurl: 'https://api.esrp.microsoft.com'
+            mainpublisher: 'durabletask-java'
+            domaintenantid: '33e01921-4d64-4f8c-a055-5bdaffd5e33d'
