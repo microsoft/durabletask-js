@@ -5,6 +5,15 @@
 ### Fixes
 
 
+## v0.2.0 (2026-02-18)
+
+### Changes
+
+- Update README.md to clarify SDK compatibility and improve usage instructions ([#110](https://github.com/microsoft/durabletask-js/pull/110))
+- Update ESRP release configuration for durabletask-js and durabletask-js-azuremanaged ([#109](https://github.com/microsoft/durabletask-js/pull/109))
+- Add autonomous issue triage agent for GitHub issues management ([#108](https://github.com/microsoft/durabletask-js/pull/108))
+- Release v0.1.0-beta.1 ([#107](https://github.com/microsoft/durabletask-js/pull/107))
+
 ## v0.1.0-beta.1 (2026-02-10)
 
 ### Changes
