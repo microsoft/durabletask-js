@@ -1,183 +1,155 @@
-# DurableTask Javascript
+# Durable Task SDK for JavaScript/TypeScript
 
+[![Build status](https://github.com/microsoft/durabletask-js/actions/workflows/validate-build.yml/badge.svg)](https://github.com/microsoft/durabletask-js/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-This repo contains a Javascript client SDK for use with the [Durable Task Framework for Go](https://github.com/microsoft/durabletask-go) and [Dapr Workflow](https://docs.dapr.io/developing-applications/building-blocks/workflow/workflow-overview/). With this SDK, you can define, schedule, and manage durable orchestrations using ordinary Javascript code.
+This repo contains a JavaScript/TypeScript SDK for use with the [Azure Durable Task Scheduler](https://github.com/Azure/Durable-Task-Scheduler). With this SDK, you can define, schedule, and manage durable orchestrations using ordinary TypeScript/JavaScript code.
 
-> This SDK is currently under active development and is not yet ready for production use.
+> Note that this SDK is **not** currently compatible with [Azure Durable Functions](https://learn.microsoft.com/azure/azure-functions/durable/durable-functions-overview). If you are looking for a JavaScript SDK for Azure Durable Functions, please see [this repo](https://github.com/Azure/azure-functions-durable-js).
 
-Note that this project is **not** currently affiliated with the [Durable Functions](https://docs.microsoft.com/azure/azure-functions/durable/durable-functions-overview) project for Azure Functions.
+## npm packages
 
-⚠️ **This SDK is currently under active development and is not yet ready for production use.** ⚠️
+The following npm packages are available for download.
+
+| Name | Latest version | Description |
+| - | - | - |
+| Core SDK | [![npm version](https://img.shields.io/npm/v/@microsoft/durabletask-js)](https://www.npmjs.com/package/@microsoft/durabletask-js) | Core Durable Task SDK for JavaScript/TypeScript. |
+| AzureManaged SDK | [![npm version](https://img.shields.io/npm/v/@microsoft/durabletask-js-azuremanaged)](https://www.npmjs.com/package/@microsoft/durabletask-js-azuremanaged) | Azure-managed [Durable Task Scheduler](https://learn.microsoft.com/azure/azure-functions/durable/durable-functions-task-scheduler) support for the Durable Task JavaScript SDK. |
+
+## Prerequisites
+
+- [Node.js](https://nodejs.org/) 22 or higher
+- An [Azure Durable Task Scheduler](https://learn.microsoft.com/azure/azure-functions/durable/durable-functions-task-scheduler) instance, or the [DTS Emulator](https://github.com/Azure/Durable-Task-Scheduler) for local development
+
+## Usage with the Durable Task Scheduler
+
+This SDK can be used with the [Durable Task Scheduler](https://learn.microsoft.com/azure/azure-functions/durable/durable-functions-task-scheduler), a managed backend for running durable orchestrations in Azure.
+
+To get started, install the npm packages:
+
+```sh
+npm install @microsoft/durabletask-js @microsoft/durabletask-js-azuremanaged
+```
+
+You can then use the following code to define a simple "Hello, cities" durable orchestration.
+
+```typescript
+import {
+  ActivityContext,
+  OrchestrationContext,
+  TOrchestrator,
+} from "@microsoft/durabletask-js";
+import {
+  createAzureManagedClient,
+  createAzureManagedWorkerBuilder,
+} from "@microsoft/durabletask-js-azuremanaged";
+
+// Define an activity function
+const sayHello = async (_: ActivityContext, name: string): Promise<string> => {
+  return `Hello, ${name}!`;
+};
+
+// Define an orchestrator function
+const helloCities: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+  const result1 = yield ctx.callActivity(sayHello, "Tokyo");
+  const result2 = yield ctx.callActivity(sayHello, "London");
+  const result3 = yield ctx.callActivity(sayHello, "Seattle");
+  return [result1, result2, result3];
+};
+
+// Create client and worker using a connection string
+const connectionString = process.env.DURABLE_TASK_SCHEDULER_CONNECTION_STRING!;
+const client = createAzureManagedClient(connectionString);
+const worker = createAzureManagedWorkerBuilder(connectionString)
+  .addOrchestrator(helloCities)
+  .addActivity(sayHello)
+  .build();
+
+// Start the worker and schedule an orchestration
+await worker.start();
+const id = await client.scheduleNewOrchestration(helloCities);
+const state = await client.waitForOrchestrationCompletion(id, true, 60);
+console.log(`Result: ${state?.serializedOutput}`);
+```
+
+You can find more samples in the [examples/azure-managed](./examples/azure-managed) directory.
 
 ## Supported patterns
 
-The following orchestration patterns are currently supported.
+The following orchestration patterns are supported.
 
 ### Function chaining
 
-An orchestration can chain a sequence of function calls using the following syntax:
-
-```typescript
-function hello(ctx: ActivityContext, name: string): string {
-  return `Hello ${name}!`;
-}
-
-const sequence: TOrchestrator = async function* (ctx: OrchestrationContext): any {
-  const cities = [];
-
-  const result1 = yield ctx.callActivity(hello, "Tokyo");
-  cities.push(result1);
-  const result2 = yield ctx.callActivity(hello, "Seatle");
-  cities.push(result2);
-  const result3 = yield ctx.callActivity(hello, "London");
-  cities.push(result3);
-
-  return cities;
-};
-```
-
-You can find the full sample [here](./examples/activity-sequence.ts).
+The getting-started example above demonstrates function chaining, where an orchestration calls a sequence of activities one after another. You can find the full sample at [examples/hello-world/activity-sequence.ts](./examples/hello-world/activity-sequence.ts).
 
 ### Fan-out/fan-in
 
-An orchestration can fan-out a dynamic number of function calls in parallel and then fan-in the results using the following syntax:
+An orchestration can fan-out a dynamic number of function calls in parallel and then fan-in the results:
 
 ```typescript
-# activity function for getting the list of work items
-function getWorkItems (ctx: ActivityContext): string[] {
-    //...
-}
-
-function processWorkItem(ctx: ActivityContext): number {
-    //...
-}
+import { whenAll } from "@microsoft/durabletask-js";
 
 const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
-    const tasks = [];
-    const workItems = yield ctx.callActivity(getWorkItems);
-    for (const workItem of workItems) {
-    tasks.push(ctx.callActivity(processWorkItem, workItem));
-    }
-    const results = yield whenAll(tasks);
-    return results
-}
+  const workItems = yield ctx.callActivity(getWorkItems);
+  const tasks = [];
+  for (const item of workItems) {
+    tasks.push(ctx.callActivity(processWorkItem, item));
+  }
+  const results: number[] = yield whenAll(tasks);
+  return results.reduce((sum, val) => sum + val, 0);
+};
 ```
 
-You can find the full sample [here](./examples/fanout-fanin.ts).
+You can find the full sample at [examples/hello-world/fanout-fanin.ts](./examples/hello-world/fanout-fanin.ts).
 
 ### Human interaction and durable timers
 
-An orchestration can wait for a user-defined event, such as a human approval event, before proceding to the next step. In addition, the orchestration can create a timer with an arbitrary duration that triggers some alternate action if the external event hasn't been received:
+An orchestration can wait for external events, such as a human approval, with optional timeout handling:
 
 ```typescript
-const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, order: Order): any {
+import { whenAny } from "@microsoft/durabletask-js";
+
+const purchaseOrderWorkflow: TOrchestrator = async function* (
+  ctx: OrchestrationContext,
+  order: Order,
+): any {
+  // Orders under $1000 are auto-approved
   if (order.cost < 1000) {
-    return "Auto-approvied";
+    return "Auto-approved";
   }
 
+  // Orders of $1000 or more require manager approval
   yield ctx.callActivity(sendApprovalRequest, order);
+
+  // Approvals must be received within 24 hours or they will be canceled
   const approvalEvent = ctx.waitForExternalEvent("approval_received");
-  const timerEvent = ctx.createTimer(10 * 60);
-  const winner = yield whenAny([approvalEvent, timerEvent]);
-  if (winner == timerEvent) {
-    return "Canceled";
+  const timeoutEvent = ctx.createTimer(24 * 60 * 60);
+  const winner = yield whenAny([approvalEvent, timeoutEvent]);
+
+  if (winner == timeoutEvent) {
+    return "Cancelled";
   }
 
-  ctx.callActivity(placeOrder, order);
+  yield ctx.callActivity(placeOrder, order);
   const approvalDetails = approvalEvent.getResult();
   return `Approved by ${approvalDetails.approver}`;
 };
 ```
 
-As an aside, you'll also notice that the example orchestration above works with custom business objects. Support for custom business objects includes support for custom classes, custom data classes, and named tuples. Serialization and deserialization of these objects is handled automatically by the SDK.
+You can find the full sample at [examples/hello-world/human_interaction.ts](./examples/hello-world/human_interaction.ts).
 
-You can find the full sample [here](./examples/human_interaction.ts).
-### Durable Entities (Stateful Actors)
+### Durable entities
 
 Durable entities provide a way to manage small pieces of state with a simple object-oriented programming model:
 
 ```typescript
-import { TaskEntity, EntityInstanceId } from "durabletask-js";
-
-// Define an entity by extending TaskEntity
-class CounterEntity extends TaskEntity<{ value: number }> {
-  add(amount: number): number {
-    this.state.value += amount;
-    return this.state.value;
-  }
-
-  protected initializeState() {
-    return { value: 0 };
-  }
-}
-
-// From an orchestration, call the entity
-const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
-  const entityId = new EntityInstanceId("Counter", "myCounter");
-  const value: number = yield* ctx.entities.callEntity(entityId, "add", 5);
-  return value;
-};
-```
-
-You can find full entity samples [here](./examples/hello-world/entity-counter.ts) and [here](./examples/hello-world/entity-orchestration.ts).
-## Feature overview
-
-The following features are currently supported:
-
-### Orchestrations
-
-Orchestrations are implemented using ordinary Python functions that take an `OrchestrationContext` as their first parameter. The `OrchestrationContext` provides APIs for starting child orchestrations, scheduling activities, and waiting for external events, among other things. Orchestrations are fault-tolerant and durable, meaning that they can automatically recover from failures and rebuild their local execution state. Orchestrator functions must be deterministic, meaning that they must always produce the same output given the same input.
-
-### Activities
-
-Activities are implemented using ordinary Python functions that take an `ActivityContext` as their first parameter. Activity functions are scheduled by orchestrations and have at-least-once execution guarantees, meaning that they will be executed at least once but may be executed multiple times in the event of a transient failure. Activity functions are where the real "work" of any orchestration is done.
-
-### Durable timers
-
-Orchestrations can schedule durable timers using the `create_timer` API. These timers are durable, meaning that they will survive orchestrator restarts and will fire even if the orchestrator is not actively in memory. Durable timers can be of any duration, from milliseconds to months.
-
-### Sub-orchestrations
-
-Orchestrations can start child orchestrations using the `call_sub_orchestrator` API. Child orchestrations are useful for encapsulating complex logic and for breaking up large orchestrations into smaller, more manageable pieces.
-
-### External events
-
-Orchestrations can wait for external events using the `wait_for_external_event` API. External events are useful for implementing human interaction patterns, such as waiting for a user to approve an order before continuing.
-
-### Continue-as-new
-
-Orchestrations can be continued as new using the `continue_as_new` API. This API allows an orchestration to restart itself from scratch, optionally with a new input.
-
-### Durable Entities
-
-Durable entities are stateful objects that can be accessed from orchestrations or directly from clients. They support operations that can read/modify state, and multiple entities can be locked together for atomic cross-entity transactions. See the detailed section below for more information.
-
-### Suspend, resume, and terminate
-
-Orchestrations can be suspended using the `suspend_orchestration` client API and will remain suspended until resumed using the `resume_orchestration` client API. A suspended orchestration will stop processing new events, but will continue to buffer any that happen to arrive until resumed, ensuring that no data is lost. An orchestration can also be terminated using the `terminate_orchestration` client API. Terminated orchestrations will stop processing new events and will discard any buffered events.
-
-### Retry policies (TODO)
-
-Orchestrations can specify retry policies for activities and sub-orchestrations. These policies control how many times and how frequently an activity or sub-orchestration will be retried in the event of a transient error.
-
-### Durable Entities
-
-Durable entities are stateful objects that can be accessed and manipulated from orchestrations or directly from clients. Entities provide a way to manage small pieces of state that need to be accessed and updated reliably.
-
-#### Defining an Entity
-
-Entities are defined by extending the `TaskEntity` class:
-
-```typescript
-import { TaskEntity } from "durabletask-js";
+import { TaskEntity } from "@microsoft/durabletask-js";
 
 interface CounterState {
   value: number;
 }
 
 class CounterEntity extends TaskEntity<CounterState> {
-  // Operations are just methods on the class
   add(amount: number): number {
     this.state.value += amount;
     return this.state.value;
@@ -191,138 +163,30 @@ class CounterEntity extends TaskEntity<CounterState> {
     this.state.value = 0;
   }
 
-  // Required: Initialize the entity state
   protected initializeState(): CounterState {
     return { value: 0 };
   }
 }
 
 // Register with the worker
-worker.addEntity("Counter", () => new CounterEntity());
+worker.addNamedEntity("Counter", () => new CounterEntity());
 ```
 
-#### Accessing Entities from a Client
+You can find the full entity samples at [examples/entity-counter](./examples/entity-counter) and [examples/entity-orchestration](./examples/entity-orchestration).
 
-Entities can be signaled (fire-and-forget) or queried from a client:
+## Obtaining the Protobuf definitions
 
-```typescript
-import { TaskHubGrpcClient, EntityInstanceId } from "durabletask-js";
-
-const client = new TaskHubGrpcClient("localhost:4001");
-const entityId = new EntityInstanceId("Counter", "myCounter");
-
-// Signal an operation (fire-and-forget)
-await client.signalEntity(entityId, "add", 5);
-
-// Get the entity state
-const response = await client.getEntity<CounterState>(entityId);
-console.log(`Current value: ${response.state?.value}`);
-```
-
-#### Calling Entities from Orchestrations
-
-Orchestrations can call entities and wait for results:
-
-```typescript
-const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
-  const entityId = new EntityInstanceId("Counter", "myCounter");
-
-  // Call entity and wait for result
-  const currentValue: number = yield* ctx.entities.callEntity(entityId, "get");
-
-  // Signal entity (fire-and-forget)
-  ctx.entities.signalEntity(entityId, "add", 10);
-
-  return currentValue;
-};
-```
-
-#### Entity Locking (Critical Sections)
-
-Multiple entities can be locked together for atomic operations:
-
-```typescript
-const transferOrchestration: TOrchestrator = async function* (
-  ctx: OrchestrationContext,
-  input: { from: string; to: string; amount: number }
-): any {
-  const fromEntity = new EntityInstanceId("Account", input.from);
-  const toEntity = new EntityInstanceId("Account", input.to);
-
-  // Lock both entities atomically (sorted to prevent deadlocks)
-  const lock = yield* ctx.entities.lockEntities(fromEntity, toEntity);
-
-  try {
-    const fromBalance: number = yield* ctx.entities.callEntity(fromEntity, "getBalance");
-    if (fromBalance >= input.amount) {
-      yield* ctx.entities.callEntity(fromEntity, "withdraw", input.amount);
-      yield* ctx.entities.callEntity(toEntity, "deposit", input.amount);
-    }
-  } finally {
-    lock.release();
-  }
-};
-```
-
-#### Entity Management
-
-Clean up empty or unused entities:
-
-```typescript
-// Clean up entities that have been empty for 30 days
-await client.cleanEntityStorage({ removeEmptyEntities: true });
-```
-
-You can find full entity examples [here](./examples/hello-world/entity-counter.ts) and [here](./examples/hello-world/entity-orchestration.ts).
-
-## Getting Started
-
-### Prerequisites
-
-- Node.js 18 or higher
-- A Durable Task-compatible sidecar, like [Dapr Workflow](https://docs.dapr.io/developing-applications/building-blocks/workflow/workflow-overview/)
-
-### Run the samples
-
-See the [examples](./examples) directory for a list of sample orchestrations and instructions on how to run them.
-
-## Development
-
-### Generating protobufs
-
-Protobuf definitions are downloaded from the [durabletask-protobuf](https://github.com/microsoft/durabletask-protobuf) repository. To download the latest proto files, run:
+This project utilizes protobuf definitions from [durabletask-protobuf](https://github.com/microsoft/durabletask-protobuf). To download the latest proto files, run:
 
 ```sh
 npm run download-proto
 ```
 
-This will download the proto files to `internal/durabletask-protobuf/protos/`.
-
-Once the proto files are available, the corresponding TypeScript source code can be regenerated using the following command from the project root:
+This will download the proto files to `internal/durabletask-protobuf/protos/`. Once the proto files are available, the corresponding TypeScript source code can be regenerated using:
 
 ```sh
-./tools/generate-grpc-javascript.sh ./src/proto
+npm run generate-grpc
 ```
-
-Note: You need `grpc-tools` installed globally (`npm install -g grpc-tools`).
-
-### Running unit tests
-
-Unit tests can be run using the following command from the project root. Unit tests _don't_ require a sidecar process to be running.
-
-```sh
-npm run test:unit
-```
-
-### Running E2E tests
-
-To run the E2E tests, run the following command from the project root:
-
-```sh
-npm run test:e2e
-```
-
-This command will start a durabletask sidecar docker container (cgillum/durabletask-sidecar:latest).
 
 ## Contributing
 
@@ -342,6 +206,6 @@ contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additio
 
 This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft
 trademarks or logos is subject to and must follow
-[Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/en-us/legal/intellectualproperty/trademarks/usage/general).
+[Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/legal/intellectualproperty/trademarks/usage/general).
 Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship.
 Any use of third-party trademarks or logos are subject to those third-party's policies.
