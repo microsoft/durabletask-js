@@ -245,16 +245,25 @@ export class ExportHistoryJobClient {
   async delete(): Promise<void> {
     const orchestrationInstanceId = getOrchestratorInstanceId(this.jobId);
 
-    // First, delete the entity
+    // First, delete the entity via the operation orchestrator
     const request: ExportJobOperationRequest = {
       entityId: this.entityId.toString(),
       operationName: "delete",
     };
 
-    await this.client.scheduleNewOrchestration(
+    const deleteInstanceId = await this.client.scheduleNewOrchestration(
       EXECUTE_EXPORT_JOB_OPERATION_ORCHESTRATOR_NAME,
       request,
     );
+
+    // Wait for the delete operation to complete
+    const deleteState = await this.client.waitForOrchestrationCompletion(deleteInstanceId, true, 60);
+
+    if (!deleteState || deleteState.runtimeStatus !== OrchestrationStatus.COMPLETED) {
+      throw new Error(
+        `Failed to delete export job '${this.jobId}': ${deleteState?.failureDetails?.message ?? "Unknown error"}`,
+      );
+    }
 
     // Then terminate the linked export orchestration if it exists
     try {
