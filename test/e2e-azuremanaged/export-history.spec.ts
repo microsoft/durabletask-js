@@ -162,7 +162,7 @@ describe("Export History E2E Tests (DTS)", () => {
       // Worker may not have been started
     }
     await taskHubClient.stop();
-  });
+  }, 30_000);
 
   describe("Export Job Entity Lifecycle", () => {
     it("should create an export job and query its status", async () => {
@@ -241,6 +241,10 @@ describe("Export History E2E Tests (DTS)", () => {
     it("should complete a batch export when there are completed orchestrations", async () => {
       await taskHubWorker.start();
 
+      // Record time BEFORE creating orchestrations to narrow the export time window.
+      // This avoids picking up unrelated instances from the shared task hub.
+      const completedTimeFrom = new Date();
+
       // Create some completed orchestration instances
       const ids: string[] = [];
       for (let i = 0; i < 3; i++) {
@@ -263,7 +267,7 @@ describe("Export History E2E Tests (DTS)", () => {
       const jobId = uniqueId("batch-export");
       const options = createExportJobCreationOptions({
         jobId,
-        completedTimeFrom: new Date(Date.now() - 120_000), // 2 minutes ago
+        completedTimeFrom,
         completedTimeTo,
         mode: ExportMode.Batch,
         format: { kind: ExportFormatKind.Jsonl, schemaVersion: "1.0" },
@@ -319,6 +323,9 @@ describe("Export History E2E Tests (DTS)", () => {
     it("should export orchestrations with multiple activity steps", async () => {
       await taskHubWorker.start();
 
+      // Record time BEFORE creating orchestrations to narrow the export time window.
+      const completedTimeFrom = new Date();
+
       // Create and complete multi-step orchestrations
       const ids: string[] = [];
       for (let i = 0; i < 2; i++) {
@@ -337,7 +344,7 @@ describe("Export History E2E Tests (DTS)", () => {
       const jobId = uniqueId("multi-step-export");
       const options = createExportJobCreationOptions({
         jobId,
-        completedTimeFrom: new Date(Date.now() - 120_000),
+        completedTimeFrom,
         completedTimeTo,
         mode: ExportMode.Batch,
         format: { kind: ExportFormatKind.Json, schemaVersion: "1.0" },

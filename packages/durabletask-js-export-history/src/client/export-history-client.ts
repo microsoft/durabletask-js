@@ -20,13 +20,11 @@ import {
 } from "../models";
 import {
   EXPORT_JOB_ENTITY_NAME,
-  EXPORT_JOB_ORCHESTRATOR_NAME,
   EXECUTE_EXPORT_JOB_OPERATION_ORCHESTRATOR_NAME,
   getOrchestratorInstanceId,
 } from "../constants";
 import { ExportJobNotFoundError } from "../errors";
 import { ExportJobOperationRequest } from "../orchestrators/execute-export-job-operation-orchestrator";
-import { ExportJobRunRequest } from "../entity/export-job";
 
 /**
  * Client for managing export history jobs.
@@ -174,20 +172,8 @@ export class ExportHistoryJobClient {
       );
     }
 
-    // Schedule the export job orchestrator directly from the client.
-    // Entity-level scheduleNewOrchestration is not reliably supported in all runtimes,
-    // so we schedule it here after the entity has been created successfully.
-    const exportOrchestratorInstanceId = getOrchestratorInstanceId(this.jobId);
-    const runRequest: ExportJobRunRequest = {
-      jobEntityId: this.entityId.toString(),
-      processedCycles: 0,
-    };
-
-    await this.client.scheduleNewOrchestration(
-      EXPORT_JOB_ORCHESTRATOR_NAME,
-      runRequest,
-      { instanceId: exportOrchestratorInstanceId },
-    );
+    // The entity's Create operation signals Run, which schedules the export orchestrator.
+    // No need to schedule the orchestrator from the client.
   }
 
   /**

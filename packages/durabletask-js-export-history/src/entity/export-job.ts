@@ -13,7 +13,10 @@ import {
   createInitialExportJobState,
 } from "../models";
 import { ExportJobInvalidTransitionError } from "../errors";
-import { getOrchestratorInstanceId } from "../constants";
+import {
+  EXPORT_JOB_ORCHESTRATOR_NAME,
+  getOrchestratorInstanceId,
+} from "../constants";
 
 /**
  * Input for the ExportJobOrchestrator.
@@ -50,6 +53,7 @@ export class ExportJob extends TaskEntity<ExportJobState> {
 
   /**
    * Creates a new export job from creation options.
+   * After updating entity state, signals the Run operation to start the export orchestration.
    */
   create(creationOptions: ExportJobCreationOptions): void {
     if (!creationOptions) {
@@ -95,8 +99,10 @@ export class ExportJob extends TaskEntity<ExportJobState> {
     this.state.checkpoint = undefined;
     this.state.lastCheckpointTime = undefined;
 
-    // Set the expected orchestrator instance ID (the client will schedule it)
-    this.state.orchestratorInstanceId = getOrchestratorInstanceId(creationOptions.jobId);
+    // Signal the startExport method to start the export orchestration
+    // (aligned with .NET's context.SignalEntity(context.Id, nameof(this.Run)),
+    // renamed to 'startExport' because JS TaskEntity reserves 'run' for dispatch)
+    this.context!.signalEntity(this.context!.id, "startExport");
   }
 
   /**
@@ -104,6 +110,24 @@ export class ExportJob extends TaskEntity<ExportJobState> {
    */
   get(): ExportJobState {
     return this.state;
+  }
+
+  /**
+   * Starts the export job by starting the export orchestrator.
+   * This is signaled by Create after the entity state is initialized.
+   * Named 'startExport' because JS TaskEntity reserves 'run' for dispatch.
+   * (.NET equivalent: ExportJob.Run)
+   */
+  startExport(): void {
+    if (this.state.status !== ExportJobStatus.Active) {
+      throw new Error("Export job must be in Active status to run.");
+    }
+
+    if (!this.state.config) {
+      throw new Error("Export job has no configuration.");
+    }
+
+    this.startExportOrchestration();
   }
 
   /**
@@ -174,6 +198,43 @@ export class ExportJob extends TaskEntity<ExportJobState> {
     this.state.status = ExportJobStatus.Failed;
     this.state.lastError = errorMessage;
     this.state.lastModifiedAt = new Date();
+  }
+
+  /**
+   * Deletes the export job entity by setting state to null.
+   */
+  delete(): void {
+    this.state = null as unknown as ExportJobState;
+  }
+
+  /**
+   * Starts the export orchestration by scheduling it from the entity context.
+   * Uses a fixed instance ID to prevent concurrent orchestrators for the same job.
+   */
+  private startExportOrchestration(): void {
+    try {
+      const jobKey = this.context!.id.key;
+      const instanceId = getOrchestratorInstanceId(jobKey);
+
+      const runRequest: ExportJobRunRequest = {
+        jobEntityId: this.context!.id.toString(),
+        processedCycles: 0,
+      };
+
+      this.context!.scheduleNewOrchestration(
+        EXPORT_JOB_ORCHESTRATOR_NAME,
+        runRequest,
+        { instanceId },
+      );
+
+      this.state.orchestratorInstanceId = instanceId;
+      this.state.lastModifiedAt = new Date();
+    } catch (ex) {
+      // Mark job as failed and record the exception
+      this.state.status = ExportJobStatus.Failed;
+      this.state.lastError = ex instanceof Error ? ex.message : String(ex);
+      this.state.lastModifiedAt = new Date();
+    }
   }
 
   private canTransitionTo(operationName: string, targetStatus: ExportJobStatus): boolean {

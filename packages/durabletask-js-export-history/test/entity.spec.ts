@@ -84,8 +84,12 @@ describe("ExportJob Entity", () => {
       expect(state.scannedInstances).toBe(0);
       expect(state.exportedInstances).toBe(0);
 
-      // Verify that orchestratorInstanceId was set (client will schedule the orchestrator)
-      expect(state.orchestratorInstanceId).toBeDefined();
+      // Verify that signalEntity was called to start the export
+      // (orchestratorInstanceId is set by startExport, not directly by create)
+      expect(op.context.signalEntity).toHaveBeenCalledWith(
+        op.context.id,
+        "startExport",
+      );
     });
 
     it("should throw when creationOptions is missing", async () => {
@@ -193,6 +197,66 @@ describe("ExportJob Entity", () => {
       const state = failOp._stateHolder.value!;
       expect(state.status).toBe(ExportJobStatus.Failed);
       expect(state.lastError).toBe("Something went wrong");
+    });
+  });
+
+  describe("startExport operation", () => {
+    it("should schedule export orchestrator when job is Active", async () => {
+      // Create a job first
+      const createOp = createMockOperation("create", {
+        jobId: "test-job-1",
+        completedTimeFrom: new Date("2024-01-01"),
+        mode: ExportMode.Batch,
+        format: createExportFormat(ExportFormatKind.Jsonl),
+        destination: { container: "exports" },
+        maxInstancesPerBatch: 100,
+        maxParallelExports: 10,
+      } as ExportJobCreationOptions);
+
+      await entity.run(createOp as any);
+
+      const entity2 = new ExportJob();
+      const startOp = createMockOperation("startExport");
+      startOp._stateHolder.value = { ...createOp._stateHolder.value! };
+
+      await entity2.run(startOp as any);
+
+      const state = startOp._stateHolder.value!;
+      expect(state.orchestratorInstanceId).toBeDefined();
+      expect(state.orchestratorInstanceId).toContain("ExportJob-");
+      expect(startOp.context.scheduleNewOrchestration).toHaveBeenCalled();
+    });
+
+    it("should throw when job is not Active", async () => {
+      const startOp = createMockOperation("startExport");
+      // State is NotStarted by default (initializeState)
+      await expect(entity.run(startOp as any)).rejects.toThrow("Export job must be in Active status to run.");
+    });
+  });
+
+  describe("delete operation", () => {
+    it("should set state to null (delete entity)", async () => {
+      // Create a job first
+      const createOp = createMockOperation("create", {
+        jobId: "test-job-1",
+        completedTimeFrom: new Date("2024-01-01"),
+        mode: ExportMode.Batch,
+        format: createExportFormat(ExportFormatKind.Jsonl),
+        destination: { container: "exports" },
+        maxInstancesPerBatch: 100,
+        maxParallelExports: 10,
+      } as ExportJobCreationOptions);
+
+      await entity.run(createOp as any);
+
+      const entity2 = new ExportJob();
+      const deleteOp = createMockOperation("delete");
+      deleteOp._stateHolder.value = { ...createOp._stateHolder.value! };
+
+      await entity2.run(deleteOp as any);
+
+      // State should be null after delete
+      expect(deleteOp._stateHolder.value).toBeNull();
     });
   });
 });
