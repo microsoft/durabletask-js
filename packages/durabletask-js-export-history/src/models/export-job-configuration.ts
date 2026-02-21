@@ -38,7 +38,7 @@ export interface ExportJobConfiguration {
 
   /**
    * The maximum number of parallel export activities.
-   * @default 10
+   * @default 32
    */
   readonly maxParallelExports: number;
 }
@@ -51,4 +51,4 @@ export const DEFAULT_MAX_INSTANCES_PER_BATCH = 100;
 /**
  * Default value for maxParallelExports.
  */
-export const DEFAULT_MAX_PARALLEL_EXPORTS = 10;
+export const DEFAULT_MAX_PARALLEL_EXPORTS = 32;

@@ -8,6 +8,7 @@ import {
   AsyncPageable,
   createAsyncPageable,
   Page,
+  EntityQuery,
 } from "@microsoft/durabletask-js";
 import {
   ExportJobCreationOptions,
@@ -72,27 +73,43 @@ export class ExportHistoryClient {
 
   /**
    * Lists export jobs matching the optional filter.
+   * Uses direct entity query API (aligned with .NET's GetAllEntitiesAsync).
    * @param filter Optional query parameters.
    * @returns An async pageable of export job descriptions.
    */
   listJobs(filter?: ExportJobQuery): AsyncPageable<ExportJobDescription> {
-    return createAsyncPageable(async (_continuationToken?: string) => {
-      // Use the operation orchestrator to get entity state
-      // We query orchestration instances that match the export job pattern
-      const _instanceIdPrefix = `@${EXPORT_JOB_ENTITY_NAME.toLowerCase()}@${filter?.jobIdPrefix ?? ""}`;
-      const _pageSize = filter?.pageSize ?? DEFAULT_EXPORT_JOB_QUERY_PAGE_SIZE;
+    return createAsyncPageable(async (continuationToken?: string) => {
+      const entityQuery: EntityQuery = {
+        instanceIdStartsWith: `@${EXPORT_JOB_ENTITY_NAME.toLowerCase()}@${filter?.jobIdPrefix ?? ""}`,
+        includeState: true,
+        pageSize: filter?.pageSize ?? DEFAULT_EXPORT_JOB_QUERY_PAGE_SIZE,
+        continuationToken,
+      };
 
-      // Since we don't have direct entity query APIs in the JS client,
-      // we need to list orchestration instances and filter
-      // For now, we'll use the entity-based approach with individual gets
-      // This is a simplified implementation that may need enhancement
-      // when entity query APIs become available in the JS SDK
-
-      // Return a page of results
-      // Note: Full entity listing requires gRPC entity query support
-      // which is not yet available in the JS SDK
+      // Fetch one page of entities
       const jobs: ExportJobDescription[] = [];
-      return new Page<ExportJobDescription>(jobs, undefined);
+      let nextToken: string | undefined;
+
+      for await (const entityPage of this.client.getEntities<ExportJobState>(entityQuery).asPages()) {
+        for (const metadata of entityPage.values) {
+          const state = metadata.state;
+          if (state === undefined) {
+            continue;
+          }
+
+          // Apply client-side filtering (aligned with .NET's MatchesFilter)
+          if (filter && !matchesFilter(state, filter)) {
+            continue;
+          }
+
+          jobs.push(mapStateToDescription(metadata.id.key, state));
+        }
+
+        nextToken = entityPage.continuationToken;
+        break; // Only process one page per call; the outer createAsyncPageable handles iteration
+      }
+
+      return new Page<ExportJobDescription>(jobs, nextToken);
     });
   }
 
@@ -178,78 +195,38 @@ export class ExportHistoryJobClient {
 
   /**
    * Gets the description of the export job.
+   * Uses direct entity read API (aligned with .NET's GetEntityAsync).
    * @returns The export job description.
    * @throws ExportJobNotFoundError if the job is not found.
    */
   async describe(): Promise<ExportJobDescription> {
-    // Use the operation orchestrator to get the entity state
-    const request: ExportJobOperationRequest = {
-      entityId: this.entityId.toString(),
-      operationName: "get",
-    };
+    const metadata = await this.client.getEntity<ExportJobState>(this.entityId, true);
 
-    const instanceId = await this.client.scheduleNewOrchestration(
-      EXECUTE_EXPORT_JOB_OPERATION_ORCHESTRATOR_NAME,
-      request,
-    );
-
-    const state = await this.client.waitForOrchestrationCompletion(instanceId, true, 60);
-
-    if (!state || state.runtimeStatus !== OrchestrationStatus.COMPLETED) {
+    if (!metadata || metadata.state === undefined) {
       throw new ExportJobNotFoundError(this.jobId);
     }
 
-    // The orchestrator output is the entity state
-    const jobState = state.serializedOutput
-      ? (JSON.parse(state.serializedOutput) as ExportJobState)
-      : null;
-
-    if (!jobState) {
-      throw new ExportJobNotFoundError(this.jobId);
-    }
-
-    return {
-      jobId: this.jobId,
-      status: jobState.status,
-      createdAt: jobState.createdAt ? new Date(jobState.createdAt) : undefined,
-      lastModifiedAt: jobState.lastModifiedAt ? new Date(jobState.lastModifiedAt) : undefined,
-      config: jobState.config,
-      orchestratorInstanceId: jobState.orchestratorInstanceId,
-      scannedInstances: jobState.scannedInstances,
-      exportedInstances: jobState.exportedInstances,
-      lastError: jobState.lastError,
-      checkpoint: jobState.checkpoint,
-      lastCheckpointTime: jobState.lastCheckpointTime
-        ? new Date(jobState.lastCheckpointTime)
-        : undefined,
-    };
+    return mapStateToDescription(this.jobId, metadata.state);
   }
 
   /**
    * Deletes the export job.
+   * Signals entity deletion via operation orchestrator (fire-and-forget, aligned with .NET),
+   * then terminates and purges the linked export orchestration.
    */
   async delete(): Promise<void> {
     const orchestrationInstanceId = getOrchestratorInstanceId(this.jobId);
 
-    // First, delete the entity via the operation orchestrator
+    // First, delete the entity (fire-and-forget — does not wait for the operation orchestrator)
     const request: ExportJobOperationRequest = {
       entityId: this.entityId.toString(),
       operationName: "delete",
     };
 
-    const deleteInstanceId = await this.client.scheduleNewOrchestration(
+    await this.client.scheduleNewOrchestration(
       EXECUTE_EXPORT_JOB_OPERATION_ORCHESTRATOR_NAME,
       request,
     );
-
-    // Wait for the delete operation to complete
-    const deleteState = await this.client.waitForOrchestrationCompletion(deleteInstanceId, true, 60);
-
-    if (!deleteState || deleteState.runtimeStatus !== OrchestrationStatus.COMPLETED) {
-      throw new Error(
-        `Failed to delete export job '${this.jobId}': ${deleteState?.failureDetails?.message ?? "Unknown error"}`,
-      );
-    }
 
     // Then terminate the linked export orchestration if it exists
     try {
@@ -260,4 +237,37 @@ export class ExportHistoryJobClient {
       // Orchestration instance doesn't exist or already purged - this is expected
     }
   }
+}
+
+/**
+ * Maps an ExportJobState to an ExportJobDescription.
+ */
+function mapStateToDescription(jobId: string, state: ExportJobState): ExportJobDescription {
+  return {
+    jobId,
+    status: state.status,
+    createdAt: state.createdAt ? new Date(state.createdAt) : undefined,
+    lastModifiedAt: state.lastModifiedAt ? new Date(state.lastModifiedAt) : undefined,
+    config: state.config,
+    orchestratorInstanceId: state.orchestratorInstanceId,
+    scannedInstances: state.scannedInstances,
+    exportedInstances: state.exportedInstances,
+    lastError: state.lastError,
+    checkpoint: state.checkpoint,
+    lastCheckpointTime: state.lastCheckpointTime ? new Date(state.lastCheckpointTime) : undefined,
+  };
+}
+
+/**
+ * Client-side filter matching for export job queries (aligned with .NET's MatchesFilter).
+ */
+function matchesFilter(state: ExportJobState, filter: ExportJobQuery): boolean {
+  const statusMatches = filter.status === undefined || state.status === filter.status;
+  const createdFromMatches =
+    filter.createdFrom === undefined ||
+    (state.createdAt !== undefined && new Date(state.createdAt) > filter.createdFrom);
+  const createdToMatches =
+    filter.createdTo === undefined ||
+    (state.createdAt !== undefined && new Date(state.createdAt) < filter.createdTo);
+  return statusMatches && createdFromMatches && createdToMatches;
 }

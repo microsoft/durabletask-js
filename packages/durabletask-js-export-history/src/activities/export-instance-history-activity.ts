@@ -48,11 +48,26 @@ export interface ExportResult {
 }
 
 /**
+ * Formats a Date to match .NET's DateTimeOffset round-trip ("O") format.
+ * .NET format: "2026-02-20T15:30:00.0000000+00:00"
+ * JS toISOString: "2026-02-20T15:30:00.000Z"
+ * This ensures blob filename hashes match between JS and .NET implementations.
+ */
+function formatDateRoundTrip(date: Date): string {
+  const iso = date.toISOString(); // e.g. "2026-02-20T15:30:00.000Z"
+  // Pad fractional seconds to 7 digits and replace Z with +00:00
+  const dotIndex = iso.lastIndexOf(".");
+  const fractional = iso.substring(dotIndex + 1, iso.length - 1); // e.g. "000"
+  const padded = fractional.padEnd(7, "0"); // e.g. "0000000"
+  return iso.substring(0, dotIndex + 1) + padded + "+00:00";
+}
+
+/**
  * Generates a blob file name from a completed timestamp and instance ID.
  * Uses SHA-256 hash for deterministic naming.
  */
 function generateBlobFileName(completedTimestamp: Date, instanceId: string, format: ExportFormat): string {
-  const hashInput = `${completedTimestamp.toISOString()}|${instanceId}`;
+  const hashInput = `${formatDateRoundTrip(completedTimestamp)}|${instanceId}`;
   const hash = createHash("sha256").update(hashInput).digest("hex").toLowerCase();
   const extension = getFileExtension(format);
   return `${hash}.${extension}`;

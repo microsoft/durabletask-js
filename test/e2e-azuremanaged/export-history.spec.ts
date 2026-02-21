@@ -185,8 +185,8 @@ describe("Export History E2E Tests (DTS)", () => {
       expect(description).toBeDefined();
       expect(description.jobId).toBe(jobId);
       // After creation, status should be either Active (started immediately)
-      // or NotStarted (waiting for orchestrator to pick up)
-      expect([ExportJobStatus.Active, ExportJobStatus.NotStarted]).toContain(
+      // or Pending (waiting for orchestrator to pick up)
+      expect([ExportJobStatus.Active, ExportJobStatus.Pending]).toContain(
         description.status,
       );
       expect(description.config).toBeDefined();
@@ -200,6 +200,7 @@ describe("Export History E2E Tests (DTS)", () => {
       const options = createExportJobCreationOptions({
         jobId,
         completedTimeFrom: new Date("2024-01-01T00:00:00Z"),
+        completedTimeTo: new Date("2025-12-31T23:59:59Z"),
         mode: ExportMode.Batch,
       });
 
@@ -220,6 +221,7 @@ describe("Export History E2E Tests (DTS)", () => {
       const options = createExportJobCreationOptions({
         jobId,
         completedTimeFrom: new Date("2024-01-01T00:00:00Z"),
+        completedTimeTo: new Date("2025-12-31T23:59:59Z"),
         mode: ExportMode.Batch,
       });
 
@@ -229,9 +231,9 @@ describe("Export History E2E Tests (DTS)", () => {
       await jobClient.delete();
 
       // After deletion, the entity is re-initialized on next access.
-      // Querying it returns the default initial state (NotStarted, no config).
+      // Querying it returns the default initial state (Pending, no config).
       const afterDelete = await exportClient.getJob(jobId);
-      expect(afterDelete.status).toBe(ExportJobStatus.NotStarted);
+      expect(afterDelete.status).toBe(ExportJobStatus.Pending);
       expect(afterDelete.config).toBeUndefined();
       expect(afterDelete.createdAt).toBeUndefined();
     }, 120_000);
@@ -370,12 +372,13 @@ describe("Export History E2E Tests (DTS)", () => {
       const options = createExportJobCreationOptions({
         jobId: "test",
         completedTimeFrom: new Date("2024-01-01"),
+        completedTimeTo: new Date("2024-06-01"),
       });
 
       expect(options.format.kind).toBe(ExportFormatKind.Jsonl);
       expect(options.mode).toBe(ExportMode.Batch);
       expect(options.maxInstancesPerBatch).toBe(100);
-      expect(options.maxParallelExports).toBe(10);
+      expect(options.maxParallelExports).toBe(32);
     });
 
     it("should reject export worker registration with missing connectionString", () => {

@@ -72,4 +72,4 @@ export {
 } from "./constants";
 
 // Errors
-export { ExportJobInvalidTransitionError, ExportJobNotFoundError } from "./errors";
+export { ExportJobInvalidTransitionError, ExportJobNotFoundError, ExportJobClientValidationError } from "./errors";

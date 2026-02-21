@@ -35,3 +35,16 @@ export class ExportJobNotFoundError extends Error {
     this.jobId = jobId;
   }
 }
+
+/**
+ * Error thrown when export job creation options fail validation.
+ */
+export class ExportJobClientValidationError extends Error {
+  readonly parameterName: string;
+
+  constructor(message: string, parameterName: string) {
+    super(message);
+    this.name = "ExportJobClientValidationError";
+    this.parameterName = parameterName;
+  }
+}

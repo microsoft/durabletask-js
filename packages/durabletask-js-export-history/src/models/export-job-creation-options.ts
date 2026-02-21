@@ -6,6 +6,7 @@ import { ExportDestination } from "./export-destination";
 import { ExportFormat, ExportFormatKind, createExportFormat } from "./export-format";
 import { ExportMode } from "./export-mode";
 import { DEFAULT_MAX_INSTANCES_PER_BATCH, DEFAULT_MAX_PARALLEL_EXPORTS } from "./export-job-configuration";
+import { ExportJobClientValidationError } from "../errors";
 
 /**
  * Options for creating a new export job.
@@ -57,7 +58,7 @@ export interface ExportJobCreationOptions {
 
   /**
    * The maximum number of parallel export activities.
-   * @default 10
+   * @default 32
    */
   readonly maxParallelExports: number;
 }
@@ -70,12 +71,85 @@ export interface ExportJobCreationOptions {
 export function createExportJobCreationOptions(
   options: Partial<ExportJobCreationOptions> & { jobId: string; completedTimeFrom: Date },
 ): ExportJobCreationOptions {
+  const mode = options.mode ?? ExportMode.Batch;
+
+  // Validate mode-specific requirements (aligned with .NET ExportJobCreationOptions constructor)
+  if (mode === ExportMode.Batch) {
+    if (!options.completedTimeFrom) {
+      throw new ExportJobClientValidationError(
+        "CompletedTimeFrom is required for Batch export mode.",
+        "completedTimeFrom",
+      );
+    }
+    if (!options.completedTimeTo) {
+      throw new ExportJobClientValidationError(
+        "CompletedTimeTo is required for Batch export mode.",
+        "completedTimeTo",
+      );
+    }
+    if (options.completedTimeTo <= options.completedTimeFrom) {
+      throw new ExportJobClientValidationError(
+        `CompletedTimeTo(${options.completedTimeTo.toISOString()}) must be greater than CompletedTimeFrom(${options.completedTimeFrom.toISOString()}).`,
+        "completedTimeTo",
+      );
+    }
+    if (options.completedTimeTo > new Date()) {
+      throw new ExportJobClientValidationError(
+        `CompletedTimeTo(${options.completedTimeTo.toISOString()}) cannot be in the future.`,
+        "completedTimeTo",
+      );
+    }
+  } else if (mode === ExportMode.Continuous) {
+    if (options.completedTimeTo) {
+      throw new ExportJobClientValidationError(
+        "CompletedTimeTo is not allowed for Continuous export mode.",
+        "completedTimeTo",
+      );
+    }
+  } else {
+    throw new ExportJobClientValidationError("Invalid export mode.", "mode");
+  }
+
+  // Validate maxInstancesPerBatch range
+  if (
+    options.maxInstancesPerBatch !== undefined &&
+    (options.maxInstancesPerBatch <= 0 || options.maxInstancesPerBatch >= 1001)
+  ) {
+    throw new ExportJobClientValidationError(
+      "MaxInstancesPerBatch must be between 1 and 1000.",
+      "maxInstancesPerBatch",
+    );
+  }
+
+  // Validate runtimeStatus (only terminal statuses allowed)
+  const terminalStatuses = [
+    OrchestrationStatus.COMPLETED,
+    OrchestrationStatus.FAILED,
+    OrchestrationStatus.TERMINATED,
+  ];
+  if (
+    options.runtimeStatus &&
+    options.runtimeStatus.length > 0 &&
+    options.runtimeStatus.some((s) => !terminalStatuses.includes(s))
+  ) {
+    throw new ExportJobClientValidationError(
+      "Export supports terminal orchestration statuses only. Valid statuses are: Completed, Failed, and Terminated.",
+      "runtimeStatus",
+    );
+  }
+
+  // Default runtimeStatus to all terminal statuses if not provided
+  const runtimeStatus =
+    options.runtimeStatus && options.runtimeStatus.length > 0
+      ? options.runtimeStatus
+      : terminalStatuses;
+
   return {
     jobId: options.jobId,
-    mode: options.mode ?? ExportMode.Batch,
+    mode,
     completedTimeFrom: options.completedTimeFrom,
     completedTimeTo: options.completedTimeTo,
-    runtimeStatus: options.runtimeStatus,
+    runtimeStatus,
     destination: options.destination,
     format: options.format ?? createExportFormat(ExportFormatKind.Jsonl),
     maxInstancesPerBatch: options.maxInstancesPerBatch ?? DEFAULT_MAX_INSTANCES_PER_BATCH,

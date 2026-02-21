@@ -62,11 +62,11 @@ export interface ExportJobState {
 
 /**
  * Creates a default initial ExportJobState.
- * @returns A new ExportJobState with NotStarted status and zero counters.
+ * @returns A new ExportJobState with Pending status and zero counters.
  */
 export function createInitialExportJobState(): ExportJobState {
   return {
-    status: ExportJobStatus.NotStarted,
+    status: ExportJobStatus.Pending,
     scannedInstances: 0,
     exportedInstances: 0,
   };

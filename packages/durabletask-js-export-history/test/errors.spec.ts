@@ -4,6 +4,7 @@
 import {
   ExportJobInvalidTransitionError,
   ExportJobNotFoundError,
+  ExportJobClientValidationError,
 } from "../src/errors";
 import { ExportJobStatus } from "../src/models";
 
@@ -12,7 +13,7 @@ describe("Errors", () => {
     it("should include job ID, statuses, and operation in message", () => {
       const error = new ExportJobInvalidTransitionError(
         "job-123",
-        ExportJobStatus.NotStarted,
+        ExportJobStatus.Pending,
         ExportJobStatus.Completed,
         "markAsCompleted",
       );
@@ -20,11 +21,11 @@ describe("Errors", () => {
       expect(error).toBeInstanceOf(Error);
       expect(error.name).toBe("ExportJobInvalidTransitionError");
       expect(error.message).toContain("job-123");
-      expect(error.message).toContain("NotStarted");
+      expect(error.message).toContain("Pending");
       expect(error.message).toContain("Completed");
       expect(error.message).toContain("markAsCompleted");
       expect(error.jobId).toBe("job-123");
-      expect(error.fromStatus).toBe(ExportJobStatus.NotStarted);
+      expect(error.fromStatus).toBe(ExportJobStatus.Pending);
       expect(error.toStatus).toBe(ExportJobStatus.Completed);
       expect(error.operationName).toBe("markAsCompleted");
     });
@@ -38,6 +39,20 @@ describe("Errors", () => {
       expect(error.name).toBe("ExportJobNotFoundError");
       expect(error.message).toContain("job-456");
       expect(error.jobId).toBe("job-456");
+    });
+  });
+
+  describe("ExportJobClientValidationError", () => {
+    it("should include message and parameter name", () => {
+      const error = new ExportJobClientValidationError(
+        "CompletedTimeTo is required.",
+        "completedTimeTo",
+      );
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error.name).toBe("ExportJobClientValidationError");
+      expect(error.message).toContain("CompletedTimeTo is required.");
+      expect(error.parameterName).toBe("completedTimeTo");
     });
   });
 });

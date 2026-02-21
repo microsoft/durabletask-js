@@ -8,7 +8,7 @@ export enum ExportJobStatus {
   /**
    * The export job has not been started.
    */
-  NotStarted = "NotStarted",
+  Pending = "Pending",
 
   /**
    * The export job is actively running.

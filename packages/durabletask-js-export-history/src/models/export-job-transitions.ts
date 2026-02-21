@@ -16,8 +16,6 @@ export function isValidTransition(
   switch (op) {
     case "create":
       return isValidCreateTransition(from, targetState);
-    case "run":
-      return isValidRunTransition(from, targetState);
     case "markascompleted":
       return isValidMarkAsCompletedTransition(from, targetState);
     case "markasfailed":
@@ -30,19 +28,7 @@ export function isValidTransition(
 function isValidCreateTransition(from: ExportJobStatus, targetState: ExportJobStatus): boolean {
   if (targetState !== ExportJobStatus.Active) return false;
   switch (from) {
-    case ExportJobStatus.NotStarted:
-    case ExportJobStatus.Failed:
-    case ExportJobStatus.Completed:
-      return true;
-    default:
-      return false;
-  }
-}
-
-function isValidRunTransition(from: ExportJobStatus, targetState: ExportJobStatus): boolean {
-  if (targetState !== ExportJobStatus.Active) return false;
-  switch (from) {
-    case ExportJobStatus.Active:
+    case ExportJobStatus.Pending:
     case ExportJobStatus.Failed:
     case ExportJobStatus.Completed:
       return true;

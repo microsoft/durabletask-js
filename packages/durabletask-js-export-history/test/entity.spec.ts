@@ -53,7 +53,7 @@ describe("ExportJob Entity", () => {
       // After run, state should be initialized
       expect(result).toBeDefined();
       const state = result as ExportJobState;
-      expect(state.status).toBe(ExportJobStatus.NotStarted);
+      expect(state.status).toBe(ExportJobStatus.Pending);
       expect(state.scannedInstances).toBe(0);
       expect(state.exportedInstances).toBe(0);
     });
@@ -229,7 +229,7 @@ describe("ExportJob Entity", () => {
 
     it("should throw when job is not Active", async () => {
       const startOp = createMockOperation("startExport");
-      // State is NotStarted by default (initializeState)
+      // State is Pending by default (initializeState)
       await expect(entity.run(startOp as any)).rejects.toThrow("Export job must be in Active status to run.");
     });
   });
