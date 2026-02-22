@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { OrchestrationStatus, TaskHubGrpcClient } from "@microsoft/durabletask-js";
+import { ActivityContext, OrchestrationStatus, TaskHubGrpcClient } from "@microsoft/durabletask-js";
 import { ExportCheckpoint } from "../models";
 
 /**
@@ -58,7 +58,7 @@ export interface InstancePage {
  */
 export function createListTerminalInstancesActivity(client: TaskHubGrpcClient) {
   return async function listTerminalInstancesActivity(
-    _context: unknown,
+    _context: ActivityContext,
     input: ListTerminalInstancesRequest,
   ): Promise<InstancePage> {
     if (!input) {

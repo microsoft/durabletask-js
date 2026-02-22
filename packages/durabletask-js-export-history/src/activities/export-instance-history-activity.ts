@@ -4,7 +4,7 @@
 import { createHash } from "crypto";
 import { gzipSync } from "zlib";
 import { BlobServiceClient } from "@azure/storage-blob";
-import { HistoryEvent, OrchestrationStatus, TaskHubGrpcClient } from "@microsoft/durabletask-js";
+import { ActivityContext, HistoryEvent, OrchestrationStatus, TaskHubGrpcClient } from "@microsoft/durabletask-js";
 import { ExportDestination, ExportFormat, ExportFormatKind, ExportHistoryStorageOptions } from "../models";
 
 /**
@@ -113,7 +113,7 @@ export function createExportInstanceHistoryActivity(
   storageOptions: ExportHistoryStorageOptions,
 ) {
   return async function exportInstanceHistoryActivity(
-    _context: unknown,
+    _context: ActivityContext,
     input: ExportRequest,
   ): Promise<ExportResult> {
     if (!input) {
