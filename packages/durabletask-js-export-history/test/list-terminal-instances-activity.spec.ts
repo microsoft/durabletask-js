@@ -13,7 +13,7 @@ describe("ListTerminalInstancesActivity", () => {
       }),
     };
 
-    const activity = createListTerminalInstancesActivity(mockClient);
+    const activity = createListTerminalInstancesActivity(mockClient as any);
 
     const result = await activity(undefined, {
       completedTimeFrom: new Date("2024-01-01"),
@@ -42,7 +42,7 @@ describe("ListTerminalInstancesActivity", () => {
       }),
     };
 
-    const activity = createListTerminalInstancesActivity(mockClient);
+    const activity = createListTerminalInstancesActivity(mockClient as any);
 
     const result = await activity(undefined, {
       completedTimeFrom: new Date("2024-01-01"),
@@ -61,7 +61,7 @@ describe("ListTerminalInstancesActivity", () => {
       }),
     };
 
-    const activity = createListTerminalInstancesActivity(mockClient);
+    const activity = createListTerminalInstancesActivity(mockClient as any);
 
     await activity(undefined, {
       completedTimeFrom: new Date("2024-01-01"),
@@ -81,7 +81,7 @@ describe("ListTerminalInstancesActivity", () => {
       listInstanceIds: jest.fn(),
     };
 
-    const activity = createListTerminalInstancesActivity(mockClient);
+    const activity = createListTerminalInstancesActivity(mockClient as any);
 
     await expect(activity(undefined, undefined as any)).rejects.toThrow("input is required");
   });

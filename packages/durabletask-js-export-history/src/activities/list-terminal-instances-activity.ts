@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { OrchestrationStatus } from "@microsoft/durabletask-js";
+import { OrchestrationStatus, TaskHubGrpcClient } from "@microsoft/durabletask-js";
 import { ExportCheckpoint } from "../models";
 
 /**
@@ -56,15 +56,7 @@ export interface InstancePage {
  * @param client The TaskHubGrpcClient to use for listing instances.
  * @returns An activity function that lists terminal instance IDs.
  */
-export function createListTerminalInstancesActivity(client: {
-  listInstanceIds: (options?: {
-    runtimeStatus?: OrchestrationStatus[];
-    completedTimeFrom?: Date;
-    completedTimeTo?: Date;
-    pageSize?: number;
-    lastInstanceKey?: string;
-  }) => Promise<{ values: readonly string[]; continuationToken?: string }>;
-}) {
+export function createListTerminalInstancesActivity(client: TaskHubGrpcClient) {
   return async function listTerminalInstancesActivity(
     _context: unknown,
     input: ListTerminalInstancesRequest,

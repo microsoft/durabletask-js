@@ -4,7 +4,7 @@
 import { createHash } from "crypto";
 import { gzipSync } from "zlib";
 import { BlobServiceClient } from "@azure/storage-blob";
-import { HistoryEvent, OrchestrationStatus } from "@microsoft/durabletask-js";
+import { HistoryEvent, OrchestrationStatus, TaskHubGrpcClient } from "@microsoft/durabletask-js";
 import { ExportDestination, ExportFormat, ExportFormatKind, ExportHistoryStorageOptions } from "../models";
 
 /**
@@ -109,13 +109,7 @@ function serializeInstanceData(historyEvents: HistoryEvent[], format: ExportForm
  * @returns An activity function that exports instance history.
  */
 export function createExportInstanceHistoryActivity(
-  client: {
-    getOrchestrationState: (
-      instanceId: string,
-      fetchPayloads?: boolean,
-    ) => Promise<{ lastUpdatedAt: Date; runtimeStatus: OrchestrationStatus } | undefined>;
-    getOrchestrationHistory: (instanceId: string) => Promise<HistoryEvent[]>;
-  },
+  client: TaskHubGrpcClient,
   storageOptions: ExportHistoryStorageOptions,
 ) {
   return async function exportInstanceHistoryActivity(
