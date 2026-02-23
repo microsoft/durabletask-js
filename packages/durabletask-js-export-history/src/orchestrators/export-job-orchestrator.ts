@@ -3,6 +3,7 @@
 
 import {
   OrchestrationContext,
+  RetryPolicy,
   Task,
   TOrchestrator,
   EntityInstanceId,
@@ -28,6 +29,15 @@ const MAX_RETRY_ATTEMPTS = 3;
 const MIN_BACKOFF_SECONDS = 60; // 1 minute
 const MAX_BACKOFF_SECONDS = 300; // 5 minutes
 const CONTINUE_AS_NEW_FREQUENCY = 5;
+
+// Retry policy for individual export activities: 3 attempts with exponential backoff
+// First retry after 15s, second retry after 30s (capped at 60s)
+const EXPORT_ACTIVITY_RETRY_POLICY = new RetryPolicy({
+  maxNumberOfAttempts: 3,
+  firstRetryIntervalInMilliseconds: 15_000,
+  backoffCoefficient: 2.0,
+  maxRetryIntervalInMilliseconds: 60_000,
+});
 const CONTINUOUS_EXPORT_IDLE_DELAY_MS = 60_000; // 1 minute
 
 // NOTE: Per-activity RetryPolicy is intentionally omitted due to a DTS server-side bug
@@ -261,6 +271,7 @@ async function* exportBatch(
       ctx.callActivity<ExportRequest, ExportResult>(
         EXPORT_INSTANCE_HISTORY_ACTIVITY_NAME,
         exportRequest,
+        { retry: EXPORT_ACTIVITY_RETRY_POLICY },
       ),
     );
 
