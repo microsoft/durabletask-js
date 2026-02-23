@@ -68,6 +68,7 @@ describe("Models", () => {
         destination: { container: "exports" },
       });
 
+      expect(options.jobId).toBe("test-job");
       expect(options.completedTimeFrom).toEqual(new Date("2024-01-01"));
       expect(options.completedTimeTo).toEqual(new Date("2024-06-01"));
       expect(options.destination).toEqual({ container: "exports" });
@@ -81,6 +82,36 @@ describe("Models", () => {
         OrchestrationStatus.FAILED,
         OrchestrationStatus.TERMINATED,
       ]);
+    });
+
+    it("should generate a GUID jobId when not provided", () => {
+      const options = createExportJobCreationOptions({
+        completedTimeFrom: new Date("2024-01-01"),
+        completedTimeTo: new Date("2024-06-01"),
+      });
+
+      // Should be a 32-character hex string (GUID without hyphens)
+      expect(options.jobId).toMatch(/^[0-9a-f]{32}$/);
+    });
+
+    it("should generate a GUID jobId when empty string provided", () => {
+      const options = createExportJobCreationOptions({
+        jobId: "",
+        completedTimeFrom: new Date("2024-01-01"),
+        completedTimeTo: new Date("2024-06-01"),
+      });
+
+      expect(options.jobId).toMatch(/^[0-9a-f]{32}$/);
+    });
+
+    it("should generate a GUID jobId when whitespace-only string provided", () => {
+      const options = createExportJobCreationOptions({
+        jobId: "   ",
+        completedTimeFrom: new Date("2024-01-01"),
+        completedTimeTo: new Date("2024-06-01"),
+      });
+
+      expect(options.jobId).toMatch(/^[0-9a-f]{32}$/);
     });
 
     it("should accept custom values for Continuous mode", () => {

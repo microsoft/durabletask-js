@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+import { randomUUID } from "crypto";
 import { OrchestrationStatus } from "@microsoft/durabletask-js";
 import { ExportDestination } from "./export-destination";
 import { ExportFormat, ExportFormatKind, createExportFormat } from "./export-format";
@@ -69,8 +70,10 @@ export interface ExportJobCreationOptions {
  * @returns A fully populated ExportJobCreationOptions.
  */
 export function createExportJobCreationOptions(
-  options: Partial<ExportJobCreationOptions> & { jobId: string; completedTimeFrom: Date },
+  options: Partial<ExportJobCreationOptions> & { completedTimeFrom: Date },
 ): ExportJobCreationOptions {
+  // Generate GUID if jobId not provided (matches .NET: Guid.NewGuid().ToString("N"))
+  const jobId = options.jobId && options.jobId.trim() !== "" ? options.jobId : randomUUID().replace(/-/g, "");
   const mode = options.mode ?? ExportMode.Batch;
 
   // Validate mode-specific requirements (aligned with .NET ExportJobCreationOptions constructor)
@@ -145,7 +148,7 @@ export function createExportJobCreationOptions(
       : terminalStatuses;
 
   return {
-    jobId: options.jobId,
+    jobId,
     mode,
     completedTimeFrom: options.completedTimeFrom,
     completedTimeTo: options.completedTimeTo,

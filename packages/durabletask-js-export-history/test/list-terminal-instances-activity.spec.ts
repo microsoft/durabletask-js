@@ -15,7 +15,7 @@ describe("ListTerminalInstancesActivity", () => {
 
     const activity = createListTerminalInstancesActivity(mockClient as any);
 
-    const result = await activity(undefined, {
+    const result = await activity(undefined as any, {
       completedTimeFrom: new Date("2024-01-01"),
       completedTimeTo: new Date("2024-06-01"),
       runtimeStatus: [OrchestrationStatus.COMPLETED],
@@ -44,7 +44,7 @@ describe("ListTerminalInstancesActivity", () => {
 
     const activity = createListTerminalInstancesActivity(mockClient as any);
 
-    const result = await activity(undefined, {
+    const result = await activity(undefined as any, {
       completedTimeFrom: new Date("2024-01-01"),
       maxInstancesPerBatch: 100,
     });
@@ -63,7 +63,7 @@ describe("ListTerminalInstancesActivity", () => {
 
     const activity = createListTerminalInstancesActivity(mockClient as any);
 
-    await activity(undefined, {
+    await activity(undefined as any, {
       completedTimeFrom: new Date("2024-01-01"),
       maxInstancesPerBatch: 100,
       lastInstanceKey: "instance-3",
@@ -83,6 +83,6 @@ describe("ListTerminalInstancesActivity", () => {
 
     const activity = createListTerminalInstancesActivity(mockClient as any);
 
-    await expect(activity(undefined, undefined as any)).rejects.toThrow("input is required");
+    await expect(activity(undefined as any, undefined as any)).rejects.toThrow("input is required");
   });
 });
