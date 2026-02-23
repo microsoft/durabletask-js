@@ -3,7 +3,6 @@
 
 import {
   OrchestrationContext,
-  RetryPolicy,
   Task,
   TOrchestrator,
   EntityInstanceId,
@@ -30,14 +29,6 @@ const MIN_BACKOFF_SECONDS = 60; // 1 minute
 const MAX_BACKOFF_SECONDS = 300; // 5 minutes
 const CONTINUE_AS_NEW_FREQUENCY = 5;
 
-// Retry policy for individual export activities: 3 attempts with exponential backoff
-// First retry after 15s, second retry after 30s (capped at 60s)
-const EXPORT_ACTIVITY_RETRY_POLICY = new RetryPolicy({
-  maxNumberOfAttempts: 3,
-  firstRetryIntervalInMilliseconds: 15_000,
-  backoffCoefficient: 2.0,
-  maxRetryIntervalInMilliseconds: 60_000,
-});
 const CONTINUOUS_EXPORT_IDLE_DELAY_MS = 60_000; // 1 minute
 
 // NOTE: Per-activity RetryPolicy is intentionally omitted due to a DTS server-side bug
@@ -132,7 +123,7 @@ export const exportJobOrchestrator: TOrchestrator = async function* (
       if (scannedCount === 0) {
         if (config.mode === ExportMode.Continuous) {
           // Wait and continue polling in continuous mode
-          yield ctx.createTimer(Date.now() + CONTINUOUS_EXPORT_IDLE_DELAY_MS);
+          yield ctx.createTimer(new Date(ctx.currentUtcDateTime.getTime() + CONTINUOUS_EXPORT_IDLE_DELAY_MS));
           continue;
         } else if (config.mode === ExportMode.Batch) {
           // No more instances - break to completion
@@ -241,7 +232,7 @@ async function* processBatchWithRetry(
       MIN_BACKOFF_SECONDS * Math.pow(2, attempt - 1),
       MAX_BACKOFF_SECONDS,
     );
-    yield ctx.createTimer(Date.now() + backoffSeconds * 1000);
+    yield ctx.createTimer(new Date(ctx.currentUtcDateTime.getTime() + backoffSeconds * 1000));
   }
 
   // Should not reach here
@@ -271,7 +262,6 @@ async function* exportBatch(
       ctx.callActivity<ExportRequest, ExportResult>(
         EXPORT_INSTANCE_HISTORY_ACTIVITY_NAME,
         exportRequest,
-        { retry: EXPORT_ACTIVITY_RETRY_POLICY },
       ),
     );
 
