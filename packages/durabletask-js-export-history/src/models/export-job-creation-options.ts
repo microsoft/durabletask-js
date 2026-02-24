@@ -116,7 +116,7 @@ export function createExportJobCreationOptions(
   // Validate maxInstancesPerBatch range
   if (
     options.maxInstancesPerBatch !== undefined &&
-    (options.maxInstancesPerBatch <= 0 || options.maxInstancesPerBatch >= 1001)
+    (options.maxInstancesPerBatch <= 0 || options.maxInstancesPerBatch > 1000)
   ) {
     throw new ExportJobClientValidationError(
       "MaxInstancesPerBatch must be between 1 and 1000.",
