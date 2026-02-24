@@ -198,6 +198,27 @@ describe("Models", () => {
       ).toThrow("MaxInstancesPerBatch");
     });
 
+    it("should throw when maxParallelExports is zero or negative", () => {
+      expect(() =>
+        createExportJobCreationOptions({
+          jobId: "test-job",
+          completedTimeFrom: new Date("2024-01-01"),
+          completedTimeTo: new Date("2024-06-01"),
+          mode: ExportMode.Batch,
+          maxParallelExports: 0,
+        }),
+      ).toThrow("MaxParallelExports");
+      expect(() =>
+        createExportJobCreationOptions({
+          jobId: "test-job",
+          completedTimeFrom: new Date("2024-01-01"),
+          completedTimeTo: new Date("2024-06-01"),
+          mode: ExportMode.Batch,
+          maxParallelExports: -1,
+        }),
+      ).toThrow("MaxParallelExports");
+    });
+
     it("should throw when runtimeStatus contains non-terminal status", () => {
       expect(() =>
         createExportJobCreationOptions({

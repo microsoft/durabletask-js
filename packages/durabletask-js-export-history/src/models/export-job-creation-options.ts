@@ -147,6 +147,15 @@ export function createExportJobCreationOptions(
       ? options.runtimeStatus
       : terminalStatuses;
 
+  // Validate maxParallelExports range
+  const validatedMaxParallelExports = options.maxParallelExports ?? DEFAULT_MAX_PARALLEL_EXPORTS;
+  if (validatedMaxParallelExports <= 0) {
+    throw new ExportJobClientValidationError(
+      "MaxParallelExports must be greater than 0.",
+      "maxParallelExports",
+    );
+  }
+
   return {
     jobId,
     mode,
@@ -156,6 +165,6 @@ export function createExportJobCreationOptions(
     destination: options.destination,
     format: options.format ?? createExportFormat(ExportFormatKind.Jsonl),
     maxInstancesPerBatch: options.maxInstancesPerBatch ?? DEFAULT_MAX_INSTANCES_PER_BATCH,
-    maxParallelExports: options.maxParallelExports ?? DEFAULT_MAX_PARALLEL_EXPORTS,
+    maxParallelExports: validatedMaxParallelExports,
   };
 }

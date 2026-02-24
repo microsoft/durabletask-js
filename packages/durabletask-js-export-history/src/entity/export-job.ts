@@ -152,9 +152,10 @@ export class ExportJob extends TaskEntity<ExportJobState> {
     this.state.lastCheckpointTime = now;
     this.state.lastModifiedAt = now;
 
-    // If there are failures and checkpoint is null (batch failed), mark job as failed
+    // Record failures for diagnostics but do NOT update job status here.
+    // Failure status transitions are handled exclusively by markAsFailed(),
+    // which is called by the orchestrator after retry exhaustion.
     if (!request.checkpoint && request.failures && request.failures.length > 0) {
-      this.state.status = ExportJobStatus.Failed;
       const failureSummary = request.failures
         .map((f) => `${f.instanceId}: ${f.reason}`)
         .join("; ");

@@ -211,13 +211,13 @@ export class ExportHistoryJobClient {
 
   /**
    * Deletes the export job.
-   * Signals entity deletion via operation orchestrator (fire-and-forget, aligned with .NET),
+   * Schedules entity deletion via operation orchestrator (does not wait for completion, aligned with .NET),
    * then terminates and purges the linked export orchestration.
    */
   async delete(): Promise<void> {
     const orchestrationInstanceId = getOrchestratorInstanceId(this.jobId);
 
-    // First, delete the entity (fire-and-forget — does not wait for the operation orchestrator)
+    // Schedule entity deletion (does not wait for the operation orchestrator to complete)
     const request: ExportJobOperationRequest = {
       entityId: this.entityId.toString(),
       operationName: "delete",
