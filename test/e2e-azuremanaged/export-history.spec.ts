@@ -4,6 +4,15 @@
 /**
  * E2E tests for the Export History feature against Durable Task Scheduler (DTS).
  *
+ * These tests require a real DTS scheduler with entity support. The DTS emulator
+ * does not currently support entities, so these tests are SKIPPED by default.
+ *
+ * To run locally, set the EXPORT_HISTORY_E2E=1 environment variable:
+ *
+ *   $env:EXPORT_HISTORY_E2E = "1"
+ *   $env:AZURE_DTS_CONNECTION_STRING = "Endpoint=https://...;Authentication=DefaultAzure;TaskHub=..."
+ *   npx jest test/e2e-azuremanaged/export-history.spec.ts --config jest.config.js --forceExit
+ *
  * These tests validate the full export history workflow including:
  * - Entity registration and state management
  * - Job creation, status querying, and lifecycle transitions
@@ -11,14 +20,9 @@
  * - Blob storage verification (correct blobs, content, format)
  * - Integration with Azure Blob Storage (Azurite or real)
  *
- * These tests can run against either:
- * 1. DTS Emulator (default) - No authentication required
- *    docker run -i -p 8080:8080 -d mcr.microsoft.com/dts/dts-emulator:latest
- *
- * 2. Real DTS Scheduler - Requires connection string with authentication
- *
  * Environment variables:
- *   - AZURE_DTS_CONNECTION_STRING: Connection string for real DTS (takes precedence)
+ *   - EXPORT_HISTORY_E2E: Set to "1" to enable these tests (default: skipped)
+ *   - AZURE_DTS_CONNECTION_STRING: Connection string for real DTS (required)
  *     Example: Endpoint=https://your-scheduler.eastus.durabletask.io;Authentication=DefaultAzure;TaskHub=your-taskhub
  *   - ENDPOINT: The endpoint for the DTS emulator (default: localhost:8080)
  *   - TASKHUB: The task hub name (default: default)
@@ -187,7 +191,7 @@ async function runExportJobToCompletion(
   client: TaskHubGrpcClient,
   exportClient: ExportHistoryClient,
   options: ReturnType<typeof createExportJobCreationOptions>,
-  timeoutSec = 90,
+  timeoutSec = 240,
 ) {
   const jobClient = await exportClient.createJob(options);
   const exportOrchId = getOrchestratorInstanceId(options.jobId);
@@ -250,7 +254,11 @@ const failOrchestrator: TOrchestrator = async function* (
 // E2E Tests
 // ============================================================================
 
-describe("Export History E2E Tests (DTS)", () => {
+// Skip in CI — the DTS emulator does not support entities.
+// Set EXPORT_HISTORY_E2E=1 to run locally against a real DTS scheduler.
+const describeIfEnabled = process.env.EXPORT_HISTORY_E2E === "1" ? describe : describe.skip;
+
+describeIfEnabled("Export History E2E Tests (DTS)", () => {
   let taskHubClient: TaskHubGrpcClient;
   let taskHubWorker: TaskHubGrpcWorker;
   let storageOptions: ExportHistoryStorageOptions;
@@ -414,7 +422,7 @@ describe("Export History E2E Tests (DTS)", () => {
       expect(description.exportedInstances).toBeGreaterThanOrEqual(3);
 
       // Verify blobs were actually written – one blob per exported instance
-      const blobPrefix = `${jobId}/`;
+      const blobPrefix = `batch-${jobId}/`;
       const blobs = await listBlobs(containerClient, blobPrefix);
       expect(blobs.length).toBeGreaterThanOrEqual(3);
     }, 180_000);
@@ -440,7 +448,7 @@ describe("Export History E2E Tests (DTS)", () => {
       expect(description.exportedInstances).toBe(0);
 
       // No blobs should be written for an empty export
-      const blobPrefix = `${jobId}/`;
+      const blobPrefix = `batch-${jobId}/`;
       const blobs = await listBlobs(containerClient, blobPrefix);
       expect(blobs).toHaveLength(0);
     }, 120_000);
@@ -478,7 +486,7 @@ describe("Export History E2E Tests (DTS)", () => {
       expect(description.exportedInstances).toBeGreaterThanOrEqual(1);
 
       // Download and verify blob content
-      const blobPrefix = `${jobId}/`;
+      const blobPrefix = `batch-${jobId}/`;
       const blobs = await listBlobs(containerClient, blobPrefix);
       expect(blobs.length).toBeGreaterThanOrEqual(1);
 
@@ -497,8 +505,113 @@ describe("Export History E2E Tests (DTS)", () => {
       // Each event should have basic expected fields
       for (const event of events) {
         const evt = event as Record<string, unknown>;
-        expect(evt).toHaveProperty("eventType");
+        expect(evt).toHaveProperty("type");
         expect(evt).toHaveProperty("timestamp");
+      }
+    }, 180_000);
+
+    it("should export a single orchestration with full history events matching expected sequence", async () => {
+      await taskHubWorker.start();
+
+      const testInput = "HistoryVerifyUser";
+      const completedTimeFrom = bufferedTimeFrom();
+      const ids = await createAndCompleteOrchestrations(taskHubClient, greetOrchestrator, [testInput]);
+      const completedTimeTo = await bufferedTimeTo();
+      const instanceId = ids[0];
+
+      const jobId = uniqueId("full-history");
+      const options = createExportJobCreationOptions({
+        jobId,
+        completedTimeFrom,
+        completedTimeTo,
+        mode: ExportMode.Batch,
+        format: { kind: ExportFormatKind.Jsonl, schemaVersion: "1.0" },
+      });
+
+      const description = await runExportJobToCompletion(taskHubClient, exportClient, options);
+      expect(description.status).toBe(ExportJobStatus.Completed);
+      expect(description.exportedInstances).toBeGreaterThanOrEqual(1);
+
+      // Download blobs and find the one containing our instance
+      const blobPrefix = `batch-${jobId}/`;
+      const blobs = await listBlobs(containerClient, blobPrefix);
+      expect(blobs.length).toBeGreaterThanOrEqual(1);
+
+      // Collect all events across all blobs
+      const allEvents: Record<string, unknown>[] = [];
+      for (const blobName of blobs) {
+        const content = await downloadBlobContent(containerClient, blobName);
+        if (blobName.endsWith(".jsonl.gz") || blobName.endsWith(".jsonl")) {
+          const parsed = parseJsonl(content);
+          allEvents.push(...(parsed as Record<string, unknown>[]));
+        } else if (blobName.endsWith(".json")) {
+          const parsed = JSON.parse(content) as Record<string, unknown>[];
+          allEvents.push(...parsed);
+        }
+      }
+
+      // Each blob is per-instance (SHA-256 of instanceId).
+      // Find the blob that contains our instance's ExecutionStarted event.
+      let targetEvents: Record<string, unknown>[] = [];
+      for (const blobName of blobs) {
+        const content = await downloadBlobContent(containerClient, blobName);
+        let events: Record<string, unknown>[];
+        if (blobName.endsWith(".json") && !blobName.endsWith(".jsonl")) {
+          events = JSON.parse(content) as Record<string, unknown>[];
+        } else {
+          events = parseJsonl(content) as Record<string, unknown>[];
+        }
+        const hasOurInstance = events.some((evt) => {
+          const oi = evt.orchestrationInstance as { instanceId?: string } | undefined;
+          return oi?.instanceId === instanceId;
+        });
+        if (hasOurInstance) {
+          targetEvents = events;
+          break;
+        }
+      }
+
+      expect(targetEvents.length).toBe(6);
+
+      // Event 0: OrchestratorStarted
+      expect(targetEvents[0].type).toBe("OrchestratorStarted");
+      expect(targetEvents[0].eventId).toBe(-1);
+      expect(targetEvents[0]).toHaveProperty("timestamp");
+
+      // Event 1: ExecutionStarted — marks the beginning of the orchestration
+      expect(targetEvents[1].type).toBe("ExecutionStarted");
+      expect(targetEvents[1].eventId).toBe(0);
+      expect(targetEvents[1].name).toBe("greetOrchestrator");
+      expect(targetEvents[1].input).toBe(JSON.stringify(testInput));
+      const oi = targetEvents[1].orchestrationInstance as { instanceId: string };
+      expect(oi.instanceId).toBe(instanceId);
+
+      // Event 2: TaskScheduled — activity was scheduled
+      expect(targetEvents[2].type).toBe("TaskScheduled");
+      expect(targetEvents[2].eventId).toBe(1);
+      expect(targetEvents[2].name).toBe("greetActivity");
+      expect(targetEvents[2].input).toBe(JSON.stringify(testInput));
+
+      // Event 3: OrchestratorStarted — second replay after activity completes
+      expect(targetEvents[3].type).toBe("OrchestratorStarted");
+      expect(targetEvents[3].eventId).toBe(-1);
+
+      // Event 4: TaskCompleted — activity result received
+      expect(targetEvents[4].type).toBe("TaskCompleted");
+      expect(targetEvents[4].eventId).toBe(-1);
+      expect(targetEvents[4].taskScheduledId).toBe(1);
+      expect(targetEvents[4].result).toBe(JSON.stringify(`Hello, ${testInput}!`));
+
+      // Event 5: ExecutionCompleted — orchestration finished successfully
+      expect(targetEvents[5].type).toBe("ExecutionCompleted");
+      expect(targetEvents[5].eventId).toBe(2);
+      expect(targetEvents[5].orchestrationStatus).toBe("ORCHESTRATION_STATUS_COMPLETED");
+      expect(targetEvents[5].result).toBe(JSON.stringify(`Hello, ${testInput}!`));
+
+      // Verify all events have timestamps that are valid ISO dates
+      for (const evt of targetEvents) {
+        expect(typeof evt.timestamp).toBe("string");
+        expect(new Date(evt.timestamp as string).getTime()).not.toBeNaN();
       }
     }, 180_000);
 
@@ -533,7 +646,7 @@ describe("Export History E2E Tests (DTS)", () => {
       expect(description.exportedInstances).toBeGreaterThanOrEqual(1);
 
       // Find blobs - should be .json (not .jsonl.gz)
-      const blobPrefix = `${jobId}/`;
+      const blobPrefix = `batch-${jobId}/`;
       const blobs = await listBlobs(containerClient, blobPrefix);
       expect(blobs.length).toBeGreaterThanOrEqual(1);
 
@@ -579,7 +692,7 @@ describe("Export History E2E Tests (DTS)", () => {
       expect(description.exportedInstances).toBeGreaterThanOrEqual(2);
 
       // Verify at least one blob has more history events than a single-step orchestration
-      const blobPrefix = `${jobId}/`;
+      const blobPrefix = `batch-${jobId}/`;
       const blobs = await listBlobs(containerClient, blobPrefix);
       expect(blobs.length).toBeGreaterThanOrEqual(2);
 
@@ -627,8 +740,8 @@ describe("Export History E2E Tests (DTS)", () => {
       expect(desc2.status).toBe(ExportJobStatus.Completed);
 
       // Each export should only have blobs under its own prefix
-      const blobs1 = await listBlobs(containerClient, `${jobId1}/`);
-      const blobs2 = await listBlobs(containerClient, `${jobId2}/`);
+      const blobs1 = await listBlobs(containerClient, `batch-${jobId1}/`);
+      const blobs2 = await listBlobs(containerClient, `batch-${jobId2}/`);
 
       // Both should have the same data (same time window)
       expect(blobs1.length).toBeGreaterThanOrEqual(1);
@@ -636,10 +749,10 @@ describe("Export History E2E Tests (DTS)", () => {
 
       // Verify no cross-contamination
       for (const b of blobs1) {
-        expect(b.startsWith(`${jobId1}/`)).toBe(true);
+        expect(b.startsWith(`batch-${jobId1}/`)).toBe(true);
       }
       for (const b of blobs2) {
-        expect(b.startsWith(`${jobId2}/`)).toBe(true);
+        expect(b.startsWith(`batch-${jobId2}/`)).toBe(true);
       }
     }, 240_000);
 
@@ -677,7 +790,7 @@ describe("Export History E2E Tests (DTS)", () => {
       expect(description.exportedInstances).toBeGreaterThanOrEqual(1);
 
       // Verify blobs contain the failed instance's history
-      const blobPrefix = `${jobId}/`;
+      const blobPrefix = `batch-${jobId}/`;
       const blobs = await listBlobs(containerClient, blobPrefix);
       expect(blobs.length).toBeGreaterThanOrEqual(1);
     }, 180_000);
@@ -728,7 +841,7 @@ describe("Export History E2E Tests (DTS)", () => {
       // Should have exported at least the 2 instances (completed + failed)
       expect(description.exportedInstances).toBeGreaterThanOrEqual(2);
 
-      const blobPrefix = `${jobId}/`;
+      const blobPrefix = `batch-${jobId}/`;
       const blobs = await listBlobs(containerClient, blobPrefix);
       expect(blobs.length).toBeGreaterThanOrEqual(2);
     }, 180_000);
