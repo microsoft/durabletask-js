@@ -201,13 +201,6 @@ export class ExportJob extends TaskEntity<ExportJobState> {
   }
 
   /**
-   * Deletes the export job entity by setting state to null.
-   */
-  delete(): void {
-    this.state = null as unknown as ExportJobState;
-  }
-
-  /**
    * Starts the export orchestration by scheduling it from the entity context.
    * Uses a fixed instance ID to prevent concurrent orchestrators for the same job.
    */
