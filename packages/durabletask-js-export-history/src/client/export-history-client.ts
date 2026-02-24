@@ -265,9 +265,9 @@ function matchesFilter(state: ExportJobState, filter: ExportJobQuery): boolean {
   const statusMatches = filter.status === undefined || state.status === filter.status;
   const createdFromMatches =
     filter.createdFrom === undefined ||
-    (state.createdAt !== undefined && new Date(state.createdAt) > filter.createdFrom);
+    (state.createdAt !== undefined && new Date(state.createdAt) >= filter.createdFrom);
   const createdToMatches =
     filter.createdTo === undefined ||
-    (state.createdAt !== undefined && new Date(state.createdAt) < filter.createdTo);
+    (state.createdAt !== undefined && new Date(state.createdAt) <= filter.createdTo);
   return statusMatches && createdFromMatches && createdToMatches;
 }
