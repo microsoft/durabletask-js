@@ -228,7 +228,7 @@ export class OrchestrationExecutor {
             delete ctx._pendingTasks[timerId];
 
             if (!timerTask) {
-              // TODO: Should this be an error? When would it ever happen?
+              // This can happen during replay or if a duplicate event is delivered
               if (!ctx._isReplaying) {
                 WorkerLogs.orchestrationUnexpectedEvent(this._logger, ctx._instanceId, "timerFired", timerId);
               }
@@ -288,7 +288,7 @@ export class OrchestrationExecutor {
             }
 
             if (!activityTask) {
-              // TODO: Should this be an error? When would it ever happen?
+              // This can happen during replay or if a duplicate event is delivered
               if (!ctx._isReplaying) {
                 WorkerLogs.orchestrationUnexpectedEvent(this._logger, ctx._instanceId, "taskCompleted", taskId);
               }
@@ -381,11 +381,23 @@ export class OrchestrationExecutor {
               ? subOrchestrationInstanceCompletedEvent.getTaskscheduledid()
               : undefined;
 
-            let subOrchTask;
+            if (taskId === undefined) {
+              if (!ctx._isReplaying) {
+                WorkerLogs.orchestrationUnexpectedEvent(this._logger, ctx._instanceId, "subOrchestrationInstanceCompleted");
+              }
+              return;
+            }
 
-            if (taskId) {
-              subOrchTask = ctx._pendingTasks[taskId];
-              delete ctx._pendingTasks[taskId];
+            const subOrchTask = ctx._pendingTasks[taskId];
+            delete ctx._pendingTasks[taskId];
+
+            if (!subOrchTask) {
+              if (!ctx._isReplaying) {
+                WorkerLogs.orchestrationUnexpectedEvent(
+                  this._logger, ctx._instanceId, "subOrchestrationInstanceCompleted", taskId,
+                );
+              }
+              return;
             }
 
             let result;
@@ -394,10 +406,7 @@ export class OrchestrationExecutor {
               result = JSON.parse(event.getSuborchestrationinstancecompleted()?.getResult()?.toString() || "");
             }
 
-            if (subOrchTask) {
-              subOrchTask.complete(result);
-            }
-
+            subOrchTask.complete(result);
             await ctx.resume();
           }
           break;
