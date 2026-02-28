@@ -19,7 +19,8 @@ import { RetryHandlerTask } from "../task/retry-handler-task";
 import { RetryTimerTask } from "../task/retry-timer-task";
 import { TOrchestrator } from "../types/orchestrator.type";
 import { enumValueToKey } from "../utils/enum.util";
-import { isEmpty } from "../utils/pb-helper.util";
+import { isEmpty, parseJsonField } from "../utils/pb-helper.util";
+import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 import { OrchestratorNotRegisteredError } from "./exception/orchestrator-not-registered-error";
 import { StopIterationError } from "./exception/stop-iteration-error";
 import { Registry } from "./registry";
@@ -129,614 +130,67 @@ export class OrchestrationExecutor {
     try {
       switch (eventType) {
         case pb.HistoryEvent.EventtypeCase.ORCHESTRATORSTARTED:
-          ctx._currentUtcDatetime = event.getTimestamp()?.toDate() ?? ctx._currentUtcDatetime;
+          await this.handleOrchestratorStarted(ctx, event);
           break;
         case pb.HistoryEvent.EventtypeCase.EXECUTIONSTARTED:
-          {
-            // TODO: Check if we already started the orchestration
-            const executionStartedEvent = event.getExecutionstarted();
-            const fn = this._registry.getOrchestrator(
-              executionStartedEvent ? executionStartedEvent.getName() : undefined,
-            );
-
-            if (!fn) {
-              throw new OrchestratorNotRegisteredError(executionStartedEvent?.getName());
-            }
-
-            // Set the execution ID from the orchestration instance
-            const executionId = executionStartedEvent?.getOrchestrationinstance()?.getExecutionid()?.getValue();
-            if (executionId) {
-              ctx._executionId = executionId;
-            }
-
-            // Track the orchestrator name for lifecycle logs
-            this._orchestratorName = executionStartedEvent?.getName() ?? "(unknown)";
-
-            // Log orchestration start (EventId 600)
-            WorkerLogs.orchestrationStarted(this._logger, ctx._instanceId, this._orchestratorName);
-
-            // Set the version from the execution started event
-            ctx._version = executionStartedEvent?.getVersion()?.getValue() ?? "";
-
-            // Extract parent instance info if this is a sub-orchestration
-            const parentInstance = executionStartedEvent?.getParentinstance();
-            if (parentInstance) {
-              const parentOrchestrationInstance = parentInstance.getOrchestrationinstance();
-              ctx._parent = {
-                name: parentInstance.getName()?.getValue() ?? "",
-                instanceId: parentOrchestrationInstance?.getInstanceid() ?? "",
-                taskScheduledId: parentInstance.getTaskscheduledid(),
-              };
-            }
-
-            // Deserialize the input, if any
-            let input = undefined;
-
-            if (executionStartedEvent?.getInput() && executionStartedEvent?.getInput()?.toString() !== "") {
-              input = JSON.parse(executionStartedEvent.getInput()?.toString() || "{}");
-            }
-
-            // This does not execute the generator, it creates it
-            // since we create an async iterator, we await the creation (so we can use await in the generator itself beside yield)
-            const result = await fn(ctx, input);
-
-            const isAsyncGenerator = typeof result?.[Symbol.asyncIterator] === "function";
-            if (isAsyncGenerator) {
-              // Start the orchestrator's generator function
-              await ctx.run(result);
-            } else {
-              const resultType = Object.prototype.toString.call(result);
-              WorkerLogs.orchestrationNoTasks(this._logger, resultType);
-
-              // This is an orchestrator that doesn't schedule any tasks
-              ctx.setComplete(result, pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
-            }
-          }
+          await this.handleExecutionStarted(ctx, event);
           break;
         case pb.HistoryEvent.EventtypeCase.TIMERCREATED:
-          // This history event confirms that the timer was successfully scheduled. Remove the timerCreated event from the pending action list so we don't schedule it again.
-          {
-            const timerId = event.getEventid();
-            const action = ctx._pendingActions[timerId];
-
-            // Delete it
-            delete ctx._pendingActions[timerId];
-
-            const isTimerAction = action?.getCreatetimer();
-
-            if (!action) {
-              throw getNonDeterminismError(timerId, getName(ctx.createTimer));
-            } else if (!isTimerAction) {
-              const expectedMethodName = getName(ctx.createTimer);
-              throw getWrongActionTypeError(timerId, expectedMethodName, action);
-            }
-          }
+          await this.handleTimerCreated(ctx, event);
           break;
         case pb.HistoryEvent.EventtypeCase.TIMERFIRED:
-          {
-            const timerFiredEvent = event.getTimerfired();
-            const timerId = timerFiredEvent ? timerFiredEvent.getTimerid() : undefined;
-
-            if (timerId === undefined) {
-              if (!ctx._isReplaying) {
-                WorkerLogs.orchestrationUnexpectedEvent(this._logger, ctx._instanceId, "timerFired");
-              }
-              return;
-            }
-
-            const timerTask = ctx._pendingTasks[timerId];
-            delete ctx._pendingTasks[timerId];
-
-            if (!timerTask) {
-              // TODO: Should this be an error? When would it ever happen?
-              if (!ctx._isReplaying) {
-                WorkerLogs.orchestrationUnexpectedEvent(this._logger, ctx._instanceId, "timerFired", timerId);
-              }
-              return;
-            }
-
-            // Check if this is a retry timer
-            if (timerTask instanceof RetryTimerTask) {
-              // Get the parent retry task and reschedule it
-              const retryTask = timerTask.retryableParent;
-              // Reschedule the original action - this will add it back to pendingActions
-              ctx.rescheduleRetryTask(retryTask);
-              // Don't resume the orchestrator - we're just rescheduling the task
-              return;
-            }
-
-            timerTask.complete(undefined);
-            await ctx.resume();
-          }
+          await this.handleTimerFired(ctx, event);
           break;
-        // This history event confirms that the activity execution was successfully scheduled. Remove the taskscheduled event from the pending action list so we don't schedule it again.
         case pb.HistoryEvent.EventtypeCase.TASKSCHEDULED:
-          {
-            const taskId = event.getEventid();
-            const action = ctx._pendingActions[taskId];
-            delete ctx._pendingActions[taskId];
-
-            const isScheduleTaskAction = action?.hasScheduletask();
-
-            if (!action) {
-              throw getNonDeterminismError(taskId, getName(ctx.callActivity));
-            } else if (!isScheduleTaskAction) {
-              const expectedMethodName = getName(ctx.callActivity);
-              throw getWrongActionTypeError(taskId, expectedMethodName, action);
-            } else if (action.getScheduletask()?.getName() != event.getTaskscheduled()?.getName()) {
-              throw getWrongActionNameError(
-                taskId,
-                getName(ctx.callActivity),
-                event.getTaskscheduled()?.getName(),
-                action.getScheduletask()?.getName(),
-              );
-            }
-          }
-
+          await this.handleTaskScheduled(ctx, event);
           break;
-        // This history event contains the result of a completed activity task
         case pb.HistoryEvent.EventtypeCase.TASKCOMPLETED:
-          {
-            const taskCompletedEvent = event.getTaskcompleted();
-            const taskId = taskCompletedEvent ? taskCompletedEvent.getTaskscheduledid() : undefined;
-
-            let activityTask;
-
-            if (taskId) {
-              activityTask = ctx._pendingTasks[taskId];
-              delete ctx._pendingTasks[taskId];
-            }
-
-            if (!activityTask) {
-              // TODO: Should this be an error? When would it ever happen?
-              if (!ctx._isReplaying) {
-                WorkerLogs.orchestrationUnexpectedEvent(this._logger, ctx._instanceId, "taskCompleted", taskId);
-              }
-
-              return;
-            }
-
-            let result;
-
-            if (!isEmpty(event.getTaskcompleted()?.getResult())) {
-              result = JSON.parse(event.getTaskcompleted()?.getResult()?.toString() || "");
-            }
-
-            activityTask.complete(result);
-            await ctx.resume();
-          }
+          await this.handleTaskCompleted(ctx, event);
           break;
         case pb.HistoryEvent.EventtypeCase.TASKFAILED:
-          {
-            const taskFailedEvent = event.getTaskfailed();
-            const taskId = taskFailedEvent ? taskFailedEvent.getTaskscheduledid() : undefined;
-
-            if (taskId === undefined) {
-              if (!ctx._isReplaying) {
-                WorkerLogs.orchestrationUnexpectedEvent(this._logger, ctx._instanceId, "taskFailed");
-              }
-              return;
-            }
-
-            const failureDetails = event.getTaskfailed()?.getFailuredetails();
-            const errorMessage = failureDetails?.getErrormessage() || "Unknown error";
-
-            // Get the task (don't delete yet - we might retry)
-            const activityTask = ctx._pendingTasks[taskId];
-
-            if (!activityTask) {
-              if (!ctx._isReplaying) {
-                WorkerLogs.orchestrationUnexpectedEvent(this._logger, ctx._instanceId, "taskFailed", taskId);
-              }
-              return;
-            }
-
-            // Check if this task supports retry and handle it
-            const retried = await this.tryHandleRetry(activityTask, errorMessage, failureDetails, taskId, ctx);
-            if (retried) {
-              return;
-            }
-
-            // No retry - fail the task
-            delete ctx._pendingTasks[taskId];
-
-            activityTask.fail(
-              `Activity task #${taskId} failed: ${errorMessage}`,
-              failureDetails,
-            );
-
-            await ctx.resume();
-          }
+          await this.handleTaskFailed(ctx, event);
           break;
-        // This history event confirms that the sub-orcehstration execution was successfully scheduled. Remove the subOrchestrationInstanceCreated event from the pending action list so we don't schedule it again.
         case pb.HistoryEvent.EventtypeCase.SUBORCHESTRATIONINSTANCECREATED:
-          {
-            const taskId = event.getEventid();
-            const action = ctx._pendingActions[taskId];
-            delete ctx._pendingActions[taskId];
-
-            const isCreateSubOrchestrationAction = action?.hasCreatesuborchestration();
-
-            if (!action) {
-              throw getNonDeterminismError(taskId, getName(ctx.callSubOrchestrator));
-            } else if (!isCreateSubOrchestrationAction) {
-              const expectedMethodName = getName(ctx.callSubOrchestrator);
-              throw getWrongActionTypeError(taskId, expectedMethodName, action);
-            } else if (
-              action.getCreatesuborchestration()?.getName() != event.getSuborchestrationinstancecreated()?.getName()
-            ) {
-              throw getWrongActionNameError(
-                taskId,
-                getName(ctx.callSubOrchestrator),
-                event.getSuborchestrationinstancecreated()?.getName(),
-                action.getCreatesuborchestration()?.getName(),
-              );
-            }
-          }
+          await this.handleSubOrchestrationCreated(ctx, event);
           break;
         case pb.HistoryEvent.EventtypeCase.SUBORCHESTRATIONINSTANCECOMPLETED:
-          {
-            const subOrchestrationInstanceCompletedEvent = event.getSuborchestrationinstancecompleted();
-            const taskId = subOrchestrationInstanceCompletedEvent
-              ? subOrchestrationInstanceCompletedEvent.getTaskscheduledid()
-              : undefined;
-
-            let subOrchTask;
-
-            if (taskId) {
-              subOrchTask = ctx._pendingTasks[taskId];
-              delete ctx._pendingTasks[taskId];
-            }
-
-            let result;
-
-            if (!isEmpty(event.getSuborchestrationinstancecompleted()?.getResult())) {
-              result = JSON.parse(event.getSuborchestrationinstancecompleted()?.getResult()?.toString() || "");
-            }
-
-            if (subOrchTask) {
-              subOrchTask.complete(result);
-            }
-
-            await ctx.resume();
-          }
+          await this.handleSubOrchestrationCompleted(ctx, event);
           break;
         case pb.HistoryEvent.EventtypeCase.SUBORCHESTRATIONINSTANCEFAILED:
-          {
-            const subOrchestrationInstanceFailedEvent = event.getSuborchestrationinstancefailed();
-            const taskId = subOrchestrationInstanceFailedEvent
-              ? subOrchestrationInstanceFailedEvent.getTaskscheduledid()
-              : undefined;
-
-            if (taskId === undefined) {
-              if (!ctx._isReplaying) {
-                WorkerLogs.orchestrationUnexpectedEvent(this._logger, ctx._instanceId, "subOrchestrationInstanceFailed");
-              }
-              return;
-            }
-
-            const failureDetails = event.getSuborchestrationinstancefailed()?.getFailuredetails();
-            const errorMessage = failureDetails?.getErrormessage() || "Unknown error";
-
-            // Get the task (don't delete yet - we might retry)
-            const subOrchTask = ctx._pendingTasks[taskId];
-
-            if (!subOrchTask) {
-              if (!ctx._isReplaying) {
-                WorkerLogs.orchestrationUnexpectedEvent(
-                  this._logger, ctx._instanceId, "subOrchestrationInstanceFailed", taskId,
-                );
-              }
-              return;
-            }
-
-            // Check if this task supports retry and handle it
-            const retried = await this.tryHandleRetry(subOrchTask, errorMessage, failureDetails, taskId, ctx);
-            if (retried) {
-              return;
-            }
-
-            // No retry - fail the task
-            delete ctx._pendingTasks[taskId];
-
-            subOrchTask.fail(
-              `Sub-orchestration task #${taskId} failed: ${errorMessage}`,
-              failureDetails,
-            );
-
-            await ctx.resume();
-          }
+          await this.handleSubOrchestrationFailed(ctx, event);
           break;
         case pb.HistoryEvent.EventtypeCase.EVENTRAISED:
-          {
-            // Event names are case-insensitive
-            const eventName = event.getEventraised()?.getName()?.toLowerCase();
-
-            if (!ctx._isReplaying) {
-              WorkerLogs.orchestrationEventRaised(this._logger, ctx._instanceId, eventName!);
-            }
-
-            let taskList;
-
-            if (eventName) {
-              taskList = ctx._pendingEvents[eventName];
-            }
-
-            let decodedResult;
-
-            if (taskList) {
-              const eventTask = taskList.shift();
-
-              if (!isEmpty(event.getEventraised()?.getInput())) {
-                decodedResult = JSON.parse(event.getEventraised()?.getInput()?.toString() || "");
-              }
-
-              if (eventTask) {
-                eventTask.complete(decodedResult);
-              }
-
-              if ((taskList?.length ?? 0) === 0 && eventName) {
-                delete ctx._pendingEvents[eventName];
-              }
-
-              await ctx.resume();
-            } else {
-              // Buffer the event
-              let eventList: any[] | undefined = [];
-
-              if (eventName) {
-                eventList = ctx._receivedEvents[eventName];
-
-                if (!eventList?.length) {
-                  eventList = [];
-                  ctx._receivedEvents[eventName] = eventList;
-                }
-              }
-
-              if (!isEmpty(event.getEventraised()?.getInput())) {
-                decodedResult = JSON.parse(event.getEventraised()?.getInput()?.toString() || "");
-              }
-
-              eventList?.push(decodedResult);
-
-              if (!ctx._isReplaying) {
-                WorkerLogs.orchestrationEventBuffered(this._logger, ctx._instanceId, eventName!);
-              }
-            }
-          }
+          await this.handleEventRaised(ctx, event);
           break;
         case pb.HistoryEvent.EventtypeCase.EXECUTIONSUSPENDED:
-          {
-            if (!this._isSuspended && !ctx._isReplaying) {
-              WorkerLogs.orchestrationSuspended(this._logger, ctx._instanceId);
-            }
-
-            this._isSuspended = true;
-          }
+          await this.handleExecutionSuspended(ctx, event);
           break;
         case pb.HistoryEvent.EventtypeCase.EXECUTIONRESUMED:
-          if (!this._isSuspended) {
-            return;
-          }
-
-          this._isSuspended = false;
-
-          for (const e of this._suspendedEvents) {
-            await this.processEvent(ctx, e);
-          }
-
-          this._suspendedEvents = [];
+          await this.handleExecutionResumed(ctx, event);
           break;
-        case pb.HistoryEvent.EventtypeCase.EXECUTIONTERMINATED: {
-          if (!ctx._isReplaying) {
-            WorkerLogs.orchestrationTerminated(this._logger, ctx._instanceId);
-          }
-
-          let encodedOutput;
-
-          if (!isEmpty(event.getExecutionterminated()?.getInput())) {
-            encodedOutput = event.getExecutionterminated()?.getInput()?.getValue();
-          }
-
-          ctx.setComplete(encodedOutput, pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED, true);
+        case pb.HistoryEvent.EventtypeCase.EXECUTIONTERMINATED:
+          await this.handleExecutionTerminated(ctx, event);
           break;
-        }
-        // This history event confirms that the entity call was successfully scheduled.
-        // Remove the action from the pending action list so we don't schedule it again.
         case pb.HistoryEvent.EventtypeCase.ENTITYOPERATIONCALLED:
-          {
-            const eventId = event.getEventid();
-            const action = ctx._pendingActions[eventId];
-            delete ctx._pendingActions[eventId];
-
-            const isSendEntityMessageAction = action?.hasSendentitymessage();
-
-            if (!action) {
-              throw getNonDeterminismError(eventId, "callEntity");
-            } else if (!isSendEntityMessageAction) {
-              throw getWrongActionTypeError(eventId, "callEntity", action);
-            } else if (!action.getSendentitymessage()?.hasEntityoperationcalled()) {
-              throw getWrongActionTypeError(eventId, "callEntity (EntityOperationCalled)", action);
-            }
-          }
+          await this.handleEntityOperationCalled(ctx, event);
           break;
-        // This history event confirms that the entity signal was successfully scheduled.
-        // Remove the action from the pending action list so we don't schedule it again.
         case pb.HistoryEvent.EventtypeCase.ENTITYOPERATIONSIGNALED:
-          {
-            const eventId = event.getEventid();
-            const action = ctx._pendingActions[eventId];
-            delete ctx._pendingActions[eventId];
-
-            const isSendEntityMessageAction = action?.hasSendentitymessage();
-
-            if (!action) {
-              throw getNonDeterminismError(eventId, "signalEntity");
-            } else if (!isSendEntityMessageAction) {
-              throw getWrongActionTypeError(eventId, "signalEntity", action);
-            } else if (!action.getSendentitymessage()?.hasEntityoperationsignaled()) {
-              throw getWrongActionTypeError(eventId, "signalEntity (EntityOperationSignaled)", action);
-            }
-          }
+          await this.handleEntityOperationSignaled(ctx, event);
           break;
-        // This history event confirms that the lock request was successfully scheduled.
-        // Remove the action from the pending action list so we don't schedule it again.
-        // The pending lock request in _entityFeature.pendingLockRequests remains to receive the granted event.
         case pb.HistoryEvent.EventtypeCase.ENTITYLOCKREQUESTED:
-          {
-            const eventId = event.getEventid();
-            const action = ctx._pendingActions[eventId];
-            delete ctx._pendingActions[eventId];
-
-            const isSendEntityMessageAction = action?.hasSendentitymessage();
-
-            if (!action) {
-              throw getNonDeterminismError(eventId, "lockEntities");
-            } else if (!isSendEntityMessageAction) {
-              throw getWrongActionTypeError(eventId, "lockEntities", action);
-            } else if (!action.getSendentitymessage()?.hasEntitylockrequested()) {
-              throw getWrongActionTypeError(eventId, "lockEntities (EntityLockRequested)", action);
-            }
-          }
+          await this.handleEntityLockRequested(ctx, event);
           break;
         case pb.HistoryEvent.EventtypeCase.ENTITYOPERATIONCOMPLETED:
-          {
-            const completedEvent = event.getEntityoperationcompleted();
-            const requestId = completedEvent?.getRequestid();
-
-            if (!requestId) {
-              WorkerLogs.entityEventIgnored(
-                this._logger,
-                ctx._instanceId,
-                "EntityOperationCompletedEvent",
-                "no requestId",
-              );
-              return;
-            }
-
-            // Find the pending entity call by requestId
-            const pendingCall = ctx._entityFeature.pendingEntityCalls.get(requestId);
-            if (!pendingCall) {
-              // This could happen during replay or if the call was already processed
-              if (!ctx._isReplaying) {
-                WorkerLogs.entityEventIgnored(
-                  this._logger,
-                  ctx._instanceId,
-                  "EntityOperationCompletedEvent",
-                  `unexpected requestId = ${requestId}`,
-                );
-              }
-              return;
-            }
-
-            // Remove from pending calls
-            ctx._entityFeature.pendingEntityCalls.delete(requestId);
-
-            // If in a critical section, recover the lock for this entity
-            ctx._entityFeature.recoverLockAfterCall(pendingCall.entityId);
-
-            // Parse the result and complete the task
-            let result;
-            if (!isEmpty(completedEvent?.getOutput())) {
-              result = JSON.parse(completedEvent?.getOutput()?.getValue() || "null");
-            }
-
-            pendingCall.task.complete(result);
-            await ctx.resume();
-          }
+          await this.handleEntityOperationCompleted(ctx, event);
           break;
         case pb.HistoryEvent.EventtypeCase.ENTITYOPERATIONFAILED:
-          {
-            const failedEvent = event.getEntityoperationfailed();
-            const requestId = failedEvent?.getRequestid();
-
-            if (!requestId) {
-              WorkerLogs.entityEventIgnored(
-                this._logger,
-                ctx._instanceId,
-                "EntityOperationFailedEvent",
-                "no requestId",
-              );
-              return;
-            }
-
-            // Find the pending entity call by requestId
-            const pendingCall = ctx._entityFeature.pendingEntityCalls.get(requestId);
-            if (!pendingCall) {
-              // This could happen during replay or if the call was already processed
-              if (!ctx._isReplaying) {
-                WorkerLogs.entityEventIgnored(
-                  this._logger,
-                  ctx._instanceId,
-                  "EntityOperationFailedEvent",
-                  `unexpected requestId = ${requestId}`,
-                );
-              }
-              return;
-            }
-
-            // Remove from pending calls
-            ctx._entityFeature.pendingEntityCalls.delete(requestId);
-
-            // If in a critical section, recover the lock for this entity
-            ctx._entityFeature.recoverLockAfterCall(pendingCall.entityId);
-
-            // Convert failure details and throw EntityOperationFailedException
-            const failureDetails = createTaskFailureDetails(failedEvent?.getFailuredetails());
-            if (!failureDetails) {
-              pendingCall.task.fail(
-                `Entity operation '${pendingCall.operationName}' failed with unknown error`,
-              );
-            } else {
-              const exception = new EntityOperationFailedException(
-                pendingCall.entityId,
-                pendingCall.operationName,
-                failureDetails,
-              );
-              pendingCall.task.fail(exception.message, failedEvent?.getFailuredetails());
-            }
-
-            await ctx.resume();
-          }
+          await this.handleEntityOperationFailed(ctx, event);
           break;
         case pb.HistoryEvent.EventtypeCase.ENTITYLOCKGRANTED:
-          {
-            const lockGrantedEvent = event.getEntitylockgranted();
-            const criticalSectionId = lockGrantedEvent?.getCriticalsectionid();
-
-            if (!criticalSectionId) {
-              WorkerLogs.entityEventIgnored(
-                this._logger,
-                ctx._instanceId,
-                "EntityLockGrantedEvent",
-                "no criticalSectionId",
-              );
-              return;
-            }
-
-            // Find the pending lock request by criticalSectionId
-            const pendingRequest = ctx._entityFeature.pendingLockRequests.get(criticalSectionId);
-            if (!pendingRequest) {
-              // This could happen during replay or if the lock was already acquired
-              if (!ctx._isReplaying) {
-                WorkerLogs.entityEventIgnored(
-                  this._logger,
-                  ctx._instanceId,
-                  "EntityLockGrantedEvent",
-                  `unexpected criticalSectionId = ${criticalSectionId}`,
-                );
-              }
-              return;
-            }
-
-            // Complete the lock acquisition
-            ctx._entityFeature.completeLockAcquisition(criticalSectionId);
-            await ctx.resume();
-          }
+          await this.handleEntityLockGranted(ctx, event);
           break;
         default:
           WorkerLogs.orchestrationUnknownEvent(this._logger, eventTypeName, eventType);
-        // throw new OrchestrationStateError(`Unknown history event type: ${eventTypeName} (value: ${eventType})`);
       }
     } catch (e: unknown) {
       // StopIteration is thrown when the generator is finished and didn't return a task as its next action
@@ -751,6 +205,558 @@ export class OrchestrationExecutor {
       throw e;
     }
   }
+
+  private async handleOrchestratorStarted(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+    ctx._currentUtcDatetime = event.getTimestamp()?.toDate() ?? ctx._currentUtcDatetime;
+  }
+
+  private async handleExecutionStarted(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+    // TODO: Check if we already started the orchestration
+    const executionStartedEvent = event.getExecutionstarted();
+    const fn = this._registry.getOrchestrator(
+      executionStartedEvent ? executionStartedEvent.getName() : undefined,
+    );
+
+    if (!fn) {
+      throw new OrchestratorNotRegisteredError(executionStartedEvent?.getName());
+    }
+
+    // Set the execution ID from the orchestration instance
+    const executionId = executionStartedEvent?.getOrchestrationinstance()?.getExecutionid()?.getValue();
+    if (executionId) {
+      ctx._executionId = executionId;
+    }
+
+    // Track the orchestrator name for lifecycle logs
+    this._orchestratorName = executionStartedEvent?.getName() ?? "(unknown)";
+
+    // Log orchestration start (EventId 600)
+    WorkerLogs.orchestrationStarted(this._logger, ctx._instanceId, this._orchestratorName);
+
+    // Set the version from the execution started event
+    ctx._version = executionStartedEvent?.getVersion()?.getValue() ?? "";
+
+    // Extract parent instance info if this is a sub-orchestration
+    const parentInstance = executionStartedEvent?.getParentinstance();
+    if (parentInstance) {
+      const parentOrchestrationInstance = parentInstance.getOrchestrationinstance();
+      ctx._parent = {
+        name: parentInstance.getName()?.getValue() ?? "",
+        instanceId: parentOrchestrationInstance?.getInstanceid() ?? "",
+        taskScheduledId: parentInstance.getTaskscheduledid(),
+      };
+    }
+
+    // Deserialize the input, if any
+    const inputField = executionStartedEvent?.getInput();
+    const input = isEmpty(inputField) ? undefined : parseJsonField(inputField);
+
+    // This does not execute the generator, it creates it
+    // since we create an async iterator, we await the creation (so we can use await in the generator itself beside yield)
+    const result = await fn(ctx, input);
+
+    const isAsyncGenerator = typeof result?.[Symbol.asyncIterator] === "function";
+    if (isAsyncGenerator) {
+      // Start the orchestrator's generator function
+      await ctx.run(result);
+    } else {
+      const resultType = Object.prototype.toString.call(result);
+      WorkerLogs.orchestrationNoTasks(this._logger, resultType);
+
+      // This is an orchestrator that doesn't schedule any tasks
+      ctx.setComplete(result, pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    }
+  }
+
+  private async handleTimerCreated(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+    // This history event confirms that the timer was successfully scheduled. Remove the timerCreated event from the pending action list so we don't schedule it again.
+    const timerId = event.getEventid();
+    const action = ctx._pendingActions[timerId];
+
+    // Delete it
+    delete ctx._pendingActions[timerId];
+
+    const isTimerAction = action?.getCreatetimer();
+
+    if (!action) {
+      throw getNonDeterminismError(timerId, getName(ctx.createTimer));
+    } else if (!isTimerAction) {
+      const expectedMethodName = getName(ctx.createTimer);
+      throw getWrongActionTypeError(timerId, expectedMethodName, action);
+    }
+  }
+
+  private async handleTimerFired(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+    const timerFiredEvent = event.getTimerfired();
+    const timerId = timerFiredEvent ? timerFiredEvent.getTimerid() : undefined;
+
+    if (timerId === undefined) {
+      if (!ctx._isReplaying) {
+        WorkerLogs.orchestrationUnexpectedEvent(this._logger, ctx._instanceId, "timerFired");
+      }
+      return;
+    }
+
+    const timerTask = ctx._pendingTasks[timerId];
+    delete ctx._pendingTasks[timerId];
+
+    if (!timerTask) {
+      // TODO: Should this be an error? When would it ever happen?
+      if (!ctx._isReplaying) {
+        WorkerLogs.orchestrationUnexpectedEvent(this._logger, ctx._instanceId, "timerFired", timerId);
+      }
+      return;
+    }
+
+    // Check if this is a retry timer
+    if (timerTask instanceof RetryTimerTask) {
+      // Get the parent retry task and reschedule it
+      const retryTask = timerTask.retryableParent;
+      // Reschedule the original action - this will add it back to pendingActions
+      ctx.rescheduleRetryTask(retryTask);
+      // Don't resume the orchestrator - we're just rescheduling the task
+      return;
+    }
+
+    timerTask.complete(undefined);
+    await ctx.resume();
+  }
+
+  private async handleTaskScheduled(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+    // This history event confirms that the activity execution was successfully scheduled. Remove the taskscheduled event from the pending action list so we don't schedule it again.
+    const taskId = event.getEventid();
+    const action = ctx._pendingActions[taskId];
+    delete ctx._pendingActions[taskId];
+
+    const isScheduleTaskAction = action?.hasScheduletask();
+
+    if (!action) {
+      throw getNonDeterminismError(taskId, getName(ctx.callActivity));
+    } else if (!isScheduleTaskAction) {
+      const expectedMethodName = getName(ctx.callActivity);
+      throw getWrongActionTypeError(taskId, expectedMethodName, action);
+    } else if (action.getScheduletask()?.getName() != event.getTaskscheduled()?.getName()) {
+      throw getWrongActionNameError(
+        taskId,
+        getName(ctx.callActivity),
+        event.getTaskscheduled()?.getName(),
+        action.getScheduletask()?.getName(),
+      );
+    }
+  }
+
+  private async handleTaskCompleted(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+    const taskCompletedEvent = event.getTaskcompleted();
+    const taskId = taskCompletedEvent ? taskCompletedEvent.getTaskscheduledid() : undefined;
+    const result = taskCompletedEvent?.getResult();
+    const normalizedResult = isEmpty(result) ? undefined : result;
+    await this.handleCompletedTask(ctx, taskId, normalizedResult, "taskCompleted");
+  }
+
+  private async handleTaskFailed(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+    const taskFailedEvent = event.getTaskfailed();
+    const taskId = taskFailedEvent ? taskFailedEvent.getTaskscheduledid() : undefined;
+    const failureDetails = taskFailedEvent?.getFailuredetails();
+    await this.handleFailedTask(ctx, taskId, failureDetails, "taskFailed", "Activity task");
+  }
+
+  private async handleSubOrchestrationCreated(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+    // This history event confirms that the sub-orchestration execution was successfully scheduled. Remove the subOrchestrationInstanceCreated event from the pending action list so we don't schedule it again.
+    const taskId = event.getEventid();
+    const action = ctx._pendingActions[taskId];
+    delete ctx._pendingActions[taskId];
+
+    const isCreateSubOrchestrationAction = action?.hasCreatesuborchestration();
+
+    if (!action) {
+      throw getNonDeterminismError(taskId, getName(ctx.callSubOrchestrator));
+    } else if (!isCreateSubOrchestrationAction) {
+      const expectedMethodName = getName(ctx.callSubOrchestrator);
+      throw getWrongActionTypeError(taskId, expectedMethodName, action);
+    } else if (
+      action.getCreatesuborchestration()?.getName() != event.getSuborchestrationinstancecreated()?.getName()
+    ) {
+      throw getWrongActionNameError(
+        taskId,
+        getName(ctx.callSubOrchestrator),
+        event.getSuborchestrationinstancecreated()?.getName(),
+        action.getCreatesuborchestration()?.getName(),
+      );
+    }
+  }
+
+  private async handleSubOrchestrationCompleted(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+    const subOrchestrationInstanceCompletedEvent = event.getSuborchestrationinstancecompleted();
+    const taskId = subOrchestrationInstanceCompletedEvent
+      ? subOrchestrationInstanceCompletedEvent.getTaskscheduledid()
+      : undefined;
+
+    let subOrchTask;
+
+    if (taskId) {
+      subOrchTask = ctx._pendingTasks[taskId];
+      delete ctx._pendingTasks[taskId];
+    }
+
+    const result = parseJsonField(subOrchestrationInstanceCompletedEvent?.getResult());
+
+    if (subOrchTask) {
+      subOrchTask.complete(result);
+    }
+
+    await ctx.resume();
+  }
+
+  private async handleSubOrchestrationFailed(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+    const subOrchestrationInstanceFailedEvent = event.getSuborchestrationinstancefailed();
+    const taskId = subOrchestrationInstanceFailedEvent
+      ? subOrchestrationInstanceFailedEvent.getTaskscheduledid()
+      : undefined;
+    const failureDetails = subOrchestrationInstanceFailedEvent?.getFailuredetails();
+    await this.handleFailedTask(ctx, taskId, failureDetails, "subOrchestrationInstanceFailed", "Sub-orchestration task");
+  }
+
+  private async handleEventRaised(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+    // Event names are case-insensitive
+    const eventName = event.getEventraised()?.getName()?.toLowerCase();
+
+    if (!ctx._isReplaying) {
+      WorkerLogs.orchestrationEventRaised(this._logger, ctx._instanceId, eventName!);
+    }
+
+    let taskList;
+
+    if (eventName) {
+      taskList = ctx._pendingEvents[eventName];
+    }
+
+    let decodedResult;
+
+    if (taskList) {
+      const eventTask = taskList.shift();
+
+      decodedResult = parseJsonField(event.getEventraised()?.getInput());
+
+      if (eventTask) {
+        eventTask.complete(decodedResult);
+      }
+
+      if ((taskList?.length ?? 0) === 0 && eventName) {
+        delete ctx._pendingEvents[eventName];
+      }
+
+      await ctx.resume();
+    } else {
+      // Buffer the event
+      let eventList: any[] | undefined = [];
+
+      if (eventName) {
+        eventList = ctx._receivedEvents[eventName];
+
+        if (!eventList?.length) {
+          eventList = [];
+          ctx._receivedEvents[eventName] = eventList;
+        }
+      }
+
+      decodedResult = parseJsonField(event.getEventraised()?.getInput());
+
+      eventList?.push(decodedResult);
+
+      if (!ctx._isReplaying) {
+        WorkerLogs.orchestrationEventBuffered(this._logger, ctx._instanceId, eventName!);
+      }
+    }
+  }
+
+  private async handleExecutionSuspended(ctx: RuntimeOrchestrationContext, _event: pb.HistoryEvent): Promise<void> {
+    if (!this._isSuspended && !ctx._isReplaying) {
+      WorkerLogs.orchestrationSuspended(this._logger, ctx._instanceId);
+    }
+
+    this._isSuspended = true;
+  }
+
+  private async handleExecutionResumed(ctx: RuntimeOrchestrationContext, _event: pb.HistoryEvent): Promise<void> {
+    if (!this._isSuspended) {
+      return;
+    }
+
+    this._isSuspended = false;
+
+    for (const e of this._suspendedEvents) {
+      await this.processEvent(ctx, e);
+    }
+
+    this._suspendedEvents = [];
+  }
+
+  private async handleExecutionTerminated(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+    if (!ctx._isReplaying) {
+      WorkerLogs.orchestrationTerminated(this._logger, ctx._instanceId);
+    }
+
+    let encodedOutput;
+
+    if (!isEmpty(event.getExecutionterminated()?.getInput())) {
+      encodedOutput = event.getExecutionterminated()?.getInput()?.getValue();
+    }
+
+    ctx.setComplete(encodedOutput, pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED, true);
+  }
+
+  private async handleEntityOperationCalled(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+    this.validateEntityAction(
+      ctx,
+      event,
+      "callEntity",
+      (msg) => msg.hasEntityoperationcalled(),
+      "callEntity (EntityOperationCalled)",
+    );
+  }
+
+  private async handleEntityOperationSignaled(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+    this.validateEntityAction(
+      ctx,
+      event,
+      "signalEntity",
+      (msg) => msg.hasEntityoperationsignaled(),
+      "signalEntity (EntityOperationSignaled)",
+    );
+  }
+
+  private async handleEntityLockRequested(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+    this.validateEntityAction(
+      ctx,
+      event,
+      "lockEntities",
+      (msg) => msg.hasEntitylockrequested(),
+      "lockEntities (EntityLockRequested)",
+    );
+  }
+
+  private async handleEntityOperationCompleted(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+    const completedEvent = event.getEntityoperationcompleted();
+    const requestId = completedEvent?.getRequestid();
+
+    if (!requestId) {
+      WorkerLogs.entityEventIgnored(
+        this._logger,
+        ctx._instanceId,
+        "EntityOperationCompletedEvent",
+        "no requestId",
+      );
+      return;
+    }
+
+    // Find the pending entity call by requestId
+    const pendingCall = ctx._entityFeature.pendingEntityCalls.get(requestId);
+    if (!pendingCall) {
+      // This could happen during replay or if the call was already processed
+      if (!ctx._isReplaying) {
+        WorkerLogs.entityEventIgnored(
+          this._logger,
+          ctx._instanceId,
+          "EntityOperationCompletedEvent",
+          `unexpected requestId = ${requestId}`,
+        );
+      }
+      return;
+    }
+
+    // Remove from pending calls
+    ctx._entityFeature.pendingEntityCalls.delete(requestId);
+
+    // If in a critical section, recover the lock for this entity
+    ctx._entityFeature.recoverLockAfterCall(pendingCall.entityId);
+
+    // Parse the result and complete the task
+    const result = parseJsonField(completedEvent?.getOutput());
+
+    pendingCall.task.complete(result);
+    await ctx.resume();
+  }
+
+  private async handleEntityOperationFailed(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+    const failedEvent = event.getEntityoperationfailed();
+    const requestId = failedEvent?.getRequestid();
+
+    if (!requestId) {
+      WorkerLogs.entityEventIgnored(
+        this._logger,
+        ctx._instanceId,
+        "EntityOperationFailedEvent",
+        "no requestId",
+      );
+      return;
+    }
+
+    // Find the pending entity call by requestId
+    const pendingCall = ctx._entityFeature.pendingEntityCalls.get(requestId);
+    if (!pendingCall) {
+      // This could happen during replay or if the call was already processed
+      if (!ctx._isReplaying) {
+        WorkerLogs.entityEventIgnored(
+          this._logger,
+          ctx._instanceId,
+          "EntityOperationFailedEvent",
+          `unexpected requestId = ${requestId}`,
+        );
+      }
+      return;
+    }
+
+    // Remove from pending calls
+    ctx._entityFeature.pendingEntityCalls.delete(requestId);
+
+    // If in a critical section, recover the lock for this entity
+    ctx._entityFeature.recoverLockAfterCall(pendingCall.entityId);
+
+    // Convert failure details and throw EntityOperationFailedException
+    const failureDetails = createTaskFailureDetails(failedEvent?.getFailuredetails());
+    if (!failureDetails) {
+      pendingCall.task.fail(
+        `Entity operation '${pendingCall.operationName}' failed with unknown error`,
+      );
+    } else {
+      const exception = new EntityOperationFailedException(
+        pendingCall.entityId,
+        pendingCall.operationName,
+        failureDetails,
+      );
+      pendingCall.task.fail(exception.message, failedEvent?.getFailuredetails());
+    }
+
+    await ctx.resume();
+  }
+
+  private async handleEntityLockGranted(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+    const lockGrantedEvent = event.getEntitylockgranted();
+    const criticalSectionId = lockGrantedEvent?.getCriticalsectionid();
+
+    if (!criticalSectionId) {
+      WorkerLogs.entityEventIgnored(
+        this._logger,
+        ctx._instanceId,
+        "EntityLockGrantedEvent",
+        "no criticalSectionId",
+      );
+      return;
+    }
+
+    // Find the pending lock request by criticalSectionId
+    const pendingRequest = ctx._entityFeature.pendingLockRequests.get(criticalSectionId);
+    if (!pendingRequest) {
+      // This could happen during replay or if the lock was already acquired
+      if (!ctx._isReplaying) {
+        WorkerLogs.entityEventIgnored(
+          this._logger,
+          ctx._instanceId,
+          "EntityLockGrantedEvent",
+          `unexpected criticalSectionId = ${criticalSectionId}`,
+        );
+      }
+      return;
+    }
+
+    // Complete the lock acquisition
+    ctx._entityFeature.completeLockAcquisition(criticalSectionId);
+    await ctx.resume();
+  }
+
+  private validateEntityAction(
+    ctx: RuntimeOrchestrationContext,
+    event: pb.HistoryEvent,
+    operationName: string,
+    hasEventCheck: (msg: pb.SendEntityMessageAction) => boolean,
+    detailedName: string,
+  ): void {
+    const eventId = event.getEventid();
+    const action = ctx._pendingActions[eventId];
+    delete ctx._pendingActions[eventId];
+
+    const isSendEntityMessageAction = action?.hasSendentitymessage();
+
+    if (!action) {
+      throw getNonDeterminismError(eventId, operationName);
+    } else if (!isSendEntityMessageAction) {
+      throw getWrongActionTypeError(eventId, operationName, action);
+    } else if (!hasEventCheck(action.getSendentitymessage()!)) {
+      throw getWrongActionTypeError(eventId, detailedName, action);
+    }
+  }
+
+  private async handleCompletedTask(
+    ctx: RuntimeOrchestrationContext,
+    taskId: number | undefined,
+    result: StringValue | undefined,
+    eventName: string,
+  ): Promise<void> {
+    let task;
+
+    if (taskId) {
+      task = ctx._pendingTasks[taskId];
+      delete ctx._pendingTasks[taskId];
+    }
+
+    if (!task) {
+      // TODO: Should this be an error? When would it ever happen?
+      if (!ctx._isReplaying) {
+        WorkerLogs.orchestrationUnexpectedEvent(this._logger, ctx._instanceId, eventName, taskId);
+      }
+
+      return;
+    }
+
+    const parsedResult = parseJsonField(result);
+
+    task.complete(parsedResult);
+    await ctx.resume();
+  }
+
+  private async handleFailedTask(
+    ctx: RuntimeOrchestrationContext,
+    taskId: number | undefined,
+    failureDetails: pb.TaskFailureDetails | undefined,
+    eventName: string,
+    taskLabel: string,
+  ): Promise<void> {
+    if (taskId === undefined) {
+      if (!ctx._isReplaying) {
+        WorkerLogs.orchestrationUnexpectedEvent(this._logger, ctx._instanceId, eventName);
+      }
+      return;
+    }
+
+    const errorMessage = failureDetails?.getErrormessage() || "Unknown error";
+
+    // Get the task (don't delete yet - we might retry)
+    const task = ctx._pendingTasks[taskId];
+
+    if (!task) {
+      if (!ctx._isReplaying) {
+        WorkerLogs.orchestrationUnexpectedEvent(this._logger, ctx._instanceId, eventName, taskId);
+      }
+      return;
+    }
+
+    // Check if this task supports retry and handle it
+    const retried = await this.tryHandleRetry(task, errorMessage, failureDetails, taskId, ctx);
+    if (retried) {
+      return;
+    }
+
+    // No retry - fail the task
+    delete ctx._pendingTasks[taskId];
+
+    task.fail(
+      `${taskLabel} #${taskId} failed: ${errorMessage}`,
+      failureDetails,
+    );
+
+    await ctx.resume();
+  }
+
 
   /**
    * Checks if a failed task supports retry and handles the retry if applicable.

@@ -91,14 +91,14 @@ abstract class DurableTaskAzureManagedOptionsBase {
 
     // Add https:// prefix if no protocol is specified
     if (!endpoint.startsWith("http://") && !endpoint.startsWith("https://")) {
-      endpoint = "https://" + endpoint;
+      endpoint = `https://${endpoint}`;
     }
 
     try {
       const url = new URL(endpoint);
       let authority = url.hostname;
       if (url.port) {
-        authority += ":" + url.port;
+        authority = `${authority}:${url.port}`;
       }
       return authority;
     } catch {
