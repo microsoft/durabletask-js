@@ -431,7 +431,7 @@ export function parseJsonField(v?: StringValue | null): any {
     return JSON.parse(v.getValue());
   } catch (err) {
     // Wrap JSON.parse errors to provide clearer context to callers while preserving the original error
-    throw new Error(`Failed to parse JSON from StringValue: ${(err as Error).message}`);
+    throw new Error(`Failed to parse JSON from StringValue: ${(err as Error).message}`, { cause: err });
   }
 }
 
