@@ -20,7 +20,7 @@ import { RetryTimerTask } from "../task/retry-timer-task";
 import { TOrchestrator } from "../types/orchestrator.type";
 import { enumValueToKey } from "../utils/enum.util";
 import { isEmpty, parseJsonField } from "../utils/pb-helper.util";
-import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
+import type { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 import { OrchestratorNotRegisteredError } from "./exception/orchestrator-not-registered-error";
 import { StopIterationError } from "./exception/stop-iteration-error";
 import { Registry } from "./registry";
