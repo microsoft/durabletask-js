@@ -50,7 +50,7 @@ jobs:
 
       - name: 🔧 Set environment variables
         run: |
-          echo "TASKHUB=${{ matrix.test-group.name }}" >> $GITHUB_ENV
+          echo "TASKHUB=default" >> $GITHUB_ENV
           echo "ENDPOINT=localhost:8080" >> $GITHUB_ENV
 
       - name: ⚙️ NodeJS - Install
