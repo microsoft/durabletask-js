@@ -1,7 +1,7 @@
 name: 🧪 DTS Emulator E2E Tests
 
 # This workflow runs E2E tests against the Durable Task Scheduler (DTS) emulator.
-# It mirrors the Python testing setup at durabletask-python for Azure-managed tests.
+# Tests are split across parallel jobs with separate task hubs for isolation.
 
 on:
   push:
@@ -20,6 +20,16 @@ jobs:
       fail-fast: false
       matrix:
         node-version: ["22.x", "24.x"]
+        test-group:
+          - name: "entity"
+            pattern: "test/e2e-azuremanaged/entity.spec.ts"
+          - name: "orchestration"
+            pattern: "test/e2e-azuremanaged/orchestration.spec.ts"
+          - name: "query-restart"
+            pattern: "test/e2e-azuremanaged/query-apis.spec.ts test/e2e-azuremanaged/restart.spec.ts"
+          - name: "retry-history-rewind"
+            pattern: "test/e2e-azuremanaged/retry-handler.spec.ts test/e2e-azuremanaged/retry-advanced.spec.ts test/e2e-azuremanaged/history.spec.ts test/e2e-azuremanaged/rewind.spec.ts"
+    name: "e2e (${{ matrix.test-group.name }}, node ${{ matrix.node-version }})"
     env:
       EMULATOR_VERSION: "latest"
     runs-on: ubuntu-latest
@@ -36,11 +46,11 @@ jobs:
           docker run --name dtsemulator -d -p 8080:8080 mcr.microsoft.com/dts/dts-emulator:$EMULATOR_VERSION
 
       - name: ⏳ Wait for container to be ready
-        run: sleep 10  # Adjust if your service needs more time to start
+        run: sleep 10
 
       - name: 🔧 Set environment variables
         run: |
-          echo "TASKHUB=default" >> $GITHUB_ENV
+          echo "TASKHUB=${{ matrix.test-group.name }}" >> $GITHUB_ENV
           echo "ENDPOINT=localhost:8080" >> $GITHUB_ENV
 
       - name: ⚙️ NodeJS - Install
@@ -52,6 +62,6 @@ jobs:
       - name: ⚙️ Install dependencies
         run: npm ci
 
-      - name: ✅ Run E2E tests against DTS emulator
-        run: npm run test:e2e:azuremanaged:internal
-        timeout-minutes: 20
+      - name: ✅ Run E2E tests — ${{ matrix.test-group.name }}
+        run: npx jest ${{ matrix.test-group.pattern }} --runInBand --detectOpenHandles
+        timeout-minutes: 15
