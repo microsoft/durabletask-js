@@ -45,16 +45,12 @@ invariants, task hierarchy, entity system, error handling patterns, and where bu
 tend to hide. This context is essential for distinguishing real bugs from intentional
 design decisions.
 
-## Step 1: Deduplication (MANDATORY — Do This Second)
+## Step 1: Review Exclusion List (MANDATORY — Do This Second)
 
-Before analyzing any code, you MUST check what's already in-flight:
+The workflow has already collected open PRs, open issues, recently merged PRs, and bot PRs
+with the `copilot-finds` label. This data is injected below as **Pre-loaded Deduplication Context**.
 
-1. **List all open PRs** with the `copilot-finds` label.
-2. **List all open issues** with the `copilot-finds` label.
-3. **List all open PRs** created by `copilot` or `github-actions[bot]` in the last 30 days.
-4. **List recently merged PRs** (last 14 days) to avoid re-raising recently fixed items.
-
-Build an **exclusion list** of:
+Review it and build a mental exclusion list of:
 - File paths already touched by open PRs
 - Problem descriptions already covered by open issues
 - Areas recently fixed by merged PRs
@@ -131,10 +127,16 @@ Example: `copilot-finds/bug/fix-unhandled-promise-rejection`
 
 ### Code Changes
 - Fix the actual problem
-- Add new test(s) that:
+- Add new **unit test(s)** that:
   - Would have caught the bug (for bug fixes)
   - Cover the previously uncovered path (for missing tests)
   - Verify the improvement works (for improvements)
+- **If the change affects orchestration, activity, entity, or client/worker behavior:**
+  Add **Azure Managed e2e test(s)** in `test/e2e-azuremanaged/` as well. Follow the
+  existing patterns there (uses `DurableTaskAzureManagedClientBuilder` /
+  `DurableTaskAzureManagedWorkerBuilder`, reads `DTS_CONNECTION_STRING` or
+  `ENDPOINT`/`TASKHUB` env vars). Add the new test case to the appropriate existing
+  spec file (e.g., `orchestration.spec.ts`, `entity.spec.ts`, `retry-advanced.spec.ts`).
 - Keep changes minimal and focused — one concern per PR
 
 ### Labels
