@@ -16,8 +16,6 @@ jobs:
   daily-code-review:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Require environment approval for manual triggers (configure in repo Settings > Environments)
-    environment: copilot-agent
 
     env:
       NODE_VER: "22"
