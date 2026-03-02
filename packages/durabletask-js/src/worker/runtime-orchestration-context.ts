@@ -130,6 +130,11 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   }
 
   async resume() {
+    // Don't resume if the orchestration is already complete
+    if (this._isComplete) {
+      return;
+    }
+
     // This is never expected unless maybe there's an issue with the history
     if (!this._generator) {
       throw new Error("The orchestrator generator is not initialized! Was the orchestration history corrupted?");

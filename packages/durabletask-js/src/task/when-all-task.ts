@@ -27,7 +27,8 @@ export class WhenAllTask<T> extends CompositeTask<T[]> {
 
   onChildCompleted(task: Task<any>): void {
     if (this._isComplete) {
-      throw new Error("Task is already completed");
+      // Already completed (fail-fast or all children done). Ignore subsequent child completions.
+      return;
     }
 
     this._completedTasks++;
@@ -35,6 +36,7 @@ export class WhenAllTask<T> extends CompositeTask<T[]> {
     if (task.isFailed && !this._exception) {
       this._exception = task.getException();
       this._isComplete = true;
+      return;
     }
 
     if (this._completedTasks == this._tasks.length) {
