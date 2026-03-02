@@ -1128,6 +1128,57 @@ describe("Orchestration Executor", () => {
       expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
     });
   });
+
+  it("should complete immediately when whenAll is called with an empty task array", async () => {
+    const orchestrator: TOrchestrator = async function* (_ctx: OrchestrationContext): any {
+      const results = yield whenAll([]);
+      return results;
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+
+    const oldEvents: any[] = [];
+    const newEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
+
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    // The orchestration should complete immediately with an empty array result
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify([]));
+  });
+
+  it("should complete when whenAll with empty array is followed by more work", async () => {
+    const hello = (_: any, name: string) => `Hello ${name}!`;
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const emptyResults = yield whenAll([]);
+      const activityResult = yield ctx.callActivity(hello, "World");
+      return { emptyResults, activityResult };
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(hello);
+
+    // First execution: should schedule the activity after completing whenAll([])
+    const oldEvents: any[] = [];
+    const newEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
+
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    // The whenAll([]) should complete, then an activity should be scheduled
+    expect(result.actions.length).toEqual(1);
+    expect(result.actions[0].hasScheduletask()).toBeTruthy();
+    expect(result.actions[0].getScheduletask()?.getName()).toEqual(activityName);
+  });
+
+  it("should throw when whenAny is called with an empty task array", () => {
+    expect(() => whenAny([])).toThrow("whenAny requires at least one task");
+  });
 });
 
 function getAndValidateSingleCompleteOrchestrationAction(
