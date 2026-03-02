@@ -121,6 +121,12 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
 
     // TODO: check if the task is null?
     this._previousTask = value;
+
+    // If the yielded task is already complete (e.g., whenAll with an empty array),
+    // resume immediately so the generator can continue.
+    if (this._previousTask instanceof Task && this._previousTask.isComplete) {
+      await this.resume();
+    }
   }
 
   async resume() {

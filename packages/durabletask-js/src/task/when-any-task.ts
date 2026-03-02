@@ -9,6 +9,9 @@ import { Task } from "./task";
  */
 export class WhenAnyTask extends CompositeTask<Task<any>> {
   constructor(tasks: Task<any>[]) {
+    if (tasks.length === 0) {
+      throw new Error("whenAny requires at least one task");
+    }
     super(tasks);
   }
 

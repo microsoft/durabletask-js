@@ -13,6 +13,12 @@ export class WhenAllTask<T> extends CompositeTask<T[]> {
 
     this._completedTasks = 0;
     this._failedTasks = 0;
+
+    // An empty task list should complete immediately with an empty result
+    if (tasks.length === 0) {
+      this._result = [] as T[];
+      this._isComplete = true;
+    }
   }
 
   pendingTasks(): number {
