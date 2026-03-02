@@ -31,7 +31,6 @@ This is a TypeScript monorepo for the Durable Task JavaScript SDK:
 
 - `packages/durabletask-js/` — Core orchestration SDK (`@microsoft/durabletask-js`)
 - `packages/durabletask-js-azuremanaged/` — Azure Managed (DTS) backend (`@microsoft/durabletask-js-azuremanaged`)
-- `packages/durabletask-js-export-history/` — History export utilities
 - `examples/` — Sample applications
 - `tests/` and `test/` — Unit and end-to-end tests
 - `internal/protocol/` — Protobuf definitions
