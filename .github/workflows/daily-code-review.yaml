@@ -157,8 +157,8 @@ jobs:
           Execute the full workflow described above:
           1. Review the deduplication context above
           2. Analyze the codebase for bugs, missing tests, and improvements
-          3. Select up to 3 highest-impact findings
-          4. For each finding: create a branch, make the fix, add tests, verify tests pass, open a PR
+          3. Select the single highest-impact finding
+          4. Create a branch, make the fix, add tests, verify tests pass, open a PR
           5. Label each PR with "copilot-finds"
 
           Remember:
@@ -166,7 +166,7 @@ jobs:
           - Every PR must include new tests
           - Run "npm run test:unit" and "npm run lint" before opening each PR
           - If tests fail due to your changes, fix them or skip the finding
-          - Maximum 3 PRs total
+          - Maximum 1 PR total
           PROMPT_EOF
           )
 

@@ -97,7 +97,7 @@ Scan the **entire repository** looking for these categories (in priority order):
 
 ## Step 3: Rank and Select Findings
 
-From all findings, select the **top 3 most impactful** based on:
+From all findings, select the **single most impactful** based on:
 
 1. **Severity** — Could this cause data loss, incorrect behavior, or crashes?
 2. **Confidence** — Are you sure this is a real problem, not a false positive?
@@ -109,7 +109,7 @@ From all findings, select the **top 3 most impactful** based on:
 - You can't write a meaningful test for it
 - It touches generated code or third-party dependencies
 
-## Step 4: Create PRs (Up to 3)
+## Step 4: Create PR (1 Maximum)
 
 For each selected finding, create a **separate PR** with:
 
@@ -169,7 +169,7 @@ Before opening each PR, you MUST:
 ## Behavioral Rules
 
 ### Hard Constraints
-- **Maximum 3 PRs per run.** If you have more findings, save only the best 3.
+- **Maximum 1 PR per run.** Pick only the single highest-impact finding.
 - **Never modify generated files** (`*_pb.js`, `*_pb.d.ts`, `*_grpc_pb.js`, proto files).
 - **Never modify CI/CD files** (`.github/workflows/`, `eng/`, `azure-pipelines.yml`).
 - **Never modify package.json** version fields or dependency versions.
@@ -191,7 +191,7 @@ Before opening each PR, you MUST:
 ## Success Criteria
 
 A successful run means:
-- 0-3 PRs opened, each with a real fix and new tests
+- 0-1 PRs opened, with a real fix and new tests
 - Zero false positives
 - Zero overlap with existing work
 - All tests pass
