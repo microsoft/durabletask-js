@@ -16,6 +16,8 @@ jobs:
   daily-code-review:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Require environment approval for manual triggers (configure in repo Settings > Environments)
+    environment: copilot-agent
 
     env:
       NODE_VER: "22"
@@ -165,7 +167,13 @@ jobs:
           PROMPT_EOF
           )
 
-          # Run with safety timeout (20 min) and non-interactive flags
+          # Security notes on flags:
+          # --allow-all-tools: Required for non-interactive CI — CLI would hang waiting for
+          #   user confirmation otherwise. Safe here because the prompt is hardcoded (not
+          #   sourced from external/untrusted input) and PRs require human review to merge.
+          # --allow-all-paths: Required so CLI can read source files for analysis.
+          # The GITHUB_TOKEN is repo-scoped and branch protections prevent direct pushes
+          # to main. The agent can only create PRs, not merge them.
           EXIT_CODE=0
           timeout --foreground --signal=TERM --kill-after=30s 1200s \
             copilot \
