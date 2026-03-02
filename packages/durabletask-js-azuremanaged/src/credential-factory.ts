@@ -39,34 +39,17 @@ export function getCredentialFromAuthenticationType(
     }
 
     case "workloadidentity": {
-      const options: {
-        clientId?: string;
-        tenantId?: string;
-        tokenFilePath?: string;
-        additionallyAllowedTenants?: string[];
-      } = {};
-
       const clientId = connectionString.getClientId();
-      if (clientId) {
-        options.clientId = clientId;
-      }
-
       const tenantId = connectionString.getTenantId();
-      if (tenantId) {
-        options.tenantId = tenantId;
-      }
-
       const tokenFilePath = connectionString.getTokenFilePath();
-      if (tokenFilePath) {
-        options.tokenFilePath = tokenFilePath;
-      }
-
       const additionallyAllowedTenants = connectionString.getAdditionallyAllowedTenants();
-      if (additionallyAllowedTenants) {
-        options.additionallyAllowedTenants = additionallyAllowedTenants;
-      }
 
-      return new WorkloadIdentityCredential(options);
+      return new WorkloadIdentityCredential({
+        ...(clientId && { clientId }),
+        ...(tenantId && { tenantId }),
+        ...(tokenFilePath && { tokenFilePath }),
+        ...(additionallyAllowedTenants && { additionallyAllowedTenants }),
+      });
     }
 
     case "environment":

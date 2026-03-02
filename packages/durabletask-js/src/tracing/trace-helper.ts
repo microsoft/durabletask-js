@@ -517,6 +517,38 @@ export function processActionsForTracing(
   }
 }
 
+function emitSpanForEntityOperation(
+  orchestrationSpan: Span,
+  operationName: string,
+  taskType: string,
+  getSpanKind: (otel: any) => any,
+  targetInstanceId?: string,
+  taskId?: number,
+): void {
+  const otel = getOtelApi();
+  const tracer = getTracer();
+  if (!otel || !tracer) return;
+
+  const spanName = createSpanName(taskType, operationName);
+  const parentContext = otel.trace.setSpan(otel.context.active(), orchestrationSpan);
+
+  const span = tracer.startSpan(
+    spanName,
+    {
+      kind: getSpanKind(otel),
+      attributes: {
+        [DurableTaskAttributes.TYPE]: taskType,
+        [DurableTaskAttributes.ENTITY_OPERATION]: operationName,
+        ...(targetInstanceId ? { [DurableTaskAttributes.ENTITY_INSTANCE_ID]: targetInstanceId } : {}),
+        ...(taskId !== undefined ? { [DurableTaskAttributes.TASK_TASK_ID]: taskId } : {}),
+      },
+    },
+    parentContext,
+  );
+
+  span.end();
+}
+
 /**
  * Emits a span for calling an entity from an orchestration (request/response).
  *
@@ -531,28 +563,14 @@ export function emitSpanForEntityCall(
   targetInstanceId?: string,
   taskId?: number,
 ): void {
-  const otel = getOtelApi();
-  const tracer = getTracer();
-  if (!otel || !tracer) return;
-
-  const spanName = createSpanName(TaskType.CALL_ENTITY, operationName);
-  const parentContext = otel.trace.setSpan(otel.context.active(), orchestrationSpan);
-
-  const span = tracer.startSpan(
-    spanName,
-    {
-      kind: otel.SpanKind.CLIENT,
-      attributes: {
-        [DurableTaskAttributes.TYPE]: TaskType.CALL_ENTITY,
-        [DurableTaskAttributes.ENTITY_OPERATION]: operationName,
-        ...(targetInstanceId ? { [DurableTaskAttributes.ENTITY_INSTANCE_ID]: targetInstanceId } : {}),
-        ...(taskId !== undefined ? { [DurableTaskAttributes.TASK_TASK_ID]: taskId } : {}),
-      },
-    },
-    parentContext,
+  emitSpanForEntityOperation(
+    orchestrationSpan,
+    operationName,
+    TaskType.CALL_ENTITY,
+    (otel) => otel.SpanKind.CLIENT,
+    targetInstanceId,
+    taskId,
   );
-
-  span.end();
 }
 
 /**
@@ -569,28 +587,14 @@ export function emitSpanForEntitySignal(
   targetInstanceId?: string,
   taskId?: number,
 ): void {
-  const otel = getOtelApi();
-  const tracer = getTracer();
-  if (!otel || !tracer) return;
-
-  const spanName = createSpanName(TaskType.SIGNAL_ENTITY, operationName);
-  const parentContext = otel.trace.setSpan(otel.context.active(), orchestrationSpan);
-
-  const span = tracer.startSpan(
-    spanName,
-    {
-      kind: otel.SpanKind.PRODUCER,
-      attributes: {
-        [DurableTaskAttributes.TYPE]: TaskType.SIGNAL_ENTITY,
-        [DurableTaskAttributes.ENTITY_OPERATION]: operationName,
-        ...(targetInstanceId ? { [DurableTaskAttributes.ENTITY_INSTANCE_ID]: targetInstanceId } : {}),
-        ...(taskId !== undefined ? { [DurableTaskAttributes.TASK_TASK_ID]: taskId } : {}),
-      },
-    },
-    parentContext,
+  emitSpanForEntityOperation(
+    orchestrationSpan,
+    operationName,
+    TaskType.SIGNAL_ENTITY,
+    (otel) => otel.SpanKind.PRODUCER,
+    targetInstanceId,
+    taskId,
   );
-
-  span.end();
 }
 
 /**
