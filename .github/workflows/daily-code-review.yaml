@@ -44,10 +44,11 @@ jobs:
         run: |
           echo "Fetching open PRs and issues with copilot-finds label..."
 
-          # Get open PRs with copilot-finds label
+          # Get open PRs with copilot-finds label (--limit ensures we don't miss any)
           OPEN_PRS=$(gh pr list \
             --label "copilot-finds" \
             --state open \
+            --limit 200 \
             --json title,url,headRefName,files \
             --jq '[.[] | {title: .title, url: .url, branch: .headRefName, files: [.files[].path]}]' \
             2>/dev/null || echo "[]")
@@ -56,22 +57,26 @@ jobs:
           OPEN_ISSUES=$(gh issue list \
             --label "copilot-finds" \
             --state open \
+            --limit 200 \
             --json title,url,body \
             --jq '[.[] | {title: .title, url: .url}]' \
             2>/dev/null || echo "[]")
 
           # Get recently merged PRs (last 14 days) with copilot-finds label
+          # Use jq numeric timestamp comparison (fromdateiso8601) to avoid string/timezone issues
           RECENT_MERGED=$(gh pr list \
             --label "copilot-finds" \
             --state merged \
+            --limit 200 \
             --json title,url,mergedAt,files \
-            --jq '[.[] | select(.mergedAt > (now - 14*86400 | todate)) | {title: .title, url: .url, files: [.files[].path]}]' \
+            --jq '[.[] | select((.mergedAt | fromdateiso8601) > (now - 14*86400)) | {title: .title, url: .url, files: [.files[].path]}]' \
             2>/dev/null || echo "[]")
 
-          # Get all open PRs by bots (last 30 days)
+          # Get all open PRs by bots
           BOT_PRS=$(gh pr list \
             --author "app/github-actions" \
             --state open \
+            --limit 200 \
             --json title,url,headRefName \
             --jq '[.[] | {title: .title, url: .url, branch: .headRefName}]' \
             2>/dev/null || echo "[]")
@@ -178,6 +183,7 @@ jobs:
           timeout --foreground --signal=TERM --kill-after=30s 1200s \
             copilot \
               --prompt "$FULL_PROMPT" \
+              --model "claude-opus-4.6" \
               --allow-all-tools \
               --allow-all-paths \
               < /dev/null 2>&1 || EXIT_CODE=$?
@@ -204,12 +210,14 @@ jobs:
           echo "**Date:** $(date +%Y-%m-%d)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          # Count PRs created in this run
+          # Count PRs created in this run using numeric timestamp comparison
+          CUTOFF_EPOCH=$(date -d '1 hour ago' +%s)
           PR_COUNT=$(gh pr list \
             --label "copilot-finds" \
             --state open \
+            --limit 200 \
             --json createdAt \
-            --jq "[.[] | select(.createdAt > \"$(date -d '1 hour ago' -Iseconds)\")] | length" \
+            --jq "[.[] | select((.createdAt | fromdateiso8601) > $CUTOFF_EPOCH)] | length" \
             2>/dev/null || echo "0")
 
           echo "**PRs opened this run:** $PR_COUNT" >> $GITHUB_STEP_SUMMARY
@@ -220,8 +228,9 @@ jobs:
             gh pr list \
               --label "copilot-finds" \
               --state open \
+              --limit 200 \
               --json title,url,createdAt \
-              --jq ".[] | select(.createdAt > \"$(date -d '1 hour ago' -Iseconds)\") | \"- [\(.title)](\(.url))\"" \
+              --jq ".[] | select((.createdAt | fromdateiso8601) > $CUTOFF_EPOCH) | \"- [\(.title)](\(.url))\"" \
               2>/dev/null >> $GITHUB_STEP_SUMMARY || true
           else
             echo "_No new findings today — codebase looking good! 🎉_" >> $GITHUB_STEP_SUMMARY
