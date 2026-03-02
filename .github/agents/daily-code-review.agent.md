@@ -127,10 +127,16 @@ Example: `copilot-finds/bug/fix-unhandled-promise-rejection`
 
 ### Code Changes
 - Fix the actual problem
-- Add new test(s) that:
+- Add new **unit test(s)** that:
   - Would have caught the bug (for bug fixes)
   - Cover the previously uncovered path (for missing tests)
   - Verify the improvement works (for improvements)
+- **If the change affects orchestration, activity, entity, or client/worker behavior:**
+  Add **Azure Managed e2e test(s)** in `test/e2e-azuremanaged/` as well. Follow the
+  existing patterns there (uses `DurableTaskAzureManagedClientBuilder` /
+  `DurableTaskAzureManagedWorkerBuilder`, reads `DTS_CONNECTION_STRING` or
+  `ENDPOINT`/`TASKHUB` env vars). Add the new test case to the appropriate existing
+  spec file (e.g., `orchestration.spec.ts`, `entity.spec.ts`, `retry-advanced.spec.ts`).
 - Keep changes minimal and focused — one concern per PR
 
 ### Labels
