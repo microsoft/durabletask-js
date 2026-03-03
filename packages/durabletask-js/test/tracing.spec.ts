@@ -29,6 +29,7 @@ import {
   emitSpanForEventSent,
   processActionsForTracing,
   createOrchestrationTraceContextPb,
+  setOrchestrationStatusFromActions,
   setSpanError,
   setSpanOk,
   endSpan,
@@ -999,5 +1000,223 @@ describe("Trace Helper - setSpanError with unknown types", () => {
     const spans = exporter.getFinishedSpans();
     expect(spans[0].status.code).toBe(otel.SpanStatusCode.ERROR);
     expect(spans[0].status.message).toBe("null");
+  });
+});
+
+describe("Trace Helper - execution_id on creation spans", () => {
+  it("should include execution_id when present on CreateInstanceRequest", () => {
+    const req = new pb.CreateInstanceRequest();
+    req.setName("MyOrchestration");
+    req.setInstanceid("test-instance");
+    const execId = new StringValue();
+    execId.setValue("exec-abc-123");
+    req.setExecutionid(execId);
+
+    const span = startSpanForNewOrchestration(req);
+    span!.end();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].attributes[DurableTaskAttributes.TASK_EXECUTION_ID]).toBe("exec-abc-123");
+  });
+
+  it("should not include execution_id when not present", () => {
+    const req = new pb.CreateInstanceRequest();
+    req.setName("MyOrchestration");
+    req.setInstanceid("test-instance");
+
+    const span = startSpanForNewOrchestration(req);
+    span!.end();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].attributes[DurableTaskAttributes.TASK_EXECUTION_ID]).toBeUndefined();
+  });
+});
+
+describe("Trace Helper - version on activity execution spans", () => {
+  it("should include version in span name and attributes when provided", () => {
+    const req = new pb.ActivityRequest();
+    req.setName("MyActivity");
+    req.setTaskid(1);
+    const versionValue = new StringValue();
+    versionValue.setValue("1.5.0");
+    req.setVersion(versionValue);
+
+    const orchInstance = new pb.OrchestrationInstance();
+    orchInstance.setInstanceid("parent-orch-id");
+    req.setOrchestrationinstance(orchInstance);
+
+    const span = startSpanForTaskExecution(req);
+    span!.end();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].name).toBe("activity:MyActivity@(1.5.0)");
+    expect(spans[0].attributes[DurableTaskAttributes.TASK_VERSION]).toBe("1.5.0");
+  });
+
+  it("should not include version when not present", () => {
+    const req = new pb.ActivityRequest();
+    req.setName("MyActivity");
+    req.setTaskid(1);
+
+    const orchInstance = new pb.OrchestrationInstance();
+    orchInstance.setInstanceid("parent-orch-id");
+    req.setOrchestrationinstance(orchInstance);
+
+    const span = startSpanForTaskExecution(req);
+    span!.end();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].name).toBe("activity:MyActivity");
+    expect(spans[0].attributes[DurableTaskAttributes.TASK_VERSION]).toBeUndefined();
+  });
+});
+
+describe("Trace Helper - timer span enrichment", () => {
+  it("should include name and instance_id on timer spans", () => {
+    const tracer = otel.trace.getTracer(TRACER_NAME);
+    const parentSpan = tracer.startSpan("parent-orch-timer-enriched");
+    const fireAt = new Date("2025-07-01T12:00:00Z");
+
+    emitSpanForTimer(parentSpan, "EnrichedOrch", fireAt, 7, "instance-enriched-123");
+    parentSpan.end();
+
+    const spans = exporter.getFinishedSpans();
+    const timerSpan = spans.find((s: any) => s.name === "orchestration:EnrichedOrch:timer");
+    expect(timerSpan).toBeDefined();
+    expect(timerSpan!.attributes[DurableTaskAttributes.TASK_NAME]).toBe("EnrichedOrch");
+    expect(timerSpan!.attributes[DurableTaskAttributes.TASK_INSTANCE_ID]).toBe("instance-enriched-123");
+  });
+
+  it("should omit instance_id when not provided", () => {
+    const tracer = otel.trace.getTracer(TRACER_NAME);
+    const parentSpan = tracer.startSpan("parent-orch-timer-no-id");
+    const fireAt = new Date("2025-07-01T12:00:00Z");
+
+    emitSpanForTimer(parentSpan, "NoIdOrch", fireAt, 8);
+    parentSpan.end();
+
+    const spans = exporter.getFinishedSpans();
+    const timerSpan = spans.find((s: any) => s.name === "orchestration:NoIdOrch:timer");
+    expect(timerSpan).toBeDefined();
+    expect(timerSpan!.attributes[DurableTaskAttributes.TASK_NAME]).toBe("NoIdOrch");
+    expect(timerSpan!.attributes[DurableTaskAttributes.TASK_INSTANCE_ID]).toBeUndefined();
+  });
+});
+
+describe("Trace Helper - setOrchestrationStatusFromActions", () => {
+  it("should set status attribute for completed orchestration", () => {
+    const tracer = otel.trace.getTracer(TRACER_NAME);
+    const span = tracer.startSpan("orch-status-test");
+
+    const completeAction = new pb.CompleteOrchestrationAction();
+    completeAction.setOrchestrationstatus(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+
+    const action = new pb.OrchestratorAction();
+    action.setCompleteorchestration(completeAction);
+
+    setOrchestrationStatusFromActions(span, [action]);
+    span.end();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].attributes[DurableTaskAttributes.TASK_STATUS]).toBe("Completed");
+  });
+
+  it("should set status attribute for failed orchestration", () => {
+    const tracer = otel.trace.getTracer(TRACER_NAME);
+    const span = tracer.startSpan("orch-status-failed");
+
+    const completeAction = new pb.CompleteOrchestrationAction();
+    completeAction.setOrchestrationstatus(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+
+    const action = new pb.OrchestratorAction();
+    action.setCompleteorchestration(completeAction);
+
+    setOrchestrationStatusFromActions(span, [action]);
+    span.end();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].attributes[DurableTaskAttributes.TASK_STATUS]).toBe("Failed");
+  });
+
+  it("should not set status when no completion action present", () => {
+    const tracer = otel.trace.getTracer(TRACER_NAME);
+    const span = tracer.startSpan("orch-status-none");
+
+    const action = new pb.OrchestratorAction();
+    action.setScheduletask(new pb.ScheduleTaskAction());
+
+    setOrchestrationStatusFromActions(span, [action]);
+    span.end();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].attributes[DurableTaskAttributes.TASK_STATUS]).toBeUndefined();
+  });
+
+  it("should safely handle null/undefined span", () => {
+    const action = new pb.OrchestratorAction();
+    action.setCompleteorchestration(new pb.CompleteOrchestrationAction());
+
+    // Should not throw
+    setOrchestrationStatusFromActions(null, [action]);
+    setOrchestrationStatusFromActions(undefined, [action]);
+  });
+
+  it("should handle terminated status", () => {
+    const tracer = otel.trace.getTracer(TRACER_NAME);
+    const span = tracer.startSpan("orch-status-terminated");
+
+    const completeAction = new pb.CompleteOrchestrationAction();
+    completeAction.setOrchestrationstatus(pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED);
+
+    const action = new pb.OrchestratorAction();
+    action.setCompleteorchestration(completeAction);
+
+    setOrchestrationStatusFromActions(span, [action]);
+    span.end();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].attributes[DurableTaskAttributes.TASK_STATUS]).toBe("Terminated");
+  });
+
+  it("should handle continued_as_new status", () => {
+    const tracer = otel.trace.getTracer(TRACER_NAME);
+    const span = tracer.startSpan("orch-status-can");
+
+    const completeAction = new pb.CompleteOrchestrationAction();
+    completeAction.setOrchestrationstatus(pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW);
+
+    const action = new pb.OrchestratorAction();
+    action.setCompleteorchestration(completeAction);
+
+    setOrchestrationStatusFromActions(span, [action]);
+    span.end();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].attributes[DurableTaskAttributes.TASK_STATUS]).toBe("ContinuedAsNew");
+  });
+});
+
+describe("Trace Helper - processActionsForTracing with instanceId", () => {
+  it("should pass instanceId to timer spans", () => {
+    const tracer = otel.trace.getTracer(TRACER_NAME);
+    const orchSpan = tracer.startSpan("orch-with-instance");
+
+    const timerAction = new pb.CreateTimerAction();
+    const fireAt = new Timestamp();
+    fireAt.fromDate(new Date("2025-07-01T12:00:00Z"));
+    timerAction.setFireat(fireAt);
+
+    const action = new pb.OrchestratorAction();
+    action.setId(10);
+    action.setCreatetimer(timerAction);
+
+    processActionsForTracing(orchSpan, [action], "TestOrch", "test-orch-instance-42");
+    orchSpan.end();
+
+    const spans = exporter.getFinishedSpans();
+    const timerSpan = spans.find((s: any) => s.name === "orchestration:TestOrch:timer");
+    expect(timerSpan).toBeDefined();
+    expect(timerSpan!.attributes[DurableTaskAttributes.TASK_INSTANCE_ID]).toBe("test-orch-instance-42");
+    expect(timerSpan!.attributes[DurableTaskAttributes.TASK_NAME]).toBe("TestOrch");
   });
 });

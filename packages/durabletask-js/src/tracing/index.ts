@@ -35,6 +35,7 @@ export {
   setSpanError,
   setSpanOk,
   endSpan,
+  setOrchestrationStatusFromActions,
   createOrchestrationTraceContextPb,
   processActionsForTracing,
 } from "./trace-helper";

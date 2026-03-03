@@ -84,6 +84,9 @@ export function startSpanForNewOrchestration(req: pb.CreateInstanceRequest): Spa
       [DurableTaskAttributes.TASK_NAME]: name,
       [DurableTaskAttributes.TASK_INSTANCE_ID]: instanceId,
       ...(version ? { [DurableTaskAttributes.TASK_VERSION]: version } : {}),
+      ...(req.getExecutionid()?.getValue()
+        ? { [DurableTaskAttributes.TASK_EXECUTION_ID]: req.getExecutionid()!.getValue() }
+        : {}),
     },
   });
 
@@ -229,7 +232,8 @@ export function startSpanForTaskExecution(req: pb.ActivityRequest): Span | undef
   if (!ctx) return undefined;
 
   const name = req.getName();
-  const spanName = createSpanName(TaskType.ACTIVITY, name);
+  const version = req.getVersion()?.getValue();
+  const spanName = createSpanName(TaskType.ACTIVITY, name, version);
 
   const parentPbCtx = req.getParenttracecontext();
   const parentContext = createParentContextFromPb(parentPbCtx);
@@ -245,6 +249,7 @@ export function startSpanForTaskExecution(req: pb.ActivityRequest): Span | undef
         [DurableTaskAttributes.TASK_NAME]: name,
         [DurableTaskAttributes.TASK_INSTANCE_ID]: instanceId,
         [DurableTaskAttributes.TASK_TASK_ID]: req.getTaskid(),
+        ...(version ? { [DurableTaskAttributes.TASK_VERSION]: version } : {}),
       },
     },
     parentContext,
@@ -308,12 +313,14 @@ export function startSpanForSchedulingSubOrchestration(
  * @param orchestrationName - The name of the parent orchestration.
  * @param fireAt - When the timer fires.
  * @param timerId - The timer's sequential ID.
+ * @param instanceId - The orchestration instance ID.
  */
 export function emitSpanForTimer(
   orchestrationSpan: Span,
   orchestrationName: string,
   fireAt: Date,
   timerId: number,
+  instanceId?: string,
 ): void {
   const ctx = getTracingContext();
   if (!ctx) return;
@@ -327,8 +334,10 @@ export function emitSpanForTimer(
       kind: ctx.otel.SpanKind.INTERNAL,
       attributes: {
         [DurableTaskAttributes.TYPE]: TaskType.TIMER,
+        [DurableTaskAttributes.TASK_NAME]: orchestrationName,
         [DurableTaskAttributes.TASK_TASK_ID]: timerId,
         [DurableTaskAttributes.FIRE_AT]: fireAt.toISOString(),
+        ...(instanceId ? { [DurableTaskAttributes.TASK_INSTANCE_ID]: instanceId } : {}),
       },
     },
     parentContext,
@@ -441,6 +450,57 @@ export function endSpan(span: Span | undefined | null): void {
 }
 
 /**
+ * Sets the orchestration completion status attribute on the span.
+ * This records the final status (e.g. "Completed", "Failed") as a span attribute,
+ * matching the .NET SDK behavior.
+ *
+ * @param span - The orchestration span.
+ * @param actions - The orchestrator actions to inspect for completion status.
+ */
+export function setOrchestrationStatusFromActions(
+  span: Span | undefined | null,
+  actions: pb.OrchestratorAction[],
+): void {
+  if (!span) return;
+
+  for (const action of actions) {
+    if (action.hasCompleteorchestration()) {
+      const completeAction = action.getCompleteorchestration()!;
+      const status = completeAction.getOrchestrationstatus();
+      const statusName = orchestrationStatusToString(status);
+      if (statusName) {
+        span.setAttribute(DurableTaskAttributes.TASK_STATUS, statusName);
+      }
+      break;
+    }
+  }
+}
+
+/** Maps protobuf OrchestrationStatus enum to a human-readable string. */
+function orchestrationStatusToString(status: pb.OrchestrationStatus): string | undefined {
+  switch (status) {
+    case pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING:
+      return "Running";
+    case pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED:
+      return "Completed";
+    case pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW:
+      return "ContinuedAsNew";
+    case pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED:
+      return "Failed";
+    case pb.OrchestrationStatus.ORCHESTRATION_STATUS_CANCELED:
+      return "Canceled";
+    case pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED:
+      return "Terminated";
+    case pb.OrchestrationStatus.ORCHESTRATION_STATUS_PENDING:
+      return "Pending";
+    case pb.OrchestrationStatus.ORCHESTRATION_STATUS_SUSPENDED:
+      return "Suspended";
+    default:
+      return undefined;
+  }
+}
+
+/**
  * Creates an OrchestrationTraceContext protobuf message for the orchestrator response.
  *
  * @param spanInfo - The span info to encode.
@@ -467,11 +527,13 @@ export function createOrchestrationTraceContextPb(spanInfo: OrchestrationSpanInf
  * @param orchestrationSpan - The orchestration span (parent for action spans).
  * @param actions - The OrchestratorAction list to process.
  * @param orchestrationName - The name of the orchestration (for timer spans).
+ * @param instanceId - The orchestration instance ID (for enriching span attributes).
  */
 export function processActionsForTracing(
   orchestrationSpan: Span | undefined | null,
   actions: pb.OrchestratorAction[],
   orchestrationName: string,
+  instanceId?: string,
 ): void {
   if (!orchestrationSpan) return;
 
@@ -485,7 +547,7 @@ export function processActionsForTracing(
     } else if (action.hasCreatetimer()) {
       const createTimer = action.getCreatetimer()!;
       const fireAt = createTimer.getFireat()?.toDate() ?? new Date();
-      emitSpanForTimer(orchestrationSpan, orchestrationName, fireAt, action.getId());
+      emitSpanForTimer(orchestrationSpan, orchestrationName, fireAt, action.getId(), instanceId);
     } else if (action.hasSendevent()) {
       const sendEvent = action.getSendevent()!;
       emitSpanForEventSent(orchestrationSpan, sendEvent.getName(), sendEvent.getInstance()?.getInstanceid());
