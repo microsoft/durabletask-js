@@ -382,6 +382,7 @@ export class InMemoryOrchestrationBackend {
   reset(): void {
     this.instances.clear();
     this.orchestrationQueue.length = 0;
+    this.orchestrationQueueSet.clear();
     this.activityQueue.length = 0;
     for (const waiters of this.stateWaiters.values()) {
       for (const waiter of waiters) {
