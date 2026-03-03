@@ -14,7 +14,7 @@
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { resourceFromAttributes } from "@opentelemetry/resources";
+import { Resource } from "@opentelemetry/resources";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 
 // Load environment variables from .env file
@@ -30,10 +30,10 @@ const traceExporter = new OTLPTraceExporter({
 });
 
 const sdk = new NodeSDK({
-  resource: resourceFromAttributes({
+  resource: new Resource({
     [ATTR_SERVICE_NAME]: "durabletask-js-tracing-example",
   }),
-  spanProcessors: [new SimpleSpanProcessor(traceExporter)],
+  spanProcessors: [new SimpleSpanProcessor(traceExporter) as any],
 });
 
 sdk.start();
