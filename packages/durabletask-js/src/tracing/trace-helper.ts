@@ -349,6 +349,49 @@ export function emitSpanForTimer(
 }
 
 /**
+ * Emits a retroactive Client-kind span for a completed/failed task or sub-orchestration.
+ * Common helper for activity and sub-orchestration retroactive spans.
+ */
+function emitRetroactiveClientSpan(
+  orchestrationSpan: Span,
+  taskType: string,
+  taskName: string,
+  version: string | undefined,
+  instanceId: string,
+  startTime?: Date,
+  failureMessage?: string,
+  taskId?: number,
+): void {
+  const ctx = getTracingContext();
+  if (!ctx) return;
+
+  const spanName = createSpanName(taskType, taskName, version);
+  const parentContext = ctx.otel.trace.setSpan(ctx.otel.context.active(), orchestrationSpan);
+
+  const span = ctx.tracer.startSpan(
+    spanName,
+    {
+      kind: ctx.otel.SpanKind.CLIENT,
+      startTime: startTime,
+      attributes: {
+        [DurableTaskAttributes.TYPE]: taskType,
+        [DurableTaskAttributes.TASK_NAME]: taskName,
+        [DurableTaskAttributes.TASK_INSTANCE_ID]: instanceId,
+        ...(version ? { [DurableTaskAttributes.TASK_VERSION]: version } : {}),
+        ...(taskId !== undefined ? { [DurableTaskAttributes.TASK_TASK_ID]: taskId } : {}),
+      },
+    },
+    parentContext,
+  );
+
+  if (failureMessage) {
+    span.setStatus({ code: ctx.otel.SpanStatusCode.ERROR, message: failureMessage });
+  }
+
+  span.end();
+}
+
+/**
  * Emits a retroactive Client-kind span for a completed/failed activity task.
  * This matches the .NET SDK pattern (EmitTraceActivityForTaskCompleted/Failed) where
  * client spans are emitted at completion time with startTime from the original
@@ -371,33 +414,10 @@ export function emitRetroactiveActivityClientSpan(
   startTime?: Date,
   failureMessage?: string,
 ): void {
-  const ctx = getTracingContext();
-  if (!ctx) return;
-
-  const spanName = createSpanName(TaskType.ACTIVITY, taskName, version);
-  const parentContext = ctx.otel.trace.setSpan(ctx.otel.context.active(), orchestrationSpan);
-
-  const span = ctx.tracer.startSpan(
-    spanName,
-    {
-      kind: ctx.otel.SpanKind.CLIENT,
-      startTime: startTime,
-      attributes: {
-        [DurableTaskAttributes.TYPE]: TaskType.ACTIVITY,
-        [DurableTaskAttributes.TASK_NAME]: taskName,
-        [DurableTaskAttributes.TASK_INSTANCE_ID]: instanceId,
-        [DurableTaskAttributes.TASK_TASK_ID]: taskId,
-        ...(version ? { [DurableTaskAttributes.TASK_VERSION]: version } : {}),
-      },
-    },
-    parentContext,
+  emitRetroactiveClientSpan(
+    orchestrationSpan, TaskType.ACTIVITY, taskName, version,
+    instanceId, startTime, failureMessage, taskId,
   );
-
-  if (failureMessage) {
-    span.setStatus({ code: ctx.otel.SpanStatusCode.ERROR, message: failureMessage });
-  }
-
-  span.end();
 }
 
 /**
@@ -419,32 +439,10 @@ export function emitRetroactiveSubOrchClientSpan(
   startTime?: Date,
   failureMessage?: string,
 ): void {
-  const ctx = getTracingContext();
-  if (!ctx) return;
-
-  const spanName = createSpanName(TaskType.ORCHESTRATION, subOrchName, version);
-  const parentContext = ctx.otel.trace.setSpan(ctx.otel.context.active(), orchestrationSpan);
-
-  const span = ctx.tracer.startSpan(
-    spanName,
-    {
-      kind: ctx.otel.SpanKind.CLIENT,
-      startTime: startTime,
-      attributes: {
-        [DurableTaskAttributes.TYPE]: TaskType.ORCHESTRATION,
-        [DurableTaskAttributes.TASK_NAME]: subOrchName,
-        [DurableTaskAttributes.TASK_INSTANCE_ID]: instanceId,
-        ...(version ? { [DurableTaskAttributes.TASK_VERSION]: version } : {}),
-      },
-    },
-    parentContext,
+  emitRetroactiveClientSpan(
+    orchestrationSpan, TaskType.ORCHESTRATION, subOrchName, version,
+    instanceId, startTime, failureMessage,
   );
-
-  if (failureMessage) {
-    span.setStatus({ code: ctx.otel.SpanStatusCode.ERROR, message: failureMessage });
-  }
-
-  span.end();
 }
 
 /**
@@ -694,27 +692,19 @@ export function setOrchestrationStatusFromActions(
 }
 
 /** Maps protobuf OrchestrationStatus enum to a human-readable string. */
+const orchestrationStatusNames: Record<number, string> = {
+  [pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING]: "Running",
+  [pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED]: "Completed",
+  [pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW]: "ContinuedAsNew",
+  [pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED]: "Failed",
+  [pb.OrchestrationStatus.ORCHESTRATION_STATUS_CANCELED]: "Canceled",
+  [pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED]: "Terminated",
+  [pb.OrchestrationStatus.ORCHESTRATION_STATUS_PENDING]: "Pending",
+  [pb.OrchestrationStatus.ORCHESTRATION_STATUS_SUSPENDED]: "Suspended",
+};
+
 function orchestrationStatusToString(status: pb.OrchestrationStatus): string | undefined {
-  switch (status) {
-    case pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING:
-      return "Running";
-    case pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED:
-      return "Completed";
-    case pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW:
-      return "ContinuedAsNew";
-    case pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED:
-      return "Failed";
-    case pb.OrchestrationStatus.ORCHESTRATION_STATUS_CANCELED:
-      return "Canceled";
-    case pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED:
-      return "Terminated";
-    case pb.OrchestrationStatus.ORCHESTRATION_STATUS_PENDING:
-      return "Pending";
-    case pb.OrchestrationStatus.ORCHESTRATION_STATUS_SUSPENDED:
-      return "Suspended";
-    default:
-      return undefined;
-  }
+  return orchestrationStatusNames[status];
 }
 
 /**

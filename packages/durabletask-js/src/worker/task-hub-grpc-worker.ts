@@ -658,8 +658,8 @@ export class TaskHubGrpcWorker {
     // Emit retroactive spans for tasks/sub-orchestrations that completed/failed and timers
     // that fired. This follows the .NET SDK pattern where these spans are emitted from
     // history events BEFORE the orchestrator executor runs.
+    const orchName = executionStartedProtoEvent?.getName() ?? "";
     if (tracingResult) {
-      const orchName = executionStartedProtoEvent?.getName() ?? "";
       processNewEventsForTracing(
         tracingResult.span,
         req.getPasteventsList(),
@@ -677,7 +677,6 @@ export class TaskHubGrpcWorker {
 
       // Process actions to inject trace context into scheduled tasks, sub-orchestrations, etc.
       if (tracingResult) {
-        const orchName = executionStartedProtoEvent?.getName() ?? "";
         processActionsForTracing(tracingResult.span, result.actions, orchName, instanceId);
       }
 
