@@ -2,6 +2,8 @@
 
 ### New
 
+- Align tracing attributes with .NET SDK conventions: add `execution_id` on creation spans, `version` on activity execution spans, `name`/`instance_id` on timer spans, and `durabletask.task.status` on orchestration completion
+
 ### Fixes
 
 
