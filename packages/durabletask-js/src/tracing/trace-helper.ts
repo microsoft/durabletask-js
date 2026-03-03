@@ -321,6 +321,7 @@ export function emitSpanForTimer(
   fireAt: Date,
   timerId: number,
   instanceId?: string,
+  startTime?: Date,
 ): void {
   const ctx = getTracingContext();
   if (!ctx) return;
@@ -332,6 +333,7 @@ export function emitSpanForTimer(
     spanName,
     {
       kind: ctx.otel.SpanKind.INTERNAL,
+      startTime: startTime,
       attributes: {
         [DurableTaskAttributes.TYPE]: TaskType.TIMER,
         [DurableTaskAttributes.TASK_NAME]: orchestrationName,
@@ -344,6 +346,221 @@ export function emitSpanForTimer(
   );
 
   span.end();
+}
+
+/**
+ * Emits a retroactive Client-kind span for a completed/failed activity task.
+ * This matches the .NET SDK pattern (EmitTraceActivityForTaskCompleted/Failed) where
+ * client spans are emitted at completion time with startTime from the original
+ * TaskScheduled event timestamp, providing accurate scheduling-to-completion duration.
+ *
+ * @param orchestrationSpan - The parent orchestration span.
+ * @param taskName - The activity name.
+ * @param version - The activity version (optional).
+ * @param instanceId - The orchestration instance ID.
+ * @param taskId - The task's sequential ID.
+ * @param startTime - The scheduling timestamp from the TaskScheduled history event.
+ * @param failureMessage - If the task failed, the error message.
+ */
+export function emitRetroactiveActivityClientSpan(
+  orchestrationSpan: Span,
+  taskName: string,
+  version: string | undefined,
+  instanceId: string,
+  taskId: number,
+  startTime?: Date,
+  failureMessage?: string,
+): void {
+  const ctx = getTracingContext();
+  if (!ctx) return;
+
+  const spanName = createSpanName(TaskType.ACTIVITY, taskName, version);
+  const parentContext = ctx.otel.trace.setSpan(ctx.otel.context.active(), orchestrationSpan);
+
+  const span = ctx.tracer.startSpan(
+    spanName,
+    {
+      kind: ctx.otel.SpanKind.CLIENT,
+      startTime: startTime,
+      attributes: {
+        [DurableTaskAttributes.TYPE]: TaskType.ACTIVITY,
+        [DurableTaskAttributes.TASK_NAME]: taskName,
+        [DurableTaskAttributes.TASK_INSTANCE_ID]: instanceId,
+        [DurableTaskAttributes.TASK_TASK_ID]: taskId,
+        ...(version ? { [DurableTaskAttributes.TASK_VERSION]: version } : {}),
+      },
+    },
+    parentContext,
+  );
+
+  if (failureMessage) {
+    span.setStatus({ code: ctx.otel.SpanStatusCode.ERROR, message: failureMessage });
+  }
+
+  span.end();
+}
+
+/**
+ * Emits a retroactive Client-kind span for a completed/failed sub-orchestration.
+ * Matches .NET SDK's EmitTraceActivityForSubOrchestrationCompleted/Failed pattern.
+ *
+ * @param orchestrationSpan - The parent orchestration span.
+ * @param subOrchName - The sub-orchestration name.
+ * @param version - The sub-orchestration version (optional).
+ * @param instanceId - The parent orchestration instance ID.
+ * @param startTime - The scheduling timestamp from the SubOrchestrationInstanceCreated event.
+ * @param failureMessage - If the sub-orchestration failed, the error message.
+ */
+export function emitRetroactiveSubOrchClientSpan(
+  orchestrationSpan: Span,
+  subOrchName: string,
+  version: string | undefined,
+  instanceId: string,
+  startTime?: Date,
+  failureMessage?: string,
+): void {
+  const ctx = getTracingContext();
+  if (!ctx) return;
+
+  const spanName = createSpanName(TaskType.ORCHESTRATION, subOrchName, version);
+  const parentContext = ctx.otel.trace.setSpan(ctx.otel.context.active(), orchestrationSpan);
+
+  const span = ctx.tracer.startSpan(
+    spanName,
+    {
+      kind: ctx.otel.SpanKind.CLIENT,
+      startTime: startTime,
+      attributes: {
+        [DurableTaskAttributes.TYPE]: TaskType.ORCHESTRATION,
+        [DurableTaskAttributes.TASK_NAME]: subOrchName,
+        [DurableTaskAttributes.TASK_INSTANCE_ID]: instanceId,
+        ...(version ? { [DurableTaskAttributes.TASK_VERSION]: version } : {}),
+      },
+    },
+    parentContext,
+  );
+
+  if (failureMessage) {
+    span.setStatus({ code: ctx.otel.SpanStatusCode.ERROR, message: failureMessage });
+  }
+
+  span.end();
+}
+
+/**
+ * Processes new history events to emit retroactive spans for completed/failed tasks,
+ * sub-orchestrations, and fired timers. This follows the .NET SDK pattern where the
+ * worker emits these spans before the orchestrator executor runs.
+ *
+ * @param orchestrationSpan - The orchestration span (parent for retroactive spans).
+ * @param pastEvents - The past (replay) history events to look up scheduling events.
+ * @param newEvents - The new history events to process for completions/failures.
+ * @param instanceId - The orchestration instance ID.
+ * @param orchestrationName - The orchestration name (for timer spans).
+ */
+export function processNewEventsForTracing(
+  orchestrationSpan: Span | undefined | null,
+  pastEvents: pb.HistoryEvent[],
+  newEvents: pb.HistoryEvent[],
+  instanceId: string,
+  orchestrationName: string,
+): void {
+  if (!orchestrationSpan) return;
+  if (!getTracingContext()) return;
+
+  // Build lookup maps from past events
+  const taskScheduledEvents = new Map<number, pb.HistoryEvent>();
+  const subOrchCreatedEvents = new Map<number, pb.HistoryEvent>();
+  const timerCreatedEvents = new Map<number, pb.HistoryEvent>();
+
+  for (const event of pastEvents) {
+    const eventId = event.getEventid();
+    if (event.hasTaskscheduled()) {
+      taskScheduledEvents.set(eventId, event);
+    } else if (event.hasSuborchestrationinstancecreated()) {
+      subOrchCreatedEvents.set(eventId, event);
+    } else if (event.hasTimercreated()) {
+      timerCreatedEvents.set(eventId, event);
+    }
+  }
+
+  // Process new events for completions, failures, and timer firings
+  for (const newEvent of newEvents) {
+    if (newEvent.hasTaskcompleted()) {
+      const taskCompleted = newEvent.getTaskcompleted()!;
+      const scheduledEvent = taskScheduledEvents.get(taskCompleted.getTaskscheduledid());
+      if (scheduledEvent) {
+        const taskScheduled = scheduledEvent.getTaskscheduled()!;
+        emitRetroactiveActivityClientSpan(
+          orchestrationSpan,
+          taskScheduled.getName(),
+          taskScheduled.getVersion()?.getValue(),
+          instanceId,
+          scheduledEvent.getEventid(),
+          scheduledEvent.getTimestamp()?.toDate(),
+        );
+      }
+    } else if (newEvent.hasTaskfailed()) {
+      const taskFailed = newEvent.getTaskfailed()!;
+      const scheduledEvent = taskScheduledEvents.get(taskFailed.getTaskscheduledid());
+      if (scheduledEvent) {
+        const taskScheduled = scheduledEvent.getTaskscheduled()!;
+        const failureMessage =
+          taskFailed.getFailuredetails()?.getErrormessage() ?? "Unspecified task activity failure";
+        emitRetroactiveActivityClientSpan(
+          orchestrationSpan,
+          taskScheduled.getName(),
+          taskScheduled.getVersion()?.getValue(),
+          instanceId,
+          scheduledEvent.getEventid(),
+          scheduledEvent.getTimestamp()?.toDate(),
+          failureMessage,
+        );
+      }
+    } else if (newEvent.hasSuborchestrationinstancecompleted()) {
+      const subOrchCompleted = newEvent.getSuborchestrationinstancecompleted()!;
+      const createdEvent = subOrchCreatedEvents.get(subOrchCompleted.getTaskscheduledid());
+      if (createdEvent) {
+        const subOrchCreated = createdEvent.getSuborchestrationinstancecreated()!;
+        emitRetroactiveSubOrchClientSpan(
+          orchestrationSpan,
+          subOrchCreated.getName(),
+          subOrchCreated.getVersion()?.getValue(),
+          instanceId,
+          createdEvent.getTimestamp()?.toDate(),
+        );
+      }
+    } else if (newEvent.hasSuborchestrationinstancefailed()) {
+      const subOrchFailed = newEvent.getSuborchestrationinstancefailed()!;
+      const createdEvent = subOrchCreatedEvents.get(subOrchFailed.getTaskscheduledid());
+      if (createdEvent) {
+        const subOrchCreated = createdEvent.getSuborchestrationinstancecreated()!;
+        const failureMessage =
+          subOrchFailed.getFailuredetails()?.getErrormessage() ?? "Unspecified sub-orchestration failure";
+        emitRetroactiveSubOrchClientSpan(
+          orchestrationSpan,
+          subOrchCreated.getName(),
+          subOrchCreated.getVersion()?.getValue(),
+          instanceId,
+          createdEvent.getTimestamp()?.toDate(),
+          failureMessage,
+        );
+      }
+    } else if (newEvent.hasTimerfired()) {
+      const timerFired = newEvent.getTimerfired()!;
+      const timerId = timerFired.getTimerid();
+      const createdEvent = timerCreatedEvents.get(timerId);
+      const fireAt = timerFired.getFireat()?.toDate() ?? new Date();
+      emitSpanForTimer(
+        orchestrationSpan,
+        orchestrationName,
+        fireAt,
+        timerId,
+        instanceId,
+        createdEvent?.getTimestamp()?.toDate(),
+      );
+    }
+  }
 }
 
 /**

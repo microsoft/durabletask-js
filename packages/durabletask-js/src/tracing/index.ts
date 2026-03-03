@@ -38,4 +38,7 @@ export {
   setOrchestrationStatusFromActions,
   createOrchestrationTraceContextPb,
   processActionsForTracing,
+  emitRetroactiveActivityClientSpan,
+  emitRetroactiveSubOrchClientSpan,
+  processNewEventsForTracing,
 } from "./trace-helper";

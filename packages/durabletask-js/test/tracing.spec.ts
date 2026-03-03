@@ -30,6 +30,9 @@ import {
   processActionsForTracing,
   createOrchestrationTraceContextPb,
   setOrchestrationStatusFromActions,
+  emitRetroactiveActivityClientSpan,
+  emitRetroactiveSubOrchClientSpan,
+  processNewEventsForTracing,
   setSpanError,
   setSpanOk,
   endSpan,
@@ -1218,5 +1221,367 @@ describe("Trace Helper - processActionsForTracing with instanceId", () => {
     expect(timerSpan).toBeDefined();
     expect(timerSpan!.attributes[DurableTaskAttributes.TASK_INSTANCE_ID]).toBe("test-orch-instance-42");
     expect(timerSpan!.attributes[DurableTaskAttributes.TASK_NAME]).toBe("TestOrch");
+  });
+});
+
+describe("Retroactive span emission", () => {
+  beforeEach(() => {
+    exporter.reset();
+  });
+
+  describe("emitRetroactiveActivityClientSpan", () => {
+    it("should emit a Client span with historical startTime for completed activities", () => {
+      const tracer = otel.trace.getTracer(TRACER_NAME);
+      const orchSpan = tracer.startSpan("parent-orch");
+      const schedulingTime = new Date("2025-01-15T10:00:00Z");
+
+      emitRetroactiveActivityClientSpan(
+        orchSpan,
+        "GetWeather",
+        "1.0",
+        "instance-abc",
+        5,
+        schedulingTime,
+      );
+      orchSpan.end();
+
+      const spans = exporter.getFinishedSpans();
+      const clientSpan = spans.find((s: any) => s.name === "activity:GetWeather@(1.0)");
+      expect(clientSpan).toBeDefined();
+      expect(clientSpan!.kind).toBe(otel.SpanKind.CLIENT);
+      expect(clientSpan!.attributes[DurableTaskAttributes.TYPE]).toBe(TaskType.ACTIVITY);
+      expect(clientSpan!.attributes[DurableTaskAttributes.TASK_NAME]).toBe("GetWeather");
+      expect(clientSpan!.attributes[DurableTaskAttributes.TASK_VERSION]).toBe("1.0");
+      expect(clientSpan!.attributes[DurableTaskAttributes.TASK_INSTANCE_ID]).toBe("instance-abc");
+      expect(clientSpan!.attributes[DurableTaskAttributes.TASK_TASK_ID]).toBe(5);
+      // Verify historical startTime is used
+      expect(clientSpan!.startTime[0]).toBe(Math.floor(schedulingTime.getTime() / 1000));
+    });
+
+    it("should set error status for failed activities", () => {
+      const tracer = otel.trace.getTracer(TRACER_NAME);
+      const orchSpan = tracer.startSpan("parent-orch");
+
+      emitRetroactiveActivityClientSpan(
+        orchSpan,
+        "FailingTask",
+        undefined,
+        "instance-def",
+        7,
+        new Date(),
+        "Task timed out",
+      );
+      orchSpan.end();
+
+      const spans = exporter.getFinishedSpans();
+      const clientSpan = spans.find((s: any) => s.name === "activity:FailingTask");
+      expect(clientSpan).toBeDefined();
+      expect(clientSpan!.status.code).toBe(otel.SpanStatusCode.ERROR);
+      expect(clientSpan!.status.message).toBe("Task timed out");
+    });
+
+    it("should work without version", () => {
+      const tracer = otel.trace.getTracer(TRACER_NAME);
+      const orchSpan = tracer.startSpan("parent-orch");
+
+      emitRetroactiveActivityClientSpan(
+        orchSpan,
+        "SimpleTask",
+        undefined,
+        "instance-ghi",
+        3,
+      );
+      orchSpan.end();
+
+      const spans = exporter.getFinishedSpans();
+      const clientSpan = spans.find((s: any) => s.name === "activity:SimpleTask");
+      expect(clientSpan).toBeDefined();
+      expect(clientSpan!.attributes[DurableTaskAttributes.TASK_VERSION]).toBeUndefined();
+    });
+  });
+
+  describe("emitRetroactiveSubOrchClientSpan", () => {
+    it("should emit a Client span for completed sub-orchestrations", () => {
+      const tracer = otel.trace.getTracer(TRACER_NAME);
+      const orchSpan = tracer.startSpan("parent-orch");
+      const schedulingTime = new Date("2025-02-20T14:30:00Z");
+
+      emitRetroactiveSubOrchClientSpan(
+        orchSpan,
+        "ChildWorkflow",
+        "2.0",
+        "parent-instance",
+        schedulingTime,
+      );
+      orchSpan.end();
+
+      const spans = exporter.getFinishedSpans();
+      const clientSpan = spans.find((s: any) => s.name === "orchestration:ChildWorkflow@(2.0)");
+      expect(clientSpan).toBeDefined();
+      expect(clientSpan!.kind).toBe(otel.SpanKind.CLIENT);
+      expect(clientSpan!.attributes[DurableTaskAttributes.TYPE]).toBe(TaskType.ORCHESTRATION);
+      expect(clientSpan!.attributes[DurableTaskAttributes.TASK_NAME]).toBe("ChildWorkflow");
+      expect(clientSpan!.attributes[DurableTaskAttributes.TASK_INSTANCE_ID]).toBe("parent-instance");
+      expect(clientSpan!.startTime[0]).toBe(Math.floor(schedulingTime.getTime() / 1000));
+    });
+
+    it("should set error status for failed sub-orchestrations", () => {
+      const tracer = otel.trace.getTracer(TRACER_NAME);
+      const orchSpan = tracer.startSpan("parent-orch");
+
+      emitRetroactiveSubOrchClientSpan(
+        orchSpan,
+        "FailingChild",
+        undefined,
+        "parent-instance",
+        new Date(),
+        "Sub-orchestration crashed",
+      );
+      orchSpan.end();
+
+      const spans = exporter.getFinishedSpans();
+      const clientSpan = spans.find((s: any) => s.name === "orchestration:FailingChild");
+      expect(clientSpan).toBeDefined();
+      expect(clientSpan!.status.code).toBe(otel.SpanStatusCode.ERROR);
+    });
+  });
+
+  describe("emitSpanForTimer with startTime", () => {
+    it("should use historical startTime for timer spans", () => {
+      const tracer = otel.trace.getTracer(TRACER_NAME);
+      const orchSpan = tracer.startSpan("parent-orch");
+      const creationTime = new Date("2025-03-01T08:00:00Z");
+      const fireTime = new Date("2025-03-01T08:05:00Z");
+
+      emitSpanForTimer(orchSpan, "TimerOrch", fireTime, 42, "timer-instance", creationTime);
+      orchSpan.end();
+
+      const spans = exporter.getFinishedSpans();
+      const timerSpan = spans.find((s: any) => s.name === "orchestration:TimerOrch:timer");
+      expect(timerSpan).toBeDefined();
+      expect(timerSpan!.kind).toBe(otel.SpanKind.INTERNAL);
+      expect(timerSpan!.startTime[0]).toBe(Math.floor(creationTime.getTime() / 1000));
+    });
+  });
+
+  describe("processNewEventsForTracing", () => {
+    function makeHistoryEvent(eventId: number, timestampDate?: Date): pb.HistoryEvent {
+      const event = new pb.HistoryEvent();
+      event.setEventid(eventId);
+      if (timestampDate) {
+        const ts = new Timestamp();
+        ts.fromDate(timestampDate);
+        event.setTimestamp(ts);
+      }
+      return event;
+    }
+
+    it("should emit retroactive Client span for TaskCompleted", () => {
+      const tracer = otel.trace.getTracer(TRACER_NAME);
+      const orchSpan = tracer.startSpan("test-orch");
+      const schedulingTime = new Date("2025-01-10T09:00:00Z");
+
+      // Past event: TaskScheduled
+      const pastEvent = makeHistoryEvent(1, schedulingTime);
+      const taskScheduled = new pb.TaskScheduledEvent();
+      taskScheduled.setName("ProcessData");
+      pastEvent.setTaskscheduled(taskScheduled);
+
+      // New event: TaskCompleted
+      const newEvent = makeHistoryEvent(2);
+      const taskCompleted = new pb.TaskCompletedEvent();
+      taskCompleted.setTaskscheduledid(1);
+      newEvent.setTaskcompleted(taskCompleted);
+
+      processNewEventsForTracing(orchSpan, [pastEvent], [newEvent], "instance-123", "MainOrch");
+      orchSpan.end();
+
+      const spans = exporter.getFinishedSpans();
+      const clientSpan = spans.find((s: any) => s.name === "activity:ProcessData");
+      expect(clientSpan).toBeDefined();
+      expect(clientSpan!.kind).toBe(otel.SpanKind.CLIENT);
+      expect(clientSpan!.attributes[DurableTaskAttributes.TASK_INSTANCE_ID]).toBe("instance-123");
+      expect(clientSpan!.startTime[0]).toBe(Math.floor(schedulingTime.getTime() / 1000));
+    });
+
+    it("should emit retroactive Client span with error for TaskFailed", () => {
+      const tracer = otel.trace.getTracer(TRACER_NAME);
+      const orchSpan = tracer.startSpan("test-orch");
+
+      const pastEvent = makeHistoryEvent(3, new Date());
+      const taskScheduled = new pb.TaskScheduledEvent();
+      taskScheduled.setName("RiskyOperation");
+      pastEvent.setTaskscheduled(taskScheduled);
+
+      const newEvent = makeHistoryEvent(4);
+      const taskFailed = new pb.TaskFailedEvent();
+      taskFailed.setTaskscheduledid(3);
+      const failureDetails = new pb.TaskFailureDetails();
+      failureDetails.setErrormessage("Connection refused");
+      taskFailed.setFailuredetails(failureDetails);
+      newEvent.setTaskfailed(taskFailed);
+
+      processNewEventsForTracing(orchSpan, [pastEvent], [newEvent], "instance-456", "MainOrch");
+      orchSpan.end();
+
+      const spans = exporter.getFinishedSpans();
+      const clientSpan = spans.find((s: any) => s.name === "activity:RiskyOperation");
+      expect(clientSpan).toBeDefined();
+      expect(clientSpan!.status.code).toBe(otel.SpanStatusCode.ERROR);
+      expect(clientSpan!.status.message).toBe("Connection refused");
+    });
+
+    it("should emit retroactive Client span for SubOrchestrationCompleted", () => {
+      const tracer = otel.trace.getTracer(TRACER_NAME);
+      const orchSpan = tracer.startSpan("test-orch");
+      const schedulingTime = new Date("2025-02-01T10:00:00Z");
+
+      const pastEvent = makeHistoryEvent(5, schedulingTime);
+      const subOrchCreated = new pb.SubOrchestrationInstanceCreatedEvent();
+      subOrchCreated.setName("ChildWorkflow");
+      pastEvent.setSuborchestrationinstancecreated(subOrchCreated);
+
+      const newEvent = makeHistoryEvent(6);
+      const subOrchCompleted = new pb.SubOrchestrationInstanceCompletedEvent();
+      subOrchCompleted.setTaskscheduledid(5);
+      newEvent.setSuborchestrationinstancecompleted(subOrchCompleted);
+
+      processNewEventsForTracing(orchSpan, [pastEvent], [newEvent], "parent-789", "MainOrch");
+      orchSpan.end();
+
+      const spans = exporter.getFinishedSpans();
+      const clientSpan = spans.find((s: any) => s.name === "orchestration:ChildWorkflow");
+      expect(clientSpan).toBeDefined();
+      expect(clientSpan!.kind).toBe(otel.SpanKind.CLIENT);
+      expect(clientSpan!.attributes[DurableTaskAttributes.TYPE]).toBe(TaskType.ORCHESTRATION);
+      expect(clientSpan!.startTime[0]).toBe(Math.floor(schedulingTime.getTime() / 1000));
+    });
+
+    it("should emit retroactive Client span with error for SubOrchestrationFailed", () => {
+      const tracer = otel.trace.getTracer(TRACER_NAME);
+      const orchSpan = tracer.startSpan("test-orch");
+
+      const pastEvent = makeHistoryEvent(7, new Date());
+      const subOrchCreated = new pb.SubOrchestrationInstanceCreatedEvent();
+      subOrchCreated.setName("FailingChild");
+      pastEvent.setSuborchestrationinstancecreated(subOrchCreated);
+
+      const newEvent = makeHistoryEvent(8);
+      const subOrchFailed = new pb.SubOrchestrationInstanceFailedEvent();
+      subOrchFailed.setTaskscheduledid(7);
+      const failureDetails = new pb.TaskFailureDetails();
+      failureDetails.setErrormessage("Child orchestration crashed");
+      subOrchFailed.setFailuredetails(failureDetails);
+      newEvent.setSuborchestrationinstancefailed(subOrchFailed);
+
+      processNewEventsForTracing(orchSpan, [pastEvent], [newEvent], "parent-xyz", "MainOrch");
+      orchSpan.end();
+
+      const spans = exporter.getFinishedSpans();
+      const clientSpan = spans.find((s: any) => s.name === "orchestration:FailingChild");
+      expect(clientSpan).toBeDefined();
+      expect(clientSpan!.status.code).toBe(otel.SpanStatusCode.ERROR);
+    });
+
+    it("should emit timer span with historical startTime for TimerFired", () => {
+      const tracer = otel.trace.getTracer(TRACER_NAME);
+      const orchSpan = tracer.startSpan("test-orch");
+      const timerCreationTime = new Date("2025-03-01T12:00:00Z");
+      const timerFireTime = new Date("2025-03-01T12:05:00Z");
+
+      // Past event: TimerCreated
+      const pastEvent = makeHistoryEvent(10, timerCreationTime);
+      pastEvent.setTimercreated(new pb.TimerCreatedEvent());
+
+      // New event: TimerFired
+      const newEvent = makeHistoryEvent(11);
+      const timerFired = new pb.TimerFiredEvent();
+      timerFired.setTimerid(10);
+      const fireAtTs = new Timestamp();
+      fireAtTs.fromDate(timerFireTime);
+      timerFired.setFireat(fireAtTs);
+      newEvent.setTimerfired(timerFired);
+
+      processNewEventsForTracing(orchSpan, [pastEvent], [newEvent], "timer-instance", "TimerOrch");
+      orchSpan.end();
+
+      const spans = exporter.getFinishedSpans();
+      const timerSpan = spans.find((s: any) => s.name === "orchestration:TimerOrch:timer");
+      expect(timerSpan).toBeDefined();
+      expect(timerSpan!.kind).toBe(otel.SpanKind.INTERNAL);
+      expect(timerSpan!.attributes[DurableTaskAttributes.TASK_INSTANCE_ID]).toBe("timer-instance");
+      expect(timerSpan!.startTime[0]).toBe(Math.floor(timerCreationTime.getTime() / 1000));
+    });
+
+    it("should handle multiple completions in a single batch", () => {
+      const tracer = otel.trace.getTracer(TRACER_NAME);
+      const orchSpan = tracer.startSpan("test-orch");
+
+      // Two past TaskScheduled events
+      const past1 = makeHistoryEvent(1, new Date("2025-01-01T10:00:00Z"));
+      const ts1 = new pb.TaskScheduledEvent();
+      ts1.setName("TaskA");
+      past1.setTaskscheduled(ts1);
+
+      const past2 = makeHistoryEvent(2, new Date("2025-01-01T10:01:00Z"));
+      const ts2 = new pb.TaskScheduledEvent();
+      ts2.setName("TaskB");
+      past2.setTaskscheduled(ts2);
+
+      // Two new TaskCompleted events
+      const new1 = makeHistoryEvent(3);
+      const tc1 = new pb.TaskCompletedEvent();
+      tc1.setTaskscheduledid(1);
+      new1.setTaskcompleted(tc1);
+
+      const new2 = makeHistoryEvent(4);
+      const tc2 = new pb.TaskCompletedEvent();
+      tc2.setTaskscheduledid(2);
+      new2.setTaskcompleted(tc2);
+
+      processNewEventsForTracing(orchSpan, [past1, past2], [new1, new2], "batch-instance", "BatchOrch");
+      orchSpan.end();
+
+      const spans = exporter.getFinishedSpans();
+      const taskASpan = spans.find((s: any) => s.name === "activity:TaskA");
+      const taskBSpan = spans.find((s: any) => s.name === "activity:TaskB");
+      expect(taskASpan).toBeDefined();
+      expect(taskBSpan).toBeDefined();
+    });
+
+    it("should not emit spans when orchestration span is null", () => {
+      const pastEvent = makeHistoryEvent(1, new Date());
+      const taskScheduled = new pb.TaskScheduledEvent();
+      taskScheduled.setName("Orphan");
+      pastEvent.setTaskscheduled(taskScheduled);
+
+      const newEvent = makeHistoryEvent(2);
+      const taskCompleted = new pb.TaskCompletedEvent();
+      taskCompleted.setTaskscheduledid(1);
+      newEvent.setTaskcompleted(taskCompleted);
+
+      processNewEventsForTracing(null, [pastEvent], [newEvent], "instance", "Orch");
+
+      const spans = exporter.getFinishedSpans();
+      expect(spans.find((s: any) => s.name === "activity:Orphan")).toBeUndefined();
+    });
+
+    it("should skip events with no matching past event", () => {
+      const tracer = otel.trace.getTracer(TRACER_NAME);
+      const orchSpan = tracer.startSpan("test-orch");
+
+      // New event referencing non-existent past event
+      const newEvent = makeHistoryEvent(2);
+      const taskCompleted = new pb.TaskCompletedEvent();
+      taskCompleted.setTaskscheduledid(999);
+      newEvent.setTaskcompleted(taskCompleted);
+
+      processNewEventsForTracing(orchSpan, [], [newEvent], "instance", "Orch");
+      orchSpan.end();
+
+      const spans = exporter.getFinishedSpans();
+      // Only the parent orch span should exist
+      expect(spans.length).toBe(1);
+    });
   });
 });
