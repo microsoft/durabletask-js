@@ -13,7 +13,6 @@
 // --------------------------------------------------------------------------
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
-import { SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { Resource } from "@opentelemetry/resources";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 
@@ -25,15 +24,13 @@ dotenv.config({ path: path.join(__dirname, "..", ".env") });
 // Read the OTLP endpoint from the environment (defaults to Jaeger's OTLP HTTP port)
 const otlpEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT || "http://localhost:4318";
 
-const traceExporter = new OTLPTraceExporter({
-  url: `${otlpEndpoint}/v1/traces`,
-});
-
 const sdk = new NodeSDK({
   resource: new Resource({
     [ATTR_SERVICE_NAME]: "durabletask-js-tracing-example",
   }),
-  spanProcessors: [new SimpleSpanProcessor(traceExporter) as any],
+  traceExporter: new OTLPTraceExporter({
+    url: `${otlpEndpoint}/v1/traces`,
+  }),
 });
 
 sdk.start();

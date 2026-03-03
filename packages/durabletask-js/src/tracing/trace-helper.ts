@@ -75,6 +75,7 @@ export function startSpanForNewOrchestration(req: pb.CreateInstanceRequest): Spa
   const name = req.getName();
   const version = req.getVersion()?.getValue();
   const instanceId = req.getInstanceid();
+  const executionId = req.getExecutionid()?.getValue();
   const spanName = createSpanName(TaskType.CREATE_ORCHESTRATION, name, version);
 
   const span = ctx.tracer.startSpan(spanName, {
@@ -84,9 +85,7 @@ export function startSpanForNewOrchestration(req: pb.CreateInstanceRequest): Spa
       [DurableTaskAttributes.TASK_NAME]: name,
       [DurableTaskAttributes.TASK_INSTANCE_ID]: instanceId,
       ...(version ? { [DurableTaskAttributes.TASK_VERSION]: version } : {}),
-      ...(req.getExecutionid()?.getValue()
-        ? { [DurableTaskAttributes.TASK_EXECUTION_ID]: req.getExecutionid()!.getValue() }
-        : {}),
+      ...(executionId ? { [DurableTaskAttributes.TASK_EXECUTION_ID]: executionId } : {}),
     },
   });
 

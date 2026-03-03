@@ -717,6 +717,11 @@ export class TaskHubGrpcWorker {
         ),
       ];
 
+      // Set orchestration status on the span for the failure path too
+      if (tracingResult) {
+        setOrchestrationStatusFromActions(tracingResult.span, actions);
+      }
+
       res = new pb.OrchestratorResponse();
       res.setInstanceid(req.getInstanceid());
       res.setCompletiontoken(completionToken);
