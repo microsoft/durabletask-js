@@ -3,6 +3,7 @@
 ### New
 
 - Align tracing attributes with .NET SDK conventions: add `execution_id` on creation spans, `version` on activity execution spans, `name`/`instance_id` on timer spans, and `durabletask.task.status` on orchestration completion
+- Add retroactive span emission model: emit Client spans at activity/sub-orchestration completion with historical scheduling timestamps, and timer spans with creation-to-fired duration (matching .NET/Java SDK patterns)
 
 ### Fixes
 
