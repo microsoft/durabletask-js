@@ -206,7 +206,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
 
     let resultJson;
 
-    if (result) {
+    if (result !== undefined) {
       resultJson = isResultEncoded ? result : JSON.stringify(result);
     }
 
@@ -252,7 +252,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
         // replayed when the new instance starts
         for (const [eventName, values] of Object.entries(this._receivedEvents)) {
           for (const eventValue of values) {
-            const encodedValue = eventValue ? JSON.stringify(eventValue) : undefined;
+            const encodedValue = eventValue !== undefined ? JSON.stringify(eventValue) : undefined;
             carryoverEvents.push(ph.newEventRaisedEvent(eventName, encodedValue));
           }
         }
@@ -261,7 +261,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
       const action = ph.newCompleteOrchestrationAction(
         this.nextSequenceNumber(),
         pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW,
-        this._newInput ? JSON.stringify(this._newInput) : undefined,
+        this._newInput !== undefined ? JSON.stringify(this._newInput) : undefined,
         undefined,
         carryoverEvents,
       );
@@ -308,7 +308,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   ): Task<TOutput> {
     const id = this.nextSequenceNumber();
     const name = typeof activity === "string" ? activity : getName(activity);
-    const encodedInput = input ? JSON.stringify(input) : undefined;
+    const encodedInput = input !== undefined ? JSON.stringify(input) : undefined;
     const action = ph.newScheduleTaskAction(id, name, encodedInput, options?.tags, options?.version);
     this._pendingActions[action.getId()] = action;
 
@@ -339,7 +339,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
       instanceId = `${this._instanceId}:${instanceIdSuffix}`;
     }
 
-    const encodedInput = input ? JSON.stringify(input) : undefined;
+    const encodedInput = input !== undefined ? JSON.stringify(input) : undefined;
     const action = ph.newCreateSubOrchestrationAction(id, name, instanceId, encodedInput, options?.tags, options?.version);
     this._pendingActions[action.getId()] = action;
 
