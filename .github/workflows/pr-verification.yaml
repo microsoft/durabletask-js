@@ -1,0 +1,79 @@
+name: 🔎 PR Verification Agent
+
+on:
+  # Trigger when a PR is labeled
+  pull_request:
+    types: [labeled]
+
+  # Safety-net: run periodically to catch any missed PRs
+  schedule:
+    - cron: "0 */6 * * *" # Every 6 hours
+
+  # Allow manual trigger for testing
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  verify-prs:
+    # For the labeled trigger, only run when the label is 'pending-verification'
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.label.name == 'pending-verification'
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      NODE_VER: "22"
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: ⚙️ Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VER }}
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: 🔨 Build project
+        run: npm run build
+
+      - name: 🐳 Start DTS Emulator
+        run: |
+          docker run --name dts-emulator -d --rm -p 8080:8080 \
+            mcr.microsoft.com/dts/dts-emulator:latest
+
+          echo "Waiting for emulator to be ready..."
+          for i in $(seq 1 30); do
+            if nc -z localhost 8080 2>/dev/null; then
+              echo "Emulator is ready!"
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "Emulator failed to start within 30 seconds"
+              exit 1
+            fi
+            sleep 1
+          done
+
+      - name: 🤖 Run PR Verification Agent
+        uses: github/copilot-agent@v1
+        with:
+          agent: pr-verification
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ENDPOINT: localhost:8080
+          TASKHUB: default
+
+      - name: 🧹 Stop DTS Emulator
+        if: always()
+        run: docker stop dts-emulator 2>/dev/null || true
