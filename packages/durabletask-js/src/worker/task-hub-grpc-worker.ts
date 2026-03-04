@@ -25,6 +25,7 @@ import { VersioningOptions, VersionMatchStrategy, VersionFailureStrategy } from 
 import { compareVersions } from "../utils/versioning.util";
 import * as WorkerLogs from "./logs";
 import {
+  DurableTaskAttributes,
   startSpanForOrchestrationExecution,
   startSpanForTaskExecution,
   processActionsForTracing,
@@ -705,6 +706,9 @@ export class TaskHubGrpcWorker {
       // Record the failure on the tracing span
       if (tracingResult) {
         setSpanError(tracingResult.span, error);
+        // Set just the status attribute — don't call setOrchestrationStatusFromActions
+        // which would overwrite the specific error message with a generic one
+        tracingResult.span.setAttribute(DurableTaskAttributes.TASK_STATUS, "Failed");
       }
 
       const failureDetails = pbh.newFailureDetails(error);
@@ -717,11 +721,6 @@ export class TaskHubGrpcWorker {
           failureDetails,
         ),
       ];
-
-      // Set orchestration status on the span for the failure path too
-      if (tracingResult) {
-        setOrchestrationStatusFromActions(tracingResult.span, actions);
-      }
 
       res = new pb.OrchestratorResponse();
       res.setInstanceid(req.getInstanceid());
