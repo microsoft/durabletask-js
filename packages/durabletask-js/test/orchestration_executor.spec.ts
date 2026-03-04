@@ -1266,6 +1266,61 @@ describe("Orchestration Executor", () => {
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain(ex.message);
   });
 
+  it("should complete whenAll when some child tasks are already complete at construction time", async () => {
+    // This test verifies that WhenAllTask handles pre-completed tasks correctly.
+    // The WhenAllTask constructor must not reset the completed task counter after
+    // the base class processes already-complete children.
+    const task1 = new CompletableTask<string>();
+    const task2 = new CompletableTask<string>();
+    const task3 = new CompletableTask<string>();
+
+    // Complete task1 before creating the WhenAllTask
+    task1.complete("result1");
+
+    const allTask = whenAll([task1, task2, task3]);
+
+    // The WhenAllTask should not be complete yet (2 of 3 tasks are still pending)
+    expect(allTask.isComplete).toBe(false);
+    expect(allTask.completedTasks).toBe(1);
+    expect(allTask.pendingTasks()).toBe(2);
+
+    // Complete the remaining tasks
+    task2.complete("result2");
+    expect(allTask.isComplete).toBe(false);
+    expect(allTask.completedTasks).toBe(2);
+
+    task3.complete("result3");
+    expect(allTask.isComplete).toBe(true);
+    expect(allTask.getResult()).toEqual(["result1", "result2", "result3"]);
+  });
+
+  it("should complete whenAll immediately when all child tasks are already complete", async () => {
+    const task1 = new CompletableTask<number>();
+    const task2 = new CompletableTask<number>();
+
+    task1.complete(10);
+    task2.complete(20);
+
+    const allTask = whenAll([task1, task2]);
+
+    expect(allTask.isComplete).toBe(true);
+    expect(allTask.isFailed).toBe(false);
+    expect(allTask.getResult()).toEqual([10, 20]);
+  });
+
+  it("should fail-fast whenAll when an already-failed child task is passed", async () => {
+    const task1 = new CompletableTask<string>();
+    const task2 = new CompletableTask<string>();
+
+    task1.fail("task1 failed");
+
+    const allTask = whenAll([task1, task2]);
+
+    // Should be immediately complete (failed) due to fail-fast
+    expect(allTask.isComplete).toBe(true);
+    expect(allTask.isFailed).toBe(true);
+  });
+
   it("should preserve orchestration result when whenAll failure is caught and other tasks complete", async () => {
     const printInt = (_: any, value: number) => {
       return value.toString();
