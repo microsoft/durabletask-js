@@ -677,7 +677,8 @@ export class TaskHubGrpcWorker {
 
       // Process actions to inject trace context into scheduled tasks, sub-orchestrations, etc.
       if (tracingResult) {
-        processActionsForTracing(tracingResult.span, result.actions, orchName, instanceId);
+        const executionId = req.getExecutionid()?.getValue();
+        processActionsForTracing(tracingResult.span, result.actions, orchName, instanceId, executionId);
       }
 
       res = new pb.OrchestratorResponse();
@@ -693,9 +694,9 @@ export class TaskHubGrpcWorker {
         const orchTraceCtxPb = createOrchestrationTraceContextPb(tracingResult.spanInfo);
         res.setOrchestrationtracecontext(orchTraceCtxPb);
 
-        // Set orchestration completion status attribute (e.g. "Completed", "Failed")
+        // Set orchestration completion status attribute and span status
+        // (OK for success, ERROR for failed orchestrations — matching .NET)
         setOrchestrationStatusFromActions(tracingResult.span, result.actions);
-        setSpanOk(tracingResult.span);
       }
     } catch (e: unknown) {
       const error = e instanceof Error ? e : new Error(String(e));

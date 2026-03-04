@@ -567,12 +567,14 @@ export function processNewEventsForTracing(
  * @param eventName - The name of the event.
  * @param targetInstanceId - The target orchestration instance ID.
  * @param instanceId - The source orchestration instance ID.
+ * @param executionId - The source orchestration execution ID.
  */
 export function emitSpanForEventSent(
   orchestrationSpan: Span,
   eventName: string,
   targetInstanceId?: string,
   instanceId?: string,
+  executionId?: string,
 ): void {
   const ctx = getTracingContext();
   if (!ctx) return;
@@ -588,6 +590,7 @@ export function emitSpanForEventSent(
         [DurableTaskAttributes.TYPE]: TaskType.EVENT,
         [DurableTaskAttributes.TASK_NAME]: eventName,
         ...(instanceId ? { [DurableTaskAttributes.TASK_INSTANCE_ID]: instanceId } : {}),
+        ...(executionId ? { [DurableTaskAttributes.TASK_EXECUTION_ID]: executionId } : {}),
         ...(targetInstanceId ? { [DurableTaskAttributes.EVENT_TARGET_INSTANCE_ID]: targetInstanceId } : {}),
       },
     },
@@ -667,9 +670,9 @@ export function endSpan(span: Span | undefined | null): void {
 }
 
 /**
- * Sets the orchestration completion status attribute on the span.
- * This records the final status (e.g. "Completed", "Failed") as a span attribute,
- * matching the .NET SDK behavior.
+ * Sets the orchestration completion status attribute and span status based on the
+ * completion action. Matches .NET behavior: sets ERROR status with result message
+ * when orchestration fails, OK otherwise.
  *
  * @param span - The orchestration span.
  * @param actions - The orchestrator actions to inspect for completion status.
@@ -679,6 +682,8 @@ export function setOrchestrationStatusFromActions(
   actions: pb.OrchestratorAction[],
 ): void {
   if (!span) return;
+  const otel = getOtelApi();
+  if (!otel) return;
 
   for (const action of actions) {
     if (action.hasCompleteorchestration()) {
@@ -688,6 +693,15 @@ export function setOrchestrationStatusFromActions(
       if (statusName) {
         span.setAttribute(DurableTaskAttributes.TASK_STATUS, statusName);
       }
+
+      // Match .NET: set span error status when orchestration completes with Failed
+      if (status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED) {
+        const errorMessage = completeAction.getResult()?.getValue() ?? "Orchestration failed";
+        span.setStatus({ code: otel.SpanStatusCode.ERROR, message: errorMessage });
+      } else {
+        span.setStatus({ code: otel.SpanStatusCode.OK });
+      }
+
       break;
     }
   }
@@ -737,12 +751,14 @@ export function createOrchestrationTraceContextPb(spanInfo: OrchestrationSpanInf
  * @param actions - The OrchestratorAction list to process.
  * @param orchestrationName - The name of the orchestration (for timer spans).
  * @param instanceId - The orchestration instance ID (for enriching span attributes).
+ * @param executionId - The orchestration execution ID (for event spans).
  */
 export function processActionsForTracing(
   orchestrationSpan: Span | undefined | null,
   actions: pb.OrchestratorAction[],
   orchestrationName: string,
   instanceId?: string,
+  executionId?: string,
 ): void {
   if (!orchestrationSpan) return;
 
@@ -763,6 +779,7 @@ export function processActionsForTracing(
         sendEvent.getName(),
         sendEvent.getInstance()?.getInstanceid(),
         instanceId,
+        executionId,
       );
     } else if (action.hasSendentitymessage()) {
       const sendEntityMsg = action.getSendentitymessage()!;

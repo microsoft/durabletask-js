@@ -1106,7 +1106,7 @@ describe("Trace Helper - timer span enrichment", () => {
 });
 
 describe("Trace Helper - setOrchestrationStatusFromActions", () => {
-  it("should set status attribute for completed orchestration", () => {
+  it("should set status attribute for completed orchestration and OK span status", () => {
     const tracer = otel.trace.getTracer(TRACER_NAME);
     const span = tracer.startSpan("orch-status-test");
 
@@ -1121,14 +1121,18 @@ describe("Trace Helper - setOrchestrationStatusFromActions", () => {
 
     const spans = exporter.getFinishedSpans();
     expect(spans[0].attributes[DurableTaskAttributes.TASK_STATUS]).toBe("Completed");
+    expect(spans[0].status.code).toBe(otel.SpanStatusCode.OK);
   });
 
-  it("should set status attribute for failed orchestration", () => {
+  it("should set status attribute for failed orchestration and ERROR span status", () => {
     const tracer = otel.trace.getTracer(TRACER_NAME);
     const span = tracer.startSpan("orch-status-failed");
 
     const completeAction = new pb.CompleteOrchestrationAction();
     completeAction.setOrchestrationstatus(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    const resultValue = new StringValue();
+    resultValue.setValue("User code threw an error");
+    completeAction.setResult(resultValue);
 
     const action = new pb.OrchestratorAction();
     action.setCompleteorchestration(completeAction);
@@ -1138,6 +1142,8 @@ describe("Trace Helper - setOrchestrationStatusFromActions", () => {
 
     const spans = exporter.getFinishedSpans();
     expect(spans[0].attributes[DurableTaskAttributes.TASK_STATUS]).toBe("Failed");
+    expect(spans[0].status.code).toBe(otel.SpanStatusCode.ERROR);
+    expect(spans[0].status.message).toBe("User code threw an error");
   });
 
   it("should not set status when no completion action present", () => {
