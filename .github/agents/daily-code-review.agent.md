@@ -106,9 +106,27 @@ From all findings, select the **single most impactful** based on:
 - You can't write a meaningful test for it
 - It touches generated code or third-party dependencies
 
-## Step 4: Create PR (1 Maximum)
+## Step 4: Create Tracking Issue (MANDATORY — Before Any PR)
 
-For each selected finding, create a **separate PR** with:
+Before creating a PR, create a **GitHub issue** to track the finding:
+
+### Issue Content
+
+**Title:** `[copilot-finds] <Category>: <Clear one-line description>`
+
+**Body must include:**
+1. **Problem** — What's wrong and why it matters (with file/line references)
+2. **Root Cause** — Why this happens
+3. **Proposed Fix** — High-level description of what the PR will change
+4. **Impact** — Severity and which scenarios are affected
+
+**Labels:** Apply the `copilot-finds` label to the issue.
+
+**Important:** Record the issue number — you will reference it in the PR.
+
+## Step 5: Create PR (1 Maximum)
+
+For the selected finding, create a **separate PR** linked to the tracking issue:
 
 ### Branch Naming
 `copilot-finds/<category>/<short-description>` where category is `bug`, `test`, or `improve`.
@@ -125,6 +143,7 @@ Example: `copilot-finds/bug/fix-unhandled-promise-rejection`
 3. **Fix** — What the PR changes and why this approach
 4. **Testing** — What new tests were added and what they verify
 5. **Risk** — What could go wrong with this change (be honest)
+6. **Tracking Issue** — `Fixes #<issue-number>` (links to the tracking issue created in Step 4)
 
 ### Code Changes
 - Fix the actual problem
@@ -143,7 +162,7 @@ Example: `copilot-finds/bug/fix-unhandled-promise-rejection`
 ### Labels
 Apply the `copilot-finds` label to every PR.
 
-## Step 5: Quality Gates (MANDATORY — Do This Before Opening Each PR)
+## Step 6: Quality Gates (MANDATORY — Do This Before Opening Each PR)
 
 Before opening each PR, you MUST:
 
