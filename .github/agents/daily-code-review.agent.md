@@ -236,7 +236,7 @@ Flag any function/file exceeding these limits:
 
 ### Error Handling
 - **Empty catch blocks:** `catch (e) {}` — silently swallows errors
-- **Missing error cause:** `throw new Error(msg)` without `{ cause }` loses context (ES2022 supports `{ cause: origErr }`)
+- **Missing error cause when wrapping:** When rethrowing or wrapping an existing error, preserve it via `throw new Error(msg, { cause: err })` instead of dropping the original error.
 - **Broad catch:** Giant try/catch wrapping entire functions instead of targeting fallible ops
 - **Error type check by name:** `e.constructor.name === 'TypeError'` instead of `instanceof`
 
@@ -304,7 +304,7 @@ primary mission — prioritize bugs and missing tests.
 | Manual `for` loop building/filtering array | `.map()` / `.filter()` / `.find()` / `.reduce()` |
 | `.then().then().catch()` chains | `async`/`await` with try/catch |
 | `Object.assign({}, a, b)` | `{ ...a, ...b }` (spread) |
-| `JSON.parse(JSON.stringify(obj))` | `structuredClone(obj)` |
+| `JSON.parse(JSON.stringify(obj))` on JSON-serializable data | `structuredClone(obj)` — note: `structuredClone` throws on non-serializable values (e.g. functions, symbols); only substitute when data is known to be JSON-serializable |
 | `obj.hasOwnProperty(k)` | `Object.hasOwn(obj, k)` |
 | `arr[arr.length - 1]` | `arr.at(-1)` |
 | `for (k in obj)` (includes prototype keys) | `for (const k of Object.keys(obj))` |
@@ -317,13 +317,13 @@ primary mission — prioritize bugs and missing tests.
 | String concatenation `'Hello ' + name` | Template literal `` `Hello ${name}` `` |
 | `function(x) { return x * 2; }` | `x => x * 2` (arrow) |
 | `{ x: x, y: y }` | `{ x, y }` (shorthand property) |
-| `this._secret` convention | `#secret` (private field, ES2022) |
 | Implicit `any` on public API | Add explicit type annotations |
 
 ### Do NOT Flag (out of scope for this repo)
 - CommonJS `require()` → ESM `import` (repo intentionally uses CommonJS)
 - React/Next.js patterns (not in this codebase)
 - ES2024+ features (`Object.groupBy`, `Set.intersection`, `Promise.withResolvers`) — repo targets ES2022
+- Private field naming (`this._secret` vs `#secret`); repo uses `_underscorePrefixed` per `.github/copilot-instructions.md`
 
 ---
 
