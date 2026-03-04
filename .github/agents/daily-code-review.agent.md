@@ -60,7 +60,8 @@ If a finding is even partially covered by an existing issue or PR, skip it entir
 
 ## Step 2: Code Analysis
 
-Scan the **entire repository** looking for these categories (in priority order):
+Scan the **entire repository** looking for these categories (in priority order).
+Use the **Detection Playbook** (Appendix) for concrete patterns and thresholds.
 
 ### Category A: Bugs (Highest Priority)
 - Incorrect error handling (swallowed errors, missing try/catch, wrong error types)
@@ -198,3 +199,145 @@ A successful run means:
 - Zero overlap with existing work
 - All tests pass
 - A human reviewer can understand and approve within 5 minutes
+
+---
+
+# Appendix: Detection Playbook
+
+Consolidated reference for Step 2 code analysis. All patterns are scoped to this
+TypeScript/Node.js codebase (ES2022 target, CommonJS output).
+
+**How to use:** When scanning files in Step 2, check each file against the relevant
+sections below. These are detection heuristics — only flag issues that meet the
+confidence threshold from Step 3.
+
+---
+
+## A. Complexity Thresholds
+
+Flag any function/file exceeding these limits:
+
+| Metric | Warning | Error | Fix |
+|---|---|---|---|
+| Function length | >30 lines | >50 lines | Extract method |
+| Nesting depth | >2 levels | >3 levels | Guard clauses / extract |
+| Parameter count | >3 | >5 | Parameter object or options bag |
+| File length | >300 lines | >500 lines | Split by responsibility |
+| Cyclomatic complexity | >5 branches | >10 branches | Decompose conditional / lookup table |
+
+**Cognitive complexity red flags:**
+- Nested ternaries: `a ? b ? c : d : e`
+- Boolean soup: `a && b || c && !d` (missing parens)
+- Multiple return points inside nested blocks
+
+---
+
+## B. Bug Patterns (Category A)
+
+### Error Handling
+- **Empty catch blocks:** `catch (e) {}` — silently swallows errors
+- **Missing error cause:** `throw new Error(msg)` without `{ cause }` loses context (ES2022 supports `{ cause: origErr }`)
+- **Broad catch:** Giant try/catch wrapping entire functions instead of targeting fallible ops
+- **Error type check by name:** `e.constructor.name === 'TypeError'` instead of `instanceof`
+
+### Async/Promise Issues
+- **Missing `await`:** Calling async function without `await` — result is discarded
+- **Unhandled rejection:** Promise chain without `.catch()` or surrounding try/catch
+- **Sequential independent awaits:** `await a(); await b()` when they could be `Promise.all([a(), b()])`
+- **Unnecessary async:** `async function f() { return val; }` — the `async` adds overhead for no reason
+
+### Resource Leaks
+- **Unclosed gRPC streams:** Streams opened but not closed in error paths
+- **Dangling timers:** `setTimeout`/`setInterval` without cleanup on teardown
+- **Event listener leaks:** `.on()` without corresponding `.off()` or `.removeListener()`
+
+### Repo-Specific (Durable Task SDK)
+- **Non-determinism in orchestrators:** `Date.now()`, `Math.random()`, `crypto.randomUUID()`, or direct I/O in orchestrator code
+- **Replay event mismatch:** The executor's switch statement silently drops unmatched events — verify all cases are handled
+- **Timer-to-retry linkage:** Retry tasks create timers with different IDs; verify maps connecting them are maintained
+- **Generator lifecycle:** Check for unguarded `generator.next()` when `done` might be true
+- **Composite task constructor:** Already-complete children trigger `onChildCompleted()` during construction — callers must handle immediate completion
+- **Entity state mutation:** Verify lazy JSON deserialization handles null/undefined state correctly
+
+---
+
+## C. Dead Code Patterns (Category C)
+
+### What to Look For
+- **Unused imports:** Import bindings never referenced in the file
+- **Unused variables:** `const`/`let` declared but never read
+- **Unreachable code:** Statements after `return`, `throw`, `break`, `continue`, or `process.exit()`
+- **Commented-out code:** 3+ consecutive lines of commented code-like patterns — should be removed (use version control)
+- **Unused private functions:** Functions not exported and not called within the module
+- **Dead parameters:** Function parameters never referenced in the body (check interface contracts first)
+- **Always-true/false conditions:** `if (true)`, literal tautologies
+- **Stale TODOs:** `TODO`/`FIXME`/`HACK` comments in code unchanged for months
+
+### False Positive Guards
+- Variables used in string interpolation or destructuring
+- Parameters required by interface contracts (gRPC callbacks, event handlers)
+- Re-exports through barrel `index.ts` files
+
+### Prioritization
+| Category | Impact | Action |
+|---|---|---|
+| Empty catch blocks | **High** | Review — likely hiding errors |
+| Unreachable code | Medium | Remove — may indicate bugs |
+| Unused variables | Medium | Remove — may indicate logic errors |
+| Unused functions | Medium | Confirm no dynamic/reflection usage first |
+| Unused imports | Low | Remove — zero risk |
+| Commented-out code | Low | Remove |
+| Dead parameters | Low | Check interface contracts first |
+
+---
+
+## D. TypeScript Modernization Patterns (Category C)
+
+Only flag these when the improvement is clear and low-risk. These are **not** the
+primary mission — prioritize bugs and missing tests.
+
+### High Value (flag these)
+| Verbose Pattern | Modern Alternative |
+|---|---|
+| `x && x.y && x.y.z` | `x?.y?.z` (optional chaining) |
+| `x !== null && x !== undefined ? x : def` | `x ?? def` (nullish coalescing) |
+| Manual `for` loop building/filtering array | `.map()` / `.filter()` / `.find()` / `.reduce()` |
+| `.then().then().catch()` chains | `async`/`await` with try/catch |
+| `Object.assign({}, a, b)` | `{ ...a, ...b }` (spread) |
+| `JSON.parse(JSON.stringify(obj))` | `structuredClone(obj)` |
+| `obj.hasOwnProperty(k)` | `Object.hasOwn(obj, k)` |
+| `arr[arr.length - 1]` | `arr.at(-1)` |
+| `for (k in obj)` (includes prototype keys) | `for (const k of Object.keys(obj))` |
+| `throw new Error(msg)` losing cause | `throw new Error(msg, { cause: origErr })` |
+
+### Medium Value (flag only if clearly better)
+| Verbose Pattern | Modern Alternative |
+|---|---|
+| `const x = obj.x; const y = obj.y;` | `const { x, y } = obj` (destructuring) |
+| String concatenation `'Hello ' + name` | Template literal `` `Hello ${name}` `` |
+| `function(x) { return x * 2; }` | `x => x * 2` (arrow) |
+| `{ x: x, y: y }` | `{ x, y }` (shorthand property) |
+| `this._secret` convention | `#secret` (private field, ES2022) |
+| Implicit `any` on public API | Add explicit type annotations |
+
+### Do NOT Flag (out of scope for this repo)
+- CommonJS `require()` → ESM `import` (repo intentionally uses CommonJS)
+- React/Next.js patterns (not in this codebase)
+- ES2024+ features (`Object.groupBy`, `Set.intersection`, `Promise.withResolvers`) — repo targets ES2022
+
+---
+
+## E. Refactoring Strategies
+
+When a fix requires restructuring, use the simplest applicable strategy:
+
+1. **Guard clauses** — Flatten nested if/else by returning early for edge cases
+2. **Extract method** — Pull 30+ line blocks with a clear purpose into named functions
+3. **Replace loop with pipeline** — `for` + `if` + `push` → `.filter().map()`
+4. **Decompose conditional** — Extract complex boolean expressions into well-named variables
+5. **Consolidate duplicates** — If every branch of a conditional has the same code, move it outside
+6. **Extract constant** — Replace magic numbers/strings with named constants
+7. **Introduce parameter object** — When 4+ related params travel together
+
+**Key principle:** Only refactor code that you're already fixing for a bug or test gap.
+Don't open PRs for refactoring alone — it must accompany a concrete fix.
