@@ -25,10 +25,13 @@ import { VersioningOptions, VersionMatchStrategy, VersionFailureStrategy } from 
 import { compareVersions } from "../utils/versioning.util";
 import * as WorkerLogs from "./logs";
 import {
+  DurableTaskAttributes,
   startSpanForOrchestrationExecution,
   startSpanForTaskExecution,
   processActionsForTracing,
   createOrchestrationTraceContextPb,
+  setOrchestrationStatusFromActions,
+  processNewEventsForTracing,
   setSpanError,
   setSpanOk,
   endSpan,
@@ -653,6 +656,20 @@ export class TaskHubGrpcWorker {
       ? startSpanForOrchestrationExecution(executionStartedProtoEvent, orchTraceContext, instanceId)
       : undefined;
 
+    // Emit retroactive spans for tasks/sub-orchestrations that completed/failed and timers
+    // that fired. This follows the .NET SDK pattern where these spans are emitted from
+    // history events BEFORE the orchestrator executor runs.
+    const orchName = executionStartedProtoEvent?.getName() ?? "";
+    if (tracingResult) {
+      processNewEventsForTracing(
+        tracingResult.span,
+        req.getPasteventsList(),
+        req.getNeweventsList(),
+        instanceId,
+        orchName,
+      );
+    }
+
     let res;
 
     try {
@@ -661,8 +678,8 @@ export class TaskHubGrpcWorker {
 
       // Process actions to inject trace context into scheduled tasks, sub-orchestrations, etc.
       if (tracingResult) {
-        const orchName = executionStartedProtoEvent?.getName() ?? "";
-        processActionsForTracing(tracingResult.span, result.actions, orchName);
+        const executionId = req.getExecutionid()?.getValue();
+        processActionsForTracing(tracingResult.span, result.actions, orchName, instanceId, executionId);
       }
 
       res = new pb.OrchestratorResponse();
@@ -678,7 +695,9 @@ export class TaskHubGrpcWorker {
         const orchTraceCtxPb = createOrchestrationTraceContextPb(tracingResult.spanInfo);
         res.setOrchestrationtracecontext(orchTraceCtxPb);
 
-        setSpanOk(tracingResult.span);
+        // Set orchestration completion status attribute and span status
+        // (OK for success, ERROR for failed orchestrations — matching .NET)
+        setOrchestrationStatusFromActions(tracingResult.span, result.actions);
       }
     } catch (e: unknown) {
       const error = e instanceof Error ? e : new Error(String(e));
@@ -687,6 +706,9 @@ export class TaskHubGrpcWorker {
       // Record the failure on the tracing span
       if (tracingResult) {
         setSpanError(tracingResult.span, error);
+        // Set just the status attribute — don't call setOrchestrationStatusFromActions
+        // which would overwrite the specific error message with a generic one
+        tracingResult.span.setAttribute(DurableTaskAttributes.TASK_STATUS, "Failed");
       }
 
       const failureDetails = pbh.newFailureDetails(error);
