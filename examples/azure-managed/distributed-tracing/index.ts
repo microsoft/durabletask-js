@@ -149,7 +149,7 @@ import { whenAll } from "@microsoft/durabletask-js/dist/task";
     return ["users-api", "orders-api", "inventory-api", "analytics-api"];
   };
 
-  // --- Orchestrator: simple sequence (for a cleaner trace comparison) ---
+  // --- Orchestrator: simple sequence with timer (for a cleaner trace comparison) ---
 
   const sequenceOrchestrator: TOrchestrator = async function* (
     ctx: OrchestrationContext,
@@ -160,6 +160,11 @@ import { whenAll } from "@microsoft/durabletask-js/dist/task";
       const greeting: string = yield ctx.callActivity(greetCity, city);
       greetings.push(greeting);
     }
+
+    // Wait briefly before returning (demonstrates timer span in trace)
+    const delay = new Date(ctx.currentUtcDateTime.getTime() + 2000);
+    yield ctx.createTimer(delay);
+
     return greetings;
   };
 
