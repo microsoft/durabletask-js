@@ -1179,6 +1179,138 @@ describe("Orchestration Executor", () => {
   it("should throw when whenAny is called with an empty task array", () => {
     expect(() => whenAny([])).toThrow("whenAny requires at least one task");
   });
+
+  it("should fail whenAll correctly when the failing task is the last to complete", async () => {
+    const printInt = (_: any, value: number) => {
+      return value.toString();
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const tasks: Task<string>[] = [];
+
+      for (let i = 0; i < 3; i++) {
+        tasks.push(ctx.callActivity(printInt, i));
+      }
+
+      const results = yield whenAll(tasks);
+      return results;
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(printInt);
+
+    const oldEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
+
+    for (let i = 0; i < 3; i++) {
+      oldEvents.push(newTaskScheduledEvent(i + 1, activityName, i.toString()));
+    }
+
+    // First two tasks succeed, last task fails
+    const ex = new Error("Last task failed");
+    const newEvents: any[] = [
+      newTaskCompletedEvent(1, printInt(null, 0)),
+      newTaskCompletedEvent(2, printInt(null, 1)),
+      newTaskFailedEvent(3, ex),
+    ];
+
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("TaskFailedError");
+    expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain(ex.message);
+  });
+
+  it("should not crash when additional tasks complete after whenAll fails fast", async () => {
+    const printInt = (_: any, value: number) => {
+      return value.toString();
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const tasks: Task<string>[] = [];
+
+      for (let i = 0; i < 3; i++) {
+        tasks.push(ctx.callActivity(printInt, i));
+      }
+
+      const results = yield whenAll(tasks);
+      return results;
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(printInt);
+
+    const oldEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
+
+    for (let i = 0; i < 3; i++) {
+      oldEvents.push(newTaskScheduledEvent(i + 1, activityName, i.toString()));
+    }
+
+    // First task fails, then remaining tasks complete in the same batch
+    const ex = new Error("First task failed");
+    const newEvents: any[] = [
+      newTaskFailedEvent(1, ex),
+      newTaskCompletedEvent(2, printInt(null, 1)),
+      newTaskCompletedEvent(3, printInt(null, 2)),
+    ];
+
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("TaskFailedError");
+    expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain(ex.message);
+  });
+
+  it("should preserve orchestration result when whenAll failure is caught and other tasks complete", async () => {
+    const printInt = (_: any, value: number) => {
+      return value.toString();
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const tasks: Task<string>[] = [];
+
+      for (let i = 0; i < 3; i++) {
+        tasks.push(ctx.callActivity(printInt, i));
+      }
+
+      try {
+        yield whenAll(tasks);
+      } catch {
+        // Intentionally catch the failure and return a fallback result
+        return "handled";
+      }
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(printInt);
+
+    const oldEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
+
+    for (let i = 0; i < 3; i++) {
+      oldEvents.push(newTaskScheduledEvent(i + 1, activityName, i.toString()));
+    }
+
+    // First task fails, then remaining tasks complete in the same batch
+    const ex = new Error("One task failed");
+    const newEvents: any[] = [
+      newTaskFailedEvent(1, ex),
+      newTaskCompletedEvent(2, printInt(null, 1)),
+      newTaskCompletedEvent(3, printInt(null, 2)),
+    ];
+
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify("handled"));
+  });
 });
 
 function getAndValidateSingleCompleteOrchestrationAction(
