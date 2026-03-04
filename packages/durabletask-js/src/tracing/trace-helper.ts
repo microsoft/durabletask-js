@@ -566,11 +566,13 @@ export function processNewEventsForTracing(
  * @param orchestrationSpan - The parent orchestration span.
  * @param eventName - The name of the event.
  * @param targetInstanceId - The target orchestration instance ID.
+ * @param instanceId - The source orchestration instance ID.
  */
 export function emitSpanForEventSent(
   orchestrationSpan: Span,
   eventName: string,
   targetInstanceId?: string,
+  instanceId?: string,
 ): void {
   const ctx = getTracingContext();
   if (!ctx) return;
@@ -585,6 +587,7 @@ export function emitSpanForEventSent(
       attributes: {
         [DurableTaskAttributes.TYPE]: TaskType.EVENT,
         [DurableTaskAttributes.TASK_NAME]: eventName,
+        ...(instanceId ? { [DurableTaskAttributes.TASK_INSTANCE_ID]: instanceId } : {}),
         ...(targetInstanceId ? { [DurableTaskAttributes.EVENT_TARGET_INSTANCE_ID]: targetInstanceId } : {}),
       },
     },
@@ -751,12 +754,16 @@ export function processActionsForTracing(
       const createSubOrch = action.getCreatesuborchestration()!;
       startSpanForSchedulingSubOrchestration(orchestrationSpan, createSubOrch, action.getId());
     } else if (action.hasCreatetimer()) {
-      const createTimer = action.getCreatetimer()!;
-      const fireAt = createTimer.getFireat()?.toDate() ?? new Date();
-      emitSpanForTimer(orchestrationSpan, orchestrationName, fireAt, action.getId(), instanceId);
+      // Timer spans are emitted retroactively from TimerFired events in
+      // processNewEventsForTracing (matching .NET/Java), not here.
     } else if (action.hasSendevent()) {
       const sendEvent = action.getSendevent()!;
-      emitSpanForEventSent(orchestrationSpan, sendEvent.getName(), sendEvent.getInstance()?.getInstanceid());
+      emitSpanForEventSent(
+        orchestrationSpan,
+        sendEvent.getName(),
+        sendEvent.getInstance()?.getInstanceid(),
+        instanceId,
+      );
     } else if (action.hasSendentitymessage()) {
       const sendEntityMsg = action.getSendentitymessage()!;
       if (sendEntityMsg.hasEntityoperationcalled()) {

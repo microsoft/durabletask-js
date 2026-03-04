@@ -598,7 +598,7 @@ describe("Trace Helper - processActionsForTracing", () => {
     expect(childSpan!.kind).toBe(otel.SpanKind.CLIENT);
   });
 
-  it("should create spans for CreateTimerAction", () => {
+  it("should skip timer actions (timers are emitted retroactively from TimerFired events)", () => {
     const tracer = otel.trace.getTracer(TRACER_NAME);
     const parentSpan = tracer.startSpan("parent-orch");
 
@@ -617,8 +617,7 @@ describe("Trace Helper - processActionsForTracing", () => {
 
     const spans = exporter.getFinishedSpans();
     const timerSpan = spans.find((s: any) => s.name === "orchestration:MyOrchestration:timer");
-    expect(timerSpan).toBeDefined();
-    expect(timerSpan!.kind).toBe(otel.SpanKind.INTERNAL);
+    expect(timerSpan).toBeUndefined();
   });
 
   it("should create spans for SendEventAction", () => {
@@ -1200,27 +1199,28 @@ describe("Trace Helper - setOrchestrationStatusFromActions", () => {
 });
 
 describe("Trace Helper - processActionsForTracing with instanceId", () => {
-  it("should pass instanceId to timer spans", () => {
+  it("should pass instanceId to event spans", () => {
     const tracer = otel.trace.getTracer(TRACER_NAME);
     const orchSpan = tracer.startSpan("orch-with-instance");
 
-    const timerAction = new pb.CreateTimerAction();
-    const fireAt = new Timestamp();
-    fireAt.fromDate(new Date("2025-07-01T12:00:00Z"));
-    timerAction.setFireat(fireAt);
+    const sendEvent = new pb.SendEventAction();
+    sendEvent.setName("TestEvent");
+    const instance = new pb.OrchestrationInstance();
+    instance.setInstanceid("target-instance-99");
+    sendEvent.setInstance(instance);
 
     const action = new pb.OrchestratorAction();
     action.setId(10);
-    action.setCreatetimer(timerAction);
+    action.setSendevent(sendEvent);
 
-    processActionsForTracing(orchSpan, [action], "TestOrch", "test-orch-instance-42");
+    processActionsForTracing(orchSpan, [action], "TestOrch", "source-orch-instance-42");
     orchSpan.end();
 
     const spans = exporter.getFinishedSpans();
-    const timerSpan = spans.find((s: any) => s.name === "orchestration:TestOrch:timer");
-    expect(timerSpan).toBeDefined();
-    expect(timerSpan!.attributes[DurableTaskAttributes.TASK_INSTANCE_ID]).toBe("test-orch-instance-42");
-    expect(timerSpan!.attributes[DurableTaskAttributes.TASK_NAME]).toBe("TestOrch");
+    const eventSpan = spans.find((s: any) => s.name === "orchestration_event:TestEvent");
+    expect(eventSpan).toBeDefined();
+    expect(eventSpan!.attributes[DurableTaskAttributes.TASK_INSTANCE_ID]).toBe("source-orch-instance-42");
+    expect(eventSpan!.attributes[DurableTaskAttributes.EVENT_TARGET_INSTANCE_ID]).toBe("target-instance-99");
   });
 });
 
