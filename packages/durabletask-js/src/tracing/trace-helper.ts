@@ -9,6 +9,8 @@ import {
   getOtelApi,
   createPbTraceContextFromSpan,
   createParentContextFromPb,
+  generateSpanId,
+  createTraceparent,
 } from "./trace-context-utils";
 import type { Span, Tracer } from "@opentelemetry/api";
 
@@ -181,43 +183,41 @@ export function startSpanForOrchestrationExecution(
  * @param action - The ScheduleTaskAction to inject trace context into.
  * @param taskId - The sequential task ID.
  */
-export function startSpanForSchedulingTask(
+/**
+ * Injects trace context into a ScheduleTaskAction for activity scheduling.
+ * Generates a random client span ID (matching .NET's CreateTraceContext pattern)
+ * without creating an actual Client span — the retroactive Client span is emitted
+ * later from processNewEventsForTracing when the activity completes.
+ *
+ * @param orchestrationSpan - The parent orchestration span.
+ * @param action - The ScheduleTaskAction to inject trace context into.
+ */
+export function injectTraceContextForSchedulingTask(
   orchestrationSpan: Span,
   action: pb.ScheduleTaskAction,
-  taskId: number,
 ): void {
   const ctx = getTracingContext();
   if (!ctx) return;
 
-  const name = action.getName();
-  const version = action.getVersion()?.getValue();
-  const spanName = createSpanName(TaskType.ACTIVITY, name, version);
+  const orchSpanContext = orchestrationSpan.spanContext();
+  if (!ctx.otel.isSpanContextValid(orchSpanContext)) return;
 
-  // Create a context with the orchestration span as parent
-  const parentContext = ctx.otel.trace.setSpan(ctx.otel.context.active(), orchestrationSpan);
+  // Generate a random client span ID (like .NET's ActivitySpanId.CreateRandom())
+  const clientSpanId = generateSpanId();
+  const traceparent = createTraceparent(orchSpanContext.traceId, clientSpanId, orchSpanContext.traceFlags);
 
-  const span = ctx.tracer.startSpan(
-    spanName,
-    {
-      kind: ctx.otel.SpanKind.CLIENT,
-      attributes: {
-        [DurableTaskAttributes.TYPE]: TaskType.ACTIVITY,
-        [DurableTaskAttributes.TASK_NAME]: name,
-        [DurableTaskAttributes.TASK_TASK_ID]: taskId,
-        ...(version ? { [DurableTaskAttributes.TASK_VERSION]: version } : {}),
-      },
-    },
-    parentContext,
-  );
+  const pbCtx = new pb.TraceContext();
+  pbCtx.setTraceparent(traceparent);
+  pbCtx.setSpanid(clientSpanId);
 
-  // Inject trace context into the action
-  const pbCtx = createPbTraceContextFromSpan(span);
-  if (pbCtx) {
-    action.setParenttracecontext(pbCtx);
+  const tracestate = orchSpanContext.traceState?.serialize();
+  if (tracestate) {
+    const sv = new StringValue();
+    sv.setValue(tracestate);
+    pbCtx.setTracestate(sv);
   }
 
-  // End the span immediately - it represents the act of scheduling, not execution
-  span.end();
+  action.setParenttracecontext(pbCtx);
 }
 
 /**
@@ -265,44 +265,40 @@ export function startSpanForTaskExecution(req: pb.ActivityRequest): Span | undef
  * @param action - The CreateSubOrchestrationAction to inject trace context into.
  * @param taskId - The sequential task ID.
  */
-export function startSpanForSchedulingSubOrchestration(
+/**
+ * Injects trace context into a CreateSubOrchestrationAction for sub-orchestration scheduling.
+ * Generates a random client span ID (matching .NET's CreateTraceContext pattern)
+ * without creating an actual Client span — the retroactive Client span is emitted
+ * later from processNewEventsForTracing when the sub-orchestration completes.
+ *
+ * @param orchestrationSpan - The parent orchestration span.
+ * @param action - The CreateSubOrchestrationAction to inject trace context into.
+ */
+export function injectTraceContextForSchedulingSubOrchestration(
   orchestrationSpan: Span,
   action: pb.CreateSubOrchestrationAction,
-  taskId: number,
 ): void {
   const ctx = getTracingContext();
   if (!ctx) return;
 
-  const name = action.getName();
-  const version = action.getVersion()?.getValue();
-  const instanceId = action.getInstanceid();
-  const spanName = createSpanName(TaskType.ORCHESTRATION, name, version);
+  const orchSpanContext = orchestrationSpan.spanContext();
+  if (!ctx.otel.isSpanContextValid(orchSpanContext)) return;
 
-  const parentContext = ctx.otel.trace.setSpan(ctx.otel.context.active(), orchestrationSpan);
+  const clientSpanId = generateSpanId();
+  const traceparent = createTraceparent(orchSpanContext.traceId, clientSpanId, orchSpanContext.traceFlags);
 
-  const span = ctx.tracer.startSpan(
-    spanName,
-    {
-      kind: ctx.otel.SpanKind.CLIENT,
-      attributes: {
-        [DurableTaskAttributes.TYPE]: TaskType.ORCHESTRATION,
-        [DurableTaskAttributes.TASK_NAME]: name,
-        [DurableTaskAttributes.TASK_INSTANCE_ID]: instanceId,
-        [DurableTaskAttributes.TASK_TASK_ID]: taskId,
-        ...(version ? { [DurableTaskAttributes.TASK_VERSION]: version } : {}),
-      },
-    },
-    parentContext,
-  );
+  const pbCtx = new pb.TraceContext();
+  pbCtx.setTraceparent(traceparent);
+  pbCtx.setSpanid(clientSpanId);
 
-  // Inject trace context into the action
-  const pbCtx = createPbTraceContextFromSpan(span);
-  if (pbCtx) {
-    action.setParenttracecontext(pbCtx);
+  const tracestate = orchSpanContext.traceState?.serialize();
+  if (tracestate) {
+    const sv = new StringValue();
+    sv.setValue(tracestate);
+    pbCtx.setTracestate(sv);
   }
 
-  // End the span immediately - it represents the act of scheduling
-  span.end();
+  action.setParenttracecontext(pbCtx);
 }
 
 /**
@@ -765,10 +761,10 @@ export function processActionsForTracing(
   for (const action of actions) {
     if (action.hasScheduletask()) {
       const scheduleTask = action.getScheduletask()!;
-      startSpanForSchedulingTask(orchestrationSpan, scheduleTask, action.getId());
+      injectTraceContextForSchedulingTask(orchestrationSpan, scheduleTask);
     } else if (action.hasCreatesuborchestration()) {
       const createSubOrch = action.getCreatesuborchestration()!;
-      startSpanForSchedulingSubOrchestration(orchestrationSpan, createSubOrch, action.getId());
+      injectTraceContextForSchedulingSubOrchestration(orchestrationSpan, createSubOrch);
     } else if (action.hasCreatetimer()) {
       // Timer spans are emitted retroactively from TimerFired events in
       // processNewEventsForTracing (matching .NET/Java), not here.

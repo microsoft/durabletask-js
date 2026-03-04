@@ -291,18 +291,17 @@ describe("Worker Tracing - Scheduled Actions Trace Context Injection", () => {
     // Should have a valid traceparent
     expect(traceCtx!.getTraceparent()).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$/);
 
-    // Verify OTEL spans were created: orchestration span + scheduling span
+    // Verify OTEL spans were created: orchestration span only (no scheduling CLIENT span — matching .NET)
     const spans = exporter.getFinishedSpans();
     const orchSpan = spans.find(
       (s) => s.attributes[DurableTaskAttributes.TYPE] === TaskType.ORCHESTRATION,
     );
+    expect(orchSpan).toBeDefined();
+    // No activity CLIENT span should exist — trace context is injected via random span ID
     const activityScheduleSpan = spans.find(
       (s) => s.attributes[DurableTaskAttributes.TYPE] === TaskType.ACTIVITY,
     );
-    expect(orchSpan).toBeDefined();
-    expect(activityScheduleSpan).toBeDefined();
-    // The schedule span should be a CLIENT span (act of scheduling)
-    expect(activityScheduleSpan!.kind).toBe(otel.SpanKind.CLIENT);
+    expect(activityScheduleSpan).toBeUndefined();
   });
 
   it("should inject parenttracecontext into CreateSubOrchestrationAction", async () => {
@@ -334,13 +333,12 @@ describe("Worker Tracing - Scheduled Actions Trace Context Injection", () => {
     // Should have a valid traceparent
     expect(traceCtx!.getTraceparent()).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$/);
 
-    // Verify the scheduling span was created
+    // No CLIENT span should exist — trace context is injected via random span ID (matching .NET)
     const spans = exporter.getFinishedSpans();
     const subOrchScheduleSpan = spans.find(
       (s) => s.attributes[DurableTaskAttributes.TYPE] === TaskType.ORCHESTRATION && s.kind === otel.SpanKind.CLIENT,
     );
-    expect(subOrchScheduleSpan).toBeDefined();
-    expect(subOrchScheduleSpan!.kind).toBe(otel.SpanKind.CLIENT);
+    expect(subOrchScheduleSpan).toBeUndefined();
   });
 
   it("should inject parenttracecontext with trace ID from parent span", async () => {

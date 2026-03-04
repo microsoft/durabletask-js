@@ -549,7 +549,7 @@ describe("Trace Helper - setSpanError and setSpanOk", () => {
 });
 
 describe("Trace Helper - processActionsForTracing", () => {
-  it("should create spans for ScheduleTaskAction", () => {
+  it("should inject trace context for ScheduleTaskAction without creating a span", () => {
     const tracer = otel.trace.getTracer(TRACER_NAME);
     const parentSpan = tracer.startSpan("parent-orch");
 
@@ -564,12 +564,8 @@ describe("Trace Helper - processActionsForTracing", () => {
     parentSpan.end();
 
     const spans = exporter.getFinishedSpans();
-    // Should have parent + child (schedule task)
-    expect(spans.length).toBe(2);
-
-    const childSpan = spans.find((s: any) => s.name === "activity:MyActivity");
-    expect(childSpan).toBeDefined();
-    expect(childSpan!.kind).toBe(otel.SpanKind.CLIENT);
+    // Should have only the parent span — no Client span created (matching .NET)
+    expect(spans.length).toBe(1);
 
     // Trace context should have been injected into the action
     const traceCtx = scheduleTask.getParenttracecontext();
@@ -577,7 +573,7 @@ describe("Trace Helper - processActionsForTracing", () => {
     expect(traceCtx!.getTraceparent()).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$/);
   });
 
-  it("should create spans for CreateSubOrchestrationAction", () => {
+  it("should inject trace context for CreateSubOrchestrationAction without creating a span", () => {
     const tracer = otel.trace.getTracer(TRACER_NAME);
     const parentSpan = tracer.startSpan("parent-orch");
 
@@ -593,9 +589,13 @@ describe("Trace Helper - processActionsForTracing", () => {
     parentSpan.end();
 
     const spans = exporter.getFinishedSpans();
-    const childSpan = spans.find((s: any) => s.name === "orchestration:SubOrch");
-    expect(childSpan).toBeDefined();
-    expect(childSpan!.kind).toBe(otel.SpanKind.CLIENT);
+    // Should have only the parent span — no Client span created (matching .NET)
+    expect(spans.length).toBe(1);
+
+    // Trace context should have been injected
+    const traceCtx = createSubOrch.getParenttracecontext();
+    expect(traceCtx).toBeDefined();
+    expect(traceCtx!.getTraceparent()).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$/);
   });
 
   it("should skip timer actions (timers are emitted retroactively from TimerFired events)", () => {
