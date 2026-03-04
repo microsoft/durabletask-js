@@ -190,6 +190,86 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     expect(activityCounter).toEqual(10);
   }, 31000);
 
+  it("should remain completed when whenAll fail-fast is caught and other children complete later", async () => {
+    let failActivityCounter = 0;
+    let slowActivityCounter = 0;
+
+    const fastFail = async (_: ActivityContext): Promise<void> => {
+      failActivityCounter++;
+      throw new Error("fast failure for whenAll fail-fast test");
+    };
+
+    const slowSuccess = async (_: ActivityContext, _input: string): Promise<void> => {
+      slowActivityCounter++;
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      try {
+        yield whenAll([
+          ctx.callActivity(fastFail),
+          ctx.callActivity(slowSuccess, "a"),
+          ctx.callActivity(slowSuccess, "b"),
+        ]);
+      } catch {
+        return "handled-failure";
+      }
+    };
+
+    taskHubWorker.addActivity(fastFail);
+    taskHubWorker.addActivity(slowSuccess);
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.failureDetails).toBeUndefined();
+    expect(state?.serializedOutput).toEqual(JSON.stringify("handled-failure"));
+    expect(failActivityCounter).toEqual(1);
+    expect(slowActivityCounter).toEqual(2);
+
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    const finalState = await taskHubClient.getOrchestrationState(id);
+    expect(finalState).toBeDefined();
+    expect(finalState?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(finalState?.serializedOutput).toEqual(JSON.stringify("handled-failure"));
+  }, 31000);
+
+  it("should preserve original whenAll failure details when not caught", async () => {
+    const fastFail = async (_: ActivityContext): Promise<void> => {
+      throw new Error("fast failure for whenAll uncaught test");
+    };
+
+    const slowSuccess = async (_: ActivityContext): Promise<void> => {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      yield whenAll([
+        ctx.callActivity(fastFail),
+        ctx.callActivity(slowSuccess),
+        ctx.callActivity(slowSuccess),
+      ]);
+    };
+
+    taskHubWorker.addActivity(fastFail);
+    taskHubWorker.addActivity(slowSuccess);
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(state?.failureDetails).toBeDefined();
+    expect(state?.failureDetails?.message).toContain("fast failure for whenAll uncaught test");
+    expect(state?.failureDetails?.message).not.toContain("Task is already completed");
+  }, 31000);
+
   it("should be able to use the sub-orchestration", async () => {
     let activityCounter = 0;
 
