@@ -11,9 +11,6 @@ export class WhenAllTask<T> extends CompositeTask<T[]> {
   constructor(tasks: Task<T>[]) {
     super(tasks);
 
-    this._completedTasks = 0;
-    this._failedTasks = 0;
-
     // An empty task list should complete immediately with an empty result
     if (tasks.length === 0) {
       this._result = [] as T[];

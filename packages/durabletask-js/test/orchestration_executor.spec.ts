@@ -1266,6 +1266,89 @@ describe("Orchestration Executor", () => {
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain(ex.message);
   });
 
+  it("should complete whenAll when some child tasks are already complete", async () => {
+    const hello = (_: any, name: string) => `Hello ${name}!`;
+
+    // This orchestrator creates tasks, yields one to completion, then passes both to whenAll
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const task1 = ctx.callActivity(hello, "Alice");
+      const _result1: string = yield task1; // task1 completes here
+      const task2 = ctx.callActivity(hello, "Bob");
+      // task1 is already complete when passed to whenAll
+      const allResults: string[] = yield whenAll([task1, task2]);
+      return allResults;
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(hello);
+
+    const oldEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID),
+      // task1 was scheduled and completed in a previous execution
+      newTaskScheduledEvent(1, activityName, JSON.stringify("Alice")),
+      newTaskCompletedEvent(1, JSON.stringify("Hello Alice!")),
+      // task2 was scheduled in a previous execution
+      newTaskScheduledEvent(2, activityName, JSON.stringify("Bob")),
+    ];
+
+    // task2 completes in this execution
+    const newEvents = [
+      newOrchestratorStartedEvent(),
+      newTaskCompletedEvent(2, JSON.stringify("Hello Bob!")),
+    ];
+
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(completeAction?.getResult()?.getValue()).toEqual(
+      JSON.stringify(["Hello Alice!", "Hello Bob!"]),
+    );
+  });
+
+  it("should complete whenAll when all child tasks are already complete", async () => {
+    const hello = (_: any, name: string) => `Hello ${name}!`;
+
+    // This orchestrator creates tasks, yields them individually, then passes all to whenAll
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const task1 = ctx.callActivity(hello, "Alice");
+      yield task1; // task1 completes
+      const task2 = ctx.callActivity(hello, "Bob");
+      yield task2; // task2 completes
+      // Both tasks are already complete
+      const allResults: string[] = yield whenAll([task1, task2]);
+      return allResults;
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(hello);
+
+    const oldEvents: any[] = [];
+    const newEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID),
+      // task1 scheduled and completed
+      newTaskScheduledEvent(1, activityName, JSON.stringify("Alice")),
+      newTaskCompletedEvent(1, JSON.stringify("Hello Alice!")),
+      // task2 scheduled and completed
+      newTaskScheduledEvent(2, activityName, JSON.stringify("Bob")),
+      newTaskCompletedEvent(2, JSON.stringify("Hello Bob!")),
+    ];
+
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(completeAction?.getResult()?.getValue()).toEqual(
+      JSON.stringify(["Hello Alice!", "Hello Bob!"]),
+    );
+  });
+
   it("should preserve orchestration result when whenAll failure is caught and other tasks complete", async () => {
     const printInt = (_: any, value: number) => {
       return value.toString();
