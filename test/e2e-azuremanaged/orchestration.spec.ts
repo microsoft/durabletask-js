@@ -270,6 +270,38 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     expect(state?.failureDetails?.message).not.toContain("Task is already completed");
   }, 31000);
 
+  it("should fail whenAll correctly when the failing task is the last to complete", async () => {
+    const fastSuccess = async (_: ActivityContext): Promise<void> => {
+      // completes immediately
+    };
+
+    const slowFail = async (_: ActivityContext): Promise<void> => {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      throw new Error("slow failure as last task");
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      yield whenAll([
+        ctx.callActivity(fastSuccess),
+        ctx.callActivity(fastSuccess),
+        ctx.callActivity(slowFail),
+      ]);
+    };
+
+    taskHubWorker.addActivity(fastSuccess);
+    taskHubWorker.addActivity(slowFail);
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(state?.failureDetails).toBeDefined();
+    expect(state?.failureDetails?.message).toContain("slow failure as last task");
+  }, 31000);
+
   it("should be able to use the sub-orchestration", async () => {
     let activityCounter = 0;
 
