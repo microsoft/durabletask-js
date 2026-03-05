@@ -151,12 +151,15 @@ Example: `copilot-finds/bug/fix-unhandled-promise-rejection`
   - Would have caught the bug (for bug fixes)
   - Cover the previously uncovered path (for missing tests)
   - Verify the improvement works (for improvements)
-- **If the change affects orchestration, activity, entity, or client/worker behavior:**
-  Add **Azure Managed e2e test(s)** in `test/e2e-azuremanaged/` as well. Follow the
-  existing patterns there (uses `DurableTaskAzureManagedClientBuilder` /
+- **Azure Managed e2e tests (MANDATORY for behavioral changes):**
+  If the change affects orchestration, activity, entity, or client/worker behavior,
+  you **MUST** also add an **Azure Managed e2e test** in `test/e2e-azuremanaged/`.
+  Do NOT skip this — it is a hard requirement, not optional. Follow the existing
+  patterns (uses `DurableTaskAzureManagedClientBuilder` /
   `DurableTaskAzureManagedWorkerBuilder`, reads `DTS_CONNECTION_STRING` or
   `ENDPOINT`/`TASKHUB` env vars). Add the new test case to the appropriate existing
   spec file (e.g., `orchestration.spec.ts`, `entity.spec.ts`, `retry-advanced.spec.ts`).
+  If you cannot add the e2e test, explain in the PR body **why** it was not feasible.
 - Keep changes minimal and focused — one concern per PR
 
 ### Labels
@@ -182,6 +185,11 @@ Before opening each PR, you MUST:
    - Your new tests must be in the appropriate test directory
    - They must follow existing test patterns and conventions
    - They must actually test the fix (not just exist)
+
+4. **Verify Azure Managed e2e tests were added (if applicable):**
+   - If your change affects orchestration, activity, entity, or client/worker behavior,
+     confirm you added a test in `test/e2e-azuremanaged/`
+   - If you did not, you must either add one or document in the PR body why it was not feasible
 
 **If any tests fail or lint errors appear:**
 - Fix them if they're caused by your changes
