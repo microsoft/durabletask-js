@@ -72,31 +72,67 @@ For each PR to verify:
 2. **Read the PR description:** Understand the problem, root cause, and fix approach.
 3. **Read any linked issue:** Understand the user-facing scenario that motivated the fix.
 4. **Read existing tests in the PR:** Understand what the unit tests and e2e tests
-   already verify — your sample should complement them, not duplicate them.
+   already verify. Unit tests and e2e tests verify **internal correctness** of the SDK.
+   Your verification sample serves a different purpose — it validates that the fix works
+   under a **realistic customer orchestration scenario**. Do not duplicate existing tests.
+   Instead, simulate a real-world orchestration workload that previously failed and should
+   now succeed.
 
 Produce a mental model: "Before this fix, scenario X would fail with Y. After the fix,
 scenario X should succeed with Z."
 
+## Step 2.5: Scenario Extraction
+
+Before writing the verification sample, extract a structured scenario model from the PR
+and linked issue. This ensures the sample is grounded in a real customer use case.
+
+Produce the following:
+
+- **Scenario name:** A short descriptive name (e.g., "Fan-out/fan-in with partial activity failure")
+- **Customer workflow:** What real-world orchestration pattern does this scenario represent?
+  (e.g., "A batch processing pipeline that fans out to N activities and aggregates results")
+- **Preconditions:** What setup or state must exist for the scenario to trigger?
+  (e.g., "At least one activity in the fan-out must throw an exception")
+- **Expected failure before fix:** What broken behavior would a customer observe before
+  this fix? (e.g., "The orchestration hangs indefinitely instead of failing fast")
+- **Expected behavior after fix:** What correct behavior should a customer observe now?
+  (e.g., "The orchestration completes with FAILED status and a TaskFailedError containing
+  the activity's exception details")
+
+The verification sample must implement this scenario exactly.
+
 ## Step 3: Create Verification Sample
 
-Create a **standalone verification script** that demonstrates the fix works against
-a real DTS emulator. The sample should be placed in a temporary working directory.
+Create a **standalone verification script** that reproduces a realistic customer
+orchestration scenario and validates that the fix works under real SDK usage patterns.
+The sample should be placed in a temporary working directory.
+
+The verification sample is fundamentally different from unit tests or e2e tests:
+- **Unit/e2e tests** verify internal SDK correctness using test harnesses and mocks.
+- **Verification samples** simulate a real application that an external developer would
+  write — they exercise the bug scenario exactly as a customer would encounter it,
+  running against the DTS emulator as a real system test.
 
 ### Sample Structure
 
-Create a single TypeScript file that:
+Create a single TypeScript file that resembles a **minimal real application**:
 
-1. **Connects to the DTS emulator** using `DurableTaskAzureManagedClientBuilder` /
-   `DurableTaskAzureManagedWorkerBuilder` with environment variables:
+1. **Creates a client and worker** connecting to the DTS emulator using
+   `DurableTaskAzureManagedClientBuilder` / `DurableTaskAzureManagedWorkerBuilder`
+   with environment variables:
    - `ENDPOINT` (default: `localhost:8080`)
    - `TASKHUB` (default: `default`)
 
-2. **Registers orchestrator(s) and activity(ies)** that exercise the specific
-   scenario the PR fixes.
+2. **Registers orchestrator(s) and activity(ies)** that model the customer workflow
+   identified in Step 2.5. The orchestration logic should represent a realistic
+   use case (e.g., a data processing pipeline, an approval workflow, a batch job)
+   rather than a synthetic test construct.
 
-3. **Schedules the orchestration** and waits for completion.
+3. **Starts the orchestration** with realistic input and waits for completion —
+   exactly as a customer application would.
 
-4. **Prints structured verification output** including:
+4. **Validates the final output** against expected results, then prints structured
+   verification output including:
    - Orchestration instance ID
    - Final runtime status
    - Output value (if any)
@@ -108,9 +144,14 @@ Create a single TypeScript file that:
 
 ### Sample Guidelines
 
-- Keep it minimal — only the code needed to verify the fix.
-- Use descriptive variable/function names that relate to the PR's scenario.
-- Add comments explaining what the sample verifies and why.
+- The sample must read like **real application code**, not a test. Avoid synthetic
+  test constructs, mock objects, or test framework assertions.
+- Structure the code as a customer would: create worker → register orchestrations →
+  register activities → start worker → schedule orchestration → await result → validate.
+- Use descriptive variable/function names that relate to the customer workflow
+  (e.g., `processOrderOrchestrator`, `sendNotificationActivity`).
+- Add comments explaining the customer scenario and why this workflow previously failed.
+- Keep it minimal — only the code needed to reproduce the scenario.
 - Do NOT import from local workspace paths — use the built packages.
 - The sample must be runnable with `npx ts-node --swc <file>` from the repo root.
 
@@ -118,8 +159,14 @@ Create a single TypeScript file that:
 
 ```typescript
 // Verification sample for PR #123: Fix WhenAllTask crash on late child completion
-// This sample verifies that whenAll correctly handles fail-fast when one activity
-// fails and others complete in the same event batch.
+//
+// Customer scenario: A batch processing pipeline fans out to multiple activities
+// to process data partitions in parallel. If one partition fails, the orchestration
+// should fail fast with a clear error instead of hanging indefinitely.
+//
+// Before fix: The orchestration would hang when a failed activity and a successful
+// activity completed in the same event batch.
+// After fix: The orchestration correctly fails fast and surfaces the TaskFailedError.
 
 import {
   TaskHubGrpcClient,
@@ -174,6 +221,41 @@ main().catch((err) => {
 });
 ```
 
+## Step 3.5: Checkout the PR Branch (CRITICAL)
+
+**The verification sample MUST run against the PR's code changes, not `main`.**
+This is the entire point of verification — confirming the fix works.
+
+Before building or running anything, switch to the PR's branch:
+
+```bash
+git fetch origin pull/<pr-number>/head:pr-<pr-number>
+git checkout pr-<pr-number>
+```
+
+Then rebuild the SDK from the PR branch:
+
+```bash
+npm ci
+npm run build
+```
+
+Verify the checkout is correct:
+
+```bash
+git log --oneline -1
+```
+
+The commit shown must match the PR's latest commit. If it does not, abort
+verification for this PR and report the mismatch.
+
+**After verification is complete** for a PR, switch back to `main` before
+processing the next PR:
+
+```bash
+git checkout main
+```
+
 ## Step 4: Start DTS Emulator and Run Verification
 
 ### Start the Emulator
@@ -197,15 +279,6 @@ Wait for the emulator to be ready:
 sleep 5
 # PowerShell: Test-NetConnection -ComputerName localhost -Port 8080
 # Bash: nc -z localhost 8080
-```
-
-### Build the SDK
-
-Ensure the SDK is built so the sample can import from it:
-
-```bash
-npm install
-npm run build
 ```
 
 ### Run the Sample
@@ -319,7 +392,10 @@ If verification **failed**, do NOT update labels. Instead:
 ### Quality Standards
 
 - Verification samples must be runnable without manual intervention.
-- Samples must test the **specific scenario** the PR addresses, not generic functionality.
+- Samples must reproduce a **realistic customer orchestration scenario** that exercises
+  the specific bug the PR addresses — not generic functionality or synthetic test cases.
+- Samples validate the fix under **real SDK usage patterns**, simulating how an external
+  developer would use the SDK in production code.
 - Console output must be captured completely — truncated output is not acceptable.
 - Timestamps must use ISO 8601 format.
 
