@@ -125,7 +125,7 @@ describe("Falsy input serialization", () => {
 
   describe("continueAsNew with falsy input", () => {
     it("should correctly serialize zero as continue-as-new input", async () => {
-      const orchestrator: TOrchestrator = async (ctx: OrchestrationContext, input: any): any => {
+      const orchestrator: TOrchestrator = async (ctx: OrchestrationContext, input: any): Promise<any> => {
         if (input === 0) {
           ctx.continueAsNew(0, false);
           return;
