@@ -125,10 +125,9 @@ describe("Falsy input serialization", () => {
 
   describe("continueAsNew with falsy input", () => {
     it("should correctly serialize zero as continue-as-new input", async () => {
-      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: any): any {
+      const orchestrator: TOrchestrator = async (ctx: OrchestrationContext, input: any): any => {
         if (input === 0) {
           ctx.continueAsNew(0, false);
-          yield ctx.createTimer(1); // yield to avoid require-yield lint error
           return;
         }
         return input;
