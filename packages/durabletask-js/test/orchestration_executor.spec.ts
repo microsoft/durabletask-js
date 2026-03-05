@@ -1127,6 +1127,135 @@ describe("Orchestration Executor", () => {
       const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
       expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
     });
+
+    it("should fail the task (not retry) when retry handler returns undefined", async () => {
+      const { result: startResult, replay } = await startOrchestration(
+        async function* (ctx: OrchestrationContext): any {
+          // Cast to bypass TypeScript — simulates a JavaScript consumer or a handler
+          // with a code path that omits a return statement
+          const retryHandler = (async (_retryCtx: any) => {
+            // Intentionally missing return statement
+          }) as any;
+          return yield ctx.callActivity("flakyActivity", undefined, { retry: retryHandler });
+        },
+      );
+
+      expect(startResult.actions[0].hasScheduletask()).toBe(true);
+
+      // Activity fails → handler returns undefined → should NOT retry, task should fail
+      const result = await replay(
+        [newTaskScheduledEvent(1, "flakyActivity")],
+        [newTaskFailedEvent(1, new Error("Activity error"))],
+      );
+      const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+      expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    });
+
+    it("should fail the task (not retry) when retry handler returns null", async () => {
+      const { result: startResult, replay } = await startOrchestration(
+        async function* (ctx: OrchestrationContext): any {
+          const retryHandler = async (_retryCtx: any) => {
+            return null as any;
+          };
+          return yield ctx.callActivity("flakyActivity", undefined, { retry: retryHandler });
+        },
+      );
+
+      expect(startResult.actions[0].hasScheduletask()).toBe(true);
+
+      // Activity fails → handler returns null → should NOT retry, task should fail
+      const result = await replay(
+        [newTaskScheduledEvent(1, "flakyActivity")],
+        [newTaskFailedEvent(1, new Error("Activity error"))],
+      );
+      const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+      expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    });
+
+    it("should create a retry timer when retry handler returns a positive delay", async () => {
+      const { result: startResult, replay } = await startOrchestration(
+        async function* (ctx: OrchestrationContext): any {
+          const retryHandler = async (_retryCtx: any) => {
+            return 5000; // Retry after 5 seconds
+          };
+          return yield ctx.callActivity("flakyActivity", undefined, { retry: retryHandler });
+        },
+      );
+
+      expect(startResult.actions[0].hasScheduletask()).toBe(true);
+
+      // Activity fails → handler returns 5000 → should create a timer
+      const result = await replay(
+        [newTaskScheduledEvent(1, "flakyActivity")],
+        [newTaskFailedEvent(1, new Error("Transient failure"))],
+      );
+      expect(result.actions.length).toBe(1);
+      expect(result.actions[0].hasCreatetimer()).toBe(true);
+    });
+
+    it("should retry immediately when retry handler returns 0", async () => {
+      const { result: startResult, replay } = await startOrchestration(
+        async function* (ctx: OrchestrationContext): any {
+          const retryHandler = async (_retryCtx: any) => {
+            return 0; // Retry immediately via zero delay
+          };
+          return yield ctx.callActivity("flakyActivity", undefined, { retry: retryHandler });
+        },
+      );
+
+      expect(startResult.actions[0].hasScheduletask()).toBe(true);
+
+      // Activity fails → handler returns 0 → should reschedule immediately (no timer)
+      const result = await replay(
+        [newTaskScheduledEvent(1, "flakyActivity")],
+        [newTaskFailedEvent(1, new Error("Transient failure"))],
+      );
+      expect(result.actions.length).toBe(1);
+      expect(result.actions[0].hasScheduletask()).toBe(true);
+      expect(result.actions[0].getScheduletask()?.getName()).toBe("flakyActivity");
+    });
+
+    it("should fail the task when retry handler returns NaN", async () => {
+      const { result: startResult, replay } = await startOrchestration(
+        async function* (ctx: OrchestrationContext): any {
+          const retryHandler = async (_retryCtx: any) => {
+            return NaN;
+          };
+          return yield ctx.callActivity("flakyActivity", undefined, { retry: retryHandler });
+        },
+      );
+
+      expect(startResult.actions[0].hasScheduletask()).toBe(true);
+
+      // Activity fails → handler returns NaN → should NOT retry
+      const result = await replay(
+        [newTaskScheduledEvent(1, "flakyActivity")],
+        [newTaskFailedEvent(1, new Error("Activity error"))],
+      );
+      const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+      expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    });
+
+    it("should fail the task when retry handler returns Infinity", async () => {
+      const { result: startResult, replay } = await startOrchestration(
+        async function* (ctx: OrchestrationContext): any {
+          const retryHandler = async (_retryCtx: any) => {
+            return Infinity;
+          };
+          return yield ctx.callActivity("flakyActivity", undefined, { retry: retryHandler });
+        },
+      );
+
+      expect(startResult.actions[0].hasScheduletask()).toBe(true);
+
+      // Activity fails → handler returns Infinity → should NOT retry
+      const result = await replay(
+        [newTaskScheduledEvent(1, "flakyActivity")],
+        [newTaskFailedEvent(1, new Error("Activity error"))],
+      );
+      const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+      expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    });
   });
 
   it("should complete immediately when whenAll is called with an empty task array", async () => {

@@ -792,16 +792,20 @@ export class OrchestrationExecutor {
       task.recordFailure(errorMessage, failureDetails);
       const retryResult = await task.shouldRetry(ctx._currentUtcDatetime);
 
-      if (retryResult !== false) {
+      // Only retry when the handler explicitly returns true or a finite number.
+      // Using a positive check (=== true || finite number) instead of !== false
+      // ensures that undefined/null (e.g., from a missing return statement) is
+      // treated as "don't retry" rather than causing an infinite retry loop.
+      if (retryResult === true || (typeof retryResult === "number" && Number.isFinite(retryResult))) {
         WorkerLogs.retryingTask(this._logger, ctx._instanceId, task.taskName, task.attemptCount);
         task.incrementAttemptCount();
 
         if (typeof retryResult === "number") {
           if (retryResult <= 0) {
-            // Handler returned true — retry immediately
+            // Zero or negative delay — retry immediately
             ctx.rescheduleRetryTask(task);
           } else {
-            // Handler returned a delay in milliseconds — use a timer
+            // Positive delay in milliseconds — use a timer
             ctx.createRetryTimer(task, retryResult);
           }
         } else {
