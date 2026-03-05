@@ -44,7 +44,7 @@ export class ActivityExecutor {
       }
 
       // Return the output
-      const encodedOutput = activityOutput ? JSON.stringify(activityOutput) : undefined;
+      const encodedOutput = activityOutput !== undefined ? JSON.stringify(activityOutput) : undefined;
 
       // Log activity completion (EventId 604)
       WorkerLogs.activityCompleted(this._logger, orchestrationId, name);

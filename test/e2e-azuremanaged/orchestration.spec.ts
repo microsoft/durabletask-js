@@ -1373,4 +1373,180 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
       expect(parentStateAfterPurge).toBeUndefined();
     }, 60000);
   });
+
+  // PR #138: Fix falsy values (0, "", false, null) silently dropped during serialization
+  describe("falsy value serialization", () => {
+    it("should pass zero (0) through activity round-trip", async () => {
+      const echo = async (_: ActivityContext, input: number) => input;
+
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: number): any {
+        const result = yield ctx.callActivity(echo, input);
+        return result;
+      };
+
+      taskHubWorker.addOrchestrator(orchestrator);
+      taskHubWorker.addActivity(echo);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator, 0);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.serializedInput).toEqual(JSON.stringify(0));
+      expect(state?.serializedOutput).toEqual(JSON.stringify(0));
+    }, 31000);
+
+    it("should pass empty string through activity round-trip", async () => {
+      const echo = async (_: ActivityContext, input: string) => input;
+
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: string): any {
+        const result = yield ctx.callActivity(echo, input);
+        return result;
+      };
+
+      taskHubWorker.addOrchestrator(orchestrator);
+      taskHubWorker.addActivity(echo);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator, "");
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.serializedInput).toEqual(JSON.stringify(""));
+      expect(state?.serializedOutput).toEqual(JSON.stringify(""));
+    }, 31000);
+
+    it("should pass false through activity round-trip", async () => {
+      const echo = async (_: ActivityContext, input: boolean) => input;
+
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: boolean): any {
+        const result = yield ctx.callActivity(echo, input);
+        return result;
+      };
+
+      taskHubWorker.addOrchestrator(orchestrator);
+      taskHubWorker.addActivity(echo);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator, false);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.serializedInput).toEqual(JSON.stringify(false));
+      expect(state?.serializedOutput).toEqual(JSON.stringify(false));
+    }, 31000);
+
+    it("should pass null through activity round-trip", async () => {
+      const echo = async (_: ActivityContext, input: any) => input;
+
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: any): any {
+        const result = yield ctx.callActivity(echo, input);
+        return result;
+      };
+
+      taskHubWorker.addOrchestrator(orchestrator);
+      taskHubWorker.addActivity(echo);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator, null);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.serializedOutput).toEqual(JSON.stringify(null));
+    }, 31000);
+
+    it("should pass zero through sub-orchestration round-trip", async () => {
+      const child: TOrchestrator = async (_ctx: OrchestrationContext, input: number) => {
+        return input;
+      };
+
+      const parent: TOrchestrator = async function* (ctx: OrchestrationContext, input: number): any {
+        const result = yield ctx.callSubOrchestrator(child, input);
+        return result;
+      };
+
+      taskHubWorker.addOrchestrator(parent);
+      taskHubWorker.addOrchestrator(child);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(parent, 0);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.serializedOutput).toEqual(JSON.stringify(0));
+    }, 31000);
+
+    it("should return zero as orchestration result", async () => {
+      const orchestrator: TOrchestrator = async (_ctx: OrchestrationContext) => {
+        return 0;
+      };
+
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.serializedOutput).toEqual(JSON.stringify(0));
+    }, 31000);
+
+    it("should return false as orchestration result", async () => {
+      const orchestrator: TOrchestrator = async (_ctx: OrchestrationContext) => {
+        return false;
+      };
+
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.serializedOutput).toEqual(JSON.stringify(false));
+    }, 31000);
+
+    it("should return empty string as orchestration result", async () => {
+      const orchestrator: TOrchestrator = async (_ctx: OrchestrationContext) => {
+        return "";
+      };
+
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.serializedOutput).toEqual(JSON.stringify(""));
+    }, 31000);
+
+    it("should continue-as-new with zero input", async () => {
+      const orchestrator: TOrchestrator = async (ctx: OrchestrationContext, input: number) => {
+        if (input === 0) {
+          ctx.continueAsNew(1, false);
+          return;
+        }
+        return input;
+      };
+
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator, 0);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.serializedOutput).toEqual(JSON.stringify(1));
+    }, 31000);
+  });
 });

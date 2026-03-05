@@ -12,6 +12,7 @@ import { Registry } from "../src/worker/registry";
 import { TOrchestrator } from "../src/types/orchestrator.type";
 import { NoOpLogger } from "../src/types/logger.type";
 import { ActivityContext } from "../src/task/context/activity-context";
+import { ActivityExecutor } from "../src/worker/activity-executor";
 
 const testLogger = new NoOpLogger();
 const TEST_INSTANCE_ID = "falsy-test-instance";
@@ -182,6 +183,37 @@ describe("Falsy input serialization", () => {
       // Input should be undefined when not provided
       const inputValue = scheduleAction!.getScheduletask()!.getInput();
       expect(inputValue).toBeUndefined();
+    });
+  });
+
+  describe("activity output with falsy values", () => {
+    it.each([
+      { output: 0, label: "zero" },
+      { output: "", label: "empty string" },
+      { output: false, label: "false" },
+      { output: null, label: "null" },
+    ])("should correctly serialize $label as activity output", async ({ output }) => {
+      const myActivity = async (_ctx: ActivityContext) => output;
+
+      const registry = new Registry();
+      registry.addActivity(myActivity);
+
+      const executor = new ActivityExecutor(registry, testLogger);
+      const result = await executor.execute(TEST_INSTANCE_ID, "myActivity", 1);
+
+      expect(result).toEqual(JSON.stringify(output));
+    });
+
+    it("should return undefined when activity output is undefined", async () => {
+      const myActivity = async (_ctx: ActivityContext) => undefined;
+
+      const registry = new Registry();
+      registry.addActivity(myActivity);
+
+      const executor = new ActivityExecutor(registry, testLogger);
+      const result = await executor.execute(TEST_INSTANCE_ID, "myActivity", 1);
+
+      expect(result).toBeUndefined();
     });
   });
 });
