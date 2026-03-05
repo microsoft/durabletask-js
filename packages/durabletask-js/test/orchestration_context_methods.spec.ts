@@ -614,3 +614,36 @@ describe("OrchestrationContext.compareVersionTo", () => {
   });
 });
 
+describe("OrchestrationContext.createTimer", () => {
+  it("should compute fire-at from currentUtcDateTime when given seconds", async () => {
+    // Use a specific orchestrator start time far from Date.now() to detect
+    // if the timer incorrectly uses the wall clock instead of the orchestration time.
+    const orchestrationTime = new Date("2020-06-15T12:00:00Z");
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext) {
+      yield ctx.createTimer(30); // 30-second timer
+    };
+
+    const registry = new Registry();
+    const name = registry.addOrchestrator(orchestrator);
+    const newEvents = [
+      newOrchestratorStartedEvent(orchestrationTime),
+      newExecutionStartedEvent(name, TEST_INSTANCE_ID),
+    ];
+
+    const executor = new OrchestrationExecutor(registry);
+    const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+
+    // Find the timer action (there should be a CreateTimer action)
+    const timerAction = result.actions.find((a) => a.hasCreatetimer());
+    expect(timerAction).toBeDefined();
+
+    const fireAt = timerAction!.getCreatetimer()!.getFireat()!.toDate();
+
+    // The fire-at time should be 30 seconds after the orchestration time,
+    // NOT 30 seconds after Date.now().
+    const expectedFireAt = new Date(orchestrationTime.getTime() + 30 * 1000);
+    expect(fireAt.getTime()).toEqual(expectedFireAt.getTime());
+  });
+});
+

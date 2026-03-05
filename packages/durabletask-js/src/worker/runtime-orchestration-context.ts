@@ -291,10 +291,10 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   createTimer(fireAt: number | Date): Task<any> {
     const id = this.nextSequenceNumber();
 
-    // If a number is passed, we use it as the number of seconds to wait
-    // we use instanceof Date as number is not a native Javascript type
+    // If a number is passed, we use it as the number of seconds to wait.
+    // Use currentUtcDateTime (not Date.now()) to maintain orchestrator determinism.
     if (!(fireAt instanceof Date)) {
-      fireAt = new Date(Date.now() + fireAt * 1000);
+      fireAt = new Date(this._currentUtcDatetime.getTime() + fireAt * 1000);
     }
 
     const action = ph.newCreateTimerAction(id, fireAt);
