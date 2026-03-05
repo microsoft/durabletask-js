@@ -247,7 +247,6 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
 
   getActions(): pb.OrchestratorAction[] {
     if (this._completionStatus === pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW) {
-      // Only return the single completion actions when continuing-as-new
       let carryoverEvents: pb.HistoryEvent[] | null = null;
 
       if (this._saveEvents) {
@@ -271,7 +270,11 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
         carryoverEvents,
       );
 
-      return [action];
+      // Include fire-and-forget actions (sendEvent, signalEntity, etc.) that were
+      // scheduled before continueAsNew was called, consistent with setComplete/setFailed
+      const allActions = Object.values(this._pendingActions);
+      allActions.push(action);
+      return allActions;
     }
 
     return Object.values(this._pendingActions);

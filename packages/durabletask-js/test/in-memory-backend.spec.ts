@@ -229,6 +229,49 @@ describe("In-Memory Backend", () => {
     expect(state?.serializedOutput).toEqual(JSON.stringify(5));
   });
 
+  it("should preserve sendEvent actions when continuing-as-new", async () => {
+    // Receiver orchestration that waits for an event
+    const receiver: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const value = yield ctx.waitForExternalEvent("ping");
+      return value;
+    };
+
+    // Sender orchestration that sends an event then continues-as-new
+    const sender: TOrchestrator = async (ctx: OrchestrationContext, input: { receiverId: string; iteration: number }) => {
+      if (input.iteration === 1) {
+        // On first iteration, send event to receiver then continue-as-new
+        ctx.sendEvent(input.receiverId, "ping", "hello from sender");
+        ctx.continueAsNew({ receiverId: input.receiverId, iteration: 2 }, false);
+      } else {
+        return "sender done";
+      }
+    };
+
+    worker.addOrchestrator(receiver);
+    worker.addOrchestrator(sender);
+    await worker.start();
+
+    // Start receiver first, then sender
+    const receiverId = await client.scheduleNewOrchestration(receiver);
+    await client.waitForOrchestrationStart(receiverId, false, 5);
+
+    const senderId = await client.scheduleNewOrchestration(sender, { receiverId, iteration: 1 });
+
+    // Wait for both to complete
+    const senderState = await client.waitForOrchestrationCompletion(senderId, true, 10);
+    const receiverState = await client.waitForOrchestrationCompletion(receiverId, true, 10);
+
+    // Sender should complete after continuing-as-new
+    expect(senderState).toBeDefined();
+    expect(senderState?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(senderState?.serializedOutput).toEqual(JSON.stringify("sender done"));
+
+    // Receiver should have received the event sent before continue-as-new
+    expect(receiverState).toBeDefined();
+    expect(receiverState?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(receiverState?.serializedOutput).toEqual(JSON.stringify("hello from sender"));
+  });
+
   it("should handle orchestration without activities", async () => {
     const orchestrator: TOrchestrator = async (_: OrchestrationContext, input: number) => {
       return input * 2;
