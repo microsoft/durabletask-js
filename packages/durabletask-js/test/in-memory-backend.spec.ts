@@ -286,4 +286,26 @@ describe("In-Memory Backend", () => {
     const state = await client.getOrchestrationState(id);
     expect(state).toBeUndefined();
   });
+
+  it("should allow reusing instance IDs after reset", async () => {
+    const orchestrator: TOrchestrator = async (_: OrchestrationContext, input: number) => {
+      return input * 2;
+    };
+
+    // Create an orchestration without starting the worker, so it stays in the queue
+    const instanceId = "reuse-test-id";
+    backend.createInstance(instanceId, getName(orchestrator), JSON.stringify(10));
+
+    // Reset while the orchestration is still queued (not yet processed)
+    backend.reset();
+
+    // Now create a new orchestration with the same instance ID and process it
+    worker.addOrchestrator(orchestrator);
+    await worker.start();
+
+    await client.scheduleNewOrchestration(orchestrator, 21, instanceId);
+    const state = await client.waitForOrchestrationCompletion(instanceId, true, 10);
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(state?.serializedOutput).toEqual(JSON.stringify(42));
+  });
 });
