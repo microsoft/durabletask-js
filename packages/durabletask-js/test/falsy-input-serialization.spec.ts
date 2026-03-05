@@ -180,7 +180,7 @@ describe("Falsy input serialization", () => {
 
       const scheduleAction = result.actions.find((a) => a.hasScheduletask());
       expect(scheduleAction).toBeDefined();
-      // Input should be undefined/null when not provided
+      // Input should be undefined when not provided
       const inputValue = scheduleAction!.getScheduletask()!.getInput();
       expect(inputValue).toBeUndefined();
     });
