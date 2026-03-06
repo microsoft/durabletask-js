@@ -297,7 +297,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     // If a number is passed, we use it as the number of seconds to wait
     // we use instanceof Date as number is not a native Javascript type
     if (!(fireAt instanceof Date)) {
-      fireAt = new Date(Date.now() + fireAt * 1000);
+      fireAt = new Date(this._currentUtcDatetime.getTime() + fireAt * 1000);
     }
 
     const action = ph.newCreateTimerAction(id, fireAt);
