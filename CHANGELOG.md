@@ -2,11 +2,31 @@
 
 ### New
 
-- Align tracing attributes with .NET SDK conventions: add `execution_id` on creation spans, `version` on activity execution spans, `name`/`instance_id` on timer spans, and `durabletask.task.status` on orchestration completion ([#126](https://github.com/microsoft/durabletask-js/pull/126))
-- Add retroactive span emission model: emit Client spans at activity/sub-orchestration completion with historical scheduling timestamps, and timer spans with creation-to-fired duration (matching .NET/Java SDK patterns) ([#126](https://github.com/microsoft/durabletask-js/pull/126))
-
 ### Fixes
 
+
+## v0.3.0 (2026-03-06)
+
+### Changes
+
+- Fix falsy values (0, empty string, false, null) silently dropped during serialization ([#138](https://github.com/microsoft/durabletask-js/pull/138))
+- Fix PR verification agent: grant contents:write to push verification branches ([#141](https://github.com/microsoft/durabletask-js/pull/141))
+- Enforce Azure Managed e2e tests in daily-code-review agent ([#139](https://github.com/microsoft/durabletask-js/pull/139))
+- Add sample code branch push step to PR verification agent ([#137](https://github.com/microsoft/durabletask-js/pull/137))
+- Fix continueAsNew dropping fire-and-forget actions (sendEvent, signalEntity) ([#136](https://github.com/microsoft/durabletask-js/pull/136))
+- fix: clear orchestrationQueueSet in InMemoryOrchestrationBackend.reset() ([#133](https://github.com/microsoft/durabletask-js/pull/133))
+- PR Verification Agent + github action ([#132](https://github.com/microsoft/durabletask-js/pull/132))
+- fix: update daily code review agent to require tracking issues before PRs ([#130](https://github.com/microsoft/durabletask-js/pull/130))
+- Fix WhenAllTask crash when children complete after fail-fast ([#123](https://github.com/microsoft/durabletask-js/pull/123))
+- Optimize daily code review agent with focused detection playbook ([#128](https://github.com/microsoft/durabletask-js/pull/128))
+- feat: align tracing attributes with .NET SDK conventions ([#126](https://github.com/microsoft/durabletask-js/pull/126))
+- fix: set instanceId on ActivityResponse in failure path ([#122](https://github.com/microsoft/durabletask-js/pull/122))
+- Update code review agent instructions ([#119](https://github.com/microsoft/durabletask-js/pull/119))
+- [copilot-finds] Bug: Fix whenAll([]) hanging orchestration forever ([#118](https://github.com/microsoft/durabletask-js/pull/118))
+- Daily Code Review Agent ([#117](https://github.com/microsoft/durabletask-js/pull/117))
+- refactor: streamline orchestration event handling and improve state management ([#115](https://github.com/microsoft/durabletask-js/pull/115))
+- Bump tar in the npm_and_yarn group across 1 directory ([#113](https://github.com/microsoft/durabletask-js/pull/113))
+- Release v0.2.0 ([#112](https://github.com/microsoft/durabletask-js/pull/112))
 
 ## v0.2.0 (2026-02-18)
 
