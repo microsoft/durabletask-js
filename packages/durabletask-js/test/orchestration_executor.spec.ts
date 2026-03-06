@@ -246,6 +246,82 @@ describe("Orchestration Executor", () => {
     // const userCodeStatement = "ctx.callActivity(dummyActivity, orchestratorInput)";
     // expect(completeAction?.getFailuredetails()?.getStacktrace()?.getValue()).toContain(userCodeStatement);
   });
+  it("should handle a task completion event with an unmatched taskScheduledId without error", async () => {
+    const dummyActivity = async (_: ActivityContext) => {
+      // do nothing
+    };
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
+      const result = yield ctx.callActivity(dummyActivity);
+      return result;
+    };
+    const registry = new Registry();
+    const name = registry.addOrchestrator(orchestrator);
+    const oldEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined),
+      newTaskScheduledEvent(1, dummyActivity.name),
+    ];
+    // Send a completion event with a non-matching taskScheduledId (999)
+    const newEvents = [newTaskCompletedEvent(999, JSON.stringify("result"))];
+    const executor = new OrchestrationExecutor(registry, testLogger);
+
+    // Should not throw — the unmatched event is logged and the orchestration continues waiting
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    // Orchestration should still be waiting (task at id 1 was not completed)
+    expect(result.actions.length).toEqual(0);
+  });
+
+  it("should handle a task completion event with taskScheduledId 0 without error", async () => {
+    const dummyActivity = async (_: ActivityContext) => {
+      // do nothing
+    };
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
+      const result = yield ctx.callActivity(dummyActivity);
+      return result;
+    };
+    const registry = new Registry();
+    const name = registry.addOrchestrator(orchestrator);
+    const oldEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined),
+      newTaskScheduledEvent(1, dummyActivity.name),
+    ];
+    // Send a completion event with taskScheduledId 0 — should not be silently skipped
+    const newEvents = [newTaskCompletedEvent(0, JSON.stringify("result"))];
+    const executor = new OrchestrationExecutor(registry, testLogger);
+
+    // Should not throw — taskId 0 is properly handled (lookup attempted, no match found)
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    // Orchestration should still be waiting (task at id 1 was not completed)
+    expect(result.actions.length).toEqual(0);
+  });
+
+  it("should handle a sub-orchestration completion event with taskScheduledId 0 without error", async () => {
+    const subOrchestrator = async (_: OrchestrationContext) => {
+      // do nothing
+    };
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
+      const res = yield ctx.callSubOrchestrator(subOrchestrator);
+      return res;
+    };
+    const registry = new Registry();
+    const subOrchestratorName = registry.addOrchestrator(subOrchestrator);
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const oldEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID, undefined),
+      newSubOrchestrationCreatedEvent(1, subOrchestratorName, "sub-orch-123"),
+    ];
+    // Send a completion event with taskScheduledId 0 — should not be silently skipped
+    const newEvents = [newSubOrchestrationCompletedEvent(0, JSON.stringify("sub-result"))];
+    const executor = new OrchestrationExecutor(registry, testLogger);
+
+    // Should not throw — taskId 0 is properly handled
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    // Orchestration should still be waiting (sub-orch task at id 1 was not completed)
+    expect(result.actions.length).toEqual(0);
+  });
+
   it("should test the non-determinism detection logic when callTimer is expected but some other method (callActivity) is called instead", async () => {
     const dummyActivity = async (_: ActivityContext) => {
       // do nothing
