@@ -1,9 +1,11 @@
 name: 🔎 PR Verification Agent
 
-# Security: This workflow has write permissions to issues and PRs, so it must NOT
-# use the `pull_request` trigger (which checks out untrusted PR code and could
-# exfiltrate the job token). Instead, it runs on schedule/manual dispatch only.
-# The agent fetches each PR's branch itself before building and verifying.
+# Security: This workflow has write permissions to contents, issues, and PRs, so
+# it must NOT use the `pull_request` trigger (which checks out untrusted PR code
+# and could exfiltrate the job token). Instead, it runs on schedule/manual
+# dispatch only. The agent fetches each PR's branch itself before building and
+# verifying. The contents:write permission is needed to push verification sample
+# code to verification/pr-<N> branches.
 on:
   # Run periodically to pick up PRs labeled pending-verification
   schedule:
@@ -13,7 +15,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   issues: write
   pull-requests: write
 
@@ -35,7 +37,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: false
 
       - name: ⚙️ Setup Node.js
         uses: actions/setup-node@v4
