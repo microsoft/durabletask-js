@@ -19,6 +19,7 @@ export class WhenAnyTask extends CompositeTask<Task<any>> {
     if (!this.isComplete) {
       this._isComplete = true;
       this._result = task;
+      this._parent?.onChildCompleted(this);
     }
   }
 }
