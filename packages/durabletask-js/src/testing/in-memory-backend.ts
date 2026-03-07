@@ -337,24 +337,29 @@ export class InMemoryOrchestrationBackend {
     }
 
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        const waiters = this.stateWaiters.get(instanceId);
-        if (waiters) {
-          const index = waiters.findIndex((w) => w.resolve === resolve);
-          if (index >= 0) {
-            waiters.splice(index, 1);
+      // When timeoutMs is 0, no timeout is applied — the waiter will only be
+      // resolved by a matching state change or rejected by reset().
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      if (timeoutMs > 0) {
+        timer = setTimeout(() => {
+          const waiters = this.stateWaiters.get(instanceId);
+          if (waiters) {
+            const index = waiters.findIndex((w) => w.resolve === resolve);
+            if (index >= 0) {
+              waiters.splice(index, 1);
+            }
           }
-        }
-        reject(new Error(`Timeout waiting for orchestration '${instanceId}'`));
-      }, timeoutMs);
+          reject(new Error(`Timeout waiting for orchestration '${instanceId}'`));
+        }, timeoutMs);
+      }
 
       const waiter: StateWaiter = {
         resolve: (result) => {
-          clearTimeout(timer);
+          if (timer !== undefined) clearTimeout(timer);
           resolve(result);
         },
         reject: (error) => {
-          clearTimeout(timer);
+          if (timer !== undefined) clearTimeout(timer);
           reject(error);
         },
         predicate,
@@ -590,8 +595,7 @@ export class InMemoryOrchestrationBackend {
     this.waitForState(
       subInstanceId,
       (inst) => this.isTerminalStatus(inst.status),
-      // No timeout - sub-orchestration will eventually complete, fail, or be terminated
-      // If parent is terminated, we check that when delivering the event
+      0, // No timeout — sub-orchestration will eventually complete, fail, or be terminated
     )
       .then((subInstance) => {
         const parentInstance = this.instances.get(parentInstanceId);

@@ -146,6 +146,56 @@ describe("In-Memory Backend", () => {
     expect(activityCounter).toEqual(1);
   });
 
+  it("should handle sub-orchestrations with timer delays", async () => {
+    const childWithTimer: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      // Sub-orchestration uses a short timer before returning a result
+      yield ctx.createTimer(0.1);
+      return "child-done";
+    };
+
+    const parentOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const result = yield ctx.callSubOrchestrator(childWithTimer);
+      return `parent-received-${result}`;
+    };
+
+    worker.addOrchestrator(childWithTimer);
+    worker.addOrchestrator(parentOrchestrator);
+    await worker.start();
+
+    const id = await client.scheduleNewOrchestration(parentOrchestrator);
+    const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(state?.serializedOutput).toEqual(JSON.stringify("parent-received-child-done"));
+  });
+
+  it("should handle sub-orchestration failure", async () => {
+    const failingChild: TOrchestrator = async (_ctx: OrchestrationContext) => {
+      throw new Error("child failed");
+    };
+
+    const parentOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      try {
+        yield ctx.callSubOrchestrator(failingChild);
+        return "should not reach";
+      } catch (error: any) {
+        return `caught: ${error.message}`;
+      }
+    };
+
+    worker.addOrchestrator(failingChild);
+    worker.addOrchestrator(parentOrchestrator);
+    await worker.start();
+
+    const id = await client.scheduleNewOrchestration(parentOrchestrator);
+    const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(state?.serializedOutput).toContain("caught:");
+  });
+
   it("should handle external events", async () => {
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
       const value = yield ctx.waitForExternalEvent("my_event");
@@ -350,5 +400,41 @@ describe("In-Memory Backend", () => {
     const state = await client.waitForOrchestrationCompletion(instanceId, true, 10);
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
     expect(state?.serializedOutput).toEqual(JSON.stringify(42));
+  });
+
+  it("waitForState with zero timeout should wait indefinitely until state matches", async () => {
+    const orchestrator: TOrchestrator = async (_: OrchestrationContext) => "done";
+
+    worker.addOrchestrator(orchestrator);
+    await worker.start();
+
+    const id = await client.scheduleNewOrchestration(orchestrator);
+
+    // Use waitForState with timeoutMs=0 (no timeout).
+    // The orchestration completes quickly, so this should resolve.
+    const instance = await backend.waitForState(
+      id,
+      (inst) => backend.toClientStatus(inst.status) === OrchestrationStatus.COMPLETED,
+      0,
+    );
+
+    expect(instance).toBeDefined();
+  });
+
+  it("waitForState with zero timeout should be rejected on reset", async () => {
+    // Create an instance that won't complete (no worker started)
+    backend.createInstance("stuck-instance", "test", JSON.stringify("input"));
+
+    // Start waiting with no timeout
+    const waitPromise = backend.waitForState(
+      "stuck-instance",
+      () => false, // Never matches
+      0,
+    );
+
+    // Reset should reject the waiter
+    backend.reset();
+
+    await expect(waitPromise).rejects.toThrow("Backend was reset");
   });
 });
