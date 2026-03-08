@@ -155,15 +155,17 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
           throw new StopIterationError(throwResult.value);
         }
 
-        // If the generator yielded a new task after catching the exception
-        if (throwResult.value instanceof Task) {
-          this._previousTask = throwResult.value;
-          // If the new task is already complete, continue processing
-          if (this._previousTask.isComplete) {
-            await this.resume();
-          }
-          return;
+        // Validate that the generator yielded a Task (same check as the success path)
+        if (!(throwResult.value instanceof Task)) {
+          throw new Error("The orchestrator generator yielded a non-Task object");
         }
+
+        this._previousTask = throwResult.value;
+        // If the new task is already complete, continue processing
+        if (this._previousTask.isComplete) {
+          await this.resume();
+        }
+        return;
       } else if (this._previousTask.isComplete) {
         while (true) {
           // Resume the generator. This will either return a Task or raise StopIteration if it's done.

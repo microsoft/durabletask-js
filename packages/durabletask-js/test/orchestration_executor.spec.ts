@@ -1311,6 +1311,86 @@ describe("Orchestration Executor", () => {
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify("handled"));
   });
+
+  it("should fail when orchestrator catches an exception and yields a non-Task object", async () => {
+    const dummyActivity = async (_: ActivityContext) => {
+      // do nothing
+    };
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      try {
+        yield ctx.callActivity(dummyActivity);
+      } catch {
+        // Catch the failure but yield a non-Task value (invalid orchestrator code)
+        yield "not a task" as any;
+      }
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(dummyActivity);
+
+    const oldEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID),
+      newTaskScheduledEvent(1, activityName),
+    ];
+
+    const ex = new Error("Activity failed");
+    const newEvents: any[] = [newTaskFailedEvent(1, ex)];
+
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain(
+      "The orchestrator generator yielded a non-Task object",
+    );
+  });
+
+  it("should continue when orchestrator catches an exception and yields a valid Task", async () => {
+    const dummyActivity1 = async (_: ActivityContext) => {
+      // do nothing
+    };
+    const dummyActivity2 = async (_: ActivityContext) => {
+      return "recovered";
+    };
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      try {
+        yield ctx.callActivity(dummyActivity1);
+      } catch {
+        // Catch the failure and yield a new valid task
+        const result = yield ctx.callActivity(dummyActivity2);
+        return result;
+      }
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName1 = registry.addActivity(dummyActivity1);
+    const activityName2 = registry.addActivity(dummyActivity2);
+
+    const oldEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID),
+      newTaskScheduledEvent(1, activityName1),
+    ];
+
+    const ex = new Error("Activity1 failed");
+    const newEvents: any[] = [
+      newTaskFailedEvent(1, ex),
+      // The second activity is scheduled and completed
+      newTaskScheduledEvent(2, activityName2),
+      newTaskCompletedEvent(2, JSON.stringify("recovered")),
+    ];
+
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify("recovered"));
+  });
 });
 
 function getAndValidateSingleCompleteOrchestrationAction(
