@@ -11,11 +11,8 @@ export class WhenAllTask<T> extends CompositeTask<T[]> {
   constructor(tasks: Task<T>[]) {
     super(tasks);
 
-    // Note: Do NOT re-initialize _completedTasks or _failedTasks here.
-    // CompositeTask's constructor already initializes them to 0 and then
-    // processes pre-completed children via onChildCompleted(), which
-    // increments the counter. Re-initializing would wipe out that count
-    // and cause the task to hang when some children are already complete.
+    this._completedTasks = 0;
+    this._failedTasks = 0;
 
     // An empty task list should complete immediately with an empty result
     if (tasks.length === 0) {
