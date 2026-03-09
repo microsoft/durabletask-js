@@ -302,6 +302,69 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     expect(state?.failureDetails?.message).toContain("slow failure as last task");
   }, 31000);
 
+  // Issue #131: WhenAllTask constructor was resetting the _completedTasks counter,
+  // causing whenAll to hang when some children were already completed during replay.
+  // This test validates the fix by scheduling activities that complete at different
+  // speeds, then doing additional work after whenAll. The additional activity after
+  // whenAll forces a replay where the whenAll children are already completed, which
+  // would trigger the bug (the counter reset would make it appear that no children
+  // had completed, causing whenAll to never resolve).
+  it("should complete whenAll correctly when children finish at different speeds and replay occurs", async () => {
+    const fast = async (_: ActivityContext): Promise<string> => {
+      return "fast";
+    };
+
+    const medium = async (_: ActivityContext): Promise<string> => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return "medium";
+    };
+
+    const slow = async (_: ActivityContext): Promise<string> => {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      return "slow";
+    };
+
+    const finalStep = async (_: ActivityContext): Promise<string> => {
+      return "done";
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      // Fan-out with activities completing at different speeds
+      const results: string[] = yield whenAll([
+        ctx.callActivity(fast),
+        ctx.callActivity(medium),
+        ctx.callActivity(slow),
+      ]);
+
+      // This additional activity forces a replay of the orchestration.
+      // During replay, all three whenAll children will already be completed
+      // (they have history events). The bug was that WhenAllTask's constructor
+      // reset the _completedTasks counter AFTER CompositeTask's constructor
+      // had already counted them, so whenAll would never resolve.
+      const final: string = yield ctx.callActivity(finalStep);
+
+      return { results, final };
+    };
+
+    taskHubWorker.addActivity(fast);
+    taskHubWorker.addActivity(medium);
+    taskHubWorker.addActivity(slow);
+    taskHubWorker.addActivity(finalStep);
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.failureDetails).toBeUndefined();
+
+    const output = JSON.parse(state?.serializedOutput || "{}");
+    expect(output.results).toEqual(["fast", "medium", "slow"]);
+    expect(output.final).toEqual("done");
+  }, 31000);
+
   it("should be able to use the sub-orchestration", async () => {
     let activityCounter = 0;
 
