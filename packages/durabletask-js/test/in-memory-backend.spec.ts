@@ -229,6 +229,32 @@ describe("In-Memory Backend", () => {
     expect(state?.serializedOutput).toEqual(JSON.stringify(5));
   });
 
+  it("should clear customStatus after continue-as-new", async () => {
+    const orchestrator: TOrchestrator = async (ctx: OrchestrationContext, input: number) => {
+      if (input === 1) {
+        // First iteration: set a custom status then continue-as-new
+        ctx.setCustomStatus("iteration-1-status");
+        ctx.continueAsNew(2, false);
+      } else {
+        // Second iteration: do NOT set custom status — it should be cleared
+        return "done";
+      }
+    };
+
+    worker.addOrchestrator(orchestrator);
+    await worker.start();
+
+    const id = await client.scheduleNewOrchestration(orchestrator, 1);
+    const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(state?.serializedOutput).toEqual(JSON.stringify("done"));
+    // customStatus must be cleared after continue-as-new when the new iteration
+    // does not set one — it should not carry over from the previous iteration
+    expect(state?.serializedCustomStatus).toBeUndefined();
+  });
+
   it("should preserve sendEvent actions when continuing-as-new", async () => {
     // Receiver orchestration that waits for an event
     const receiver: TOrchestrator = async function* (ctx: OrchestrationContext): any {
