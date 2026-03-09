@@ -657,6 +657,144 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     expect(invoked).toBe(true);
   }, 31000);
 
+  // ==================== Retry Handler Tests ====================
+
+  it("should fail (not retry infinitely) when retry handler returns undefined", async () => {
+    // Issue: A retry handler with a missing return statement returns undefined.
+    // Before the fix, `undefined !== false` was truthy, so the executor treated it
+    // as "retry", causing an infinite retry loop. The fix uses a positive check:
+    // only `true` or a finite number triggers a retry.
+    let attemptCount = 0;
+
+    const failingActivity = async (_: ActivityContext) => {
+      attemptCount++;
+      throw new Error(`Failure on attempt ${attemptCount}`);
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      // Cast to any to simulate a JavaScript consumer or handler with a missing return
+      const retryHandler = (async (_retryCtx: any) => {
+        // Intentionally no return statement — returns undefined
+      }) as any;
+      const result = yield ctx.callActivity(failingActivity, undefined, { retry: retryHandler });
+      return result;
+    };
+
+    taskHubWorker.addActivity(failingActivity);
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    // Should fail after exactly 1 attempt — the handler returned undefined so no retry
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(state?.failureDetails).toBeDefined();
+    expect(attemptCount).toBe(1);
+  }, 31000);
+
+  it("should fail (not retry infinitely) when retry handler returns null", async () => {
+    let attemptCount = 0;
+
+    const failingActivity = async (_: ActivityContext) => {
+      attemptCount++;
+      throw new Error(`Failure on attempt ${attemptCount}`);
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const retryHandler = async (_retryCtx: any) => {
+        return null as any; // Explicitly returning null
+      };
+      const result = yield ctx.callActivity(failingActivity, undefined, { retry: retryHandler });
+      return result;
+    };
+
+    taskHubWorker.addActivity(failingActivity);
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(state?.failureDetails).toBeDefined();
+    expect(attemptCount).toBe(1);
+  }, 31000);
+
+  it("should retry and succeed when retry handler returns true", async () => {
+    let attemptCount = 0;
+
+    const flakyActivity = async (_: ActivityContext, input: number) => {
+      attemptCount++;
+      if (attemptCount < 3) {
+        throw new Error(`Transient failure on attempt ${attemptCount}`);
+      }
+      return input * 2;
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: number): any {
+      const retryHandler = async (retryCtx: any) => retryCtx.lastAttemptNumber < 5;
+      const result = yield ctx.callActivity(flakyActivity, input, { retry: retryHandler });
+      return result;
+    };
+
+    taskHubWorker.addActivity(flakyActivity);
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator, 21);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.failureDetails).toBeUndefined();
+    expect(state?.serializedOutput).toEqual(JSON.stringify(42));
+    expect(attemptCount).toBe(3);
+  }, 31000);
+
+  it("should retry with delay when retry handler returns a positive number", async () => {
+    let attemptCount = 0;
+    const attemptTimes: number[] = [];
+
+    const flakyActivity = async (_: ActivityContext) => {
+      attemptCount++;
+      attemptTimes.push(Date.now());
+      if (attemptCount < 2) {
+        throw new Error(`Transient failure on attempt ${attemptCount}`);
+      }
+      return "success";
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const retryHandler = async (_retryCtx: any) => {
+        return 1000; // Retry after 1 second
+      };
+      const result = yield ctx.callActivity(flakyActivity, undefined, { retry: retryHandler });
+      return result;
+    };
+
+    taskHubWorker.addActivity(flakyActivity);
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.failureDetails).toBeUndefined();
+    expect(state?.serializedOutput).toEqual(JSON.stringify("success"));
+    expect(attemptCount).toBe(2);
+
+    // Verify there was at least ~1s delay between attempts
+    if (attemptTimes.length >= 2) {
+      const delay = attemptTimes[1] - attemptTimes[0];
+      expect(delay).toBeGreaterThanOrEqual(900); // Allow some tolerance
+    }
+  }, 31000);
+
   // // ==================== newGuid Tests ====================
 
   it("should generate deterministic GUIDs with newGuid", async () => {
