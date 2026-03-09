@@ -3,7 +3,6 @@
 
 import { WhenAllTask } from "../src/task/when-all-task";
 import { CompletableTask } from "../src/task/completable-task";
-import { Task } from "../src/task/task";
 
 describe("WhenAllTask", () => {
   it("should complete immediately when given an empty task array", () => {
