@@ -954,11 +954,13 @@ export class TaskHubGrpcClient {
 
       stream.on("end", () => {
         stream.removeAllListeners();
+        stream.destroy();
         resolve(historyEvents);
       });
 
       stream.on("error", (err: grpc.ServiceError) => {
         stream.removeAllListeners();
+        stream.destroy();
         // Return empty array for NOT_FOUND to be consistent with DTS behavior
         // (DTS returns empty stream for non-existent instances) and user-friendly
         if (err.code === grpc.status.NOT_FOUND) {
