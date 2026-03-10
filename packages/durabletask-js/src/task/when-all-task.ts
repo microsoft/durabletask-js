@@ -11,8 +11,17 @@ export class WhenAllTask<T> extends CompositeTask<T[]> {
   constructor(tasks: Task<T>[]) {
     super(tasks);
 
-    this._completedTasks = 0;
-    this._failedTasks = 0;
+    // Note: Do NOT re-initialize _completedTasks or _failedTasks here.
+    // CompositeTask's constructor already initializes them to 0 and then
+    // processes pre-completed children via onChildCompleted(), which
+    // increments the counter. Re-initializing would wipe out that count
+    // and cause the task to hang when some children are already complete.
+
+    // An empty task list should complete immediately with an empty result
+    if (tasks.length === 0) {
+      this._result = [] as T[];
+      this._isComplete = true;
+    }
   }
 
   pendingTasks(): number {
@@ -21,7 +30,8 @@ export class WhenAllTask<T> extends CompositeTask<T[]> {
 
   onChildCompleted(task: Task<any>): void {
     if (this._isComplete) {
-      throw new Error("Task is already completed");
+      // Already completed (fail-fast or all children done). Ignore subsequent child completions.
+      return;
     }
 
     this._completedTasks++;
@@ -29,11 +39,14 @@ export class WhenAllTask<T> extends CompositeTask<T[]> {
     if (task.isFailed && !this._exception) {
       this._exception = task.getException();
       this._isComplete = true;
+      this._parent?.onChildCompleted(this);
+      return;
     }
 
     if (this._completedTasks == this._tasks.length) {
       this._result = this._tasks.map((task) => task.getResult());
       this._isComplete = true;
+      this._parent?.onChildCompleted(this);
     }
   }
 

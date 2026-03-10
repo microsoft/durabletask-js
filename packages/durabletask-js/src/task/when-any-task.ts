@@ -9,6 +9,9 @@ import { Task } from "./task";
  */
 export class WhenAnyTask extends CompositeTask<Task<any>> {
   constructor(tasks: Task<any>[]) {
+    if (tasks.length === 0) {
+      throw new Error("whenAny requires at least one task");
+    }
     super(tasks);
   }
 
@@ -16,6 +19,7 @@ export class WhenAnyTask extends CompositeTask<Task<any>> {
     if (!this.isComplete) {
       this._isComplete = true;
       this._result = task;
+      this._parent?.onChildCompleted(this);
     }
   }
 }

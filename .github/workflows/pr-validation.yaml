@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      NODE_VER: 18.x
+      NODE_VER: 22.x
 
     steps:
       - name: 📥 Checkout code
@@ -29,7 +29,7 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: ⚙️ Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: 🔍 Run linting
         run: npm run lint
@@ -56,7 +56,7 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: ⚙️ Install dependencies
-        run: npm install
+        run: npm ci
 
       # Install Go SDK for durabletask-go sidecar
       - name: 🔧 Install Go SDK

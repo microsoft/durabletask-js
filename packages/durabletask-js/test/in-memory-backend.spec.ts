@@ -229,6 +229,75 @@ describe("In-Memory Backend", () => {
     expect(state?.serializedOutput).toEqual(JSON.stringify(5));
   });
 
+  it("should clear customStatus after continue-as-new", async () => {
+    const orchestrator: TOrchestrator = async (ctx: OrchestrationContext, input: number) => {
+      if (input === 1) {
+        // First iteration: set a custom status then continue-as-new
+        ctx.setCustomStatus("iteration-1-status");
+        ctx.continueAsNew(2, false);
+      } else {
+        // Second iteration: do NOT set custom status — it should be cleared
+        return "done";
+      }
+    };
+
+    worker.addOrchestrator(orchestrator);
+    await worker.start();
+
+    const id = await client.scheduleNewOrchestration(orchestrator, 1);
+    const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(state?.serializedOutput).toEqual(JSON.stringify("done"));
+    // customStatus must be cleared after continue-as-new when the new iteration
+    // does not set one — it should not carry over from the previous iteration
+    expect(state?.serializedCustomStatus).toBeUndefined();
+  });
+
+  it("should preserve sendEvent actions when continuing-as-new", async () => {
+    // Receiver orchestration that waits for an event
+    const receiver: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const value = yield ctx.waitForExternalEvent("ping");
+      return value;
+    };
+
+    // Sender orchestration that sends an event then continues-as-new
+    const sender: TOrchestrator = async (ctx: OrchestrationContext, input: { receiverId: string; iteration: number }) => {
+      if (input.iteration === 1) {
+        // On first iteration, send event to receiver then continue-as-new
+        ctx.sendEvent(input.receiverId, "ping", "hello from sender");
+        ctx.continueAsNew({ receiverId: input.receiverId, iteration: 2 }, false);
+      } else {
+        return "sender done";
+      }
+    };
+
+    worker.addOrchestrator(receiver);
+    worker.addOrchestrator(sender);
+    await worker.start();
+
+    // Start receiver first, then sender
+    const receiverId = await client.scheduleNewOrchestration(receiver);
+    await client.waitForOrchestrationStart(receiverId, false, 5);
+
+    const senderId = await client.scheduleNewOrchestration(sender, { receiverId, iteration: 1 });
+
+    // Wait for both to complete
+    const senderState = await client.waitForOrchestrationCompletion(senderId, true, 10);
+    const receiverState = await client.waitForOrchestrationCompletion(receiverId, true, 10);
+
+    // Sender should complete after continuing-as-new
+    expect(senderState).toBeDefined();
+    expect(senderState?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(senderState?.serializedOutput).toEqual(JSON.stringify("sender done"));
+
+    // Receiver should have received the event sent before continue-as-new
+    expect(receiverState).toBeDefined();
+    expect(receiverState?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(receiverState?.serializedOutput).toEqual(JSON.stringify("hello from sender"));
+  });
+
   it("should handle orchestration without activities", async () => {
     const orchestrator: TOrchestrator = async (_: OrchestrationContext, input: number) => {
       return input * 2;
@@ -285,5 +354,27 @@ describe("In-Memory Backend", () => {
 
     const state = await client.getOrchestrationState(id);
     expect(state).toBeUndefined();
+  });
+
+  it("should allow reusing instance IDs after reset", async () => {
+    const orchestrator: TOrchestrator = async (_: OrchestrationContext, input: number) => {
+      return input * 2;
+    };
+
+    // Create an orchestration without starting the worker, so it stays in the queue
+    const instanceId = "reuse-test-id";
+    backend.createInstance(instanceId, getName(orchestrator), JSON.stringify(10));
+
+    // Reset while the orchestration is still queued (not yet processed)
+    backend.reset();
+
+    // Now create a new orchestration with the same instance ID and process it
+    worker.addOrchestrator(orchestrator);
+    await worker.start();
+
+    await client.scheduleNewOrchestration(orchestrator, 21, instanceId);
+    const state = await client.waitForOrchestrationCompletion(instanceId, true, 10);
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(state?.serializedOutput).toEqual(JSON.stringify(42));
   });
 });

@@ -68,7 +68,7 @@ class StateShim implements TaskEntityState {
   }
 
   get hasState(): boolean {
-    return this.serializedValue !== undefined && this.serializedValue !== null;
+    return this.serializedValue != null;
   }
 
   getState<T>(defaultValue?: T): T | undefined {
@@ -90,7 +90,7 @@ class StateShim implements TaskEntityState {
     this.cachedValue = state;
     try {
       this.serializedValue =
-        state !== undefined && state !== null ? JSON.stringify(state) : undefined;
+        state != null ? JSON.stringify(state) : undefined;
 
       this.cacheValid = true;
     } catch (e) {

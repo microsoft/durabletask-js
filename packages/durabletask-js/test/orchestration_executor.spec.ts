@@ -1127,6 +1127,463 @@ describe("Orchestration Executor", () => {
       const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
       expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
     });
+
+    it("should fail the task (not retry) when retry handler returns undefined", async () => {
+      const { result: startResult, replay } = await startOrchestration(
+        async function* (ctx: OrchestrationContext): any {
+          // Cast to bypass TypeScript — simulates a JavaScript consumer or a handler
+          // with a code path that omits a return statement
+          const retryHandler = (async (_retryCtx: any) => {
+            // Intentionally missing return statement
+          }) as any;
+          return yield ctx.callActivity("flakyActivity", undefined, { retry: retryHandler });
+        },
+      );
+
+      expect(startResult.actions[0].hasScheduletask()).toBe(true);
+
+      // Activity fails → handler returns undefined → should NOT retry, task should fail
+      const result = await replay(
+        [newTaskScheduledEvent(1, "flakyActivity")],
+        [newTaskFailedEvent(1, new Error("Activity error"))],
+      );
+      const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+      expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    });
+
+    it("should fail the task (not retry) when retry handler returns null", async () => {
+      const { result: startResult, replay } = await startOrchestration(
+        async function* (ctx: OrchestrationContext): any {
+          const retryHandler = async (_retryCtx: any) => {
+            return null as any;
+          };
+          return yield ctx.callActivity("flakyActivity", undefined, { retry: retryHandler });
+        },
+      );
+
+      expect(startResult.actions[0].hasScheduletask()).toBe(true);
+
+      // Activity fails → handler returns null → should NOT retry, task should fail
+      const result = await replay(
+        [newTaskScheduledEvent(1, "flakyActivity")],
+        [newTaskFailedEvent(1, new Error("Activity error"))],
+      );
+      const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+      expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    });
+
+    it("should create a retry timer when retry handler returns a positive delay", async () => {
+      const { result: startResult, replay } = await startOrchestration(
+        async function* (ctx: OrchestrationContext): any {
+          const retryHandler = async (_retryCtx: any) => {
+            return 5000; // Retry after 5 seconds
+          };
+          return yield ctx.callActivity("flakyActivity", undefined, { retry: retryHandler });
+        },
+      );
+
+      expect(startResult.actions[0].hasScheduletask()).toBe(true);
+
+      // Activity fails → handler returns 5000 → should create a timer
+      const result = await replay(
+        [newTaskScheduledEvent(1, "flakyActivity")],
+        [newTaskFailedEvent(1, new Error("Transient failure"))],
+      );
+      expect(result.actions.length).toBe(1);
+      expect(result.actions[0].hasCreatetimer()).toBe(true);
+    });
+
+    it("should retry immediately when retry handler returns 0", async () => {
+      const { result: startResult, replay } = await startOrchestration(
+        async function* (ctx: OrchestrationContext): any {
+          const retryHandler = async (_retryCtx: any) => {
+            return 0; // Retry immediately via zero delay
+          };
+          return yield ctx.callActivity("flakyActivity", undefined, { retry: retryHandler });
+        },
+      );
+
+      expect(startResult.actions[0].hasScheduletask()).toBe(true);
+
+      // Activity fails → handler returns 0 → should reschedule immediately (no timer)
+      const result = await replay(
+        [newTaskScheduledEvent(1, "flakyActivity")],
+        [newTaskFailedEvent(1, new Error("Transient failure"))],
+      );
+      expect(result.actions.length).toBe(1);
+      expect(result.actions[0].hasScheduletask()).toBe(true);
+      expect(result.actions[0].getScheduletask()?.getName()).toBe("flakyActivity");
+    });
+
+    it("should fail the task when retry handler returns NaN", async () => {
+      const { result: startResult, replay } = await startOrchestration(
+        async function* (ctx: OrchestrationContext): any {
+          const retryHandler = async (_retryCtx: any) => {
+            return NaN;
+          };
+          return yield ctx.callActivity("flakyActivity", undefined, { retry: retryHandler });
+        },
+      );
+
+      expect(startResult.actions[0].hasScheduletask()).toBe(true);
+
+      // Activity fails → handler returns NaN → should NOT retry
+      const result = await replay(
+        [newTaskScheduledEvent(1, "flakyActivity")],
+        [newTaskFailedEvent(1, new Error("Activity error"))],
+      );
+      const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+      expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    });
+
+    it("should fail the task when retry handler returns Infinity", async () => {
+      const { result: startResult, replay } = await startOrchestration(
+        async function* (ctx: OrchestrationContext): any {
+          const retryHandler = async (_retryCtx: any) => {
+            return Infinity;
+          };
+          return yield ctx.callActivity("flakyActivity", undefined, { retry: retryHandler });
+        },
+      );
+
+      expect(startResult.actions[0].hasScheduletask()).toBe(true);
+
+      // Activity fails → handler returns Infinity → should NOT retry
+      const result = await replay(
+        [newTaskScheduledEvent(1, "flakyActivity")],
+        [newTaskFailedEvent(1, new Error("Activity error"))],
+      );
+      const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+      expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    });
+  });
+
+  it("should complete immediately when whenAll is called with an empty task array", async () => {
+    const orchestrator: TOrchestrator = async function* (_ctx: OrchestrationContext): any {
+      const results = yield whenAll([]);
+      return results;
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+
+    const oldEvents: any[] = [];
+    const newEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
+
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    // The orchestration should complete immediately with an empty array result
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify([]));
+  });
+
+  it("should complete when whenAll with empty array is followed by more work", async () => {
+    const hello = (_: any, name: string) => `Hello ${name}!`;
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const emptyResults = yield whenAll([]);
+      const activityResult = yield ctx.callActivity(hello, "World");
+      return { emptyResults, activityResult };
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(hello);
+
+    // First execution: should schedule the activity after completing whenAll([])
+    const oldEvents: any[] = [];
+    const newEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
+
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    // The whenAll([]) should complete, then an activity should be scheduled
+    expect(result.actions.length).toEqual(1);
+    expect(result.actions[0].hasScheduletask()).toBeTruthy();
+    expect(result.actions[0].getScheduletask()?.getName()).toEqual(activityName);
+  });
+
+  it("should throw when whenAny is called with an empty task array", () => {
+    expect(() => whenAny([])).toThrow("whenAny requires at least one task");
+  });
+
+  it("should fail whenAll correctly when the failing task is the last to complete", async () => {
+    const printInt = (_: any, value: number) => {
+      return value.toString();
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const tasks: Task<string>[] = [];
+
+      for (let i = 0; i < 3; i++) {
+        tasks.push(ctx.callActivity(printInt, i));
+      }
+
+      const results = yield whenAll(tasks);
+      return results;
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(printInt);
+
+    const oldEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
+
+    for (let i = 0; i < 3; i++) {
+      oldEvents.push(newTaskScheduledEvent(i + 1, activityName, i.toString()));
+    }
+
+    // First two tasks succeed, last task fails
+    const ex = new Error("Last task failed");
+    const newEvents: any[] = [
+      newTaskCompletedEvent(1, printInt(null, 0)),
+      newTaskCompletedEvent(2, printInt(null, 1)),
+      newTaskFailedEvent(3, ex),
+    ];
+
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("TaskFailedError");
+    expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain(ex.message);
+  });
+
+  it("should not crash when additional tasks complete after whenAll fails fast", async () => {
+    const printInt = (_: any, value: number) => {
+      return value.toString();
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const tasks: Task<string>[] = [];
+
+      for (let i = 0; i < 3; i++) {
+        tasks.push(ctx.callActivity(printInt, i));
+      }
+
+      const results = yield whenAll(tasks);
+      return results;
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(printInt);
+
+    const oldEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
+
+    for (let i = 0; i < 3; i++) {
+      oldEvents.push(newTaskScheduledEvent(i + 1, activityName, i.toString()));
+    }
+
+    // First task fails, then remaining tasks complete in the same batch
+    const ex = new Error("First task failed");
+    const newEvents: any[] = [
+      newTaskFailedEvent(1, ex),
+      newTaskCompletedEvent(2, printInt(null, 1)),
+      newTaskCompletedEvent(3, printInt(null, 2)),
+    ];
+
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("TaskFailedError");
+    expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain(ex.message);
+  });
+
+  it("should preserve orchestration result when whenAll failure is caught and other tasks complete", async () => {
+    const printInt = (_: any, value: number) => {
+      return value.toString();
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const tasks: Task<string>[] = [];
+
+      for (let i = 0; i < 3; i++) {
+        tasks.push(ctx.callActivity(printInt, i));
+      }
+
+      try {
+        yield whenAll(tasks);
+      } catch {
+        // Intentionally catch the failure and return a fallback result
+        return "handled";
+      }
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(printInt);
+
+    const oldEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
+
+    for (let i = 0; i < 3; i++) {
+      oldEvents.push(newTaskScheduledEvent(i + 1, activityName, i.toString()));
+    }
+
+    // First task fails, then remaining tasks complete in the same batch
+    const ex = new Error("One task failed");
+    const newEvents: any[] = [
+      newTaskFailedEvent(1, ex),
+      newTaskCompletedEvent(2, printInt(null, 1)),
+      newTaskCompletedEvent(3, printInt(null, 2)),
+    ];
+
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify("handled"));
+  });
+
+  it("should complete nested whenAny(whenAll, whenAll) when first inner group finishes", async () => {
+    const hello = (_: any, name: string) => {
+      return `Hello ${name}!`;
+    };
+
+    // Orchestrator: yield whenAny([whenAll([a, b]), whenAll([c, d])])
+    // When the first group (a, b) completes, the outer whenAny should resolve
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const group1 = [ctx.callActivity(hello, "a"), ctx.callActivity(hello, "b")];
+      const group2 = [ctx.callActivity(hello, "c"), ctx.callActivity(hello, "d")];
+
+      const winner: Task<string[]> = yield whenAny([whenAll(group1), whenAll(group2)]);
+      return winner.getResult();
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(hello);
+
+    // First execution: schedules 4 activities
+    const oldEvents: any[] = [];
+    const newEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID),
+    ];
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    let result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    expect(result.actions.length).toEqual(4);
+
+    // Second execution: replay scheduling, then complete tasks 1 and 2 (first group)
+    const replayEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID),
+      newTaskScheduledEvent(1, activityName, JSON.stringify("a")),
+      newTaskScheduledEvent(2, activityName, JSON.stringify("b")),
+      newTaskScheduledEvent(3, activityName, JSON.stringify("c")),
+      newTaskScheduledEvent(4, activityName, JSON.stringify("d")),
+    ];
+
+    const completionEvents = [
+      newTaskCompletedEvent(1, JSON.stringify(hello(null, "a"))),
+      newTaskCompletedEvent(2, JSON.stringify(hello(null, "b"))),
+    ];
+
+    const executor2 = new OrchestrationExecutor(registry, testLogger);
+    result = await executor2.execute(TEST_INSTANCE_ID, replayEvents, completionEvents);
+
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+
+    const expectedResult = [hello(null, "a"), hello(null, "b")];
+    expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify(expectedResult));
+  });
+
+  it("should complete nested whenAll(whenAny, whenAny) when both inner tasks finish", async () => {
+    const hello = (_: any, name: string) => {
+      return `Hello ${name}!`;
+    };
+
+    // Orchestrator: yield whenAll([whenAny([a, b]), whenAny([c, d])])
+    // Both inner whenAny tasks must complete for the outer whenAll to resolve
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const race1 = [ctx.callActivity(hello, "a"), ctx.callActivity(hello, "b")];
+      const race2 = [ctx.callActivity(hello, "c"), ctx.callActivity(hello, "d")];
+
+      const results: Task<any>[] = yield whenAll([whenAny(race1), whenAny(race2)]);
+      return results.map((t: Task<any>) => t.getResult());
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(hello);
+
+    // First execution: schedules 4 activities
+    const oldEvents: any[] = [];
+    const newEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID),
+    ];
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    let result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    expect(result.actions.length).toEqual(4);
+
+    // Second execution: replay scheduling, then complete one task from each group
+    const replayEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID),
+      newTaskScheduledEvent(1, activityName, JSON.stringify("a")),
+      newTaskScheduledEvent(2, activityName, JSON.stringify("b")),
+      newTaskScheduledEvent(3, activityName, JSON.stringify("c")),
+      newTaskScheduledEvent(4, activityName, JSON.stringify("d")),
+    ];
+
+    const completionEvents = [
+      newTaskCompletedEvent(1, JSON.stringify(hello(null, "a"))),
+      newTaskCompletedEvent(3, JSON.stringify(hello(null, "c"))),
+    ];
+
+    const executor2 = new OrchestrationExecutor(registry, testLogger);
+    result = await executor2.execute(TEST_INSTANCE_ID, replayEvents, completionEvents);
+
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+
+    const expectedResult = [hello(null, "a"), hello(null, "c")];
+    expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify(expectedResult));
+  });
+
+  it("should propagate inner whenAll failure to outer whenAny in nested composites", async () => {
+    const hello = (_: any, name: string) => {
+      return `Hello ${name}!`;
+    };
+
+    // Orchestrator: yield whenAny([whenAll([a, b])])
+    // If an inner task fails, the whenAll should fail-fast and notify the outer whenAny.
+    // WhenAny completes with the failed task — the orchestrator inspects the winner.
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const group = [ctx.callActivity(hello, "a"), ctx.callActivity(hello, "b")];
+      const winner: Task<string[]> = yield whenAny([whenAll(group)]);
+      return winner.isFailed ? "inner_failed" : "inner_ok";
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(hello);
+
+    const replayEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID),
+      newTaskScheduledEvent(1, activityName, JSON.stringify("a")),
+      newTaskScheduledEvent(2, activityName, JSON.stringify("b")),
+    ];
+
+    // Task 1 fails — whenAll should fail-fast, and outer whenAny should complete
+    const ex = new Error("task a failed");
+    const completionEvents = [newTaskFailedEvent(1, ex)];
+
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, replayEvents, completionEvents);
+
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify("inner_failed"));
   });
 });
 

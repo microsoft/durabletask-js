@@ -121,9 +121,20 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
 
     // TODO: check if the task is null?
     this._previousTask = value;
+
+    // If the yielded task is already complete (e.g., whenAll with an empty array),
+    // resume immediately so the generator can continue.
+    if (this._previousTask instanceof Task && this._previousTask.isComplete) {
+      await this.resume();
+    }
   }
 
   async resume() {
+    // Don't resume if the orchestration is already complete
+    if (this._isComplete) {
+      return;
+    }
+
     // This is never expected unless maybe there's an issue with the history
     if (!this._generator) {
       throw new Error("The orchestrator generator is not initialized! Was the orchestration history corrupted?");
@@ -200,7 +211,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
 
     let resultJson;
 
-    if (result) {
+    if (result !== undefined) {
       resultJson = isResultEncoded ? result : JSON.stringify(result);
     }
 
@@ -209,11 +220,6 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   }
 
   setFailed(e: Error) {
-    // should allow orchestration to fail, even it's completed.
-    // if (this._isComplete) {
-    //   return;
-    // }
-
     this._isComplete = true;
     this._completionStatus = pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED;
     // Note: Do NOT clear pending actions here - fire-and-forget actions like sendEvent
@@ -241,7 +247,6 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
 
   getActions(): pb.OrchestratorAction[] {
     if (this._completionStatus === pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW) {
-      // Only return the single completion actions when continuing-as-new
       let carryoverEvents: pb.HistoryEvent[] | null = null;
 
       if (this._saveEvents) {
@@ -251,7 +256,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
         // replayed when the new instance starts
         for (const [eventName, values] of Object.entries(this._receivedEvents)) {
           for (const eventValue of values) {
-            const encodedValue = eventValue ? JSON.stringify(eventValue) : undefined;
+            const encodedValue = eventValue !== undefined ? JSON.stringify(eventValue) : undefined;
             carryoverEvents.push(ph.newEventRaisedEvent(eventName, encodedValue));
           }
         }
@@ -260,12 +265,16 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
       const action = ph.newCompleteOrchestrationAction(
         this.nextSequenceNumber(),
         pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW,
-        this._newInput ? JSON.stringify(this._newInput) : undefined,
+        this._newInput !== undefined ? JSON.stringify(this._newInput) : undefined,
         undefined,
         carryoverEvents,
       );
 
-      return [action];
+      // Include fire-and-forget actions (sendEvent, signalEntity, etc.) that were
+      // scheduled before continueAsNew was called, consistent with setComplete/setFailed
+      const allActions = Object.values(this._pendingActions);
+      allActions.push(action);
+      return allActions;
     }
 
     return Object.values(this._pendingActions);
@@ -288,7 +297,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     // If a number is passed, we use it as the number of seconds to wait
     // we use instanceof Date as number is not a native Javascript type
     if (!(fireAt instanceof Date)) {
-      fireAt = new Date(Date.now() + fireAt * 1000);
+      fireAt = new Date(this._currentUtcDatetime.getTime() + fireAt * 1000);
     }
 
     const action = ph.newCreateTimerAction(id, fireAt);
@@ -307,7 +316,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   ): Task<TOutput> {
     const id = this.nextSequenceNumber();
     const name = typeof activity === "string" ? activity : getName(activity);
-    const encodedInput = input ? JSON.stringify(input) : undefined;
+    const encodedInput = input !== undefined ? JSON.stringify(input) : undefined;
     const action = ph.newScheduleTaskAction(id, name, encodedInput, options?.tags, options?.version);
     this._pendingActions[action.getId()] = action;
 
@@ -338,7 +347,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
       instanceId = `${this._instanceId}:${instanceIdSuffix}`;
     }
 
-    const encodedInput = input ? JSON.stringify(input) : undefined;
+    const encodedInput = input !== undefined ? JSON.stringify(input) : undefined;
     const action = ph.newCreateSubOrchestrationAction(id, name, instanceId, encodedInput, options?.tags, options?.version);
     this._pendingActions[action.getId()] = action;
 

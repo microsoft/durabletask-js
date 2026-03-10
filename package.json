@@ -16,7 +16,7 @@
     "test:e2e": "./scripts/test-e2e.sh",
     "test:e2e:internal": "jest tests/e2e --runInBand --detectOpenHandles",
     "test:e2e:one": "jest tests/e2e --runInBand --detectOpenHandles --testNamePattern",
-    "test:e2e:azuremanaged:internal": "jest test/e2e-azuremanaged --runInBand --detectOpenHandles",
+    "test:e2e:azuremanaged:internal": "jest test/e2e-azuremanaged --detectOpenHandles",
     "test:e2e:azuremanaged": "./scripts/test-e2e-azuremanaged.sh",
     "lint": "eslint .",
     "pretty": "prettier --list-different \"**/*.{ts,tsx,js,jsx,json,md}\"",
@@ -39,6 +39,7 @@
   "homepage": "https://github.com/microsoft/durabletask-js#readme",
   "devDependencies": {
     "@eslint/js": "^9.39.2",
+    "@opentelemetry/api": "^1.9.0",
     "@swc/core": "^1.3.55",
     "@swc/helpers": "^0.5.1",
     "@types/jest": "^29.5.1",

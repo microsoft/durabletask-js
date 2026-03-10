@@ -418,6 +418,23 @@ export function isEmpty(v?: StringValue | null): boolean {
   return v == null || v.getValue() === "";
 }
 
+/**
+ * Parses the value of a StringValue protobuf field as JSON.
+ * Returns undefined if the value is null/undefined or empty.
+ *
+ * @param v The StringValue field to parse.
+ * @returns The parsed JSON value, or undefined.
+ */
+export function parseJsonField(v?: StringValue | null): any {
+  if (v == null || v.getValue() === "") return undefined;
+  try {
+    return JSON.parse(v.getValue());
+  } catch (err) {
+    // Wrap JSON.parse errors to provide clearer context to callers while preserving the original error
+    throw new Error(`Failed to parse JSON from StringValue: ${(err as Error).message}`, { cause: err });
+  }
+}
+
 // Pre-built reverse map for O(1) orchestration status string lookups
 const orchestrationStatusStrMap = new Map<number, string>();
 for (const [name, value] of Object.entries(pb.OrchestrationStatus)) {
@@ -471,14 +488,7 @@ export function newSendEntityMessageSignalAction(
     signalEvent.setScheduledtime(ts);
   }
 
-  const sendEntityMessage = new pb.SendEntityMessageAction();
-  sendEntityMessage.setEntityoperationsignaled(signalEvent);
-
-  const action = new pb.OrchestratorAction();
-  action.setId(id);
-  action.setSendentitymessage(sendEntityMessage);
-
-  return action;
+  return wrapEntityMessageAction(id, (msg) => msg.setEntityoperationsignaled(signalEvent));
 }
 
 /**
@@ -522,14 +532,7 @@ export function newSendEntityMessageCallAction(
     callEvent.setScheduledtime(ts);
   }
 
-  const sendEntityMessage = new pb.SendEntityMessageAction();
-  sendEntityMessage.setEntityoperationcalled(callEvent);
-
-  const action = new pb.OrchestratorAction();
-  action.setId(id);
-  action.setSendentitymessage(sendEntityMessage);
-
-  return action;
+  return wrapEntityMessageAction(id, (msg) => msg.setEntityoperationcalled(callEvent));
 }
 
 /**
@@ -558,14 +561,7 @@ export function newSendEntityMessageLockAction(
   lockEvent.setPosition(0);
   lockEvent.setParentinstanceid(getStringValue(parentInstanceId));
 
-  const sendEntityMessage = new pb.SendEntityMessageAction();
-  sendEntityMessage.setEntitylockrequested(lockEvent);
-
-  const action = new pb.OrchestratorAction();
-  action.setId(id);
-  action.setSendentitymessage(sendEntityMessage);
-
-  return action;
+  return wrapEntityMessageAction(id, (msg) => msg.setEntitylockrequested(lockEvent));
 }
 
 /**
@@ -592,13 +588,18 @@ export function newSendEntityMessageUnlockAction(
   unlockEvent.setTargetinstanceid(getStringValue(targetInstanceId));
   unlockEvent.setParentinstanceid(getStringValue(parentInstanceId));
 
-  const sendEntityMessage = new pb.SendEntityMessageAction();
-  sendEntityMessage.setEntityunlocksent(unlockEvent);
+  return wrapEntityMessageAction(id, (msg) => msg.setEntityunlocksent(unlockEvent));
+}
 
+function wrapEntityMessageAction(
+  id: number,
+  setEvent: (msg: pb.SendEntityMessageAction) => void,
+): pb.OrchestratorAction {
+  const sendEntityMessage = new pb.SendEntityMessageAction();
+  setEvent(sendEntityMessage);
   const action = new pb.OrchestratorAction();
   action.setId(id);
   action.setSendentitymessage(sendEntityMessage);
-
   return action;
 }
 

@@ -30,7 +30,7 @@ export class Page<T> {
    * Returns true if there are more pages available.
    */
   get hasMoreResults(): boolean {
-    return this.continuationToken !== undefined && this.continuationToken !== "";
+    return !!this.continuationToken;
   }
 }
 

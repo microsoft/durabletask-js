@@ -17,6 +17,7 @@ import {
   ProtoOrchestrationStatus as OrchestrationStatus,
   getName,
   whenAll,
+  whenAny,
   ActivityContext,
   OrchestrationContext,
   Task,
@@ -190,6 +191,181 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     expect(activityCounter).toEqual(10);
   }, 31000);
 
+  it("should remain completed when whenAll fail-fast is caught and other children complete later", async () => {
+    let failActivityCounter = 0;
+    let slowActivityCounter = 0;
+
+    const fastFail = async (_: ActivityContext): Promise<void> => {
+      failActivityCounter++;
+      throw new Error("fast failure for whenAll fail-fast test");
+    };
+
+    const slowSuccess = async (_: ActivityContext, _input: string): Promise<void> => {
+      slowActivityCounter++;
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      try {
+        yield whenAll([
+          ctx.callActivity(fastFail),
+          ctx.callActivity(slowSuccess, "a"),
+          ctx.callActivity(slowSuccess, "b"),
+        ]);
+      } catch {
+        return "handled-failure";
+      }
+    };
+
+    taskHubWorker.addActivity(fastFail);
+    taskHubWorker.addActivity(slowSuccess);
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.failureDetails).toBeUndefined();
+    expect(state?.serializedOutput).toEqual(JSON.stringify("handled-failure"));
+    expect(failActivityCounter).toEqual(1);
+    expect(slowActivityCounter).toEqual(2);
+
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    const finalState = await taskHubClient.getOrchestrationState(id);
+    expect(finalState).toBeDefined();
+    expect(finalState?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(finalState?.serializedOutput).toEqual(JSON.stringify("handled-failure"));
+  }, 31000);
+
+  it("should preserve original whenAll failure details when not caught", async () => {
+    const fastFail = async (_: ActivityContext): Promise<void> => {
+      throw new Error("fast failure for whenAll uncaught test");
+    };
+
+    const slowSuccess = async (_: ActivityContext): Promise<void> => {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      yield whenAll([
+        ctx.callActivity(fastFail),
+        ctx.callActivity(slowSuccess),
+        ctx.callActivity(slowSuccess),
+      ]);
+    };
+
+    taskHubWorker.addActivity(fastFail);
+    taskHubWorker.addActivity(slowSuccess);
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(state?.failureDetails).toBeDefined();
+    expect(state?.failureDetails?.message).toContain("fast failure for whenAll uncaught test");
+    expect(state?.failureDetails?.message).not.toContain("Task is already completed");
+  }, 31000);
+
+  it("should fail whenAll correctly when the failing task is the last to complete", async () => {
+    const fastSuccess = async (_: ActivityContext): Promise<void> => {
+      // completes immediately
+    };
+
+    const slowFail = async (_: ActivityContext): Promise<void> => {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      throw new Error("slow failure as last task");
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      yield whenAll([
+        ctx.callActivity(fastSuccess),
+        ctx.callActivity(fastSuccess),
+        ctx.callActivity(slowFail),
+      ]);
+    };
+
+    taskHubWorker.addActivity(fastSuccess);
+    taskHubWorker.addActivity(slowFail);
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(state?.failureDetails).toBeDefined();
+    expect(state?.failureDetails?.message).toContain("slow failure as last task");
+  }, 31000);
+
+  // Issue #131: WhenAllTask constructor was resetting the _completedTasks counter,
+  // causing whenAll to hang when some children were already completed during replay.
+  // This test validates the fix by scheduling activities that complete at different
+  // speeds, then doing additional work after whenAll. The additional activity after
+  // whenAll forces a replay where the whenAll children are already completed, which
+  // would trigger the bug (the counter reset would make it appear that no children
+  // had completed, causing whenAll to never resolve).
+  it("should complete whenAll correctly when children finish at different speeds and replay occurs", async () => {
+    const fast = async (_: ActivityContext): Promise<string> => {
+      return "fast";
+    };
+
+    const medium = async (_: ActivityContext): Promise<string> => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return "medium";
+    };
+
+    const slow = async (_: ActivityContext): Promise<string> => {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      return "slow";
+    };
+
+    const finalStep = async (_: ActivityContext): Promise<string> => {
+      return "done";
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      // Fan-out with activities completing at different speeds
+      const results: string[] = yield whenAll([
+        ctx.callActivity(fast),
+        ctx.callActivity(medium),
+        ctx.callActivity(slow),
+      ]);
+
+      // This additional activity forces a replay of the orchestration.
+      // During replay, all three whenAll children will already be completed
+      // (they have history events). The bug was that WhenAllTask's constructor
+      // reset the _completedTasks counter AFTER CompositeTask's constructor
+      // had already counted them, so whenAll would never resolve.
+      const final: string = yield ctx.callActivity(finalStep);
+
+      return { results, final };
+    };
+
+    taskHubWorker.addActivity(fast);
+    taskHubWorker.addActivity(medium);
+    taskHubWorker.addActivity(slow);
+    taskHubWorker.addActivity(finalStep);
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.failureDetails).toBeUndefined();
+
+    const output = JSON.parse(state?.serializedOutput || "{}");
+    expect(output.results).toEqual(["fast", "medium", "slow"]);
+    expect(output.final).toEqual("done");
+  }, 31000);
+
   it("should be able to use the sub-orchestration", async () => {
     let activityCounter = 0;
 
@@ -272,6 +448,68 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     expect(state?.lastUpdatedAt).toBeDefined();
     expect(expectedCompletionSecond).toBeLessThanOrEqual(actualCompletionSecond);
   }, 31000);
+
+  it("should use deterministic time for createTimer(seconds) across replays", async () => {
+    // Issue #134: createTimer(seconds) used Date.now() instead of ctx.currentUtcDateTime,
+    // violating the determinism contract. During replay, Date.now() returns a different
+    // wall-clock time, producing a different timer fire-at value. The fix uses the
+    // orchestration's deterministic time (ctx.currentUtcDateTime) instead.
+    //
+    // This test validates the fix by:
+    // 1. Using createTimer(seconds) with an activity before and after it
+    // 2. The activity after the timer forces a replay of the timer yield
+    // 3. If the timer fire-at time were non-deterministic, the replay would either
+    //    throw a NonDeterminismError or produce incorrect behavior
+    const sayHello = async (_: ActivityContext, name: string) => `Hello, ${name}!`;
+
+    const timerDeterminismOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      // Record orchestration time BEFORE the timer
+      const timeBefore = ctx.currentUtcDateTime.toISOString();
+
+      // Call an activity to force a replay after the timer
+      const greeting1: string = yield ctx.callActivity(sayHello, "before-timer");
+
+      // Use createTimer with a relative seconds value (the code path being tested)
+      const timerDelay = 2;
+      yield ctx.createTimer(timerDelay);
+
+      // Record orchestration time AFTER the timer
+      const timeAfter = ctx.currentUtcDateTime.toISOString();
+
+      // Call another activity — this forces another replay that re-executes
+      // the createTimer(seconds) path with the replayed history
+      const greeting2: string = yield ctx.callActivity(sayHello, "after-timer");
+
+      return {
+        timeBefore,
+        timeAfter,
+        greeting1,
+        greeting2,
+        timerDelay,
+      };
+    };
+
+    taskHubWorker.addOrchestrator(timerDeterminismOrchestrator);
+    taskHubWorker.addActivity(sayHello);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(timerDeterminismOrchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.failureDetails).toBeUndefined();
+
+    const output = JSON.parse(state?.serializedOutput ?? "{}");
+    expect(output.greeting1).toEqual("Hello, before-timer!");
+    expect(output.greeting2).toEqual("Hello, after-timer!");
+    expect(output.timerDelay).toEqual(2);
+
+    // Verify time progressed (timeAfter should be at least timerDelay seconds after timeBefore)
+    const before = new Date(output.timeBefore).getTime();
+    const after = new Date(output.timeAfter).getTime();
+    expect(after).toBeGreaterThanOrEqual(before + 2000);
+  }, 45000);
 
   it("should be able to terminate an orchestration", async () => {
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
@@ -543,6 +781,144 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     expect(state?.failureDetails).toBeUndefined();
     expect(state?.serializedOutput).toEqual(JSON.stringify("Hello, World!"));
     expect(invoked).toBe(true);
+  }, 31000);
+
+  // ==================== Retry Handler Tests ====================
+
+  it("should fail (not retry infinitely) when retry handler returns undefined", async () => {
+    // Issue: A retry handler with a missing return statement returns undefined.
+    // Before the fix, `undefined !== false` was truthy, so the executor treated it
+    // as "retry", causing an infinite retry loop. The fix uses a positive check:
+    // only `true` or a finite number triggers a retry.
+    let attemptCount = 0;
+
+    const failingActivity = async (_: ActivityContext) => {
+      attemptCount++;
+      throw new Error(`Failure on attempt ${attemptCount}`);
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      // Cast to any to simulate a JavaScript consumer or handler with a missing return
+      const retryHandler = (async (_retryCtx: any) => {
+        // Intentionally no return statement — returns undefined
+      }) as any;
+      const result = yield ctx.callActivity(failingActivity, undefined, { retry: retryHandler });
+      return result;
+    };
+
+    taskHubWorker.addActivity(failingActivity);
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    // Should fail after exactly 1 attempt — the handler returned undefined so no retry
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(state?.failureDetails).toBeDefined();
+    expect(attemptCount).toBe(1);
+  }, 31000);
+
+  it("should fail (not retry infinitely) when retry handler returns null", async () => {
+    let attemptCount = 0;
+
+    const failingActivity = async (_: ActivityContext) => {
+      attemptCount++;
+      throw new Error(`Failure on attempt ${attemptCount}`);
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const retryHandler = async (_retryCtx: any) => {
+        return null as any; // Explicitly returning null
+      };
+      const result = yield ctx.callActivity(failingActivity, undefined, { retry: retryHandler });
+      return result;
+    };
+
+    taskHubWorker.addActivity(failingActivity);
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(state?.failureDetails).toBeDefined();
+    expect(attemptCount).toBe(1);
+  }, 31000);
+
+  it("should retry and succeed when retry handler returns true", async () => {
+    let attemptCount = 0;
+
+    const flakyActivity = async (_: ActivityContext, input: number) => {
+      attemptCount++;
+      if (attemptCount < 3) {
+        throw new Error(`Transient failure on attempt ${attemptCount}`);
+      }
+      return input * 2;
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: number): any {
+      const retryHandler = async (retryCtx: any) => retryCtx.lastAttemptNumber < 5;
+      const result = yield ctx.callActivity(flakyActivity, input, { retry: retryHandler });
+      return result;
+    };
+
+    taskHubWorker.addActivity(flakyActivity);
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator, 21);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.failureDetails).toBeUndefined();
+    expect(state?.serializedOutput).toEqual(JSON.stringify(42));
+    expect(attemptCount).toBe(3);
+  }, 31000);
+
+  it("should retry with delay when retry handler returns a positive number", async () => {
+    let attemptCount = 0;
+    const attemptTimes: number[] = [];
+
+    const flakyActivity = async (_: ActivityContext) => {
+      attemptCount++;
+      attemptTimes.push(Date.now());
+      if (attemptCount < 2) {
+        throw new Error(`Transient failure on attempt ${attemptCount}`);
+      }
+      return "success";
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const retryHandler = async (_retryCtx: any) => {
+        return 1000; // Retry after 1 second
+      };
+      const result = yield ctx.callActivity(flakyActivity, undefined, { retry: retryHandler });
+      return result;
+    };
+
+    taskHubWorker.addActivity(flakyActivity);
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.failureDetails).toBeUndefined();
+    expect(state?.serializedOutput).toEqual(JSON.stringify("success"));
+    expect(attemptCount).toBe(2);
+
+    // Verify there was at least ~1s delay between attempts
+    if (attemptTimes.length >= 2) {
+      const delay = attemptTimes[1] - attemptTimes[0];
+      expect(delay).toBeGreaterThanOrEqual(900); // Allow some tolerance
+    }
   }, 31000);
 
   // // ==================== newGuid Tests ====================
@@ -1372,5 +1748,297 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
       const parentStateAfterPurge = await taskHubClient.getOrchestrationState(parentId);
       expect(parentStateAfterPurge).toBeUndefined();
     }, 60000);
+  });
+
+  // PR #138: Fix falsy values (0, "", false, null) silently dropped during serialization
+  describe("falsy value serialization", () => {
+    it("should pass zero (0) through activity round-trip", async () => {
+      const echo = async (_: ActivityContext, input: number) => input;
+
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: number): any {
+        const result = yield ctx.callActivity(echo, input);
+        return result;
+      };
+
+      taskHubWorker.addOrchestrator(orchestrator);
+      taskHubWorker.addActivity(echo);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator, 0);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.serializedInput).toEqual(JSON.stringify(0));
+      expect(state?.serializedOutput).toEqual(JSON.stringify(0));
+    }, 31000);
+
+    it("should pass empty string through activity round-trip", async () => {
+      const echo = async (_: ActivityContext, input: string) => input;
+
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: string): any {
+        const result = yield ctx.callActivity(echo, input);
+        return result;
+      };
+
+      taskHubWorker.addOrchestrator(orchestrator);
+      taskHubWorker.addActivity(echo);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator, "");
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.serializedInput).toEqual(JSON.stringify(""));
+      expect(state?.serializedOutput).toEqual(JSON.stringify(""));
+    }, 31000);
+
+    it("should pass false through activity round-trip", async () => {
+      const echo = async (_: ActivityContext, input: boolean) => input;
+
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: boolean): any {
+        const result = yield ctx.callActivity(echo, input);
+        return result;
+      };
+
+      taskHubWorker.addOrchestrator(orchestrator);
+      taskHubWorker.addActivity(echo);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator, false);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.serializedInput).toEqual(JSON.stringify(false));
+      expect(state?.serializedOutput).toEqual(JSON.stringify(false));
+    }, 31000);
+
+    it("should pass null through activity round-trip", async () => {
+      const echo = async (_: ActivityContext, input: any) => input;
+
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: any): any {
+        const result = yield ctx.callActivity(echo, input);
+        return result;
+      };
+
+      taskHubWorker.addOrchestrator(orchestrator);
+      taskHubWorker.addActivity(echo);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator, null);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.serializedOutput).toEqual(JSON.stringify(null));
+    }, 31000);
+
+    it("should pass zero through sub-orchestration round-trip", async () => {
+      const child: TOrchestrator = async (_ctx: OrchestrationContext, input: number) => {
+        return input;
+      };
+
+      const parent: TOrchestrator = async function* (ctx: OrchestrationContext, input: number): any {
+        const result = yield ctx.callSubOrchestrator(child, input);
+        return result;
+      };
+
+      taskHubWorker.addOrchestrator(parent);
+      taskHubWorker.addOrchestrator(child);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(parent, 0);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.serializedOutput).toEqual(JSON.stringify(0));
+    }, 31000);
+
+    it("should return zero as orchestration result", async () => {
+      const orchestrator: TOrchestrator = async (_ctx: OrchestrationContext) => {
+        return 0;
+      };
+
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.serializedOutput).toEqual(JSON.stringify(0));
+    }, 31000);
+
+    it("should return false as orchestration result", async () => {
+      const orchestrator: TOrchestrator = async (_ctx: OrchestrationContext) => {
+        return false;
+      };
+
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.serializedOutput).toEqual(JSON.stringify(false));
+    }, 31000);
+
+    it("should return empty string as orchestration result", async () => {
+      const orchestrator: TOrchestrator = async (_ctx: OrchestrationContext) => {
+        return "";
+      };
+
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.serializedOutput).toEqual(JSON.stringify(""));
+    }, 31000);
+
+    it("should continue-as-new with zero input", async () => {
+      const orchestrator: TOrchestrator = async (ctx: OrchestrationContext, input: number) => {
+        if (input === 0) {
+          ctx.continueAsNew(1, false);
+          return;
+        }
+        return input;
+      };
+
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator, 0);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.serializedOutput).toEqual(JSON.stringify(1));
+    }, 31000);
+  });
+
+  describe("nested composite tasks (whenAll/whenAny)", () => {
+    it("should complete nested whenAll(whenAll, whenAll)", async () => {
+      const addTen = async (_: ActivityContext, input: number): Promise<number> => {
+        return input + 10;
+      };
+
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        // Two independent groups of activities, each wrapped in whenAll
+        const group1 = whenAll([
+          ctx.callActivity(addTen, 1),
+          ctx.callActivity(addTen, 2),
+        ]);
+        const group2 = whenAll([
+          ctx.callActivity(addTen, 3),
+          ctx.callActivity(addTen, 4),
+        ]);
+
+        // Outer whenAll wraps both inner whenAll composite tasks
+        const results: number[][] = yield whenAll([group1, group2]);
+        // results should be [[11, 12], [13, 14]]
+        return results;
+      };
+
+      taskHubWorker.addActivity(addTen);
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.failureDetails).toBeUndefined();
+      expect(state?.serializedOutput).toEqual(JSON.stringify([[11, 12], [13, 14]]));
+    }, 31000);
+
+    it("should complete whenAny wrapping multiple whenAll groups", async () => {
+      const fast = async (_: ActivityContext): Promise<string> => {
+        return "fast-done";
+      };
+
+      const slow = async (_: ActivityContext): Promise<string> => {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        return "slow-done";
+      };
+
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        // Group 1: both fast — should complete first
+        const fastGroup = whenAll([
+          ctx.callActivity(fast),
+          ctx.callActivity(fast),
+        ]);
+        // Group 2: both slow — should complete later
+        const slowGroup = whenAll([
+          ctx.callActivity(slow),
+          ctx.callActivity(slow),
+        ]);
+
+        // whenAny should resolve as soon as fastGroup finishes
+        const winner: Task<any> = yield whenAny([fastGroup, slowGroup]);
+        return winner.getResult();
+      };
+
+      taskHubWorker.addActivity(fast);
+      taskHubWorker.addActivity(slow);
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.failureDetails).toBeUndefined();
+      // The fast group completes first, returning ["fast-done", "fast-done"]
+      expect(state?.serializedOutput).toEqual(JSON.stringify(["fast-done", "fast-done"]));
+    }, 31000);
+
+    it("should propagate failure from nested whenAll to outer whenAll", async () => {
+      const succeed = async (_: ActivityContext): Promise<string> => {
+        return "ok";
+      };
+
+      const fail = async (_: ActivityContext): Promise<string> => {
+        throw new Error("nested-whenAll-failure");
+      };
+
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        const group1 = whenAll([
+          ctx.callActivity(succeed),
+          ctx.callActivity(fail), // This will fail
+        ]);
+        const group2 = whenAll([
+          ctx.callActivity(succeed),
+          ctx.callActivity(succeed),
+        ]);
+
+        // Outer whenAll should fail because group1 fails
+        yield whenAll([group1, group2]);
+      };
+
+      taskHubWorker.addActivity(succeed);
+      taskHubWorker.addActivity(fail);
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+      expect(state?.failureDetails).toBeDefined();
+      expect(state?.failureDetails?.message).toContain("nested-whenAll-failure");
+    }, 31000);
   });
 });
