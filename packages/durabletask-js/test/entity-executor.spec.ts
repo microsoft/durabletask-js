@@ -2,7 +2,8 @@
 // Licensed under the MIT License.
 
 import { TaskEntityShim } from "../src/worker/entity-executor";
-import { TaskEntity } from "../src/entities/task-entity";
+import { TaskEntity, ITaskEntity } from "../src/entities/task-entity";
+import { TaskEntityOperation } from "../src/entities/task-entity-operation";
 import { EntityInstanceId } from "../src/entities/entity-instance-id";
 import * as pb from "../src/proto/orchestrator_service_pb";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
@@ -432,6 +433,121 @@ describe("TaskEntityShim", () => {
       expect(failure.getFailuredetails()?.getErrormessage()).toContain(
         "Entity state is not JSON-serializable",
       );
+    });
+
+    it("should preserve previous valid state after failed setState", async () => {
+      // Entity that reads state via operation.state directly, attempts to set
+      // non-serializable state, catches the error, then reads state again.
+      // This tests that the StateShim cache is not corrupted by a failed setState.
+      class RecoveringEntity implements ITaskEntity {
+        run(operation: TaskEntityOperation): unknown {
+          // First read populates the cache (cacheValid = true)
+          const initialState = operation.state.getState<{ count: number }>();
+          const initialCount = initialState?.count;
+
+          try {
+            const circular: Record<string, unknown> = {};
+            circular.self = circular;
+            operation.state.setState(circular); // Should throw
+          } catch {
+            // After failed setState, getState should return the previous valid state
+          }
+
+          const recoveredState = operation.state.getState<{ count: number }>();
+          return { initialCount, recoveredCount: recoveredState?.count };
+        }
+      }
+
+      const entity = new RecoveringEntity();
+      const shim = new TaskEntityShim(entity, entityId);
+      const request = createBatchRequest(
+        entityId.toString(),
+        [{ name: "recover" }],
+        { count: 42 },
+      );
+
+      const result = await shim.executeAsync(request);
+
+      const opResult = result.getResultsList()[0];
+      expect(opResult.hasSuccess()).toBe(true);
+
+      const output = JSON.parse(opResult.getSuccess()!.getResult()!.getValue());
+      expect(output.initialCount).toBe(42);
+      // After failed setState, getState should return 42 (not the circular object)
+      expect(output.recoveredCount).toBe(42);
+    });
+
+    it("should allow valid setState after a failed setState", async () => {
+      // Entity that fails a setState call, then successfully sets valid state
+      class SetAfterFailEntity implements ITaskEntity {
+        run(operation: TaskEntityOperation): unknown {
+          // Read state to populate cache
+          operation.state.getState();
+
+          try {
+            const circular: Record<string, unknown> = {};
+            circular.self = circular;
+            operation.state.setState(circular);
+          } catch {
+            // Expected - now set valid state
+            operation.state.setState({ count: 99 });
+          }
+
+          return operation.state.getState<{ count: number }>()?.count;
+        }
+      }
+
+      const entity = new SetAfterFailEntity();
+      const shim = new TaskEntityShim(entity, entityId);
+      const request = createBatchRequest(
+        entityId.toString(),
+        [{ name: "setAfterFail" }],
+        { count: 10 },
+      );
+
+      const result = await shim.executeAsync(request);
+
+      const opResult = result.getResultsList()[0];
+      expect(opResult.hasSuccess()).toBe(true);
+      expect(JSON.parse(opResult.getSuccess()!.getResult()!.getValue())).toBe(99);
+
+      // Final state should be the recovered value
+      const finalState = result.getEntitystate()?.getValue();
+      expect(finalState).toBeDefined();
+      expect(JSON.parse(finalState!)).toEqual({ count: 99 });
+    });
+
+    it("should preserve error cause in setState error", async () => {
+      // Verify the error wrapping preserves the original cause
+      class CauseCheckEntity implements ITaskEntity {
+        caughtCause: unknown = undefined;
+
+        run(operation: TaskEntityOperation): unknown {
+          try {
+            const circular: Record<string, unknown> = {};
+            circular.self = circular;
+            operation.state.setState(circular);
+          } catch (e) {
+            this.caughtCause = e instanceof Error ? e.cause : undefined;
+            throw e; // Re-throw to record failure
+          }
+          return undefined;
+        }
+      }
+
+      const entity = new CauseCheckEntity();
+      const shim = new TaskEntityShim(entity, entityId);
+      const request = createBatchRequest(
+        entityId.toString(),
+        [{ name: "checkCause" }],
+        {},
+      );
+
+      await shim.executeAsync(request);
+
+      // The wrapped error should preserve the original TypeError cause
+      expect(entity.caughtCause).toBeDefined();
+      expect(entity.caughtCause).toBeInstanceOf(TypeError);
     });
   });
 
