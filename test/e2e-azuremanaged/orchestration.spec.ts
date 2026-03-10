@@ -17,6 +17,7 @@ import {
   ProtoOrchestrationStatus as OrchestrationStatus,
   getName,
   whenAll,
+  whenAny,
   ActivityContext,
   OrchestrationContext,
   Task,
@@ -1922,6 +1923,122 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
       expect(state).toBeDefined();
       expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
       expect(state?.serializedOutput).toEqual(JSON.stringify(1));
+    }, 31000);
+  });
+
+  describe("nested composite tasks (whenAll/whenAny)", () => {
+    it("should complete nested whenAll(whenAll, whenAll)", async () => {
+      const addTen = async (_: ActivityContext, input: number): Promise<number> => {
+        return input + 10;
+      };
+
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        // Two independent groups of activities, each wrapped in whenAll
+        const group1 = whenAll([
+          ctx.callActivity(addTen, 1),
+          ctx.callActivity(addTen, 2),
+        ]);
+        const group2 = whenAll([
+          ctx.callActivity(addTen, 3),
+          ctx.callActivity(addTen, 4),
+        ]);
+
+        // Outer whenAll wraps both inner whenAll composite tasks
+        const results: number[][] = yield whenAll([group1, group2]);
+        // results should be [[11, 12], [13, 14]]
+        return results;
+      };
+
+      taskHubWorker.addActivity(addTen);
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.failureDetails).toBeUndefined();
+      expect(state?.serializedOutput).toEqual(JSON.stringify([[11, 12], [13, 14]]));
+    }, 31000);
+
+    it("should complete whenAny wrapping multiple whenAll groups", async () => {
+      const fast = async (_: ActivityContext): Promise<string> => {
+        return "fast-done";
+      };
+
+      const slow = async (_: ActivityContext): Promise<string> => {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        return "slow-done";
+      };
+
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        // Group 1: both fast — should complete first
+        const fastGroup = whenAll([
+          ctx.callActivity(fast),
+          ctx.callActivity(fast),
+        ]);
+        // Group 2: both slow — should complete later
+        const slowGroup = whenAll([
+          ctx.callActivity(slow),
+          ctx.callActivity(slow),
+        ]);
+
+        // whenAny should resolve as soon as fastGroup finishes
+        const winner: Task<any> = yield whenAny([fastGroup, slowGroup]);
+        return winner.getResult();
+      };
+
+      taskHubWorker.addActivity(fast);
+      taskHubWorker.addActivity(slow);
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.failureDetails).toBeUndefined();
+      // The fast group completes first, returning ["fast-done", "fast-done"]
+      expect(state?.serializedOutput).toEqual(JSON.stringify(["fast-done", "fast-done"]));
+    }, 31000);
+
+    it("should propagate failure from nested whenAll to outer whenAll", async () => {
+      const succeed = async (_: ActivityContext): Promise<string> => {
+        return "ok";
+      };
+
+      const fail = async (_: ActivityContext): Promise<string> => {
+        throw new Error("nested-whenAll-failure");
+      };
+
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        const group1 = whenAll([
+          ctx.callActivity(succeed),
+          ctx.callActivity(fail), // This will fail
+        ]);
+        const group2 = whenAll([
+          ctx.callActivity(succeed),
+          ctx.callActivity(succeed),
+        ]);
+
+        // Outer whenAll should fail because group1 fails
+        yield whenAll([group1, group2]);
+      };
+
+      taskHubWorker.addActivity(succeed);
+      taskHubWorker.addActivity(fail);
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+      expect(state?.failureDetails).toBeDefined();
+      expect(state?.failureDetails?.message).toContain("nested-whenAll-failure");
     }, 31000);
   });
 });

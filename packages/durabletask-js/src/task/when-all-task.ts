@@ -39,12 +39,14 @@ export class WhenAllTask<T> extends CompositeTask<T[]> {
     if (task.isFailed && !this._exception) {
       this._exception = task.getException();
       this._isComplete = true;
+      this._parent?.onChildCompleted(this);
       return;
     }
 
     if (this._completedTasks == this._tasks.length) {
       this._result = this._tasks.map((task) => task.getResult());
       this._isComplete = true;
+      this._parent?.onChildCompleted(this);
     }
   }
 
