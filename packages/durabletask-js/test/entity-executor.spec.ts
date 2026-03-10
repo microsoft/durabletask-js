@@ -2,8 +2,7 @@
 // Licensed under the MIT License.
 
 import { TaskEntityShim } from "../src/worker/entity-executor";
-import { TaskEntity } from "../src/entities/task-entity";
-import { ITaskEntity } from "../src/entities/task-entity";
+import { TaskEntity, ITaskEntity } from "../src/entities/task-entity";
 import { TaskEntityOperation } from "../src/entities/task-entity-operation";
 import { EntityInstanceId } from "../src/entities/entity-instance-id";
 import * as pb from "../src/proto/orchestrator_service_pb";
