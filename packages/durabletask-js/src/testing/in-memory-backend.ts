@@ -481,6 +481,7 @@ export class InMemoryOrchestrationBackend {
       instance.history = [];
       instance.input = newInput;
       instance.output = undefined;
+      instance.customStatus = undefined;
       instance.failureDetails = undefined;
       instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_PENDING;
 
