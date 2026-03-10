@@ -448,6 +448,68 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     expect(expectedCompletionSecond).toBeLessThanOrEqual(actualCompletionSecond);
   }, 31000);
 
+  it("should use deterministic time for createTimer(seconds) across replays", async () => {
+    // Issue #134: createTimer(seconds) used Date.now() instead of ctx.currentUtcDateTime,
+    // violating the determinism contract. During replay, Date.now() returns a different
+    // wall-clock time, producing a different timer fire-at value. The fix uses the
+    // orchestration's deterministic time (ctx.currentUtcDateTime) instead.
+    //
+    // This test validates the fix by:
+    // 1. Using createTimer(seconds) with an activity before and after it
+    // 2. The activity after the timer forces a replay of the timer yield
+    // 3. If the timer fire-at time were non-deterministic, the replay would either
+    //    throw a NonDeterminismError or produce incorrect behavior
+    const sayHello = async (_: ActivityContext, name: string) => `Hello, ${name}!`;
+
+    const timerDeterminismOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      // Record orchestration time BEFORE the timer
+      const timeBefore = ctx.currentUtcDateTime.toISOString();
+
+      // Call an activity to force a replay after the timer
+      const greeting1: string = yield ctx.callActivity(sayHello, "before-timer");
+
+      // Use createTimer with a relative seconds value (the code path being tested)
+      const timerDelay = 2;
+      yield ctx.createTimer(timerDelay);
+
+      // Record orchestration time AFTER the timer
+      const timeAfter = ctx.currentUtcDateTime.toISOString();
+
+      // Call another activity — this forces another replay that re-executes
+      // the createTimer(seconds) path with the replayed history
+      const greeting2: string = yield ctx.callActivity(sayHello, "after-timer");
+
+      return {
+        timeBefore,
+        timeAfter,
+        greeting1,
+        greeting2,
+        timerDelay,
+      };
+    };
+
+    taskHubWorker.addOrchestrator(timerDeterminismOrchestrator);
+    taskHubWorker.addActivity(sayHello);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(timerDeterminismOrchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(state?.failureDetails).toBeUndefined();
+
+    const output = JSON.parse(state?.serializedOutput ?? "{}");
+    expect(output.greeting1).toEqual("Hello, before-timer!");
+    expect(output.greeting2).toEqual("Hello, after-timer!");
+    expect(output.timerDelay).toEqual(2);
+
+    // Verify time progressed (timeAfter should be at least timerDelay seconds after timeBefore)
+    const before = new Date(output.timeBefore).getTime();
+    const after = new Date(output.timeAfter).getTime();
+    expect(after).toBeGreaterThanOrEqual(before + 2000);
+  }, 45000);
+
   it("should be able to terminate an orchestration", async () => {
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
       const res = yield ctx.waitForExternalEvent("my_event");
