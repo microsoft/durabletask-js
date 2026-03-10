@@ -3,6 +3,7 @@
 
 import { ActivityContext, OrchestrationStatus, TaskHubGrpcClient } from "@microsoft/durabletask-js";
 import { ExportCheckpoint } from "../models";
+import { ExportJobClientValidationError } from "../errors";
 
 /**
  * Input for listing terminal instances activity.
@@ -62,7 +63,7 @@ export function createListTerminalInstancesActivity(client: TaskHubGrpcClient) {
     input: ListTerminalInstancesRequest,
   ): Promise<InstancePage> {
     if (!input) {
-      throw new Error("input is required");
+      throw new ExportJobClientValidationError("input is required", "input");
     }
 
     // Dates arrive as ISO strings after JSON round-tripping through orchestration input.

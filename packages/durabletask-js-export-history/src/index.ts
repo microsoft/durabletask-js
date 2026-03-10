@@ -26,6 +26,7 @@ export {
   ExportJobStatus,
   isValidTransition,
   ExportMode,
+  ExportJobOperationRequest,
 } from "./models";
 
 // Entity
@@ -45,10 +46,7 @@ export {
 
 // Orchestrators
 export { exportJobOrchestrator } from "./orchestrators/export-job-orchestrator";
-export {
-  executeExportJobOperationOrchestrator,
-  ExportJobOperationRequest,
-} from "./orchestrators/execute-export-job-operation-orchestrator";
+export { executeExportJobOperationOrchestrator } from "./orchestrators/execute-export-job-operation-orchestrator";
 
 // Client
 export { ExportHistoryClient, ExportHistoryJobClient } from "./client/export-history-client";

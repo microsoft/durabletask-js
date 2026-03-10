@@ -23,3 +23,4 @@ export { ExportJobState, createInitialExportJobState } from "./export-job-state"
 export { ExportJobStatus } from "./export-job-status";
 export { isValidTransition } from "./export-job-transitions";
 export { ExportMode } from "./export-mode";
+export { ExportJobOperationRequest } from "./export-job-operation-request";

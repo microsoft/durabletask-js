@@ -6,6 +6,7 @@ import { gzipSync } from "zlib";
 import { BlobServiceClient } from "@azure/storage-blob";
 import { ActivityContext, HistoryEvent, OrchestrationStatus, TaskHubGrpcClient } from "@microsoft/durabletask-js";
 import { ExportDestination, ExportFormat, ExportFormatKind, ExportHistoryStorageOptions } from "../models";
+import { ExportJobClientValidationError } from "../errors";
 
 /**
  * Export request for one orchestration instance.
@@ -117,16 +118,16 @@ export function createExportInstanceHistoryActivity(
     input: ExportRequest,
   ): Promise<ExportResult> {
     if (!input) {
-      throw new Error("input is required");
+      throw new ExportJobClientValidationError("input is required", "input");
     }
     if (!input.instanceId) {
-      throw new Error("instanceId is required");
+      throw new ExportJobClientValidationError("instanceId is required", "instanceId");
     }
     if (!input.destination) {
-      throw new Error("destination is required");
+      throw new ExportJobClientValidationError("destination is required", "destination");
     }
     if (!input.format) {
-      throw new Error("format is required");
+      throw new ExportJobClientValidationError("format is required", "format");
     }
 
     const instanceId = input.instanceId;

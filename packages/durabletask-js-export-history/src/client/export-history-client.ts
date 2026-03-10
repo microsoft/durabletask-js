@@ -17,6 +17,7 @@ import {
   ExportJobState,
   ExportDestination,
   ExportHistoryStorageOptions,
+  ExportJobOperationRequest,
   DEFAULT_EXPORT_JOB_QUERY_PAGE_SIZE,
 } from "../models";
 import {
@@ -25,7 +26,6 @@ import {
   getOrchestratorInstanceId,
 } from "../constants";
 import { ExportJobNotFoundError } from "../errors";
-import { ExportJobOperationRequest } from "../orchestrators/execute-export-job-operation-orchestrator";
 
 /**
  * Client for managing export history jobs.
@@ -188,9 +188,6 @@ export class ExportHistoryJobClient {
         `Failed to create export job '${this.jobId}': ${state?.failureDetails?.message ?? "Unknown error"}`,
       );
     }
-
-    // The entity's Create operation signals Run, which schedules the export orchestrator.
-    // No need to schedule the orchestrator from the client.
   }
 
   /**
