@@ -22,6 +22,8 @@ import {
   TaskHubGrpcWorker,
   EntityInstanceId,
   TaskEntity,
+  ITaskEntity,
+  TaskEntityOperation,
   OrchestrationContext,
   TOrchestrator,
   ProtoOrchestrationStatus as OrchestrationStatus,
@@ -1532,6 +1534,189 @@ describe("Durable Entities E2E Tests (DTS)", () => {
       expect(state?.runtimeStatus).toBe(OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
       expect(state?.failureDetails?.message).toContain("This operation intentionally fails");
     }, 60000);
+  });
+
+  describe("Entity setState Cache Corruption Fix", () => {
+    it("should preserve previous valid state after failed setState (via signal)", async () => {
+      // This test verifies the fix for StateShim.setState() cache corruption.
+      // Before the fix, calling setState with a non-serializable value would corrupt
+      // the cache, causing subsequent getState() calls to return the invalid object
+      // instead of the last valid state.
+
+      // Entity that attempts to set non-serializable state, catches the error,
+      // then falls back to valid state.
+      class RecoverFromBadSetStateEntity implements ITaskEntity {
+        run(operation: TaskEntityOperation): unknown {
+          if (operation.name === "corruptAndRecover") {
+            // Read state to populate the cache (cacheValid = true)
+            const currentState = operation.state.getState<{ count: number }>();
+            const initialCount = currentState?.count ?? 0;
+
+            try {
+              // Attempt to set circular (non-serializable) state
+              const circular: Record<string, unknown> = { value: "bad" };
+              circular.self = circular;
+              operation.state.setState(circular);
+            } catch {
+              // Expected - cache should NOT be corrupted
+            }
+
+            // After failed setState, getState should return previous valid state
+            const recovered = operation.state.getState<{ count: number }>();
+            // Set a new valid state that includes the recovered count
+            operation.state.setState({ count: initialCount + 1, recovered: true });
+            return { initialCount, recoveredCount: recovered?.count };
+          } else if (operation.name === "get") {
+            return operation.state.getState<{ count: number; recovered?: boolean }>();
+          }
+          return undefined;
+        }
+      }
+
+      const entityId = new EntityInstanceId(
+        "RecoverFromBadSetStateEntity",
+        `cache-fix-signal-${Date.now()}`,
+      );
+      taskHubWorker.addNamedEntity(
+        "RecoverFromBadSetStateEntity",
+        () => new RecoverFromBadSetStateEntity(),
+      );
+      await taskHubWorker.start();
+
+      // First, set initial state via a signal
+      await taskHubClient.signalEntity(entityId, "corruptAndRecover");
+      await sleep(3000);
+
+      // Verify the entity recovered and has valid state
+      const metadata = await taskHubClient.getEntity<{ count: number; recovered: boolean }>(entityId);
+      expect(metadata).toBeDefined();
+      expect(metadata?.state?.count).toBe(1); // 0 + 1
+      expect(metadata?.state?.recovered).toBe(true);
+    }, 30000);
+
+    it("should preserve state after failed setState when called from orchestration", async () => {
+      // Same cache corruption test but via orchestration callEntity (request/response)
+      class SetStateRecoveryEntity implements ITaskEntity {
+        run(operation: TaskEntityOperation): unknown {
+          if (operation.name === "init") {
+            operation.state.setState({ count: 42 });
+            return "initialized";
+          } else if (operation.name === "corruptAndRead") {
+            // Read state to populate cache
+            const before = operation.state.getState<{ count: number }>();
+
+            try {
+              const circular: Record<string, unknown> = {};
+              circular.ref = circular;
+              operation.state.setState(circular);
+            } catch {
+              // Expected
+            }
+
+            // This getState must return the valid state, not the circular object
+            const after = operation.state.getState<{ count: number }>();
+            return { beforeCount: before?.count, afterCount: after?.count };
+          } else if (operation.name === "get") {
+            return operation.state.getState();
+          }
+          return undefined;
+        }
+      }
+
+      const entityId = new EntityInstanceId(
+        "SetStateRecoveryEntity",
+        `cache-fix-orch-${Date.now()}`,
+      );
+
+      const cacheTestOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        // Initialize entity state
+        const initResult: string = yield ctx.entities.callEntity(entityId, "init");
+
+        // Trigger the corrupt-and-read operation
+        const result: { beforeCount: number; afterCount: number } = yield ctx.entities.callEntity(
+          entityId,
+          "corruptAndRead",
+        );
+
+        // Verify state is still readable
+        const finalState: { count: number } = yield ctx.entities.callEntity(entityId, "get");
+
+        return { initResult, result, finalState };
+      };
+
+      taskHubWorker.addNamedEntity("SetStateRecoveryEntity", () => new SetStateRecoveryEntity());
+      taskHubWorker.addOrchestrator(cacheTestOrchestrator);
+      await taskHubWorker.start();
+
+      const instanceId = await taskHubClient.scheduleNewOrchestration(cacheTestOrchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(instanceId, undefined, 60);
+
+      expect(state?.runtimeStatus).toBe(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+
+      const output = state?.serializedOutput ? JSON.parse(state.serializedOutput) : null;
+      expect(output.initResult).toBe("initialized");
+      // Both before and after the failed setState, getState should return count=42
+      expect(output.result.beforeCount).toBe(42);
+      expect(output.result.afterCount).toBe(42);
+      // Final state should still be intact
+      expect(output.finalState.count).toBe(42);
+    }, 90000);
+
+    it("should allow valid setState after a failed setState", async () => {
+      // Verifies that the cache is not permanently broken after a failed setState
+      class SetAfterFailEntity implements ITaskEntity {
+        run(operation: TaskEntityOperation): unknown {
+          if (operation.name === "failThenSet") {
+            const input = operation.getInput<number>() ?? 99;
+
+            // Populate cache
+            operation.state.getState();
+
+            try {
+              const circular: Record<string, unknown> = {};
+              circular.self = circular;
+              operation.state.setState(circular);
+            } catch {
+              // Expected - now set valid state
+              operation.state.setState({ value: input });
+            }
+
+            return operation.state.getState<{ value: number }>()?.value;
+          } else if (operation.name === "get") {
+            return operation.state.getState();
+          }
+          return undefined;
+        }
+      }
+
+      const entityId = new EntityInstanceId(
+        "SetAfterFailEntity",
+        `cache-fix-recover-${Date.now()}`,
+      );
+
+      const recoverOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        // Call the entity - it should fail setState, then succeed with valid state
+        const returnedValue: number = yield ctx.entities.callEntity(entityId, "failThenSet", 77);
+
+        // Verify persisted state is also correct
+        const finalState: { value: number } = yield ctx.entities.callEntity(entityId, "get");
+
+        return { returnedValue, finalState };
+      };
+
+      taskHubWorker.addNamedEntity("SetAfterFailEntity", () => new SetAfterFailEntity());
+      taskHubWorker.addOrchestrator(recoverOrchestrator);
+      await taskHubWorker.start();
+
+      const instanceId = await taskHubClient.scheduleNewOrchestration(recoverOrchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(instanceId, undefined, 60);
+
+      expect(state?.runtimeStatus).toBe(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+
+      const output = state?.serializedOutput ? JSON.parse(state.serializedOutput) : null;
+      expect(output.returnedValue).toBe(77);
+      expect(output.finalState.value).toBe(77);
+    }, 90000);
   });
 
   describe("Scheduled Signal Delivery", () => {
