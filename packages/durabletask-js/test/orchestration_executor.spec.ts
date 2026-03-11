@@ -1645,14 +1645,23 @@ describe("Orchestration Executor", () => {
       newTaskScheduledEvent(1, failingName),
     ];
     const ex = new Error("Activity failed");
-    const newEvents = [
-      newTaskFailedEvent(1, ex),
-      // After the failure is caught, the orchestrator schedules recoveryActivity
-      newTaskScheduledEvent(2, recoveryName),
-      newTaskCompletedEvent(2, JSON.stringify("recovered")),
-    ];
     const executor = new OrchestrationExecutor(registry, testLogger);
-    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    // First execution turn: the failing activity completes with an error,
+    // and the orchestrator catches it and yields a call to recoveryActivity.
+    const firstResult = await executor.execute(TEST_INSTANCE_ID, oldEvents, [newTaskFailedEvent(1, ex)]);
+    expect(firstResult.actions.length).toBeGreaterThan(0);
+
+    // Second execution turn: the sidecar has persisted TaskScheduled(2) for recoveryActivity,
+    // and now the recovery activity completes successfully.
+    const oldEventsWithFailureAndRecoverySchedule = [
+      ...oldEvents,
+      newTaskFailedEvent(1, ex),
+      newTaskScheduledEvent(2, recoveryName),
+    ];
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEventsWithFailureAndRecoverySchedule, [
+      newTaskCompletedEvent(2, JSON.stringify("recovered")),
+    ]);
 
     const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
