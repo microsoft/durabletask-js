@@ -7,6 +7,7 @@ module.exports = {
   moduleNameMapper: {
     "^@microsoft/durabletask-js$": "<rootDir>/packages/durabletask-js/src/index.ts",
     "^@microsoft/durabletask-js-azuremanaged$": "<rootDir>/packages/durabletask-js-azuremanaged/src/index.ts",
+    "^@microsoft/durabletask-js-export-history$": "<rootDir>/packages/durabletask-js-export-history/src/index.ts",
   },
   transform: {
     "^.+\\.tsx?$": [
