@@ -1549,6 +1549,82 @@ describe("Orchestration Executor", () => {
     expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify(expectedResult));
   });
 
+  it("should fail when orchestrator yields null as its first value", async () => {
+    // An orchestrator that yields null instead of a Task should fail with a clear error
+    const badOrchestrator: TOrchestrator = async function* (_ctx: OrchestrationContext): any {
+      yield null;
+    };
+
+    const registry = new Registry();
+    const name = registry.addOrchestrator(badOrchestrator);
+    const newEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined),
+    ];
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("non-Task");
+  });
+
+  it("should fail when orchestrator yields undefined as its first value", async () => {
+    // An orchestrator that yields undefined instead of a Task should fail with a clear error
+    const badOrchestrator: TOrchestrator = async function* (_ctx: OrchestrationContext): any {
+      yield undefined;
+    };
+
+    const registry = new Registry();
+    const name = registry.addOrchestrator(badOrchestrator);
+    const newEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined),
+    ];
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("non-Task");
+  });
+
+  it("should fail when orchestrator yields a plain object as its first value", async () => {
+    // An orchestrator that yields a non-Task object should fail with a clear error
+    const badOrchestrator: TOrchestrator = async function* (_ctx: OrchestrationContext): any {
+      yield { someProperty: "not a task" };
+    };
+
+    const registry = new Registry();
+    const name = registry.addOrchestrator(badOrchestrator);
+    const newEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined),
+    ];
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("non-Task");
+  });
+
+  it("should fail when orchestrator yields a primitive as its first value", async () => {
+    // An orchestrator that yields a primitive (number) instead of a Task should fail
+    const badOrchestrator: TOrchestrator = async function* (_ctx: OrchestrationContext): any {
+      yield 42;
+    };
+
+    const registry = new Registry();
+    const name = registry.addOrchestrator(badOrchestrator);
+    const newEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined),
+    ];
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("non-Task");
+  });
+
   it("should propagate inner whenAll failure to outer whenAny in nested composites", async () => {
     const hello = (_: any, name: string) => {
       return `Hello ${name}!`;
