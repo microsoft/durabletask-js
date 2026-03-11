@@ -246,6 +246,90 @@ describe("Orchestration Executor", () => {
     // const userCodeStatement = "ctx.callActivity(dummyActivity, orchestratorInput)";
     // expect(completeAction?.getFailuredetails()?.getStacktrace()?.getValue()).toContain(userCodeStatement);
   });
+  it("should fail the orchestration when the generator yields a non-Task value after catching an exception", async () => {
+    const dummyActivity = async (_: ActivityContext) => {
+      // do nothing
+    };
+    // This orchestrator catches the exception and yields a non-Task value (a string).
+    // The runtime should detect this and fail the orchestration with a clear error message,
+    // matching the validation already present in the isComplete path.
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      try {
+        yield ctx.callActivity(dummyActivity);
+      } catch {
+        yield "not a task" as any;
+      }
+    };
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(dummyActivity);
+    const oldEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID, undefined),
+      newTaskScheduledEvent(1, activityName),
+    ];
+    const ex = new Error("Activity failed");
+    const newEvents = [newTaskFailedEvent(1, ex)];
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("non-Task");
+  });
+
+  it("should complete successfully when the generator catches an exception and yields a new Task", async () => {
+    const failingActivity = async (_: ActivityContext) => {
+      throw new Error("fail");
+    };
+    const successActivity = async (_: ActivityContext) => {
+      return "ok";
+    };
+    // This orchestrator catches the exception from the first activity and
+    // yields a new activity call. The runtime should process the new task correctly.
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      try {
+        yield ctx.callActivity(failingActivity);
+      } catch {
+        const result = yield ctx.callActivity(successActivity);
+        return result;
+      }
+    };
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const failingName = registry.addActivity(failingActivity);
+    const successName = registry.addActivity(successActivity);
+
+    // First execution: activity fails, orchestrator catches and schedules a new activity
+    const oldEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID, undefined),
+      newTaskScheduledEvent(1, failingName),
+    ];
+    const ex = new Error("Activity failed");
+    const newEvents = [newTaskFailedEvent(1, ex)];
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    let result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    // Should have scheduled a new activity (scheduleTask action)
+    expect(result.actions.length).toEqual(1);
+    expect(result.actions[0].hasScheduletask()).toBe(true);
+
+    // Second execution: replay + new activity completes
+    const replayEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID, undefined),
+      newTaskScheduledEvent(1, failingName),
+      newTaskFailedEvent(1, ex),
+      newTaskScheduledEvent(2, successName),
+    ];
+    const completionEvents = [newTaskCompletedEvent(2, JSON.stringify("ok"))];
+    const executor2 = new OrchestrationExecutor(registry, testLogger);
+    result = await executor2.execute(TEST_INSTANCE_ID, replayEvents, completionEvents);
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify("ok"));
+  });
+
   it("should test the non-determinism detection logic when callTimer is expected but some other method (callActivity) is called instead", async () => {
     const dummyActivity = async (_: ActivityContext) => {
       // do nothing
