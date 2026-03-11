@@ -2041,4 +2041,97 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
       expect(state?.failureDetails?.message).toContain("nested-whenAll-failure");
     }, 31000);
   });
+
+  // Issue #159: Missing non-Task validation in generator failure recovery path
+  describe("non-Task yield validation after catching task failure", () => {
+    it("should fail orchestration when generator catches a task failure and yields a non-Task value", async () => {
+      const failingActivity = async (_: ActivityContext): Promise<string> => {
+        throw new Error("activity failure for non-Task yield test");
+      };
+
+      // This orchestrator catches the activity failure but then yields a plain number
+      // instead of a Task — this should fail the orchestration with a clear error
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        try {
+          yield ctx.callActivity(failingActivity);
+        } catch {
+          yield 42 as any; // Bug: yielding a non-Task value after catching an exception
+        }
+        return "should not reach here";
+      };
+
+      taskHubWorker.addActivity(failingActivity);
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+      expect(state?.failureDetails).toBeDefined();
+      expect(state?.failureDetails?.message).toContain("non-Task");
+    }, 31000);
+
+    it("should fail orchestration when generator catches a task failure and yields a string", async () => {
+      const failingActivity = async (_: ActivityContext): Promise<string> => {
+        throw new Error("activity failure for string yield test");
+      };
+
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        try {
+          yield ctx.callActivity(failingActivity);
+        } catch {
+          yield "not a task" as any;
+        }
+        return "should not reach here";
+      };
+
+      taskHubWorker.addActivity(failingActivity);
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+      expect(state?.failureDetails).toBeDefined();
+      expect(state?.failureDetails?.message).toContain("non-Task");
+    }, 31000);
+
+    it("should succeed when generator catches a task failure and yields a valid new Task", async () => {
+      const failingActivity = async (_: ActivityContext): Promise<string> => {
+        throw new Error("activity failure for recovery test");
+      };
+
+      const recoveryActivity = async (_: ActivityContext): Promise<string> => {
+        return "recovered-value";
+      };
+
+      // This orchestrator catches the activity failure and correctly recovers
+      // by yielding a new Task from callActivity
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        try {
+          yield ctx.callActivity(failingActivity);
+        } catch {
+          const result: string = yield ctx.callActivity(recoveryActivity);
+          return result;
+        }
+      };
+
+      taskHubWorker.addActivity(failingActivity);
+      taskHubWorker.addActivity(recoveryActivity);
+      taskHubWorker.addOrchestrator(orchestrator);
+      await taskHubWorker.start();
+
+      const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.failureDetails).toBeUndefined();
+      expect(state?.serializedOutput).toEqual(JSON.stringify("recovered-value"));
+    }, 31000);
+  });
 });

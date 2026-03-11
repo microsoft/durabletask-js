@@ -164,6 +164,8 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
           }
           return;
         }
+
+        throw new Error("The orchestrator generator yielded a non-Task object");
       } else if (this._previousTask.isComplete) {
         while (true) {
           // Resume the generator. This will either return a Task or raise StopIteration if it's done.
