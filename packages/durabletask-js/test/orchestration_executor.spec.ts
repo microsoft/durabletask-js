@@ -28,6 +28,7 @@ import { ActivityContext } from "../src/task/context/activity-context";
 import { CompletableTask } from "../src/task/completable-task";
 import { Task } from "../src/task/task";
 import { getName, whenAll, whenAny } from "../src/task";
+import { RuntimeOrchestrationContext } from "../src/worker/runtime-orchestration-context";
 
 // Use NoOpLogger to suppress log output during tests
 const testLogger = new NoOpLogger();
@@ -246,6 +247,103 @@ describe("Orchestration Executor", () => {
     // const userCodeStatement = "ctx.callActivity(dummyActivity, orchestratorInput)";
     // expect(completeAction?.getFailuredetails()?.getStacktrace()?.getValue()).toContain(userCodeStatement);
   });
+  it("should handle a task completion event with an unmatched taskScheduledId without error", async () => {
+    const dummyActivity = async (_: ActivityContext) => {
+      // do nothing
+    };
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
+      const result = yield ctx.callActivity(dummyActivity);
+      return result;
+    };
+    const registry = new Registry();
+    const name = registry.addOrchestrator(orchestrator);
+    const oldEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined),
+      newTaskScheduledEvent(1, dummyActivity.name),
+    ];
+    // Send a completion event with a non-matching taskScheduledId (999)
+    const newEvents = [newTaskCompletedEvent(999, JSON.stringify("result"))];
+    const executor = new OrchestrationExecutor(registry, testLogger);
+
+    // Should not throw — the unmatched event is logged and the orchestration continues waiting
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    // Orchestration should still be waiting (task at id 1 was not completed)
+    expect(result.actions.length).toEqual(0);
+  });
+
+  it("should handle a task completion event with taskScheduledId 0 by looking up the task (not skipping due to falsy 0)", async () => {
+    // This test validates the fix for issue #148: the old code used `if (taskId)` which
+    // treated taskId === 0 as falsy and skipped the lookup entirely. The fix uses
+    // `if (taskId !== undefined)` so that 0 is properly looked up.
+    const dummyActivity = async (_: ActivityContext) => {
+      // do nothing
+    };
+    const injectedTask = new CompletableTask<string>();
+
+    // Use an orchestrator that injects a CompletableTask at _pendingTasks[0]
+    // to simulate a task with taskScheduledId = 0
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
+      const runtimeCtx = ctx as unknown as RuntimeOrchestrationContext;
+      runtimeCtx._pendingTasks[0] = injectedTask;
+      const result = yield ctx.callActivity(dummyActivity);
+      return result;
+    };
+    const registry = new Registry();
+    const name = registry.addOrchestrator(orchestrator);
+    registry.addActivity(dummyActivity);
+    const oldEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined),
+      newTaskScheduledEvent(1, dummyActivity.name),
+    ];
+    // Send completion for taskId 0 — with the fix, this completes the injected task
+    const newEvents = [newTaskCompletedEvent(0, JSON.stringify("result-for-zero"))];
+    const executor = new OrchestrationExecutor(registry, testLogger);
+
+    await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    // With the fix (taskId !== undefined): the lookup at _pendingTasks[0] finds the injected
+    // task and completes it. With the old code (if (taskId)): 0 is falsy, the lookup is
+    // skipped, and the task is never completed.
+    expect(injectedTask.isComplete).toBe(true);
+    expect(injectedTask.getResult()).toEqual("result-for-zero");
+  });
+
+  it("should handle a sub-orchestration completion event with taskScheduledId 0 by looking up the task", async () => {
+    // Same regression test as above but for handleSubOrchestrationCompleted
+    const subOrchestrator = async (_: OrchestrationContext) => {
+      // do nothing
+    };
+    const injectedTask = new CompletableTask<string>();
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
+      const runtimeCtx = ctx as unknown as RuntimeOrchestrationContext;
+      // Inject a CompletableTask at ID 0
+      runtimeCtx._pendingTasks[0] = injectedTask;
+      const res = yield ctx.callSubOrchestrator(subOrchestrator);
+      return res;
+    };
+    const registry = new Registry();
+    const subOrchestratorName = registry.addOrchestrator(subOrchestrator);
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const oldEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID, undefined),
+      newSubOrchestrationCreatedEvent(1, subOrchestratorName, "sub-orch-123"),
+    ];
+    // Send completion for taskId 0
+    const newEvents = [newSubOrchestrationCompletedEvent(0, JSON.stringify("sub-result-zero"))];
+    const executor = new OrchestrationExecutor(registry, testLogger);
+
+    await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    // With the fix: the lookup at _pendingTasks[0] finds the injected task and completes it.
+    // With the old code: 0 is falsy, lookup is skipped, task never completed.
+    expect(injectedTask.isComplete).toBe(true);
+    expect(injectedTask.getResult()).toEqual("sub-result-zero");
+  });
+
   it("should test the non-determinism detection logic when callTimer is expected but some other method (callActivity) is called instead", async () => {
     const dummyActivity = async (_: ActivityContext) => {
       // do nothing

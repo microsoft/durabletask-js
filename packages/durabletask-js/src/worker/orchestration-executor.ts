@@ -393,7 +393,7 @@ export class OrchestrationExecutor {
 
     let subOrchTask;
 
-    if (taskId) {
+    if (taskId !== undefined) {
       subOrchTask = ctx._pendingTasks[taskId];
       delete ctx._pendingTasks[taskId];
     }
@@ -694,7 +694,7 @@ export class OrchestrationExecutor {
   ): Promise<void> {
     let task;
 
-    if (taskId) {
+    if (taskId !== undefined) {
       task = ctx._pendingTasks[taskId];
       delete ctx._pendingTasks[taskId];
     }
