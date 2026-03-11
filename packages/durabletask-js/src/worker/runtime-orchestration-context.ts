@@ -167,6 +167,8 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
           return;
         }
 
+        // The generator yielded a non-Task value after catching the exception.
+        // This is a user error — orchestrators must only yield Task objects.
         throw new Error("The orchestrator generator yielded a non-Task object");
       } else if (this._previousTask.isComplete) {
         while (true) {
