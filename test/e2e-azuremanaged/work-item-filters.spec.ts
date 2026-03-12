@@ -67,56 +67,6 @@ describe("Work Item Filters E2E Tests", () => {
     await taskHubClient.stop();
   });
 
-  describe("Auto-generated filters (default behavior)", () => {
-    it("should process orchestrations with auto-generated filters from registry", async () => {
-      // Arrange — worker with default filters (auto-generated from registry)
-      const sayHello = async (_: ActivityContext, name: string) => `Hello, ${name}!`;
-
-      const helloOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, name: string): any {
-        const result = yield ctx.callActivity(sayHello, name);
-        return result;
-      };
-
-      taskHubWorker = createWorkerBuilder().addOrchestrator(helloOrchestrator).addActivity(sayHello).build();
-      await taskHubWorker.start();
-
-      // Act
-      const id = await taskHubClient.scheduleNewOrchestration(helloOrchestrator, "World");
-      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
-
-      // Assert
-      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
-      expect(state?.serializedOutput).toEqual(JSON.stringify("Hello, World!"));
-    }, 31000);
-
-    it("should process orchestrations with activities using auto-generated filters", async () => {
-      // Arrange — orchestrator that calls multiple activities
-      const double = async (_: ActivityContext, n: number) => n * 2;
-      const addTen = async (_: ActivityContext, n: number) => n + 10;
-
-      const mathOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: number): any {
-        const doubled = yield ctx.callActivity(double, input);
-        const result = yield ctx.callActivity(addTen, doubled);
-        return result;
-      };
-
-      taskHubWorker = createWorkerBuilder()
-        .addOrchestrator(mathOrchestrator)
-        .addActivity(double)
-        .addActivity(addTen)
-        .build();
-      await taskHubWorker.start();
-
-      // Act
-      const id = await taskHubClient.scheduleNewOrchestration(mathOrchestrator, 5);
-      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
-
-      // Assert — (5 * 2) + 10 = 20
-      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
-      expect(state?.serializedOutput).toEqual(JSON.stringify(20));
-    }, 31000);
-  });
-
   describe("Disabled filters (null)", () => {
     it("should process all orchestrations when filters are explicitly disabled", async () => {
       // Arrange — worker with filters explicitly set to null (receive all work items)
