@@ -148,6 +148,27 @@ export class Registry {
     return this._entities[name.toLowerCase()];
   }
 
+  /**
+   * Gets the names of all registered orchestrators.
+   */
+  getOrchestratorNames(): string[] {
+    return Object.keys(this._orchestrators);
+  }
+
+  /**
+   * Gets the names of all registered activities.
+   */
+  getActivityNames(): string[] {
+    return Object.keys(this._activities);
+  }
+
+  /**
+   * Gets the names of all registered entities.
+   */
+  getEntityNames(): string[] {
+    return Object.keys(this._entities);
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
   _getFunctionName(fn: Function): string {
     if (fn.name) {
