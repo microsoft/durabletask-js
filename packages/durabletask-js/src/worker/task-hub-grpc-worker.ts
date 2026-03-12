@@ -22,6 +22,7 @@ import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 import { Logger, ConsoleLogger } from "../types/logger.type";
 import { ExponentialBackoff, sleep, withTimeout } from "../utils/backoff.util";
 import { VersioningOptions, VersionMatchStrategy, VersionFailureStrategy } from "./versioning-options";
+import { WorkItemFilters, generateWorkItemFiltersFromRegistry, toGrpcWorkItemFilters } from "./work-item-filters";
 import { compareVersions } from "../utils/versioning.util";
 import * as WorkerLogs from "./logs";
 import {
@@ -60,6 +61,14 @@ export interface TaskHubGrpcWorkerOptions {
   shutdownTimeoutMs?: number;
   /** Optional versioning options for filtering orchestrations by version. */
   versioning?: VersioningOptions;
+  /**
+   * Optional work item filters to control which work items the worker receives.
+   * When set, only work items matching these filters will be dispatched to this worker.
+   * When undefined (default), filters are auto-generated from the registered
+   * orchestrations, activities, and entities.
+   * Set to null to explicitly disable filtering (receive all work items).
+   */
+  workItemFilters?: WorkItemFilters | null;
 }
 
 export class TaskHubGrpcWorker {
@@ -78,6 +87,7 @@ export class TaskHubGrpcWorker {
   private _shutdownTimeoutMs: number;
   private _backoff: ExponentialBackoff;
   private _versioning?: VersioningOptions;
+  private _workItemFilters?: WorkItemFilters | null;
 
   /**
    * Creates a new TaskHubGrpcWorker instance.
@@ -125,6 +135,7 @@ export class TaskHubGrpcWorker {
     let resolvedLogger: Logger | undefined;
     let resolvedShutdownTimeoutMs: number | undefined;
     let resolvedVersioning: VersioningOptions | undefined;
+    let resolvedWorkItemFilters: WorkItemFilters | null | undefined;
 
     if (typeof hostAddressOrOptions === "object" && hostAddressOrOptions !== null) {
       // Options object constructor
@@ -136,6 +147,7 @@ export class TaskHubGrpcWorker {
       resolvedLogger = hostAddressOrOptions.logger;
       resolvedShutdownTimeoutMs = hostAddressOrOptions.shutdownTimeoutMs;
       resolvedVersioning = hostAddressOrOptions.versioning;
+      resolvedWorkItemFilters = hostAddressOrOptions.workItemFilters;
     } else {
       // Deprecated positional parameters constructor
       resolvedHostAddress = hostAddressOrOptions;
@@ -166,6 +178,7 @@ export class TaskHubGrpcWorker {
       multiplier: 2,
     });
     this._versioning = resolvedVersioning;
+    this._workItemFilters = resolvedWorkItemFilters;
   }
 
   /**
@@ -333,7 +346,17 @@ export class TaskHubGrpcWorker {
 
       // Stream work items from the sidecar (pass metadata for insecure connections)
       const metadata = await this._getMetadata();
-      const stream = client.stub.getWorkItems(new pb.GetWorkItemsRequest(), metadata);
+      const request = new pb.GetWorkItemsRequest();
+
+      // Build and attach work item filters to the request.
+      // null means explicitly no filters (receive all work items).
+      // undefined means auto-generate from the registry.
+      if (this._workItemFilters !== null) {
+        const filters = this._workItemFilters ?? generateWorkItemFiltersFromRegistry(this._registry, this._versioning);
+        request.setWorkitemfilters(toGrpcWorkItemFilters(filters));
+      }
+
+      const stream = client.stub.getWorkItems(request, metadata);
       this._responseStream = stream;
 
       WorkerLogs.workerConnected(this._logger, this._hostAddress ?? "localhost:4001");
