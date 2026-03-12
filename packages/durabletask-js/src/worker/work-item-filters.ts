@@ -114,7 +114,8 @@ export function toGrpcWorkItemFilters(filters: WorkItemFilters): pb.WorkItemFilt
   if (filters.entities) {
     for (const entFilter of filters.entities) {
       const grpcEntFilter = new pb.EntityFilter();
-      grpcEntFilter.setName(entFilter.name);
+      // Entity names are normalized to lowercase in the backend (matching .NET SDK behavior)
+      grpcEntFilter.setName(entFilter.name.toLowerCase());
       grpcFilters.addEntities(grpcEntFilter);
     }
   }

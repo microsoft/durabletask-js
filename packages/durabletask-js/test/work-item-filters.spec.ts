@@ -192,10 +192,10 @@ describe("WorkItemFilters", () => {
       // Act
       const grpcFilters = toGrpcWorkItemFilters(filters);
 
-      // Assert
+      // Assert — entity names are normalized to lowercase
       const entList = grpcFilters.getEntitiesList();
       expect(entList).toHaveLength(1);
-      expect(entList[0].getName()).toBe("MyEntity");
+      expect(entList[0].getName()).toBe("myentity");
     });
 
     it("should convert multiple entity filters", () => {
@@ -207,11 +207,11 @@ describe("WorkItemFilters", () => {
       // Act
       const grpcFilters = toGrpcWorkItemFilters(filters);
 
-      // Assert
+      // Assert — entity names are normalized to lowercase
       const entList = grpcFilters.getEntitiesList();
       expect(entList).toHaveLength(2);
-      expect(entList[0].getName()).toBe("Entity1");
-      expect(entList[1].getName()).toBe("Entity2");
+      expect(entList[0].getName()).toBe("entity1");
+      expect(entList[1].getName()).toBe("entity2");
     });
 
     it("should convert mixed filters with orchestrations, activities, and entities", () => {
@@ -234,7 +234,7 @@ describe("WorkItemFilters", () => {
       expect(grpcFilters.getOrchestrationsList()[0].getVersionsList()).toEqual(["1.0"]);
       expect(grpcFilters.getActivitiesList()[0].getName()).toBe("Act1");
       expect(grpcFilters.getActivitiesList()[0].getVersionsList()).toEqual(["2.0"]);
-      expect(grpcFilters.getEntitiesList()[0].getName()).toBe("Ent1");
+      expect(grpcFilters.getEntitiesList()[0].getName()).toBe("ent1");
     });
 
     it("should handle orchestration filter with empty versions array", () => {
@@ -699,7 +699,7 @@ describe("WorkItemFilters", () => {
 
       const entList = filters.getEntitiesList();
       expect(entList).toHaveLength(1);
-      expect(entList[0].getName()).toBe("ExplicitEnt");
+      expect(entList[0].getName()).toBe("explicitent");
     });
 
     it("should include version in auto-generated filters when Strict versioning is set", () => {
