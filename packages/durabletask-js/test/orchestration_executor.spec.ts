@@ -570,6 +570,33 @@ describe("Orchestration Executor", () => {
     // assert user_code_statement in complete_action.failureDetails.stackTrace.value
   });
 
+  it("should not advance the generator when a sub-orchestration completion event has no matching pending task", async () => {
+    const subOrchestrator = async (_: OrchestrationContext) => {
+      // do nothing
+    };
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
+      const res = yield ctx.callSubOrchestrator(subOrchestrator);
+      return res;
+    };
+    const registry = new Registry();
+    const subOrchestratorName = registry.addOrchestrator(subOrchestrator);
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const oldEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID, undefined),
+      newSubOrchestrationCreatedEvent(1, subOrchestratorName, "sub-orch-123"),
+    ];
+    // Send a completion event with a taskId (999) that does not match any pending task.
+    // Before the fix, this would call resume() unconditionally. After the fix, it returns
+    // early without advancing the generator, consistent with handleCompletedTask behavior.
+    const newEvents = [newSubOrchestrationCompletedEvent(999, JSON.stringify("unexpected"))];
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    // The orchestration should still be waiting for the real sub-orchestration to complete.
+    // No complete action should be produced.
+    expect(result.actions.length).toEqual(0);
+  });
+
   it("should test that an orchestration can wait for and process an external event sent by a client", async () => {
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
       const res = yield ctx.waitForExternalEvent("my_event");
