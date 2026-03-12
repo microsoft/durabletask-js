@@ -230,5 +230,33 @@ describe("Work Item Filters E2E Tests", () => {
       // Assert — orchestration should remain PENDING because version doesn't match
       expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_PENDING);
     }, 31000);
+
+    it("should not dispatch registered orchestration excluded from explicit filter", async () => {
+      // Arrange — register both orchA and orchB, but only include orchA in the filter
+      const orchA: TOrchestrator = async (_: OrchestrationContext) => "A";
+      const orchB: TOrchestrator = async (_: OrchestrationContext) => "B";
+
+      const filters: WorkItemFilters = {
+        orchestrations: [{ name: "orchA" }],
+      };
+
+      taskHubWorker = createWorkerBuilder()
+        .addOrchestrator(orchA)
+        .addOrchestrator(orchB)
+        .useWorkItemFilters(filters)
+        .build();
+      await taskHubWorker.start();
+
+      // Act — schedule orchB which is registered but NOT in the filter
+      const id = await taskHubClient.scheduleNewOrchestration("orchB", undefined);
+
+      // Wait to give the sidecar time to (not) dispatch it
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      const state = await taskHubClient.getOrchestrationState(id);
+
+      // Assert — orchB should remain PENDING because it's not in the filter,
+      // even though the worker has it registered
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_PENDING);
+    }, 31000);
   });
 });
