@@ -381,12 +381,22 @@ export class TaskHubGrpcWorker {
         await this._createNewClientAndRetry();
       });
 
-      stream.on("error", (err: Error) => {
+      stream.on("error", async (err: Error) => {
         // Ignore cancellation errors when the worker is being stopped intentionally
         if (this._stopWorker) {
           return;
         }
         WorkerLogs.streamErrorInfo(this._logger, err);
+
+        // Clean up the errored stream and retry the connection.
+        // In Node.js, gRPC stream errors (e.g., UNAVAILABLE, transport failures)
+        // may not always be followed by an "end" event. Without recovery here,
+        // the worker would silently stop processing work items.
+        stream.removeAllListeners();
+        stream.on("error", () => {}); // Prevent unhandled "error" after cleanup
+        stream.destroy();
+        WorkerLogs.streamRetry(this._logger, this._backoff.peekNextDelay());
+        await this._createNewClientAndRetry();
       });
     } catch (err) {
       if (this._stopWorker) {
