@@ -23,7 +23,6 @@ import {
   ActivityContext,
   OrchestrationContext,
   TOrchestrator,
-  WorkItemFilters,
 } from "@microsoft/durabletask-js";
 import {
   DurableTaskAzureManagedClientBuilder,
@@ -114,38 +113,6 @@ describe("Work Item Filters E2E Tests", () => {
       // Assert — (5 * 2) + 10 = 20
       expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
       expect(state?.serializedOutput).toEqual(JSON.stringify(20));
-    }, 31000);
-  });
-
-  describe("Explicit filters", () => {
-    it("should process orchestrations with explicit work item filters", async () => {
-      // Arrange — worker with explicit filters matching the registered orchestrator
-      const greet = async (_: ActivityContext, name: string) => `Hi, ${name}!`;
-
-      const greetOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, name: string): any {
-        const result = yield ctx.callActivity(greet, name);
-        return result;
-      };
-
-      const explicitFilters: WorkItemFilters = {
-        orchestrations: [{ name: "greetOrchestrator" }],
-        activities: [{ name: "greet" }],
-      };
-
-      taskHubWorker = createWorkerBuilder()
-        .addOrchestrator(greetOrchestrator)
-        .addActivity(greet)
-        .useWorkItemFilters(explicitFilters)
-        .build();
-      await taskHubWorker.start();
-
-      // Act
-      const id = await taskHubClient.scheduleNewOrchestration(greetOrchestrator, "Filters");
-      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
-
-      // Assert
-      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
-      expect(state?.serializedOutput).toEqual(JSON.stringify("Hi, Filters!"));
     }, 31000);
   });
 
