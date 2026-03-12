@@ -354,11 +354,17 @@ export class TaskHubGrpcWorker {
         } else if (workItem.hasEntityrequest()) {
           const entityRequest = workItem.getEntityrequest() as pb.EntityBatchRequest;
           WorkerLogs.entityRequestReceived(this._logger, entityRequest.getInstanceid(), "Entity Request");
-          this._executeEntity(entityRequest, completionToken, client.stub);
+          this._trackEntityWorkItem(
+            this._executeEntity(entityRequest, completionToken, client.stub),
+            entityRequest.getInstanceid(),
+          );
         } else if (workItem.hasEntityrequestv2()) {
           const entityRequestV2 = workItem.getEntityrequestv2() as pb.EntityRequest;
           WorkerLogs.entityRequestReceived(this._logger, entityRequestV2.getInstanceid(), "Entity Request V2");
-          this._executeEntityV2(entityRequestV2, completionToken, client.stub);
+          this._trackEntityWorkItem(
+            this._executeEntityV2(entityRequestV2, completionToken, client.stub),
+            entityRequestV2.getInstanceid(),
+          );
         } else if (workItem.hasHealthping()) {
           // Health ping - no-op, just a keep-alive message from the server
         } else {
@@ -753,6 +759,25 @@ export class TaskHubGrpcWorker {
     workPromise.finally(() => {
       this._pendingWorkItems.delete(workPromise);
     });
+  }
+
+  /**
+   * Tracks an entity execution promise as a pending work item.
+   *
+   * Entity work items must be tracked so that stop() waits for in-flight
+   * entity operations to complete during graceful shutdown, and so that
+   * execution errors are logged instead of becoming unhandled rejections.
+   */
+  private _trackEntityWorkItem(workPromise: Promise<void>, instanceId: string): void {
+    this._pendingWorkItems.add(workPromise);
+    workPromise
+      .catch((e: unknown) => {
+        const error = e instanceof Error ? e : new Error(String(e));
+        WorkerLogs.entityExecutionFailed(this._logger, instanceId, error);
+      })
+      .finally(() => {
+        this._pendingWorkItems.delete(workPromise);
+      });
   }
 
   /**
