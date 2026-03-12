@@ -13,16 +13,12 @@ import { ITaskEntity } from "../src/entities/task-entity";
 import { TaskEntityOperation } from "../src/entities/task-entity-operation";
 
 // Helper orchestrators/activities/entities for tests
-function myOrchestrator() {
-  return async function* () {
-    yield;
-  };
+async function* myOrchestrator() {
+  yield;
 }
 
-function anotherOrchestrator() {
-  return async function* () {
-    yield;
-  };
+async function* anotherOrchestrator() {
+  yield;
 }
 
 function myActivity() {
@@ -633,6 +629,96 @@ describe("WorkItemFilters", () => {
       expect(grpcFilters.getOrchestrationsList()[0].getVersionsList()).toEqual([]);
       expect(grpcFilters.getActivitiesList()[0].getName()).toBe("Task1");
       expect(grpcFilters.getActivitiesList()[0].getVersionsList()).toEqual([]);
+    });
+  });
+
+  describe("TaskHubGrpcWorker._buildGetWorkItemsRequest", () => {
+    it("should auto-generate filters from registry when workItemFilters is undefined", () => {
+      // Arrange
+      const worker = new TaskHubGrpcWorker({
+        hostAddress: "localhost:4001",
+      });
+      worker.addOrchestrator(myOrchestrator);
+      worker.addActivity(myActivity);
+
+      // Act
+      const request = worker._buildGetWorkItemsRequest();
+
+      // Assert
+      expect(request.hasWorkitemfilters()).toBe(true);
+      const filters = request.getWorkitemfilters()!;
+      const orchNames = filters.getOrchestrationsList().map((o) => o.getName());
+      const actNames = filters.getActivitiesList().map((a) => a.getName());
+      expect(orchNames).toContain("myOrchestrator");
+      expect(actNames).toContain("myActivity");
+    });
+
+    it("should omit filters when workItemFilters is null", () => {
+      // Arrange
+      const worker = new TaskHubGrpcWorker({
+        hostAddress: "localhost:4001",
+        workItemFilters: null,
+      });
+      worker.addOrchestrator(myOrchestrator);
+
+      // Act
+      const request = worker._buildGetWorkItemsRequest();
+
+      // Assert
+      expect(request.hasWorkitemfilters()).toBe(false);
+    });
+
+    it("should use explicit filters when workItemFilters is provided", () => {
+      // Arrange
+      const worker = new TaskHubGrpcWorker({
+        hostAddress: "localhost:4001",
+        workItemFilters: {
+          orchestrations: [{ name: "ExplicitOrch", versions: ["2.0"] }],
+          activities: [{ name: "ExplicitAct" }],
+          entities: [{ name: "ExplicitEnt" }],
+        },
+      });
+      // Register different names to prove explicit filters take precedence
+      worker.addOrchestrator(myOrchestrator);
+
+      // Act
+      const request = worker._buildGetWorkItemsRequest();
+
+      // Assert
+      expect(request.hasWorkitemfilters()).toBe(true);
+      const filters = request.getWorkitemfilters()!;
+
+      const orchList = filters.getOrchestrationsList();
+      expect(orchList).toHaveLength(1);
+      expect(orchList[0].getName()).toBe("ExplicitOrch");
+      expect(orchList[0].getVersionsList()).toEqual(["2.0"]);
+
+      const actList = filters.getActivitiesList();
+      expect(actList).toHaveLength(1);
+      expect(actList[0].getName()).toBe("ExplicitAct");
+
+      const entList = filters.getEntitiesList();
+      expect(entList).toHaveLength(1);
+      expect(entList[0].getName()).toBe("ExplicitEnt");
+    });
+
+    it("should include version in auto-generated filters when Strict versioning is set", () => {
+      // Arrange
+      const worker = new TaskHubGrpcWorker({
+        hostAddress: "localhost:4001",
+        versioning: {
+          version: "3.0.0",
+          matchStrategy: VersionMatchStrategy.Strict,
+        },
+      });
+      worker.addOrchestrator(myOrchestrator);
+
+      // Act
+      const request = worker._buildGetWorkItemsRequest();
+
+      // Assert
+      const filters = request.getWorkitemfilters()!;
+      expect(filters.getOrchestrationsList()[0].getVersionsList()).toEqual(["3.0.0"]);
     });
   });
 });

@@ -346,15 +346,7 @@ export class TaskHubGrpcWorker {
 
       // Stream work items from the sidecar (pass metadata for insecure connections)
       const metadata = await this._getMetadata();
-      const request = new pb.GetWorkItemsRequest();
-
-      // Build and attach work item filters to the request.
-      // null means explicitly no filters (receive all work items).
-      // undefined means auto-generate from the registry.
-      if (this._workItemFilters !== null) {
-        const filters = this._workItemFilters ?? generateWorkItemFiltersFromRegistry(this._registry, this._versioning);
-        request.setWorkitemfilters(toGrpcWorkItemFilters(filters));
-      }
+      const request = this._buildGetWorkItemsRequest();
 
       const stream = client.stub.getWorkItems(request, metadata);
       this._responseStream = stream;
@@ -491,6 +483,23 @@ export class TaskHubGrpcWorker {
     // Brief pause to allow gRPC cleanup
     // https://github.com/grpc/grpc-node/issues/1563#issuecomment-829483711
     await sleep(1000);
+  }
+
+  /**
+   * Builds the GetWorkItemsRequest, attaching work item filters based on configuration.
+   * - null: no filters sent (receive all work items)
+   * - undefined: auto-generate from the registry
+   * - explicit WorkItemFilters: use as provided
+   */
+  _buildGetWorkItemsRequest(): pb.GetWorkItemsRequest {
+    const request = new pb.GetWorkItemsRequest();
+
+    if (this._workItemFilters !== null) {
+      const filters = this._workItemFilters ?? generateWorkItemFiltersFromRegistry(this._registry, this._versioning);
+      request.setWorkitemfilters(toGrpcWorkItemFilters(filters));
+    }
+
+    return request;
   }
 
   /**
