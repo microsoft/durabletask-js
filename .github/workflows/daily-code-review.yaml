@@ -15,7 +15,7 @@ permissions:
 jobs:
   daily-code-review:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     env:
       NODE_VER: "22"
@@ -178,7 +178,7 @@ jobs:
           # The GITHUB_TOKEN is repo-scoped and branch protections prevent direct pushes
           # to main. The agent can only create PRs, not merge them.
           EXIT_CODE=0
-          timeout --foreground --signal=TERM --kill-after=30s 1200s \
+          timeout --foreground --signal=TERM --kill-after=30s 2400s \
             copilot \
               --prompt "$FULL_PROMPT" \
               --model "claude-opus-4.6" \
@@ -187,7 +187,7 @@ jobs:
               < /dev/null 2>&1 || EXIT_CODE=$?
 
           if [ $EXIT_CODE -eq 124 ]; then
-            echo "::warning::Agent timed out after 20 minutes"
+            echo "::warning::Agent timed out after 40 minutes"
           elif [ $EXIT_CODE -ne 0 ]; then
             echo "::warning::Agent exited with code $EXIT_CODE"
           fi
