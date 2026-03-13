@@ -66,7 +66,9 @@ function createWorkerWithVersioning(
     ? new DurableTaskAzureManagedWorkerBuilder().connectionString(connectionString)
     : new DurableTaskAzureManagedWorkerBuilder().endpoint(endpoint, taskHub, null);
 
-  return builder.versioning({ version, matchStrategy, failureStrategy }).build();
+  // Disable auto-generated work item filters so version mismatches are handled
+  // by the SDK's local versioning logic, not by server-side filter enforcement.
+  return builder.versioning({ version, matchStrategy, failureStrategy }).useWorkItemFilters(null).build();
 }
 
 describe("Durable Task Scheduler (DTS) E2E Tests", () => {
