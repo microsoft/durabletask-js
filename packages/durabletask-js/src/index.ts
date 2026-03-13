@@ -5,6 +5,14 @@
 export { TaskHubGrpcClient, TaskHubGrpcClientOptions, MetadataGenerator } from "./client/client";
 export { TaskHubGrpcWorker, TaskHubGrpcWorkerOptions } from "./worker/task-hub-grpc-worker";
 export { VersioningOptions, VersionMatchStrategy, VersionFailureStrategy } from "./worker/versioning-options";
+export {
+  WorkItemFilters,
+  OrchestrationWorkItemFilter,
+  ActivityWorkItemFilter,
+  EntityWorkItemFilter,
+  generateWorkItemFiltersFromRegistry,
+  toGrpcWorkItemFilters,
+} from "./worker/work-item-filters";
 
 // Contexts
 export { OrchestrationContext } from "./task/context/orchestration-context";

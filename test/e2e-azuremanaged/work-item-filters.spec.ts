@@ -1,0 +1,215 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
+/**
+ * E2E tests for Work Item Filters.
+ *
+ * These tests verify that work item filters correctly control which work items
+ * a worker receives from the sidecar. By default, filters are auto-generated
+ * from registered orchestrations, activities, and entities. Users can also
+ * provide explicit filters or disable filtering entirely.
+ *
+ * Environment variables (choose one):
+ *   - DTS_CONNECTION_STRING: Full connection string
+ *   OR
+ *   - ENDPOINT: The endpoint for the DTS emulator (default: localhost:8080)
+ *   - TASKHUB: The task hub name (default: default)
+ */
+
+import {
+  TaskHubGrpcClient,
+  TaskHubGrpcWorker,
+  ProtoOrchestrationStatus as OrchestrationStatus,
+  ActivityContext,
+  OrchestrationContext,
+  TOrchestrator,
+  WorkItemFilters,
+} from "@microsoft/durabletask-js";
+import {
+  DurableTaskAzureManagedClientBuilder,
+  DurableTaskAzureManagedWorkerBuilder,
+} from "@microsoft/durabletask-js-azuremanaged";
+
+const connectionString = process.env.DTS_CONNECTION_STRING;
+const endpoint = process.env.ENDPOINT || "localhost:8080";
+const taskHub = process.env.TASKHUB || "default";
+
+function createClient(): TaskHubGrpcClient {
+  if (connectionString) {
+    return new DurableTaskAzureManagedClientBuilder().connectionString(connectionString).build();
+  }
+  return new DurableTaskAzureManagedClientBuilder()
+    .endpoint(endpoint, taskHub, null)
+    .build();
+}
+
+function createWorkerBuilder(): DurableTaskAzureManagedWorkerBuilder {
+  if (connectionString) {
+    return new DurableTaskAzureManagedWorkerBuilder().connectionString(connectionString);
+  }
+  return new DurableTaskAzureManagedWorkerBuilder().endpoint(endpoint, taskHub, null);
+}
+
+describe("Work Item Filters E2E Tests", () => {
+  let taskHubClient: TaskHubGrpcClient;
+  let taskHubWorker: TaskHubGrpcWorker;
+
+  beforeEach(() => {
+    taskHubClient = createClient();
+  });
+
+  afterEach(async () => {
+    try {
+      await taskHubWorker.stop();
+    } catch {
+      // Worker wasn't started or already stopped
+    }
+    await taskHubClient.stop();
+  });
+
+  describe("Disabled filters (null)", () => {
+    it("should process all orchestrations when filters are explicitly disabled", async () => {
+      // Arrange — worker with filters explicitly set to null (receive all work items)
+      const echo = async (_: ActivityContext, input: string) => input;
+
+      const echoOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: string): any {
+        const result = yield ctx.callActivity(echo, input);
+        return result;
+      };
+
+      taskHubWorker = createWorkerBuilder()
+        .addOrchestrator(echoOrchestrator)
+        .addActivity(echo)
+        .useWorkItemFilters(null)
+        .build();
+      await taskHubWorker.start();
+
+      // Act
+      const id = await taskHubClient.scheduleNewOrchestration(echoOrchestrator, "no-filter");
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      // Assert
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.serializedOutput).toEqual(JSON.stringify("no-filter"));
+    }, 31000);
+  });
+
+  describe("Filters with versions", () => {
+    it("should process orchestration with explicit versioned filters", async () => {
+      // Arrange — worker with explicit filters that include specific versions
+      const greet = async (_: ActivityContext, name: string) => `Hello v3, ${name}!`;
+
+      const greetOrch: TOrchestrator = async function* (ctx: OrchestrationContext, name: string): any {
+        const result = yield ctx.callActivity(greet, name);
+        return result;
+      };
+
+      const filters: WorkItemFilters = {
+        orchestrations: [{ name: "greetOrch", versions: ["3.0.0"] }],
+        activities: [{ name: "greet", versions: ["3.0.0"] }],
+      };
+
+      taskHubWorker = createWorkerBuilder()
+        .addOrchestrator(greetOrch)
+        .addActivity(greet)
+        .useWorkItemFilters(filters)
+        .build();
+      await taskHubWorker.start();
+
+      // Act — schedule with the version that matches the filter
+      const id = await taskHubClient.scheduleNewOrchestration(greetOrch, "VersionTest", {
+        version: "3.0.0",
+      });
+      const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+      // Assert
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.serializedOutput).toEqual(JSON.stringify("Hello v3, VersionTest!"));
+    }, 31000);
+  });
+
+  // TODO: Enable after the DTS emulator supports server-side work item filter enforcement.
+  // These tests pass against a real DTS scheduler but the emulator (used in CI) dispatches
+  // all work items regardless of filters, causing these to fail.
+  describe.skip("Filtered-out work items", () => {
+    it("should not dispatch orchestration that is not in the filter", async () => {
+      // Arrange — worker only registers (and auto-filters for) 'registeredOrch',
+      // then we schedule 'unregisteredOrch' which is NOT in the filter
+      const registeredOrch: TOrchestrator = async (_: OrchestrationContext) => {
+        return "registered";
+      };
+
+      taskHubWorker = createWorkerBuilder().addOrchestrator(registeredOrch).build();
+      await taskHubWorker.start();
+
+      // Act — schedule an orchestration by name that doesn't match any filter
+      const id = await taskHubClient.scheduleNewOrchestration("unregisteredOrch", undefined);
+
+      // Wait a bit to give the sidecar time to (not) dispatch it
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      const state = await taskHubClient.getOrchestrationState(id);
+
+      // Assert — orchestration should remain PENDING because the sidecar won't
+      // dispatch it to this worker (its name isn't in the filter)
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_PENDING);
+    }, 31000);
+
+    it("should not dispatch orchestration when name matches but version does not", async () => {
+      // Arrange — worker with versioned filter only accepting version "1.0.0",
+      // then we schedule the same orchestration name but with version "9.9.9"
+      const myOrch: TOrchestrator = async (_: OrchestrationContext) => {
+        return "should not run";
+      };
+
+      const filters: WorkItemFilters = {
+        orchestrations: [{ name: "myOrch", versions: ["1.0.0"] }],
+      };
+
+      taskHubWorker = createWorkerBuilder()
+        .addOrchestrator(myOrch)
+        .useWorkItemFilters(filters)
+        .build();
+      await taskHubWorker.start();
+
+      // Act — schedule with a version that does NOT match the filter
+      const id = await taskHubClient.scheduleNewOrchestration("myOrch", undefined, {
+        version: "9.9.9",
+      });
+
+      // Wait to give the sidecar time to (not) dispatch it
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      const state = await taskHubClient.getOrchestrationState(id);
+
+      // Assert — orchestration should remain PENDING because version doesn't match
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_PENDING);
+    }, 31000);
+
+    it("should not dispatch registered orchestration excluded from explicit filter", async () => {
+      // Arrange — register both orchA and orchB, but only include orchA in the filter
+      const orchA: TOrchestrator = async (_: OrchestrationContext) => "A";
+      const orchB: TOrchestrator = async (_: OrchestrationContext) => "B";
+
+      const filters: WorkItemFilters = {
+        orchestrations: [{ name: "orchA" }],
+      };
+
+      taskHubWorker = createWorkerBuilder()
+        .addOrchestrator(orchA)
+        .addOrchestrator(orchB)
+        .useWorkItemFilters(filters)
+        .build();
+      await taskHubWorker.start();
+
+      // Act — schedule orchB which is registered but NOT in the filter
+      const id = await taskHubClient.scheduleNewOrchestration("orchB", undefined);
+
+      // Wait to give the sidecar time to (not) dispatch it
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      const state = await taskHubClient.getOrchestrationState(id);
+
+      // Assert — orchB should remain PENDING because it's not in the filter,
+      // even though the worker has it registered
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_PENDING);
+    }, 31000);
+  });
+});

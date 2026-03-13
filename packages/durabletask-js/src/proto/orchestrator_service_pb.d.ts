@@ -3661,6 +3661,11 @@ export class GetWorkItemsRequest extends jspb.Message {
     setCapabilitiesList(value: Array<WorkerCapability>): GetWorkItemsRequest;
     addCapabilities(value: WorkerCapability, index?: number): WorkerCapability;
 
+    hasWorkitemfilters(): boolean;
+    clearWorkitemfilters(): void;
+    getWorkitemfilters(): WorkItemFilters | undefined;
+    setWorkitemfilters(value?: WorkItemFilters): GetWorkItemsRequest;
+
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): GetWorkItemsRequest.AsObject;
     static toObject(includeInstance: boolean, msg: GetWorkItemsRequest): GetWorkItemsRequest.AsObject;
@@ -3677,6 +3682,109 @@ export namespace GetWorkItemsRequest {
         maxconcurrentactivityworkitems: number,
         maxconcurrententityworkitems: number,
         capabilitiesList: Array<WorkerCapability>,
+        workitemfilters?: WorkItemFilters.AsObject,
+    }
+}
+
+export class WorkItemFilters extends jspb.Message { 
+    clearOrchestrationsList(): void;
+    getOrchestrationsList(): Array<OrchestrationFilter>;
+    setOrchestrationsList(value: Array<OrchestrationFilter>): WorkItemFilters;
+    addOrchestrations(value?: OrchestrationFilter, index?: number): OrchestrationFilter;
+    clearActivitiesList(): void;
+    getActivitiesList(): Array<ActivityFilter>;
+    setActivitiesList(value: Array<ActivityFilter>): WorkItemFilters;
+    addActivities(value?: ActivityFilter, index?: number): ActivityFilter;
+    clearEntitiesList(): void;
+    getEntitiesList(): Array<EntityFilter>;
+    setEntitiesList(value: Array<EntityFilter>): WorkItemFilters;
+    addEntities(value?: EntityFilter, index?: number): EntityFilter;
+
+    serializeBinary(): Uint8Array;
+    toObject(includeInstance?: boolean): WorkItemFilters.AsObject;
+    static toObject(includeInstance: boolean, msg: WorkItemFilters): WorkItemFilters.AsObject;
+    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+    static serializeBinaryToWriter(message: WorkItemFilters, writer: jspb.BinaryWriter): void;
+    static deserializeBinary(bytes: Uint8Array): WorkItemFilters;
+    static deserializeBinaryFromReader(message: WorkItemFilters, reader: jspb.BinaryReader): WorkItemFilters;
+}
+
+export namespace WorkItemFilters {
+    export type AsObject = {
+        orchestrationsList: Array<OrchestrationFilter.AsObject>,
+        activitiesList: Array<ActivityFilter.AsObject>,
+        entitiesList: Array<EntityFilter.AsObject>,
+    }
+}
+
+export class OrchestrationFilter extends jspb.Message { 
+    getName(): string;
+    setName(value: string): OrchestrationFilter;
+    clearVersionsList(): void;
+    getVersionsList(): Array<string>;
+    setVersionsList(value: Array<string>): OrchestrationFilter;
+    addVersions(value: string, index?: number): string;
+
+    serializeBinary(): Uint8Array;
+    toObject(includeInstance?: boolean): OrchestrationFilter.AsObject;
+    static toObject(includeInstance: boolean, msg: OrchestrationFilter): OrchestrationFilter.AsObject;
+    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+    static serializeBinaryToWriter(message: OrchestrationFilter, writer: jspb.BinaryWriter): void;
+    static deserializeBinary(bytes: Uint8Array): OrchestrationFilter;
+    static deserializeBinaryFromReader(message: OrchestrationFilter, reader: jspb.BinaryReader): OrchestrationFilter;
+}
+
+export namespace OrchestrationFilter {
+    export type AsObject = {
+        name: string,
+        versionsList: Array<string>,
+    }
+}
+
+export class ActivityFilter extends jspb.Message { 
+    getName(): string;
+    setName(value: string): ActivityFilter;
+    clearVersionsList(): void;
+    getVersionsList(): Array<string>;
+    setVersionsList(value: Array<string>): ActivityFilter;
+    addVersions(value: string, index?: number): string;
+
+    serializeBinary(): Uint8Array;
+    toObject(includeInstance?: boolean): ActivityFilter.AsObject;
+    static toObject(includeInstance: boolean, msg: ActivityFilter): ActivityFilter.AsObject;
+    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+    static serializeBinaryToWriter(message: ActivityFilter, writer: jspb.BinaryWriter): void;
+    static deserializeBinary(bytes: Uint8Array): ActivityFilter;
+    static deserializeBinaryFromReader(message: ActivityFilter, reader: jspb.BinaryReader): ActivityFilter;
+}
+
+export namespace ActivityFilter {
+    export type AsObject = {
+        name: string,
+        versionsList: Array<string>,
+    }
+}
+
+export class EntityFilter extends jspb.Message { 
+    getName(): string;
+    setName(value: string): EntityFilter;
+
+    serializeBinary(): Uint8Array;
+    toObject(includeInstance?: boolean): EntityFilter.AsObject;
+    static toObject(includeInstance: boolean, msg: EntityFilter): EntityFilter.AsObject;
+    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+    static serializeBinaryToWriter(message: EntityFilter, writer: jspb.BinaryWriter): void;
+    static deserializeBinary(bytes: Uint8Array): EntityFilter;
+    static deserializeBinaryFromReader(message: EntityFilter, reader: jspb.BinaryReader): EntityFilter;
+}
+
+export namespace EntityFilter {
+    export type AsObject = {
+        name: string,
     }
 }
 
