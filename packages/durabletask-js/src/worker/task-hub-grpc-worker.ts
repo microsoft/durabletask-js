@@ -823,7 +823,23 @@ export class TaskHubGrpcWorker {
   }
 
   /**
-   * Executes an entity batch request.
+   * Executes an entity batch request and tracks it as a pending work item.
+   */
+  private _executeEntity(
+    req: pb.EntityBatchRequest,
+    completionToken: string,
+    stub: stubs.TaskHubSidecarServiceClient,
+    operationInfos?: pb.OperationInfo[],
+  ): void {
+    const workPromise = this._executeEntityInternal(req, completionToken, stub, operationInfos);
+    this._pendingWorkItems.add(workPromise);
+    workPromise.finally(() => {
+      this._pendingWorkItems.delete(workPromise);
+    });
+  }
+
+  /**
+   * Internal implementation of entity batch execution.
    *
    * @param req - The entity batch request from the sidecar.
    * @param completionToken - The completion token for the work item.
@@ -834,7 +850,7 @@ export class TaskHubGrpcWorker {
    * This method looks up the entity by name, creates a TaskEntityShim, executes the batch,
    * and sends the result back to the sidecar.
    */
-  private async _executeEntity(
+  private async _executeEntityInternal(
     req: pb.EntityBatchRequest,
     completionToken: string,
     stub: stubs.TaskHubSidecarServiceClient,
@@ -907,7 +923,22 @@ export class TaskHubGrpcWorker {
   }
 
   /**
-   * Executes an entity request (V2 format).
+   * Executes an entity request (V2 format) and tracks it as a pending work item.
+   */
+  private _executeEntityV2(
+    req: pb.EntityRequest,
+    completionToken: string,
+    stub: stubs.TaskHubSidecarServiceClient,
+  ): void {
+    const workPromise = this._executeEntityV2Internal(req, completionToken, stub);
+    this._pendingWorkItems.add(workPromise);
+    workPromise.finally(() => {
+      this._pendingWorkItems.delete(workPromise);
+    });
+  }
+
+  /**
+   * Internal implementation of V2 entity execution.
    *
    * @param req - The entity request (V2) from the sidecar.
    * @param completionToken - The completion token for the work item.
@@ -918,7 +949,7 @@ export class TaskHubGrpcWorker {
    * instead of OperationRequest. It converts the V2 format to V1 format
    * (EntityBatchRequest) and delegates to the existing execution logic.
    */
-  private async _executeEntityV2(
+  private async _executeEntityV2Internal(
     req: pb.EntityRequest,
     completionToken: string,
     stub: stubs.TaskHubSidecarServiceClient,
@@ -1002,7 +1033,7 @@ export class TaskHubGrpcWorker {
     batchRequest.setOperationsList(operations);
 
     // Delegate to the V1 execution logic with V2 operationInfos
-    await this._executeEntity(batchRequest, completionToken, stub, operationInfos);
+    await this._executeEntityInternal(batchRequest, completionToken, stub, operationInfos);
   }
 
   /**
