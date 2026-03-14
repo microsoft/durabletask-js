@@ -695,6 +695,88 @@ describe("Orchestration Executor", () => {
     expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify("terminated!"));
   });
 
+  it("should match external event names case-insensitively across waitForExternalEvent and handleEventRaised", async () => {
+    // Regression test: waitForExternalEvent must use toLowerCase() (not toLocaleLowerCase())
+    // to stay consistent with handleEventRaised, which uses toLowerCase().
+    // Using toLocaleLowerCase() causes mismatches in locales where the two differ (e.g., Turkish).
+    const testCases = [
+      { waitName: "MY_EVENT", raiseName: "my_event" },
+      { waitName: "my_event", raiseName: "MY_EVENT" },
+      { waitName: "My_Event", raiseName: "MY_EVENT" },
+      { waitName: "ITEM_UPDATED", raiseName: "item_updated" },
+    ];
+
+    for (const { waitName, raiseName } of testCases) {
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
+        const res = yield ctx.waitForExternalEvent(waitName);
+        return res;
+      };
+
+      const registry = new Registry();
+      const orchestratorName = registry.addOrchestrator(orchestrator);
+
+      let oldEvents: any[] = [];
+      let newEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
+
+      // First execution: orchestration waits for the event
+      let executor = new OrchestrationExecutor(registry, testLogger);
+      let result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+      expect(result.actions.length).toBe(0);
+
+      // Second execution: send event with different casing — should still match
+      oldEvents = newEvents;
+      newEvents = [newEventRaisedEvent(raiseName, '"data"')];
+      executor = new OrchestrationExecutor(registry, testLogger);
+      result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+      const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+      expect(completeAction?.getOrchestrationstatus()).toEqual(
+        pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED,
+      );
+      expect(completeAction?.getResult()?.getValue()).toEqual('"data"');
+    }
+  });
+
+  it("should match buffered external events case-insensitively when event arrives before waitForExternalEvent", async () => {
+    // When an event is buffered (arrives before waitForExternalEvent), the executor stores it
+    // using toLowerCase(). waitForExternalEvent must also use toLowerCase() to find it.
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
+      yield ctx.createTimer(new Date(ctx.currentUtcDateTime.getTime() + 24 * 60 * 60 * 1000));
+      const res = yield ctx.waitForExternalEvent("MY_EVENT");
+      return res;
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+
+    let oldEvents: any[] = [];
+    let newEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID),
+      newEventRaisedEvent("my_event", '"buffered_value"'),
+    ];
+
+    // First execution: event arrives early and is buffered; orchestration waits for timer
+    let executor = new OrchestrationExecutor(registry, testLogger);
+    let result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    expect(result.actions.length).toBe(1);
+    expect(result.actions[0].hasCreatetimer()).toBeTruthy();
+
+    // Complete the timer — orchestration should find the buffered event despite different casing
+    const timerDueTime = new Date(Date.now() + 1 * 24 * 60 * 60 * 1000);
+    newEvents.push(newTimerCreatedEvent(1, timerDueTime));
+    oldEvents = newEvents;
+    newEvents = [newTimerFiredEvent(1, timerDueTime)];
+    executor = new OrchestrationExecutor(registry, testLogger);
+    result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED,
+    );
+    expect(completeAction?.getResult()?.getValue()).toEqual('"buffered_value"');
+  });
+
   it("should be able to continue-as-new", async () => {
     for (const saveEvent of [true, false]) {
       const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: number): any {
