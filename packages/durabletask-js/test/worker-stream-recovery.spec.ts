@@ -147,4 +147,62 @@ describe("Worker Stream Recovery", () => {
     expect(mockStream.destroy).toHaveBeenCalled();
     expect(retryMock).toHaveBeenCalledTimes(1);
   });
+
+  it("should not crash if _createNewClientAndRetry rejects during error recovery", async () => {
+    const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+    const { client, mockStream } = createMockClient();
+
+    // Simulate a retry that throws — must not become an unhandled rejection
+    const retryMock = jest.fn().mockRejectedValue(new Error("Retry failed"));
+    (worker as any)._createNewClientAndRetry = retryMock;
+
+    await worker.internalRunWorker(client);
+
+    // Should not throw or cause unhandled promise rejection
+    mockStream.emit("error", new Error("14 UNAVAILABLE: Connection lost"));
+    await flushAsync();
+
+    expect(retryMock).toHaveBeenCalledTimes(1);
+    expect(mockStream.destroy).toHaveBeenCalled();
+  });
+
+  it("should not crash if _createNewClientAndRetry rejects during end recovery", async () => {
+    const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+    const { client, mockStream } = createMockClient();
+
+    // Simulate a retry that throws — must not become an unhandled rejection
+    const retryMock = jest.fn().mockRejectedValue(new Error("Retry failed"));
+    (worker as any)._createNewClientAndRetry = retryMock;
+
+    await worker.internalRunWorker(client);
+
+    // Should not throw or cause unhandled promise rejection
+    mockStream.emit("end");
+    await flushAsync();
+
+    expect(retryMock).toHaveBeenCalledTimes(1);
+    expect(mockStream.destroy).toHaveBeenCalled();
+  });
+
+  it("should also add no-op error guard in end handler to prevent crashes after cleanup", async () => {
+    const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+    const { client, mockStream } = createMockClient();
+
+    const retryMock = jest.fn().mockResolvedValue(undefined);
+    (worker as any)._createNewClientAndRetry = retryMock;
+
+    await worker.internalRunWorker(client);
+
+    // End fires → cleanup removes all listeners
+    mockStream.emit("end");
+    await flushAsync();
+
+    // A stale error after end cleanup must not crash
+    expect(() => {
+      mockStream.emit("error", new Error("Stale error after end cleanup"));
+    }).not.toThrow();
+
+    // The no-op guard should remain
+    expect(mockStream.listenerCount("error")).toBe(1);
+  });
 });

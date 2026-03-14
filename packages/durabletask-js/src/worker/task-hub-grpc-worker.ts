@@ -367,7 +367,7 @@ export class TaskHubGrpcWorker {
       });
 
       // Wait for the stream to end or error
-      stream.on("end", async () => {
+      stream.on("end", () => {
         if (this._stopWorker) {
           WorkerLogs.streamEnded(this._logger);
           stream.removeAllListeners();
@@ -376,12 +376,17 @@ export class TaskHubGrpcWorker {
         }
         // Stream ended unexpectedly - clean up and retry
         stream.removeAllListeners();
+        stream.on("error", () => {}); // Prevent unhandled "error" after cleanup
         stream.destroy();
         WorkerLogs.streamRetry(this._logger, this._backoff.peekNextDelay());
-        await this._createNewClientAndRetry();
+        this._createNewClientAndRetry().catch((retryErr) => {
+          if (!this._stopWorker) {
+            WorkerLogs.workerError(this._logger, retryErr instanceof Error ? retryErr : new Error(String(retryErr)));
+          }
+        });
       });
 
-      stream.on("error", async (err: Error) => {
+      stream.on("error", (err: Error) => {
         // Ignore cancellation errors when the worker is being stopped intentionally
         if (this._stopWorker) {
           return;
@@ -396,7 +401,11 @@ export class TaskHubGrpcWorker {
         stream.on("error", () => {}); // Prevent unhandled "error" after cleanup
         stream.destroy();
         WorkerLogs.streamRetry(this._logger, this._backoff.peekNextDelay());
-        await this._createNewClientAndRetry();
+        this._createNewClientAndRetry().catch((retryErr) => {
+          if (!this._stopWorker) {
+            WorkerLogs.workerError(this._logger, retryErr instanceof Error ? retryErr : new Error(String(retryErr)));
+          }
+        });
       });
     } catch (err) {
       if (this._stopWorker) {
