@@ -2,125 +2,177 @@
 // Licensed under the MIT License.
 
 /**
- * E2E tests for worker stream recovery behavior.
+ * E2E test for worker stream recovery behavior.
  *
- * These tests verify that the TaskHubGrpcWorker handles gRPC connection
- * failures gracefully — specifically that it retries on stream errors and
- * does not crash or hang when the sidecar is unreachable.
- *
- * The test connects to a port where no emulator/sidecar is running, which
- * triggers the exact gRPC UNAVAILABLE errors that the stream recovery logic
- * is designed to handle.
+ * This test verifies the full recovery flow:
+ *   1. Start a worker when the DTS emulator is NOT running
+ *   2. Verify the worker retries (via structured log capture)
+ *   3. Start the Docker emulator
+ *   4. Verify the worker reconnects and can process orchestrations
  *
  * Environment variables:
  *   - ENDPOINT: The endpoint for the DTS emulator (default: localhost:8080)
  *   - TASKHUB: The task hub name (default: default)
  */
 
+import { execSync } from "child_process";
 import {
-  TaskHubGrpcClient,
-  TaskHubGrpcWorker,
   ProtoOrchestrationStatus as OrchestrationStatus,
   OrchestrationContext,
   TOrchestrator,
+  StructuredLogger,
+  LogEvent,
 } from "@microsoft/durabletask-js";
 import {
   DurableTaskAzureManagedClientBuilder,
   DurableTaskAzureManagedWorkerBuilder,
 } from "@microsoft/durabletask-js-azuremanaged";
 
-const connectionString = process.env.DTS_CONNECTION_STRING;
 const endpoint = process.env.ENDPOINT || "localhost:8080";
 const taskHub = process.env.TASKHUB || "default";
 
-function createClient(): TaskHubGrpcClient {
-  if (connectionString) {
-    return new DurableTaskAzureManagedClientBuilder().connectionString(connectionString).build();
+const EMULATOR_CONTAINER = "dts-emulator-stream-recovery-test";
+const EMULATOR_IMAGE = "mcr.microsoft.com/dts/dts-emulator:latest";
+const EMULATOR_PORT = endpoint.split(":")[1] || "8080";
+
+/** Structured logger that captures log events for assertion. */
+class CapturingLogger implements StructuredLogger {
+  readonly events: { level: string; eventId: number; message: string }[] = [];
+
+  logEvent(level: "error" | "warn" | "info" | "debug", event: LogEvent, message: string): void {
+    this.events.push({ level, eventId: event.eventId, message });
   }
-  return new DurableTaskAzureManagedClientBuilder()
-    .endpoint(endpoint, taskHub, null)
-    .build();
-}
-
-function createWorker(): TaskHubGrpcWorker {
-  if (connectionString) {
-    return new DurableTaskAzureManagedWorkerBuilder().connectionString(connectionString).build();
+  error(message: string): void {
+    this.events.push({ level: "error", eventId: 0, message });
   }
-  return new DurableTaskAzureManagedWorkerBuilder()
-    .endpoint(endpoint, taskHub, null)
-    .build();
+  warn(message: string): void {
+    this.events.push({ level: "warn", eventId: 0, message });
+  }
+  info(message: string): void {
+    this.events.push({ level: "info", eventId: 0, message });
+  }
+  debug(message: string): void {
+    this.events.push({ level: "debug", eventId: 0, message });
+  }
+
+  /** Returns events matching a specific event ID. */
+  getByEventId(eventId: number): typeof this.events {
+    return this.events.filter((e) => e.eventId === eventId);
+  }
+
+  clear(): void {
+    this.events.length = 0;
+  }
 }
 
-/**
- * Creates a worker that connects to a port where no sidecar is running.
- * This triggers gRPC UNAVAILABLE errors, exercising the stream recovery path.
- */
-function createWorkerWithBadEndpoint(): TaskHubGrpcWorker {
-  // Port 19999 — deliberately unused, triggers gRPC UNAVAILABLE
-  return new DurableTaskAzureManagedWorkerBuilder()
-    .endpoint("localhost:19999", "nonexistent", null)
-    .build();
+function isDockerAvailable(): boolean {
+  try {
+    execSync("docker info", { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-describe("Worker Stream Recovery E2E Tests", () => {
-  it("should not crash when connecting to an unreachable sidecar and should shut down cleanly", async () => {
-    const worker = createWorkerWithBadEndpoint();
+function stopEmulator(): void {
+  try {
+    execSync(`docker rm -f ${EMULATOR_CONTAINER}`, { stdio: "ignore" });
+  } catch {
+    // Container didn't exist — fine
+  }
+}
 
-    // Register a dummy orchestrator so the worker has something registered
-    const dummyOrchestrator: TOrchestrator = async (_: OrchestrationContext) => "hello";
-    worker.addOrchestrator(dummyOrchestrator);
+function startEmulator(): void {
+  execSync(
+    `docker run --name ${EMULATOR_CONTAINER} -d --rm -p ${EMULATOR_PORT}:8080 ${EMULATOR_IMAGE}`,
+    { stdio: "ignore" },
+  );
+}
 
-    // Start the worker — it will fail to connect and begin retrying
-    // The key assertion: start() must not throw even though the sidecar is down
-    await worker.start();
+/** Poll until a condition is true or timeout. */
+async function waitFor(predicate: () => boolean, timeoutMs: number, intervalMs = 500): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return predicate();
+}
 
-    // Give the worker time to attempt at least one retry cycle
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+// Log event IDs from packages/durabletask-js/src/worker/logs.ts
+const EVENT_WORKER_CONNECTED = 700;
+const EVENT_STREAM_RETRY = 703;
+const EVENT_CONNECTION_RETRY = 705;
 
-    // The worker should shut down cleanly without throwing or hanging
-    await worker.stop();
-  }, 15000);
+describe("Worker Stream Recovery E2E", () => {
+  const skipReason = !isDockerAvailable() ? "Docker not available" : null;
 
-  it("should recover and process work after initial connection failure followed by a working connection", async () => {
-    // Skip if no real emulator is available (this test needs a running sidecar)
-    const client = createClient();
-    try {
-      // Quick check if emulator is reachable
-      const testId = await client.scheduleNewOrchestration(async (_: OrchestrationContext) => "ping");
-      await client.waitForOrchestrationCompletion(testId, undefined, 5).catch(() => {});
-      await client.purgeOrchestration(testId).catch(() => {});
-    } catch {
-      // Emulator not running — skip this test
-      await client.stop();
-      console.log("Skipping recovery test: DTS emulator not reachable");
+  beforeAll(() => {
+    if (skipReason) return;
+    // Ensure no leftover container from a previous run
+    stopEmulator();
+  });
+
+  afterAll(() => {
+    if (skipReason) return;
+    stopEmulator();
+  });
+
+  it("should retry when sidecar is down, then reconnect and complete an orchestration when sidecar starts", async () => {
+    if (skipReason) {
+      console.log(`Skipping stream recovery e2e test: ${skipReason}`);
       return;
     }
 
-    // Phase 1: Start a worker against a bad endpoint — it retries in the background
-    const badWorker = createWorkerWithBadEndpoint();
-    const orchestrator: TOrchestrator = async (_: OrchestrationContext) => "recovered";
-    badWorker.addOrchestrator(orchestrator);
-    await badWorker.start();
+    // ── Phase 1: Start worker with NO emulator running ──────────────────
+    const logger = new CapturingLogger();
 
-    // Let it fail a couple times
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    const worker = new DurableTaskAzureManagedWorkerBuilder()
+      .endpoint(endpoint, taskHub, null)
+      .logger(logger)
+      .build();
 
-    // Stop the bad worker cleanly
-    await badWorker.stop();
+    const orchestrator: TOrchestrator = async function recoveryOrchestrator(_: OrchestrationContext) {
+      return "stream-recovery-success";
+    };
+    worker.addOrchestrator(orchestrator);
 
-    // Phase 2: Start a fresh worker against the real emulator — must work normally
-    const goodWorker = createWorker();
-    goodWorker.addOrchestrator(orchestrator);
-    await goodWorker.start();
+    // start() should not throw even though the sidecar is unreachable
+    await worker.start();
+
+    // ── Phase 2: Verify retries are happening ───────────────────────────
+    const sawRetries = await waitFor(() => {
+      const retryEvents = logger.getByEventId(EVENT_STREAM_RETRY);
+      const connRetryEvents = logger.getByEventId(EVENT_CONNECTION_RETRY);
+      return retryEvents.length + connRetryEvents.length >= 2;
+    }, 15000);
+
+    expect(sawRetries).toBe(true);
+
+    // ── Phase 3: Start the emulator ─────────────────────────────────────
+    startEmulator();
+
+    // ── Phase 4: Wait for the worker to reconnect ───────────────────────
+    const sawConnected = await waitFor(() => {
+      return logger.getByEventId(EVENT_WORKER_CONNECTED).length > 0;
+    }, 30000);
+
+    expect(sawConnected).toBe(true);
+
+    // ── Phase 5: Run an orchestration to prove the worker is functional ─
+    const client = new DurableTaskAzureManagedClientBuilder()
+      .endpoint(endpoint, taskHub, null)
+      .build();
 
     const id = await client.scheduleNewOrchestration(orchestrator);
     const state = await client.waitForOrchestrationCompletion(id, undefined, 30);
 
     expect(state).toBeDefined();
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
-    expect(state?.serializedOutput).toContain("recovered");
+    expect(state?.serializedOutput).toContain("stream-recovery-success");
 
-    await goodWorker.stop();
+    // ── Cleanup ─────────────────────────────────────────────────────────
+    await worker.stop();
     await client.stop();
-  }, 45000);
+  }, 90000);
 });
