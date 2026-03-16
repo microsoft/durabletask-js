@@ -23,7 +23,8 @@ import { OrchestrationExecutor, OrchestrationExecutionResult } from "../src/work
 import * as pb from "../src/proto/orchestrator_service_pb";
 import { Registry } from "../src/worker/registry";
 import { TOrchestrator } from "../src/types/orchestrator.type";
-import { NoOpLogger } from "../src/types/logger.type";
+import { NoOpLogger, StructuredLogger, LogEvent } from "../src/types/logger.type";
+import { EVENT_ORCHESTRATION_UNEXPECTED_EVENT } from "../src/worker/logs";
 import { ActivityContext } from "../src/task/context/activity-context";
 import { CompletableTask } from "../src/task/completable-task";
 import { Task } from "../src/task/task";
@@ -570,7 +571,7 @@ describe("Orchestration Executor", () => {
     // assert user_code_statement in complete_action.failureDetails.stackTrace.value
   });
 
-  it("should not advance the generator when a sub-orchestration completion event has no matching pending task", async () => {
+  it("should produce no actions and log a warning when sub-orchestration completion has unmatched taskId", async () => {
     const subOrchestrator = async (_: OrchestrationContext) => {
       // do nothing
     };
@@ -587,14 +588,33 @@ describe("Orchestration Executor", () => {
       newSubOrchestrationCreatedEvent(1, subOrchestratorName, "sub-orch-123"),
     ];
     // Send a completion event with a taskId (999) that does not match any pending task.
-    // Before the fix, this would call resume() unconditionally. After the fix, it returns
-    // early without advancing the generator, consistent with handleCompletedTask behavior.
     const newEvents = [newSubOrchestrationCompletedEvent(999, JSON.stringify("unexpected"))];
-    const executor = new OrchestrationExecutor(registry, testLogger);
+
+    // Use a spy logger to verify the warning log is emitted via handleCompletedTask's guard clause
+    const loggedEvents: LogEvent[] = [];
+    const spyLogger: StructuredLogger = {
+      error: () => {},
+      warn: () => {},
+      info: () => {},
+      debug: () => {},
+      logEvent: (_level, event, _message) => {
+        loggedEvents.push(event);
+      },
+    };
+
+    const executor = new OrchestrationExecutor(registry, spyLogger);
     const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
     // The orchestration should still be waiting for the real sub-orchestration to complete.
-    // No complete action should be produced.
     expect(result.actions.length).toEqual(0);
+
+    // Verify the unexpected event warning was logged (proves the guard clause was hit)
+    const unexpectedEvents = loggedEvents.filter(
+      (e) => e.eventId === EVENT_ORCHESTRATION_UNEXPECTED_EVENT,
+    );
+    expect(unexpectedEvents.length).toEqual(1);
+    expect(unexpectedEvents[0].properties?.eventType).toEqual("subOrchestrationInstanceCompleted");
+    expect(unexpectedEvents[0].properties?.eventId).toEqual(999);
   });
 
   it("should test that an orchestration can wait for and process an external event sent by a client", async () => {
