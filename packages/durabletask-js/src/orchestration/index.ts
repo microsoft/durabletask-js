@@ -18,14 +18,12 @@ export function newOrchestrationState(
   const state = res.getOrchestrationstate();
   let failureDetails;
 
-  const failureDetailsErrorMessage = state?.getFailuredetails()?.getErrormessage();
-  const failureDetailsErrorType = state?.getFailuredetails()?.getErrortype();
-
-  if (state && failureDetailsErrorMessage && failureDetailsErrorType) {
+  const protoFailureDetails = state?.getFailuredetails();
+  if (protoFailureDetails) {
     failureDetails = new FailureDetails(
-      failureDetailsErrorMessage,
-      failureDetailsErrorType,
-      state.getFailuredetails()?.getStacktrace()?.toString(),
+      protoFailureDetails.getErrormessage(),
+      protoFailureDetails.getErrortype(),
+      protoFailureDetails.getStacktrace()?.getValue(),
     );
   }
 
