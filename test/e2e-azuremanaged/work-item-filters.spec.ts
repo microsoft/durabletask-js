@@ -67,9 +67,9 @@ describe("Work Item Filters E2E Tests", () => {
     await taskHubClient.stop();
   });
 
-  describe("Disabled filters (null)", () => {
-    it("should process all orchestrations when filters are explicitly disabled", async () => {
-      // Arrange — worker with filters explicitly set to null (receive all work items)
+  describe("Default behavior (no filters)", () => {
+    it("should process all orchestrations when no filters are configured (default)", async () => {
+      // Arrange — worker with default config (no useWorkItemFilters call)
       const echo = async (_: ActivityContext, input: string) => input;
 
       const echoOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: string): any {
@@ -80,7 +80,6 @@ describe("Work Item Filters E2E Tests", () => {
       taskHubWorker = createWorkerBuilder()
         .addOrchestrator(echoOrchestrator)
         .addActivity(echo)
-        .useWorkItemFilters(null)
         .build();
       await taskHubWorker.start();
 
@@ -139,7 +138,7 @@ describe("Work Item Filters E2E Tests", () => {
         return "registered";
       };
 
-      taskHubWorker = createWorkerBuilder().addOrchestrator(registeredOrch).build();
+      taskHubWorker = createWorkerBuilder().addOrchestrator(registeredOrch).useWorkItemFilters().build();
       await taskHubWorker.start();
 
       // Act — schedule an orchestration by name that doesn't match any filter

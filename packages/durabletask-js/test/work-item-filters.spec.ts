@@ -633,10 +633,26 @@ describe("WorkItemFilters", () => {
   });
 
   describe("TaskHubGrpcWorker._buildGetWorkItemsRequest", () => {
-    it("should auto-generate filters from registry when workItemFilters is undefined", () => {
+    it("should not send filters when workItemFilters is undefined (default)", () => {
       // Arrange
       const worker = new TaskHubGrpcWorker({
         hostAddress: "localhost:4001",
+      });
+      worker.addOrchestrator(myOrchestrator);
+      worker.addActivity(myActivity);
+
+      // Act
+      const request = (worker as any)._buildGetWorkItemsRequest();
+
+      // Assert — no filters sent by default (opt-in only)
+      expect(request.hasWorkitemfilters()).toBe(false);
+    });
+
+    it("should auto-generate filters from registry when workItemFilters is 'auto'", () => {
+      // Arrange
+      const worker = new TaskHubGrpcWorker({
+        hostAddress: "localhost:4001",
+        workItemFilters: "auto",
       });
       worker.addOrchestrator(myOrchestrator);
       worker.addActivity(myActivity);
@@ -653,18 +669,17 @@ describe("WorkItemFilters", () => {
       expect(actNames).toContain("myActivity");
     });
 
-    it("should omit filters when workItemFilters is null", () => {
+    it("should not send filters when workItemFilters is not configured (default)", () => {
       // Arrange
       const worker = new TaskHubGrpcWorker({
         hostAddress: "localhost:4001",
-        workItemFilters: null,
       });
       worker.addOrchestrator(myOrchestrator);
 
       // Act
       const request = (worker as any)._buildGetWorkItemsRequest();
 
-      // Assert
+      // Assert — default is no filters (opt-in only)
       expect(request.hasWorkitemfilters()).toBe(false);
     });
 
@@ -706,6 +721,7 @@ describe("WorkItemFilters", () => {
       // Arrange
       const worker = new TaskHubGrpcWorker({
         hostAddress: "localhost:4001",
+        workItemFilters: "auto",
         versioning: {
           version: "3.0.0",
           matchStrategy: VersionMatchStrategy.Strict,

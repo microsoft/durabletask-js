@@ -63,12 +63,12 @@ export interface TaskHubGrpcWorkerOptions {
   versioning?: VersioningOptions;
   /**
    * Optional work item filters to control which work items the worker receives.
-   * When set, only work items matching these filters will be dispatched to this worker.
-   * When undefined (default), filters are auto-generated from the registered
-   * orchestrations, activities, and entities.
-   * Set to null to explicitly disable filtering (receive all work items).
+   * By default, no filters are sent and the worker processes all work items.
+   * Set to a WorkItemFilters object to use explicit filters.
+   * Set to "auto" to auto-generate filters from the registered orchestrations,
+   * activities, and entities.
    */
-  workItemFilters?: WorkItemFilters | null;
+  workItemFilters?: WorkItemFilters | "auto";
 }
 
 export class TaskHubGrpcWorker {
@@ -87,7 +87,7 @@ export class TaskHubGrpcWorker {
   private _shutdownTimeoutMs: number;
   private _backoff: ExponentialBackoff;
   private _versioning?: VersioningOptions;
-  private _workItemFilters?: WorkItemFilters | null;
+  private _workItemFilters?: WorkItemFilters | "auto";
 
   /**
    * Creates a new TaskHubGrpcWorker instance.
@@ -135,7 +135,7 @@ export class TaskHubGrpcWorker {
     let resolvedLogger: Logger | undefined;
     let resolvedShutdownTimeoutMs: number | undefined;
     let resolvedVersioning: VersioningOptions | undefined;
-    let resolvedWorkItemFilters: WorkItemFilters | null | undefined;
+    let resolvedWorkItemFilters: WorkItemFilters | "auto" | undefined;
 
     if (typeof hostAddressOrOptions === "object" && hostAddressOrOptions !== null) {
       // Options object constructor
@@ -506,15 +506,18 @@ export class TaskHubGrpcWorker {
 
   /**
    * Builds the GetWorkItemsRequest, attaching work item filters based on configuration.
-   * - null: no filters sent (receive all work items)
-   * - undefined: auto-generate from the registry
+   * - undefined (default): no filters sent, worker receives all work items
+   * - "auto": auto-generate filters from the registry
    * - explicit WorkItemFilters: use as provided
    */
   private _buildGetWorkItemsRequest(): pb.GetWorkItemsRequest {
     const request = new pb.GetWorkItemsRequest();
 
-    if (this._workItemFilters !== null) {
-      const filters = this._workItemFilters ?? generateWorkItemFiltersFromRegistry(this._registry, this._versioning);
+    if (this._workItemFilters !== undefined) {
+      const filters =
+        this._workItemFilters === "auto"
+          ? generateWorkItemFiltersFromRegistry(this._registry, this._versioning)
+          : this._workItemFilters;
       request.setWorkitemfilters(toGrpcWorkItemFilters(filters));
     }
 

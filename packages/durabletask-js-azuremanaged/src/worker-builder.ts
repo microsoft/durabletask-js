@@ -28,7 +28,7 @@ export class DurableTaskAzureManagedWorkerBuilder {
   private _logger: Logger = new ConsoleLogger();
   private _shutdownTimeoutMs?: number;
   private _versioning?: VersioningOptions;
-  private _workItemFilters?: WorkItemFilters | null;
+  private _workItemFilters?: WorkItemFilters | "auto";
 
   /**
    * Creates a new instance of DurableTaskAzureManagedWorkerBuilder.
@@ -223,17 +223,17 @@ export class DurableTaskAzureManagedWorkerBuilder {
   }
 
   /**
-   * Sets work item filters for the worker.
-   * When provided, the sidecar will only send work items matching these filters.
-   * Pass null to explicitly disable filtering and receive all work items.
-   * When not called, filters are auto-generated from the registered orchestrations,
-   * activities, and entities.
+   * Enables work item filters for the worker.
+   * When called without arguments, filters are auto-generated from the registered
+   * orchestrations, activities, and entities.
+   * When called with a WorkItemFilters object, those specific filters are used.
+   * By default (when not called), no filters are sent and the worker processes all work items.
    *
-   * @param filters The work item filters, or null to disable filtering.
+   * @param filters Optional explicit filters. Omit to auto-generate from registry.
    * @returns This builder instance.
    */
-  useWorkItemFilters(filters: WorkItemFilters | null): DurableTaskAzureManagedWorkerBuilder {
-    this._workItemFilters = filters;
+  useWorkItemFilters(filters?: WorkItemFilters): DurableTaskAzureManagedWorkerBuilder {
+    this._workItemFilters = filters ?? "auto";
     return this;
   }
 
