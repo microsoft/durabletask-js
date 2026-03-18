@@ -231,7 +231,8 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     expect(state?.serializedOutput).toEqual(JSON.stringify("handled-failure"));
     expect(failActivityCounter).toEqual(1);
 
-    // Wait a bit then verify orchestration stays COMPLETED (not corrupted by late activity completions)
+    // Verify orchestration stays COMPLETED. The sidecar won't deliver activity
+    // completion events to an already-completed orchestration, so no delay is needed.
     const finalState = await taskHubClient.getOrchestrationState(id);
     expect(finalState).toBeDefined();
     expect(finalState?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
