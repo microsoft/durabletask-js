@@ -510,7 +510,7 @@ export class TaskHubGrpcWorker {
    * - undefined: auto-generate from the registry
    * - explicit WorkItemFilters: use as provided
    */
-  _buildGetWorkItemsRequest(): pb.GetWorkItemsRequest {
+  private _buildGetWorkItemsRequest(): pb.GetWorkItemsRequest {
     const request = new pb.GetWorkItemsRequest();
 
     if (this._workItemFilters !== null) {

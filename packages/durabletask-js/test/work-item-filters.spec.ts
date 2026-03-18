@@ -642,13 +642,13 @@ describe("WorkItemFilters", () => {
       worker.addActivity(myActivity);
 
       // Act
-      const request = worker._buildGetWorkItemsRequest();
+      const request = (worker as any)._buildGetWorkItemsRequest();
 
       // Assert
       expect(request.hasWorkitemfilters()).toBe(true);
       const filters = request.getWorkitemfilters()!;
-      const orchNames = filters.getOrchestrationsList().map((o) => o.getName());
-      const actNames = filters.getActivitiesList().map((a) => a.getName());
+      const orchNames = filters.getOrchestrationsList().map((o: any) => o.getName());
+      const actNames = filters.getActivitiesList().map((a: any) => a.getName());
       expect(orchNames).toContain("myOrchestrator");
       expect(actNames).toContain("myActivity");
     });
@@ -662,7 +662,7 @@ describe("WorkItemFilters", () => {
       worker.addOrchestrator(myOrchestrator);
 
       // Act
-      const request = worker._buildGetWorkItemsRequest();
+      const request = (worker as any)._buildGetWorkItemsRequest();
 
       // Assert
       expect(request.hasWorkitemfilters()).toBe(false);
@@ -682,7 +682,7 @@ describe("WorkItemFilters", () => {
       worker.addOrchestrator(myOrchestrator);
 
       // Act
-      const request = worker._buildGetWorkItemsRequest();
+      const request = (worker as any)._buildGetWorkItemsRequest();
 
       // Assert
       expect(request.hasWorkitemfilters()).toBe(true);
@@ -714,7 +714,7 @@ describe("WorkItemFilters", () => {
       worker.addOrchestrator(myOrchestrator);
 
       // Act
-      const request = worker._buildGetWorkItemsRequest();
+      const request = (worker as any)._buildGetWorkItemsRequest();
 
       // Assert
       const filters = request.getWorkitemfilters()!;
