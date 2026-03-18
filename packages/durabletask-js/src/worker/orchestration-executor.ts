@@ -386,25 +386,11 @@ export class OrchestrationExecutor {
   }
 
   private async handleSubOrchestrationCompleted(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
-    const subOrchestrationInstanceCompletedEvent = event.getSuborchestrationinstancecompleted();
-    const taskId = subOrchestrationInstanceCompletedEvent
-      ? subOrchestrationInstanceCompletedEvent.getTaskscheduledid()
-      : undefined;
-
-    let subOrchTask;
-
-    if (taskId !== undefined) {
-      subOrchTask = ctx._pendingTasks[taskId];
-      delete ctx._pendingTasks[taskId];
-    }
-
-    const result = parseJsonField(subOrchestrationInstanceCompletedEvent?.getResult());
-
-    if (subOrchTask) {
-      subOrchTask.complete(result);
-    }
-
-    await ctx.resume();
+    const completedEvent = event.getSuborchestrationinstancecompleted();
+    const taskId = completedEvent ? completedEvent.getTaskscheduledid() : undefined;
+    const result = completedEvent?.getResult();
+    const normalizedResult = isEmpty(result) ? undefined : result;
+    await this.handleCompletedTask(ctx, taskId, normalizedResult, "subOrchestrationInstanceCompleted");
   }
 
   private async handleSubOrchestrationFailed(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
