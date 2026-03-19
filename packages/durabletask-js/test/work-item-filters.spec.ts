@@ -499,18 +499,7 @@ describe("WorkItemFilters", () => {
       expect(worker).toBeDefined();
     });
 
-    it("should accept null workItemFilters to disable filtering", () => {
-      // Act
-      const worker = new TaskHubGrpcWorker({
-        hostAddress: "localhost:4001",
-        workItemFilters: null,
-      });
-
-      // Assert
-      expect(worker).toBeDefined();
-    });
-
-    it("should work without workItemFilters option (auto-generate default)", () => {
+    it("should work without workItemFilters option (default: no filters)", () => {
       // Act
       const worker = new TaskHubGrpcWorker({
         hostAddress: "localhost:4001",
