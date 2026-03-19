@@ -13,6 +13,7 @@ import {
   Logger,
   ConsoleLogger,
   VersioningOptions,
+  WorkItemFilters,
 } from "@microsoft/durabletask-js";
 
 /**
@@ -27,6 +28,7 @@ export class DurableTaskAzureManagedWorkerBuilder {
   private _logger: Logger = new ConsoleLogger();
   private _shutdownTimeoutMs?: number;
   private _versioning?: VersioningOptions;
+  private _workItemFilters?: WorkItemFilters | "auto";
 
   /**
    * Creates a new instance of DurableTaskAzureManagedWorkerBuilder.
@@ -221,6 +223,21 @@ export class DurableTaskAzureManagedWorkerBuilder {
   }
 
   /**
+   * Enables work item filters for the worker.
+   * When called without arguments, filters are auto-generated from the registered
+   * orchestrations, activities, and entities.
+   * When called with a WorkItemFilters object, those specific filters are used.
+   * By default (when not called), no filters are sent and the worker processes all work items.
+   *
+   * @param filters Optional explicit filters. Omit to auto-generate from registry.
+   * @returns This builder instance.
+   */
+  useWorkItemFilters(filters?: WorkItemFilters): DurableTaskAzureManagedWorkerBuilder {
+    this._workItemFilters = filters ?? "auto";
+    return this;
+  }
+
+  /**
    * Builds and returns a configured TaskHubGrpcWorker.
    *
    * @returns A new configured TaskHubGrpcWorker instance.
@@ -251,6 +268,7 @@ export class DurableTaskAzureManagedWorkerBuilder {
       logger: this._logger,
       shutdownTimeoutMs: this._shutdownTimeoutMs,
       versioning: this._versioning,
+      workItemFilters: this._workItemFilters,
     });
 
     // Register all orchestrators

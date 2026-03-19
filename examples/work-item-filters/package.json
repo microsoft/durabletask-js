@@ -1,0 +1,17 @@
+{
+  "name": "work-item-filters-example",
+  "version": "1.0.0",
+  "description": "Example demonstrating work item filters for Durable Task workers",
+  "private": true,
+  "scripts": {
+    "start": "ts-node --swc index.ts",
+    "start:emulator": "ENDPOINT=localhost:8080 TASKHUB=default ts-node --swc index.ts"
+  },
+  "dependencies": {
+    "@microsoft/durabletask-js": "workspace:*",
+    "@microsoft/durabletask-js-azuremanaged": "workspace:*"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
