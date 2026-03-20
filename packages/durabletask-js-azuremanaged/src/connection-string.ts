@@ -87,7 +87,7 @@ export class DurableTaskAzureManagedConnectionString {
   }
 
   private getValue(name: string): string | undefined {
-    return this.properties.get(name);
+    return this.properties.get(name.toLowerCase());
   }
 
   private getRequiredValue(name: string): string {
@@ -108,7 +108,7 @@ export class DurableTaskAzureManagedConnectionString {
       if (equalsIndex > 0) {
         const key = pair.substring(0, equalsIndex).trim();
         const value = pair.substring(equalsIndex + 1).trim();
-        properties.set(key, value);
+        properties.set(key.toLowerCase(), value);
       }
     }
 
