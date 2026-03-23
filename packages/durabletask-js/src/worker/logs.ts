@@ -76,6 +76,7 @@ const CATEGORY_ENTITIES = "Microsoft.DurableTask.Worker.Entities";
 /** @internal */ export const EVENT_ACTIVITY_EXECUTION_ERROR = 734;
 /** @internal */ export const EVENT_ACTIVITY_RESPONSE_ERROR = 735;
 /** @internal */ export const EVENT_STREAM_ERROR_INFO = 736;
+/** @internal */ export const EVENT_RETRY_HANDLER_EXCEPTION = 737;
 
 // ── Entity-specific Event IDs (800+ range) ──────────────────────────────────
 
@@ -192,6 +193,19 @@ export function retryingTask(logger: Logger, instanceId: string, name: string, a
     category: CATEGORY_ORCHESTRATIONS,
     properties: { instanceId, name, attempt },
   }, `${instanceId}: Evaluating custom retry handler for failed '${name}' task. Attempt = ${attempt}.`);
+}
+
+/**
+ * Logs that a retry handler or handleFailure predicate threw an exception.
+ * The task will not be retried and will fail with its original error.
+ */
+export function retryHandlerException(logger: Logger, instanceId: string, name: string, error: unknown): void {
+  const msg = toErrorMessage(error);
+  emitLog(logger, "warn", {
+    eventId: EVENT_RETRY_HANDLER_EXCEPTION,
+    category: CATEGORY_ORCHESTRATIONS,
+    properties: { instanceId, name },
+  }, `${instanceId}: Retry handler for '${name}' threw an exception and will not be retried: ${msg}`);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
