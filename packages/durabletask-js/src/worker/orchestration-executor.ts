@@ -765,7 +765,16 @@ export class OrchestrationExecutor {
   ): Promise<boolean> {
     if (task instanceof RetryableTask) {
       task.recordFailure(errorMessage, failureDetails);
-      const nextDelayMs = task.computeNextDelayInMilliseconds(ctx._currentUtcDatetime);
+      let nextDelayMs: number | undefined;
+      try {
+        nextDelayMs = task.computeNextDelayInMilliseconds(ctx._currentUtcDatetime);
+      } catch (e: unknown) {
+        // The retry policy's handleFailure predicate threw an exception.
+        // Treat this as "don't retry" so the task fails with its original error
+        // rather than crashing the entire orchestration.
+        WorkerLogs.retryHandlerException(this._logger, ctx._instanceId, task.taskName, e);
+        return false;
+      }
 
       if (nextDelayMs !== undefined) {
         WorkerLogs.retryingTask(this._logger, ctx._instanceId, task.taskName, task.attemptCount);
@@ -776,7 +785,16 @@ export class OrchestrationExecutor {
       }
     } else if (task instanceof RetryHandlerTask) {
       task.recordFailure(errorMessage, failureDetails);
-      const retryResult = await task.shouldRetry(ctx._currentUtcDatetime);
+      let retryResult: boolean | number;
+      try {
+        retryResult = await task.shouldRetry(ctx._currentUtcDatetime);
+      } catch (e: unknown) {
+        // The user-provided retry handler threw an exception.
+        // Treat this as "don't retry" so the task fails with its original error
+        // rather than crashing the entire orchestration.
+        WorkerLogs.retryHandlerException(this._logger, ctx._instanceId, task.taskName, e);
+        return false;
+      }
 
       // Only retry when the handler explicitly returns true or a finite number.
       // Using a positive check (=== true || finite number) instead of !== false

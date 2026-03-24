@@ -1401,6 +1401,115 @@ describe("Orchestration Executor", () => {
       const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
       expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
     });
+
+    it("should fail the task (not crash orchestration) when retry handler throws an exception", async () => {
+      const { result: startResult, replay } = await startOrchestration(
+        async function* (ctx: OrchestrationContext): any {
+          const retryHandler = async (_retryCtx: any) => {
+            throw new Error("Handler exploded!");
+          };
+          return yield ctx.callActivity("flakyActivity", undefined, { retry: retryHandler });
+        },
+      );
+
+      expect(startResult.actions[0].hasScheduletask()).toBe(true);
+
+      // Activity fails → handler throws → should NOT retry, task should fail with original error
+      const result = await replay(
+        [newTaskScheduledEvent(1, "flakyActivity")],
+        [newTaskFailedEvent(1, new Error("Original activity error"))],
+      );
+      const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+      // The orchestration fails with the original task error, not the handler exception
+      expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+      expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("Original activity error");
+    });
+
+    it("should allow orchestrator to catch TaskFailedError when retry handler throws", async () => {
+      const { result: startResult, replay } = await startOrchestration(
+        async function* (ctx: OrchestrationContext): any {
+          const retryHandler = async (_retryCtx: any) => {
+            throw new Error("Handler exploded!");
+          };
+          try {
+            yield ctx.callActivity("flakyActivity", undefined, { retry: retryHandler });
+          } catch (e: any) {
+            return "caught: " + e.message;
+          }
+        },
+      );
+
+      expect(startResult.actions[0].hasScheduletask()).toBe(true);
+
+      // Activity fails → handler throws → task fails → orchestrator catches the error
+      const result = await replay(
+        [newTaskScheduledEvent(1, "flakyActivity")],
+        [newTaskFailedEvent(1, new Error("Original activity error"))],
+      );
+      const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+      expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(completeAction?.getResult()?.getValue()).toContain("Original activity error");
+    });
+
+    it("should fail the task (not crash orchestration) when handleFailure predicate throws", async () => {
+      const { RetryPolicy } = await import("../src/task/retry/retry-policy");
+
+      const { result: startResult, replay } = await startOrchestration(
+        async function* (ctx: OrchestrationContext): any {
+          const retryPolicy = new RetryPolicy({
+            maxNumberOfAttempts: 3,
+            firstRetryIntervalInMilliseconds: 1000,
+            handleFailure: (_failure: any) => {
+              throw new Error("Predicate exploded!");
+            },
+          });
+          return yield ctx.callActivity("flakyActivity", undefined, { retry: retryPolicy });
+        },
+      );
+
+      expect(startResult.actions[0].hasScheduletask()).toBe(true);
+
+      // Activity fails → handleFailure throws → should NOT retry, task should fail with original error
+      const result = await replay(
+        [newTaskScheduledEvent(1, "flakyActivity")],
+        [newTaskFailedEvent(1, new Error("Original activity error"))],
+      );
+      const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+      expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+      expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("Original activity error");
+    });
+
+    it("should allow orchestrator to catch TaskFailedError when handleFailure predicate throws", async () => {
+      const { RetryPolicy } = await import("../src/task/retry/retry-policy");
+
+      const { result: startResult, replay } = await startOrchestration(
+        async function* (ctx: OrchestrationContext): any {
+          const retryPolicy = new RetryPolicy({
+            maxNumberOfAttempts: 3,
+            firstRetryIntervalInMilliseconds: 1000,
+            handleFailure: (_failure: any) => {
+              throw new Error("Predicate exploded!");
+            },
+          });
+          try {
+            yield ctx.callActivity("flakyActivity", undefined, { retry: retryPolicy });
+          } catch (e: any) {
+            return "caught: " + e.message;
+          }
+        },
+      );
+
+      expect(startResult.actions[0].hasScheduletask()).toBe(true);
+
+      // Activity fails → predicate throws → task fails → orchestrator catches the error
+      const result = await replay(
+        [newTaskScheduledEvent(1, "flakyActivity")],
+        [newTaskFailedEvent(1, new Error("Original activity error"))],
+      );
+      const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+      expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(completeAction?.getResult()?.getValue()).toContain("Original activity error");
+    });
   });
 
   it("should complete immediately when whenAll is called with an empty task array", async () => {
