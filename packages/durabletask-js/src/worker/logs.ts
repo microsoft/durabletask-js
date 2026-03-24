@@ -204,8 +204,13 @@ export function retryHandlerException(logger: Logger, instanceId: string, name: 
   emitLog(logger, "warn", {
     eventId: EVENT_RETRY_HANDLER_EXCEPTION,
     category: CATEGORY_ORCHESTRATIONS,
-    properties: { instanceId, name },
-  }, `${instanceId}: Retry handler for '${name}' threw an exception and will not be retried: ${msg}`);
+    properties: {
+      instanceId,
+      name,
+      error: msg,
+      ...(error instanceof Error && error.stack ? { stack: error.stack } : {}),
+    },
+  }, `${instanceId}: Retry evaluation for '${name}' threw an exception and will not be retried: ${msg}`);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
