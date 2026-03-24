@@ -429,31 +429,48 @@ export class InMemoryOrchestrationBackend {
     return new Promise((resolve, reject) => {
       // When timeoutMs is 0, no timeout is applied — the waiter will only be
       // resolved by a matching state change or rejected by reset().
+      // `waiter` is declared before the timer so the timeout callback can find it by
+      // object identity; the waiter reads `timer` only when invoked, by which point
+      // it has been assigned.
       let timer: ReturnType<typeof setTimeout> | undefined;
-      if (timeoutMs > 0) {
-        timer = setTimeout(() => {
-          const waiters = this.stateWaiters.get(instanceId);
-          if (waiters) {
-            const index = waiters.findIndex((w) => w.resolve === resolve);
-            if (index >= 0) {
-              waiters.splice(index, 1);
-            }
-          }
-          reject(new Error(`Timeout waiting for orchestration '${instanceId}'`));
-        }, timeoutMs);
-      }
 
       const waiter: StateWaiter = {
         resolve: (result) => {
-          if (timer !== undefined) clearTimeout(timer);
+          if (timer !== undefined) {
+            clearTimeout(timer);
+            this.pendingTimers.delete(timer);
+          }
           resolve(result);
         },
         reject: (error) => {
-          if (timer !== undefined) clearTimeout(timer);
+          if (timer !== undefined) {
+            clearTimeout(timer);
+            this.pendingTimers.delete(timer);
+          }
           reject(error);
         },
         predicate,
       };
+
+      if (timeoutMs > 0) {
+        timer = setTimeout(() => {
+          if (timer !== undefined) {
+            this.pendingTimers.delete(timer);
+          }
+          const waiters = this.stateWaiters.get(instanceId);
+          if (waiters) {
+            const index = waiters.indexOf(waiter);
+            if (index >= 0) {
+              waiters.splice(index, 1);
+            }
+            if (waiters.length === 0) {
+              this.stateWaiters.delete(instanceId);
+            }
+          }
+          reject(new Error(`Timeout waiting for orchestration '${instanceId}'`));
+        }, timeoutMs);
+        this.pendingTimers.add(timer);
+      }
 
       let waiters = this.stateWaiters.get(instanceId);
       if (!waiters) {
