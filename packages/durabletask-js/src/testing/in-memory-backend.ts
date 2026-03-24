@@ -337,28 +337,41 @@ export class InMemoryOrchestrationBackend {
     }
 
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      // Declare timer with let so we can reference it inside the waiter
+      // and reference the waiter inside the timer callback.
+      // eslint-disable-next-line prefer-const
+      let timer: ReturnType<typeof setTimeout>;
+
+      const waiter: StateWaiter = {
+        resolve: (result) => {
+          clearTimeout(timer);
+          this.pendingTimers.delete(timer);
+          resolve(result);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          this.pendingTimers.delete(timer);
+          reject(error);
+        },
+        predicate,
+      };
+
+      timer = setTimeout(() => {
+        this.pendingTimers.delete(timer);
         const waiters = this.stateWaiters.get(instanceId);
         if (waiters) {
-          const index = waiters.findIndex((w) => w.resolve === resolve);
+          const index = waiters.indexOf(waiter);
           if (index >= 0) {
             waiters.splice(index, 1);
+          }
+          if (waiters.length === 0) {
+            this.stateWaiters.delete(instanceId);
           }
         }
         reject(new Error(`Timeout waiting for orchestration '${instanceId}'`));
       }, timeoutMs);
 
-      const waiter: StateWaiter = {
-        resolve: (result) => {
-          clearTimeout(timer);
-          resolve(result);
-        },
-        reject: (error) => {
-          clearTimeout(timer);
-          reject(error);
-        },
-        predicate,
-      };
+      this.pendingTimers.add(timer);
 
       let waiters = this.stateWaiters.get(instanceId);
       if (!waiters) {

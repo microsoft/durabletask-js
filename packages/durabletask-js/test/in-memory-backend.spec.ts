@@ -377,4 +377,58 @@ describe("In-Memory Backend", () => {
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
     expect(state?.serializedOutput).toEqual(JSON.stringify(42));
   });
+
+  it("should clean up stale waiters after waitForState timeout", async () => {
+    const instanceId = "timeout-cleanup-test";
+    backend.createInstance(instanceId, "testOrch");
+
+    // Call waitForState with a predicate that will never match and a short timeout
+    await expect(
+      backend.waitForState(
+        instanceId,
+        () => false, // Will never match
+        50, // 50ms timeout
+      ),
+    ).rejects.toThrow("Timeout waiting for orchestration");
+
+    // After the timeout, the stale waiter should be cleaned up.
+    // Access internal stateWaiters to verify the waiter was removed.
+    const stateWaitersMap = (backend as any).stateWaiters as Map<string, any[]>;
+
+    // The timed-out waiter should have been removed, and since it was the only
+    // waiter, the instance entry should be removed from the map entirely.
+    expect(stateWaitersMap.has(instanceId)).toBe(false);
+  });
+
+  it("should remove only the timed-out waiter when multiple waiters exist", async () => {
+    const instanceId = "multi-waiter-timeout-test";
+    backend.createInstance(instanceId, "testOrch");
+
+    // Start a waiter with a long timeout (won't time out during the test)
+    const longWaitPromise = backend.waitForState(
+      instanceId,
+      () => false, // Never matches
+      60000, // 60 second timeout — won't fire
+    );
+
+    // Start a waiter with a very short timeout
+    await expect(
+      backend.waitForState(
+        instanceId,
+        () => false, // Never matches
+        50, // 50ms timeout
+      ),
+    ).rejects.toThrow("Timeout waiting for orchestration");
+
+    // After the short timeout, only the long-lived waiter should remain
+    const stateWaitersMap = (backend as any).stateWaiters as Map<string, any[]>;
+    const waiters = stateWaitersMap.get(instanceId);
+
+    expect(waiters).toBeDefined();
+    expect(waiters!.length).toBe(1);
+
+    // Clean up: reset to clear the remaining waiter and its timer
+    backend.reset();
+    await longWaitPromise.catch(() => {}); // Ignore the reset rejection
+  });
 });
