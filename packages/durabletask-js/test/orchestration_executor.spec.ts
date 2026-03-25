@@ -717,6 +717,83 @@ describe("Orchestration Executor", () => {
     expect(completeAction?.getResult()?.getValue()).toEqual("42");
   });
 
+  it("should not enter an infinite loop when buffered events include a second suspend", async () => {
+    // This test verifies two fixes working together:
+    // 1. isSuspendable now excludes ExecutionSuspended, so a second suspend
+    //    is processed immediately (as a no-op) rather than being buffered.
+    // 2. handleExecutionResumed snapshots the buffer before iterating,
+    //    preventing any re-entrant modification from causing an infinite loop.
+    //
+    // Without these fixes, a buffered SUSPEND event would set _isSuspended=true
+    // during iteration, causing subsequent events to be re-pushed onto the same
+    // array, creating an infinite loop that hangs the worker.
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
+      const res1 = yield ctx.waitForExternalEvent("event1");
+      const res2 = yield ctx.waitForExternalEvent("event2");
+      return [res1, res2];
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+
+    const oldEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
+
+    // Suspend, buffer an event, suspend again, buffer another event
+    let newEvents = [
+      newSuspendEvent(),
+      newEventRaisedEvent("event1", JSON.stringify("val1")),
+      newSuspendEvent(),
+      newEventRaisedEvent("event2", JSON.stringify("val2")),
+    ];
+
+    let executor = new OrchestrationExecutor(registry, testLogger);
+    let result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    // Both events are buffered; second suspend is processed immediately (no-op)
+    expect(result.actions.length).toBe(0);
+
+    // Resume: both buffered events are delivered, orchestration completes
+    oldEvents.push(...newEvents);
+    newEvents = [newResumeEvent()];
+
+    executor = new OrchestrationExecutor(registry, testLogger);
+    result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify(["val1", "val2"]));
+  });
+
+  it("should treat ExecutionSuspended as non-suspendable so it is never buffered", async () => {
+    // Verify that the isSuspendable function correctly excludes
+    // ExecutionSuspended events from being buffered, providing
+    // defense-in-depth against the infinite loop scenario.
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
+      const res = yield ctx.waitForExternalEvent("my_event");
+      return res;
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+
+    const oldEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
+
+    // Suspend, then immediately suspend again (the second suspend should be processed immediately, not buffered)
+    // Then an event arrives while suspended, followed by resume
+    const newEvents = [
+      newSuspendEvent(),
+      newSuspendEvent(),
+      newEventRaisedEvent("my_event", JSON.stringify("hello")),
+      newResumeEvent(),
+    ];
+
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify("hello"));
+  });
+
   it("should test that an orchestration can be terminated before it completes", async () => {
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
       const res = yield ctx.waitForExternalEvent("my_event");

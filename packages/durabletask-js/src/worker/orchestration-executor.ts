@@ -470,11 +470,17 @@ export class OrchestrationExecutor {
 
     this._isSuspended = false;
 
-    for (const e of this._suspendedEvents) {
+    // Snapshot and clear before iterating. If any buffered event (e.g. a
+    // second ExecutionSuspended) sets _isSuspended back to true during
+    // processing, subsequent suspendable events will be pushed into the
+    // now-empty _suspendedEvents array instead of the array we are
+    // iterating, preventing an infinite loop.
+    const eventsToProcess = this._suspendedEvents;
+    this._suspendedEvents = [];
+
+    for (const e of eventsToProcess) {
       await this.processEvent(ctx, e);
     }
-
-    this._suspendedEvents = [];
   }
 
   private async handleExecutionTerminated(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
