@@ -67,6 +67,46 @@ describe("DurableTaskAzureManagedConnectionString", () => {
         "The connection string must contain a TaskHub property",
       );
     });
+
+    it("should parse connection string with all-lowercase keys", () => {
+      const connectionString = new DurableTaskAzureManagedConnectionString(
+        "endpoint=https://example.com;authentication=ManagedIdentity;taskhub=myTaskHub",
+      );
+
+      expect(connectionString.getEndpoint()).toBe("https://example.com");
+      expect(connectionString.getAuthentication()).toBe("ManagedIdentity");
+      expect(connectionString.getTaskHubName()).toBe("myTaskHub");
+    });
+
+    it("should parse connection string with all-uppercase keys", () => {
+      const connectionString = new DurableTaskAzureManagedConnectionString(
+        "ENDPOINT=https://example.com;AUTHENTICATION=ManagedIdentity;TASKHUB=myTaskHub",
+      );
+
+      expect(connectionString.getEndpoint()).toBe("https://example.com");
+      expect(connectionString.getAuthentication()).toBe("ManagedIdentity");
+      expect(connectionString.getTaskHubName()).toBe("myTaskHub");
+    });
+
+    it("should parse connection string with mixed-case keys", () => {
+      const connectionString = new DurableTaskAzureManagedConnectionString(
+        "endPoint=https://example.com;AUTHENTICATION=ManagedIdentity;taskHub=myTaskHub",
+      );
+
+      expect(connectionString.getEndpoint()).toBe("https://example.com");
+      expect(connectionString.getAuthentication()).toBe("ManagedIdentity");
+      expect(connectionString.getTaskHubName()).toBe("myTaskHub");
+    });
+
+    it("should preserve value casing with case-insensitive keys", () => {
+      const connectionString = new DurableTaskAzureManagedConnectionString(
+        "endpoint=https://MyHost.example.com;authentication=ManagedIdentity;taskhub=MyTaskHub;clientid=My-Client-ID",
+      );
+
+      expect(connectionString.getEndpoint()).toBe("https://MyHost.example.com");
+      expect(connectionString.getTaskHubName()).toBe("MyTaskHub");
+      expect(connectionString.getClientId()).toBe("My-Client-ID");
+    });
   });
 
   describe("getAdditionallyAllowedTenants", () => {
@@ -86,6 +126,16 @@ describe("DurableTaskAzureManagedConnectionString", () => {
       const connectionString = new DurableTaskAzureManagedConnectionString(VALID_CONNECTION_STRING);
 
       expect(connectionString.getAdditionallyAllowedTenants()).toBeUndefined();
+    });
+
+    it("should match property name case-insensitively", () => {
+      const connectionStringWithTenants =
+        VALID_CONNECTION_STRING + ";additionallyallowedtenants=tenant1,tenant2";
+
+      const connectionString = new DurableTaskAzureManagedConnectionString(connectionStringWithTenants);
+      const tenants = connectionString.getAdditionallyAllowedTenants();
+
+      expect(tenants).toEqual(["tenant1", "tenant2"]);
     });
   });
 
