@@ -377,4 +377,28 @@ describe("In-Memory Backend", () => {
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
     expect(state?.serializedOutput).toEqual(JSON.stringify(42));
   });
+
+  describe("toClientStatus", () => {
+    it("should map CANCELED proto status to CANCELED client status", () => {
+      const { OrchestrationStatus: pbStatus } = require("../src/proto/orchestrator_service_pb");
+      expect(backend.toClientStatus(pbStatus.ORCHESTRATION_STATUS_CANCELED)).toBe(OrchestrationStatus.CANCELED);
+    });
+
+    it("should map all known proto statuses without throwing", () => {
+      const { OrchestrationStatus: pbStatus } = require("../src/proto/orchestrator_service_pb");
+      const protoStatuses = [
+        pbStatus.ORCHESTRATION_STATUS_RUNNING,
+        pbStatus.ORCHESTRATION_STATUS_COMPLETED,
+        pbStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW,
+        pbStatus.ORCHESTRATION_STATUS_FAILED,
+        pbStatus.ORCHESTRATION_STATUS_CANCELED,
+        pbStatus.ORCHESTRATION_STATUS_TERMINATED,
+        pbStatus.ORCHESTRATION_STATUS_PENDING,
+        pbStatus.ORCHESTRATION_STATUS_SUSPENDED,
+      ];
+      for (const status of protoStatuses) {
+        expect(() => backend.toClientStatus(status)).not.toThrow();
+      }
+    });
+  });
 });

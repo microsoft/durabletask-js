@@ -137,6 +137,7 @@ export class TestOrchestrationClient {
     return (
       status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED ||
       status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED ||
+      status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_CANCELED ||
       status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED
     );
   }

@@ -411,6 +411,8 @@ export class InMemoryOrchestrationBackend {
         return ClientOrchestrationStatus.FAILED;
       case pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED:
         return ClientOrchestrationStatus.TERMINATED;
+      case pb.OrchestrationStatus.ORCHESTRATION_STATUS_CANCELED:
+        return ClientOrchestrationStatus.CANCELED;
       case pb.OrchestrationStatus.ORCHESTRATION_STATUS_SUSPENDED:
         return ClientOrchestrationStatus.SUSPENDED;
       case pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW:
@@ -432,6 +434,7 @@ export class InMemoryOrchestrationBackend {
     return (
       status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED ||
       status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED ||
+      status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_CANCELED ||
       status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED
     );
   }
