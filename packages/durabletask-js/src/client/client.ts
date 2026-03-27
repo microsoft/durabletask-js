@@ -581,7 +581,7 @@ export class TaskHubGrpcClient {
           throw new Error(grpcError.details || `The rewind operation is not supported by the backend.`, { cause: e });
         }
         if (grpcError.code === grpc.status.CANCELLED) {
-          throw new Error(`The rewind operation for '${instanceId}' was cancelled.`, { cause: e });
+          throw new Error(`The rewind operation for '${instanceId}' was canceled.`, { cause: e });
         }
       }
       throw e;
