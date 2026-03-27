@@ -105,7 +105,7 @@ describe("TaskHubGrpcClient error cause preservation", () => {
       } catch (e: unknown) {
         expect(e).toBeInstanceOf(Error);
         const error = e as Error;
-        expect(error.message).toContain("was cancelled");
+        expect(error.message).toContain("was canceled");
         expect(error.cause).toBe(grpcError);
       }
     });
