@@ -569,19 +569,19 @@ export class TaskHubGrpcClient {
       );
     } catch (e) {
       // Handle gRPC errors and convert them to appropriate errors
-      if (e && typeof e === "object" && "code" in e) {
-        const grpcError = e as { code: number; details?: string };
+      if (e instanceof Error && "code" in e) {
+        const grpcError = e as grpc.ServiceError;
         if (grpcError.code === grpc.status.NOT_FOUND) {
-          throw new Error(`An orchestration with the instanceId '${instanceId}' was not found.`);
+          throw new Error(`An orchestration with the instanceId '${instanceId}' was not found.`, { cause: e });
         }
         if (grpcError.code === grpc.status.FAILED_PRECONDITION) {
-          throw new Error(grpcError.details || `Cannot rewind orchestration '${instanceId}': it is in a state that does not allow rewinding.`);
+          throw new Error(grpcError.details || `Cannot rewind orchestration '${instanceId}': it is in a state that does not allow rewinding.`, { cause: e });
         }
         if (grpcError.code === grpc.status.UNIMPLEMENTED) {
-          throw new Error(grpcError.details || `The rewind operation is not supported by the backend.`);
+          throw new Error(grpcError.details || `The rewind operation is not supported by the backend.`, { cause: e });
         }
         if (grpcError.code === grpc.status.CANCELLED) {
-          throw new Error(`The rewind operation for '${instanceId}' was cancelled.`);
+          throw new Error(`The rewind operation for '${instanceId}' was canceled.`, { cause: e });
         }
       }
       throw e;
@@ -629,13 +629,13 @@ export class TaskHubGrpcClient {
       if (e instanceof Error && "code" in e) {
         const grpcError = e as grpc.ServiceError;
         if (grpcError.code === grpc.status.NOT_FOUND) {
-          throw new Error(`An orchestration with the instanceId '${instanceId}' was not found.`);
+          throw new Error(`An orchestration with the instanceId '${instanceId}' was not found.`, { cause: e });
         }
         if (grpcError.code === grpc.status.FAILED_PRECONDITION) {
-          throw new Error(`An orchestration with the instanceId '${instanceId}' cannot be restarted.`);
+          throw new Error(`An orchestration with the instanceId '${instanceId}' cannot be restarted.`, { cause: e });
         }
         if (grpcError.code === grpc.status.CANCELLED) {
-          throw new Error(`The restartOrchestration operation was canceled.`);
+          throw new Error(`The restartOrchestration operation was canceled.`, { cause: e });
         }
       }
       throw e;
