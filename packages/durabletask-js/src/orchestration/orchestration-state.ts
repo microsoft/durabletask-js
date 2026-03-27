@@ -48,5 +48,20 @@ export class OrchestrationState {
         this.failureDetails,
       );
     }
+
+    // Also check the runtime status for cases where failure details were
+    // dropped (e.g., empty error message/type from the sidecar).
+    // Without this check, a FAILED orchestration with missing details would
+    // silently pass through raiseIfFailed().
+    if (this.runtimeStatus === OrchestrationStatus.FAILED) {
+      const syntheticDetails = new FailureDetails(
+        "Unknown error",
+        "UnknownError",
+      );
+      throw new OrchestrationFailedError(
+        `Orchestration '${this.instanceId}' failed`,
+        syntheticDetails,
+      );
+    }
   }
 }
