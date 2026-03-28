@@ -194,6 +194,14 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
           if (!this._previousTask.isComplete) {
             break;
           }
+
+          // If the immediately-complete task is FAILED (e.g., a WhenAll with a
+          // pre-failed child), we must exit this success-path loop and handle it
+          // through the isFailed branch so the exception is thrown into the generator.
+          if (this._previousTask.isFailed) {
+            await this.resume();
+            return;
+          }
         }
       }
     }

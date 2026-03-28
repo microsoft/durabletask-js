@@ -1921,6 +1921,105 @@ describe("Orchestration Executor", () => {
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify("recovered"));
   });
+
+  it("should throw exception into generator when whenAll yields with a pre-failed child", async () => {
+    // This tests a scenario where:
+    // 1. An activity is scheduled but not awaited immediately
+    // 2. A timer is awaited instead
+    // 3. The activity fails while the timer is pending
+    // 4. After the timer fires, the orchestrator creates whenAll([failedTask])
+    // 5. The WhenAllTask is immediately failed because the child is already failed
+    // 6. The generator should receive the exception, not undefined
+    const myActivity = async (_: ActivityContext, input: string) => `result-${input}`;
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      // Schedule an activity but don't yield it yet
+      const activityTask = ctx.callActivity(myActivity, "test");
+
+      // Wait on a timer instead
+      yield ctx.createTimer(10);
+
+      // By now, the activity may have already failed.
+      // Creating whenAll with a pre-failed child makes it immediately failed.
+      try {
+        yield whenAll([activityTask]);
+        return "should-not-reach-here";
+      } catch (e: any) {
+        // The exception from the failed activity should be thrown here
+        return `caught: ${e.message}`;
+      }
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(myActivity);
+
+    // Build history:
+    // 1. Orchestrator starts → schedules activity (id=1) and timer (id=2)
+    // 2. Activity is scheduled (confirmed)
+    // 3. Timer is created (confirmed)
+    // 4. Activity fails
+    // 5. Timer fires → generator resumes, creates whenAll with pre-failed task
+    const oldEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID, JSON.stringify("test")),
+      newTaskScheduledEvent(1, activityName),
+      newTimerCreatedEvent(2, new Date()),
+      newTaskFailedEvent(1, new Error("Activity exploded")),
+    ];
+
+    const timerFireAt = new Date();
+    const newEvents = [newTimerFiredEvent(2, timerFireAt)];
+
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    // The orchestrator should have caught the exception from the WhenAll
+    // and returned a message containing the error
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+
+    const output = completeAction?.getResult()?.getValue();
+    expect(output).toBeDefined();
+    expect(JSON.parse(output!)).toContain("caught:");
+    expect(JSON.parse(output!)).toContain("Activity exploded");
+  });
+
+  it("should fail orchestration when whenAll yields with pre-failed child and exception is not caught", async () => {
+    const myActivity = async (_: ActivityContext, input: string) => `result-${input}`;
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const activityTask = ctx.callActivity(myActivity, "test");
+      yield ctx.createTimer(10);
+
+      // This will throw because activityTask is already failed, but we don't catch it
+      const results = yield whenAll([activityTask]);
+      return results;
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(myActivity);
+
+    const oldEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID, JSON.stringify("test")),
+      newTaskScheduledEvent(1, activityName),
+      newTimerCreatedEvent(2, new Date()),
+      newTaskFailedEvent(1, new Error("Activity exploded")),
+    ];
+
+    const newEvents = [newTimerFiredEvent(2, new Date())];
+
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    // The orchestrator should fail because the exception was not caught
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("TaskFailedError");
+    expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("Activity exploded");
+  });
 });
 
 function getAndValidateSingleCompleteOrchestrationAction(
