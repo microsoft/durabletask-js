@@ -377,4 +377,70 @@ describe("In-Memory Backend", () => {
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
     expect(state?.serializedOutput).toEqual(JSON.stringify(42));
   });
+
+  it("should cancel pending timers on continue-as-new", async () => {
+    // This test verifies that timers from a previous iteration are cancelled
+    // when the orchestration does continue-as-new. Without this fix, stale
+    // timers fire into the new iteration and deliver events with timer IDs
+    // that could collide with new tasks.
+    let iteration2TimerFired = false;
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: number): any {
+      if (input === 1) {
+        // First iteration: create a long timer, then immediately continue-as-new.
+        // The timer should be cancelled and NOT fire into the second iteration.
+        ctx.createTimer(60); // 60-second timer — should be cancelled
+        ctx.continueAsNew(2, false);
+      } else {
+        // Second iteration: create a short timer and wait for it.
+        // If the stale timer from iteration 1 leaks, it could complete
+        // the wrong task or cause unexpected events.
+        yield ctx.createTimer(0.05); // 50ms timer
+        iteration2TimerFired = true;
+        return "done";
+      }
+    };
+
+    worker.addOrchestrator(orchestrator);
+    await worker.start();
+
+    const id = await client.scheduleNewOrchestration(orchestrator, 1);
+    const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(state?.serializedOutput).toEqual(JSON.stringify("done"));
+    expect(iteration2TimerFired).toBe(true);
+  });
+
+  it("should carry over external events in correct order after continue-as-new", async () => {
+    // Verifies that carryover events from continue-as-new are placed after
+    // OrchestratorStarted and ExecutionStarted, matching real sidecar behavior.
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: number): any {
+      if (input === 1) {
+        // First iteration: buffer an external event but don't consume it,
+        // then continue-as-new with saveEvents=true
+        ctx.continueAsNew(2, true);
+      } else {
+        // Second iteration: the carryover event should be available
+        const value = yield ctx.waitForExternalEvent("my_event");
+        return value;
+      }
+    };
+
+    worker.addOrchestrator(orchestrator);
+    await worker.start();
+
+    const id = await client.scheduleNewOrchestration(orchestrator, 1);
+
+    // Raise the event before orchestration processes — it will be buffered
+    // and carried over when continue-as-new is called with saveEvents=true
+    await client.raiseOrchestrationEvent(id, "my_event", "carried-over");
+
+    const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(state?.serializedOutput).toEqual(JSON.stringify("carried-over"));
+  });
 });

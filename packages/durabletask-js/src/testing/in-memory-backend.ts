@@ -62,6 +62,7 @@ export class InMemoryOrchestrationBackend {
   private readonly activityQueue: ActivityWorkItem[] = [];
   private readonly stateWaiters: Map<string, StateWaiter[]> = new Map();
   private readonly pendingTimers: Set<ReturnType<typeof setTimeout>> = new Set();
+  private readonly instanceTimers: Map<string, Set<ReturnType<typeof setTimeout>>> = new Map();
   private nextCompletionToken: number = 1;
   private readonly maxHistorySize: number;
 
@@ -394,6 +395,7 @@ export class InMemoryOrchestrationBackend {
       clearTimeout(timer);
     }
     this.pendingTimers.clear();
+    this.instanceTimers.clear();
   }
 
   /**
@@ -477,6 +479,11 @@ export class InMemoryOrchestrationBackend {
       const newInput = completeAction.getResult()?.getValue();
       const carryoverEvents = completeAction.getCarryovereventsList();
 
+      // Cancel all pending timers for this instance. Timers from the previous
+      // iteration must not fire into the new iteration — their timer IDs could
+      // collide with new sequence numbers and complete the wrong tasks.
+      this.cancelInstanceTimers(instance.instanceId);
+
       // Reset instance state
       instance.history = [];
       instance.input = newInput;
@@ -485,14 +492,11 @@ export class InMemoryOrchestrationBackend {
       instance.failureDetails = undefined;
       instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_PENDING;
 
-      // Add carryover events
-      instance.pendingEvents = [...carryoverEvents];
-
-      // Add new execution started events
+      // Build new events: OrchestratorStarted and ExecutionStarted must come
+      // before carryover events, matching the real sidecar's event ordering.
       const orchestratorStarted = pbh.newOrchestratorStartedEvent(new Date());
       const executionStarted = pbh.newExecutionStartedEvent(instance.name, instance.instanceId, newInput);
-      instance.pendingEvents.push(orchestratorStarted);
-      instance.pendingEvents.push(executionStarted);
+      instance.pendingEvents = [orchestratorStarted, executionStarted, ...carryoverEvents];
 
       this.enqueueOrchestration(instance.instanceId);
     }
@@ -543,6 +547,7 @@ export class InMemoryOrchestrationBackend {
 
     const timerHandle = setTimeout(() => {
       this.pendingTimers.delete(timerHandle);
+      this.removeInstanceTimer(instance.instanceId, timerHandle);
       const currentInstance = this.instances.get(instance.instanceId);
       if (currentInstance && !this.isTerminalStatus(currentInstance.status)) {
         const timerFiredEvent = pbh.newTimerFiredEvent(timerId, fireAt);
@@ -552,6 +557,7 @@ export class InMemoryOrchestrationBackend {
       }
     }, delay);
     this.pendingTimers.add(timerHandle);
+    this.addInstanceTimer(instance.instanceId, timerHandle);
   }
 
   private processCreateSubOrchestrationAction(instance: OrchestrationInstance, action: pb.OrchestratorAction): void {
@@ -635,6 +641,41 @@ export class InMemoryOrchestrationBackend {
       } catch {
         // Target instance may not exist - ignore
       }
+    }
+  }
+
+  private addInstanceTimer(instanceId: string, timerHandle: ReturnType<typeof setTimeout>): void {
+    let timers = this.instanceTimers.get(instanceId);
+    if (!timers) {
+      timers = new Set();
+      this.instanceTimers.set(instanceId, timers);
+    }
+    timers.add(timerHandle);
+  }
+
+  private removeInstanceTimer(instanceId: string, timerHandle: ReturnType<typeof setTimeout>): void {
+    const timers = this.instanceTimers.get(instanceId);
+    if (timers) {
+      timers.delete(timerHandle);
+      if (timers.size === 0) {
+        this.instanceTimers.delete(instanceId);
+      }
+    }
+  }
+
+  /**
+   * Cancels all pending timers for a specific instance.
+   * Used during continue-as-new to prevent stale timers from the previous
+   * iteration from firing into the new iteration.
+   */
+  private cancelInstanceTimers(instanceId: string): void {
+    const timers = this.instanceTimers.get(instanceId);
+    if (timers) {
+      for (const timer of timers) {
+        clearTimeout(timer);
+        this.pendingTimers.delete(timer);
+      }
+      this.instanceTimers.delete(instanceId);
     }
   }
 
