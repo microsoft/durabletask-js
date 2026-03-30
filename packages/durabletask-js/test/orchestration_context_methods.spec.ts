@@ -151,6 +151,106 @@ describe("OrchestrationContext.setCustomStatus", () => {
     // The last set value should be returned
     expect(result.customStatus).toEqual('"step3"');
   });
+
+  it("should fail the orchestration when custom status contains a circular reference", async () => {
+    const circular: Record<string, unknown> = { key: "value" };
+    circular.self = circular;
+
+    const orchestrator: TOrchestrator = async (ctx: OrchestrationContext) => {
+      ctx.setCustomStatus(circular);
+      return "done";
+    };
+
+    const registry = new Registry();
+    const name = registry.addOrchestrator(orchestrator);
+    const newEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(name, TEST_INSTANCE_ID),
+    ];
+    const executor = new OrchestrationExecutor(registry);
+    const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+
+    // The orchestration should fail gracefully instead of crashing the executor
+    const completeAction = result.actions.find((a) => a.getCompleteorchestration());
+    expect(completeAction).toBeDefined();
+    expect(completeAction?.getCompleteorchestration()?.getOrchestrationstatus()).toEqual(
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+    );
+    const failureDetails = completeAction?.getCompleteorchestration()?.getFailuredetails();
+    expect(failureDetails?.getErrormessage()).toContain("not JSON-serializable");
+  });
+
+  it("should fail the orchestration when custom status contains a BigInt", async () => {
+    const orchestrator: TOrchestrator = async (ctx: OrchestrationContext) => {
+      ctx.setCustomStatus({ count: BigInt(42) });
+      return "done";
+    };
+
+    const registry = new Registry();
+    const name = registry.addOrchestrator(orchestrator);
+    const newEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(name, TEST_INSTANCE_ID),
+    ];
+    const executor = new OrchestrationExecutor(registry);
+    const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+
+    // The orchestration should fail gracefully instead of crashing the executor
+    const completeAction = result.actions.find((a) => a.getCompleteorchestration());
+    expect(completeAction).toBeDefined();
+    expect(completeAction?.getCompleteorchestration()?.getOrchestrationstatus()).toEqual(
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+    );
+    const failureDetails = completeAction?.getCompleteorchestration()?.getFailuredetails();
+    expect(failureDetails?.getErrormessage()).toContain("not JSON-serializable");
+  });
+
+  it("should allow clearing custom status by setting it to null", async () => {
+    const orchestrator: TOrchestrator = async (ctx: OrchestrationContext) => {
+      ctx.setCustomStatus("initial");
+      ctx.setCustomStatus(null);
+      return "done";
+    };
+
+    const registry = new Registry();
+    const name = registry.addOrchestrator(orchestrator);
+    const newEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(name, TEST_INSTANCE_ID),
+    ];
+    const executor = new OrchestrationExecutor(registry);
+    const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+
+    expect(result.customStatus).toBeUndefined();
+  });
+
+  it("should preserve orchestration result when non-serializable status is set after a valid one", async () => {
+    const circular: Record<string, unknown> = { key: "value" };
+    circular.self = circular;
+
+    const orchestrator: TOrchestrator = async (ctx: OrchestrationContext) => {
+      ctx.setCustomStatus("good status");
+      ctx.setCustomStatus(circular); // This should throw
+      return "done";
+    };
+
+    const registry = new Registry();
+    const name = registry.addOrchestrator(orchestrator);
+    const newEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(name, TEST_INSTANCE_ID),
+    ];
+    const executor = new OrchestrationExecutor(registry);
+    const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+
+    // The orchestration should fail (not crash) — the serialization error
+    // is thrown inside orchestrator code and caught by the executor
+    const completeAction = result.actions.find((a) => a.getCompleteorchestration());
+    expect(completeAction).toBeDefined();
+    expect(completeAction?.getCompleteorchestration()?.getOrchestrationstatus()).toEqual(
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+    );
+  });
 });
 
 describe("OrchestrationContext.sendEvent", () => {

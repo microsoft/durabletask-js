@@ -48,7 +48,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   _pendingEvents: Record<string, CompletableTask<any>[]>;
   _newInput?: any;
   _saveEvents: boolean;
-  _customStatus?: any;
+  _customStatus?: string;
   _entityFeature: RuntimeOrchestrationEntityFeature;
 
   constructor(instanceId: string) {
@@ -402,20 +402,35 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
 
   /**
    * Sets a custom status value for the current orchestration instance.
+   *
+   * The value is serialized eagerly via JSON.stringify so that serialization
+   * errors surface inside the orchestrator execution (where they are caught
+   * by the executor's try-catch) rather than after execution completes.
    */
   setCustomStatus(customStatus: any): void {
-    this._customStatus = customStatus;
+    if (customStatus === undefined || customStatus === null) {
+      this._customStatus = undefined;
+      return;
+    }
+
+    try {
+      this._customStatus = JSON.stringify(customStatus);
+    } catch (e) {
+      throw new Error(
+        `Custom status value is not JSON-serializable: ${e instanceof Error ? e.message : String(e)}`,
+        { cause: e },
+      );
+    }
   }
 
   /**
    * Gets the encoded custom status value for the current orchestration instance.
    * This is used internally when building the orchestrator response.
+   *
+   * Returns the pre-serialized JSON string set by setCustomStatus().
    */
   getCustomStatus(): string | undefined {
-    if (this._customStatus === undefined || this._customStatus === null) {
-      return undefined;
-    }
-    return JSON.stringify(this._customStatus);
+    return this._customStatus;
   }
 
   /**
