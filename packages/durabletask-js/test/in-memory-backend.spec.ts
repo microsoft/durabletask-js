@@ -356,6 +356,50 @@ describe("In-Memory Backend", () => {
     expect(state).toBeUndefined();
   });
 
+  it("should continue processing after backend reset during orchestration execution", async () => {
+    // This test verifies that the worker's processing loop survives a backend
+    // reset that occurs while an orchestration is being processed. When the
+    // instance is deleted (e.g., via reset) before completeOrchestration runs,
+    // the worker must not crash. Without proper handling, the processing loop
+    // would terminate, preventing any subsequent orchestrations from running.
+
+    const validOrchestrator: TOrchestrator = async (_: OrchestrationContext, input: number) => {
+      return input + 1;
+    };
+
+    worker.addOrchestrator(validOrchestrator);
+    await worker.start();
+
+    // Schedule and complete a first orchestration to verify baseline behavior
+    const id1 = await client.scheduleNewOrchestration(validOrchestrator, 10);
+    const state1 = await client.waitForOrchestrationCompletion(id1, true, 10);
+    expect(state1?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(state1?.serializedOutput).toEqual(JSON.stringify(11));
+
+    // Reset the backend (simulates clearing all state while worker is running)
+    backend.reset();
+
+    // Schedule a second orchestration after reset — this verifies the worker
+    // is still alive and can process new work items
+    const id2 = await client.scheduleNewOrchestration(validOrchestrator, 41);
+    const state2 = await client.waitForOrchestrationCompletion(id2, true, 10);
+
+    expect(state2).toBeDefined();
+    expect(state2?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(state2?.serializedOutput).toEqual(JSON.stringify(42));
+  });
+
+  it("should silently ignore completeOrchestration for purged instances", () => {
+    // Verifies that completeOrchestration returns silently when the instance
+    // has been deleted (e.g., via purge or reset), consistent with how
+    // completeActivity handles missing instances.
+
+    // Should not throw — instance simply doesn't exist
+    expect(() => {
+      backend.completeOrchestration("nonexistent-instance", 1, []);
+    }).not.toThrow();
+  });
+
   it("should allow reusing instance IDs after reset", async () => {
     const orchestrator: TOrchestrator = async (_: OrchestrationContext, input: number) => {
       return input * 2;

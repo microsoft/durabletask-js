@@ -254,7 +254,7 @@ export class InMemoryOrchestrationBackend {
   ): void {
     const instance = this.instances.get(instanceId);
     if (!instance) {
-      throw new Error(`Orchestration instance '${instanceId}' not found`);
+      return; // Instance may have been purged or the backend reset
     }
 
     if (instance.completionToken !== completionToken) {
