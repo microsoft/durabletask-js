@@ -1,0 +1,179 @@
+name: 🪞 Self-Reflection Agent
+
+on:
+  # Allow manual trigger with configurable scan window
+  workflow_dispatch:
+    inputs:
+      scan_since:
+        description: >-
+          Scan merged PRs since this date (ISO format, e.g. 2025-01-01).
+          Defaults to 30 days ago.
+        required: false
+        type: string
+      scan_labels:
+        description: >-
+          Comma-separated labels to filter PRs (optional).
+          Leave empty to scan all merged PRs.
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  self-reflection:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      NODE_VER: "22"
+
+    steps:
+      - name: 📥 Checkout code (full history for PR analysis)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: ⚙️ Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VER }}
+
+      - name: 🗓️ Compute scan window
+        id: scan-window
+        run: |
+          if [ -n "${{ inputs.scan_since }}" ]; then
+            SCAN_SINCE="${{ inputs.scan_since }}"
+          else
+            # Default: 30 days ago
+            SCAN_SINCE=$(date -u -d "30 days ago" +%Y-%m-%d 2>/dev/null \
+              || date -u -v-30d +%Y-%m-%d)
+          fi
+          echo "scan_since=${SCAN_SINCE}" >> "$GITHUB_OUTPUT"
+          echo "Scanning merged PRs since: ${SCAN_SINCE}"
+
+      - name: 🔍 Collect merged PRs for analysis
+        id: collect-prs
+        run: |
+          SCAN_SINCE="${{ steps.scan-window.outputs.scan_since }}"
+
+          echo "Fetching merged PRs since ${SCAN_SINCE}..."
+
+          # Fetch merged PRs with reviews and comments
+          MERGED_PRS=$(gh pr list \
+            --state merged \
+            --limit 100 \
+            --search "merged:>=${SCAN_SINCE}" \
+            --json number,title,body,mergedAt,url,files,labels \
+            --jq 'sort_by(.mergedAt) | reverse' \
+            2>/dev/null || echo "[]")
+
+          PR_COUNT=$(echo "$MERGED_PRS" | jq 'length')
+          echo "Found ${PR_COUNT} merged PRs in scan window"
+
+          # Check for any existing self-reflection PRs to avoid overlap
+          EXISTING_SELF_REFLECTION=$(gh pr list \
+            --state open \
+            --head "self-reflection/" \
+            --json number,title,headRefName \
+            --jq '[.[] | {number: .number, title: .title, branch: .headRefName}]' \
+            2>/dev/null || echo "[]")
+
+          # Write context for agent
+          cat > /tmp/self-reflection-context.json <<CONTEXT_EOF
+          {
+            "scan_since": "${SCAN_SINCE}",
+            "scan_until": "$(date -u +%Y-%m-%d)",
+            "merged_pr_count": ${PR_COUNT},
+            "merged_prs_summary": ${MERGED_PRS},
+            "existing_self_reflection_prs": ${EXISTING_SELF_REFLECTION}
+          }
+          CONTEXT_EOF
+
+          echo "Context written to /tmp/self-reflection-context.json"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+
+      - name: 🏷️ Ensure copilot-finds label exists
+        run: |
+          gh label create "copilot-finds" \
+            --description "Findings from automated code review and reflection agents" \
+            --color "7057ff" \
+            --force
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+
+      - name: 🪞 Run Self-Reflection Agent
+        run: |
+          SCAN_SINCE="${{ steps.scan-window.outputs.scan_since }}"
+          CONTEXT=$(cat /tmp/self-reflection-context.json)
+          AGENT_PROMPT=$(cat .github/agents/self-reflection.agent.md)
+
+          FULL_PROMPT=$(cat <<PROMPT_EOF
+          $AGENT_PROMPT
+
+          ---
+
+          ## Pre-loaded Context
+
+          Today's date: $(date -u +%Y-%m-%d)
+          Repository: ${{ github.repository }}
+          Scan window: ${SCAN_SINCE} to $(date -u +%Y-%m-%d)
+
+          ### Merged PR Summary
+
+          $CONTEXT
+
+          ---
+
+          ## Execution Instructions
+
+          You are running in CI as the self-reflection agent.
+
+          Execute the full workflow described above:
+          1. Read .github/copilot-instructions.md in full
+          2. For each merged PR in the summary, fetch detailed review comments
+          3. Apply the signal quality filter to extract valuable lessons
+          4. Deduplicate against existing knowledge in copilot-instructions.md
+          5. Draft surgical updates to copilot-instructions.md
+          6. Self-validate all proposed changes
+          7. If valuable lessons were found, create a PR with the updates
+          8. If no lessons met the quality bar, exit cleanly with no PR
+
+          Environment variable for scan window: SCAN_SINCE=${SCAN_SINCE}
+
+          Remember:
+          - Only extract genuinely valuable, reusable lessons
+          - Never remove existing content from copilot-instructions.md
+          - Every addition must reference its source PR
+          - Maximum 1 PR
+          - Fact-check any JS/TS/Node.js behavioral claims before committing them
+          PROMPT_EOF
+          )
+
+          EXIT_CODE=0
+          timeout --foreground --signal=TERM --kill-after=30s 2400s \
+            copilot \
+              --prompt "$FULL_PROMPT" \
+              --model "claude-opus-4.6" \
+              --allow-all-tools \
+              --allow-all-paths \
+              < /dev/null 2>&1 || EXIT_CODE=$?
+
+          if [ $EXIT_CODE -eq 124 ]; then
+            echo "::warning::Self-reflection agent timed out after 40 minutes"
+          elif [ $EXIT_CODE -ne 0 ]; then
+            echo "::warning::Agent exited with code $EXIT_CODE"
+          fi
+
+          echo "Self-reflection agent completed."
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          SCAN_SINCE: ${{ steps.scan-window.outputs.scan_since }}
+          CI: "true"
+          NO_COLOR: "1"
