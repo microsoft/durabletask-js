@@ -551,6 +551,166 @@ describe("TaskEntityShim", () => {
     });
   });
 
+  describe("corrupted initial state (getState error handling)", () => {
+    it("should record failure with descriptive error when initial state is invalid JSON", async () => {
+      // Simulates corrupted entity state from the sidecar
+      const entity = new CounterEntity();
+      const shim = new TaskEntityShim(entity, entityId);
+
+      // Create batch request with invalid JSON as entity state
+      const request = new pb.EntityBatchRequest();
+      request.setInstanceid(entityId.toString());
+
+      const stateValue = new StringValue();
+      stateValue.setValue("{not valid json");
+      request.setEntitystate(stateValue);
+
+      const opRequest = new pb.OperationRequest();
+      opRequest.setOperation("get");
+      request.addOperations(opRequest);
+
+      const result = await shim.executeAsync(request);
+
+      // The operation should fail because getState() will throw on JSON.parse
+      const opResult = result.getResultsList()[0];
+      expect(opResult.hasFailure()).toBe(true);
+
+      const failure = opResult.getFailure()!;
+      const errorMessage = failure.getFailuredetails()?.getErrormessage() ?? "";
+      // Error message should be descriptive (not a raw SyntaxError)
+      expect(errorMessage).toContain("Entity state contains invalid JSON");
+    });
+
+    it("should preserve error cause in getState error", async () => {
+      // Verify the error wrapping preserves the original SyntaxError cause
+      class CauseInspectorEntity implements ITaskEntity {
+        caughtError: Error | undefined = undefined;
+
+        run(operation: TaskEntityOperation): unknown {
+          try {
+            operation.state.getState();
+          } catch (e) {
+            this.caughtError = e instanceof Error ? e : undefined;
+            throw e;
+          }
+          return undefined;
+        }
+      }
+
+      const entity = new CauseInspectorEntity();
+      const shim = new TaskEntityShim(entity, entityId);
+
+      const request = new pb.EntityBatchRequest();
+      request.setInstanceid(entityId.toString());
+
+      const stateValue = new StringValue();
+      stateValue.setValue("<<<corrupted>>>");
+      request.setEntitystate(stateValue);
+
+      const opRequest = new pb.OperationRequest();
+      opRequest.setOperation("inspect");
+      request.addOperations(opRequest);
+
+      await shim.executeAsync(request);
+
+      // The wrapped error should have a SyntaxError cause
+      expect(entity.caughtError).toBeDefined();
+      expect(entity.caughtError!.message).toContain("Entity state contains invalid JSON");
+      expect(entity.caughtError!.cause).toBeInstanceOf(SyntaxError);
+    });
+
+    it("should rollback to initial state when getState fails mid-batch", async () => {
+      // First operation succeeds with valid state, second operation gets corrupted state
+      // This tests that rollback works correctly for getState failures too
+      class StateReaderEntity implements ITaskEntity {
+        run(operation: TaskEntityOperation): unknown {
+          const state = operation.state.getState<{ count: number }>();
+          return state?.count;
+        }
+      }
+
+      const entity = new StateReaderEntity();
+      const shim = new TaskEntityShim(entity, entityId);
+
+      // First, run with valid state
+      const request1 = createBatchRequest(
+        entityId.toString(),
+        [{ name: "read" }],
+        { count: 42 },
+      );
+
+      const result1 = await shim.executeAsync(request1);
+      expect(result1.getResultsList()[0].hasSuccess()).toBe(true);
+      expect(JSON.parse(result1.getResultsList()[0].getSuccess()!.getResult()!.getValue())).toBe(42);
+
+      // Now run with corrupted state — the operation should fail but not crash
+      const request2 = new pb.EntityBatchRequest();
+      request2.setInstanceid(entityId.toString());
+
+      const corruptState = new StringValue();
+      corruptState.setValue("{broken json!");
+      request2.setEntitystate(corruptState);
+
+      const opRequest = new pb.OperationRequest();
+      opRequest.setOperation("read");
+      request2.addOperations(opRequest);
+
+      const result2 = await shim.executeAsync(request2);
+
+      // Operation should fail gracefully
+      const opResult = result2.getResultsList()[0];
+      expect(opResult.hasFailure()).toBe(true);
+      expect(opResult.getFailure()!.getFailuredetails()?.getErrormessage()).toContain(
+        "Entity state contains invalid JSON",
+      );
+    });
+
+    it("should succeed for subsequent operations after corrupted state causes failure", async () => {
+      // Corrupted state causes first operation to fail, but second operation
+      // with no state read should still work
+      class ConditionalReaderEntity implements ITaskEntity {
+        run(operation: TaskEntityOperation): unknown {
+          if (operation.name === "readState") {
+            return operation.state.getState<{ count: number }>();
+          }
+          // "noRead" operation doesn't read state
+          operation.state.setState({ count: 0 });
+          return "reset";
+        }
+      }
+
+      const entity = new ConditionalReaderEntity();
+      const shim = new TaskEntityShim(entity, entityId);
+
+      const request = new pb.EntityBatchRequest();
+      request.setInstanceid(entityId.toString());
+
+      const corruptState = new StringValue();
+      corruptState.setValue("not-json");
+      request.setEntitystate(corruptState);
+
+      // First op: reads corrupted state → fails
+      const op1 = new pb.OperationRequest();
+      op1.setOperation("readState");
+      request.addOperations(op1);
+
+      // Second op: writes new state without reading → succeeds
+      const op2 = new pb.OperationRequest();
+      op2.setOperation("noRead");
+      request.addOperations(op2);
+
+      const result = await shim.executeAsync(request);
+
+      expect(result.getResultsList()).toHaveLength(2);
+      // First operation fails
+      expect(result.getResultsList()[0].hasFailure()).toBe(true);
+      // Second operation succeeds (rollback restored corrupted serialized state,
+      // but noRead doesn't call getState so it works)
+      expect(result.getResultsList()[1].hasSuccess()).toBe(true);
+      expect(JSON.parse(result.getResultsList()[1].getSuccess()!.getResult()!.getValue())).toBe("reset");
+    });
+  });
+
   describe("invalid operation input", () => {
     it("should record failure when operation input is invalid JSON", async () => {
       const entity = new CounterEntity();

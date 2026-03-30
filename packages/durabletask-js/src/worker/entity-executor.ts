@@ -78,8 +78,15 @@ class StateShim implements TaskEntityState {
 
     // Lazy deserialization - only parse when needed
     if (!this.cacheValid) {
-      this.cachedValue =
-        this.serializedValue !== undefined ? JSON.parse(this.serializedValue) : undefined;
+      try {
+        this.cachedValue =
+          this.serializedValue !== undefined ? JSON.parse(this.serializedValue) : undefined;
+      } catch (e) {
+        throw new Error(
+          `Entity state contains invalid JSON: ${e instanceof Error ? e.message : String(e)}`,
+          { cause: e },
+        );
+      }
       this.cacheValid = true;
     }
 
