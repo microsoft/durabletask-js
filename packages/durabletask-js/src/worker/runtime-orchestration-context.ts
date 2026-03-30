@@ -364,7 +364,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     // arrives. If there are multiple events with the same name, we return
     // them in the order they were received.
     const externalEventTask = new CompletableTask<T>();
-    const eventName = name.toLocaleLowerCase();
+    const eventName = name.toLowerCase();
     const eventList = this._receivedEvents[eventName];
 
     if (eventList?.length) {
