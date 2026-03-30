@@ -53,12 +53,62 @@ describe("Activity Executor", () => {
     expect(caughtException).not.toBeNull();
     expect(caughtException?.message).toMatch(/Bogus/);
   });
+
+  it("should throw and log activityFailed when input is malformed JSON", async () => {
+    const testActivity = (_: ActivityContext, input: any) => {
+      return input;
+    };
+
+    const loggerSpy = createSpyLogger();
+    const [executor, name] = getActivityExecutor(testActivity, loggerSpy);
+
+    const malformedJson = "{not valid json";
+
+    await expect(executor.execute(TEST_INSTANCE_ID, name, TEST_TASK_ID, malformedJson))
+      .rejects.toThrow(SyntaxError);
+
+    // Verify the activityFailed log (EventId 605) was emitted
+    expect(loggerSpy.error).toHaveBeenCalled();
+    const errorCall = loggerSpy.error.mock.calls[0][0];
+    expect(errorCall).toContain(name);
+    expect(errorCall).toContain(TEST_INSTANCE_ID);
+    expect(errorCall).toContain("failed");
+  });
+
+  it("should handle undefined input without error", async () => {
+    const testActivity = (_: ActivityContext, input: any) => {
+      return input;
+    };
+
+    const [executor, name] = getActivityExecutor(testActivity);
+    const result = await executor.execute(TEST_INSTANCE_ID, name, TEST_TASK_ID, undefined);
+    expect(result).toBeUndefined();
+  });
+
+  it("should handle empty string input without error", async () => {
+    const testActivity = (_: ActivityContext, input: any) => {
+      return input;
+    };
+
+    const [executor, name] = getActivityExecutor(testActivity);
+    const result = await executor.execute(TEST_INSTANCE_ID, name, TEST_TASK_ID, "");
+    expect(result).toBeUndefined();
+  });
 });
 
 // Activity = Callable[[ActivityContext, TInput], TOutput]
-function getActivityExecutor(fn: TActivity<any, any>): [ActivityExecutor, string] {
+function getActivityExecutor(fn: TActivity<any, any>, logger?: any): [ActivityExecutor, string] {
   const registry = new Registry();
   const name = registry.addActivity(fn);
-  const executor = new ActivityExecutor(registry, testLogger);
+  const executor = new ActivityExecutor(registry, logger ?? testLogger);
   return [executor, name];
+}
+
+function createSpyLogger() {
+  return {
+    error: jest.fn(),
+    warn: jest.fn(),
+    info: jest.fn(),
+    debug: jest.fn(),
+  };
 }
