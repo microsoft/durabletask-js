@@ -12,6 +12,7 @@ import {
   OrchestrationContext,
   Task,
   TOrchestrator,
+  EntityInstanceId,
 } from "../src";
 
 describe("In-Memory Backend", () => {
@@ -374,6 +375,76 @@ describe("In-Memory Backend", () => {
 
     await client.scheduleNewOrchestration(orchestrator, 21, instanceId);
     const state = await client.waitForOrchestrationCompletion(instanceId, true, 10);
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(state?.serializedOutput).toEqual(JSON.stringify(42));
+  });
+
+  it("should not crash when orchestration signals an entity (fire-and-forget)", async () => {
+    const entityId = new EntityInstanceId("counter", "mykey");
+
+    const orchestrator: TOrchestrator = async (ctx: OrchestrationContext): Promise<any> => {
+      // Signal an entity (fire-and-forget). The in-memory backend doesn't
+      // process entities, but it must not crash on the SENDENTITYMESSAGE action.
+      ctx.entities.signalEntity(entityId, "add", 1);
+      return "signaled";
+    };
+
+    worker.addOrchestrator(orchestrator);
+    await worker.start();
+
+    const id = await client.scheduleNewOrchestration(orchestrator);
+    const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(state?.serializedOutput).toEqual(JSON.stringify("signaled"));
+  });
+
+  it("should not crash when orchestration signals multiple entities", async () => {
+    const entity1 = new EntityInstanceId("counter", "key1");
+    const entity2 = new EntityInstanceId("counter", "key2");
+
+    const orchestrator: TOrchestrator = async (ctx: OrchestrationContext): Promise<any> => {
+      ctx.entities.signalEntity(entity1, "add", 1);
+      ctx.entities.signalEntity(entity2, "add", 2);
+      return "done";
+    };
+
+    worker.addOrchestrator(orchestrator);
+    await worker.start();
+
+    const id = await client.scheduleNewOrchestration(orchestrator);
+    const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(state?.serializedOutput).toEqual(JSON.stringify("done"));
+  });
+
+  it("should not crash when orchestration signals entity then calls activity", async () => {
+    const entityId = new EntityInstanceId("counter", "mykey");
+
+    const doubleIt = async (_: ActivityContext, input: number) => {
+      return input * 2;
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      // Signal an entity, then call an activity. The backend must handle
+      // the SENDENTITYMESSAGE action without crashing before the activity
+      // result can be processed.
+      ctx.entities.signalEntity(entityId, "add", 5);
+      const result: number = yield ctx.callActivity(doubleIt, 21);
+      return result;
+    };
+
+    worker.addOrchestrator(orchestrator);
+    worker.addActivity(doubleIt);
+    await worker.start();
+
+    const id = await client.scheduleNewOrchestration(orchestrator);
+    const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+    expect(state).toBeDefined();
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
     expect(state?.serializedOutput).toEqual(JSON.stringify(42));
   });

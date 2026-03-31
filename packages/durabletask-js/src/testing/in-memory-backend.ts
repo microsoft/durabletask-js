@@ -455,6 +455,20 @@ export class InMemoryOrchestrationBackend {
       case pb.OrchestratorAction.OrchestratoractiontypeCase.SENDEVENT:
         this.processSendEventAction(action.getSendevent()!);
         break;
+      case pb.OrchestratorAction.OrchestratoractiontypeCase.SENDENTITYMESSAGE:
+        // Entity message actions (signal, call, lock, unlock) are produced by
+        // orchestrations that interact with entities. The in-memory backend does
+        // not currently include a full entity processing runtime, so these
+        // actions are acknowledged but not executed. Signal (fire-and-forget)
+        // operations silently succeed; call/lock operations will cause the
+        // orchestration to wait indefinitely for a response that never arrives,
+        // which matches the expected behavior when no entity worker is available.
+        break;
+      case pb.OrchestratorAction.OrchestratoractiontypeCase.TERMINATEORCHESTRATION:
+        // Terminate-orchestration actions are used for recursive termination of
+        // sub-orchestrations. Process by terminating the target instance.
+        this.processTerminateOrchestrationAction(action);
+        break;
       default:
         throw new Error(
           `Unknown orchestrator action type '${actionType}' for orchestration '${instance.instanceId}'. ` +
@@ -622,6 +636,26 @@ export class InMemoryOrchestrationBackend {
       .catch(() => {
         // Timeout or reset - sub-orchestration watcher cancelled, nothing to do
       });
+  }
+
+  private processTerminateOrchestrationAction(action: pb.OrchestratorAction): void {
+    const terminateAction = action.getTerminateorchestration();
+    if (!terminateAction) {
+      return;
+    }
+
+    const targetInstanceId = terminateAction.getInstanceid();
+    if (!targetInstanceId) {
+      return;
+    }
+
+    const output = terminateAction.getReason()?.getValue();
+
+    try {
+      this.terminate(targetInstanceId, output);
+    } catch {
+      // Target instance may not exist or already terminated - ignore
+    }
   }
 
   private processSendEventAction(sendEvent: pb.SendEventAction): void {
