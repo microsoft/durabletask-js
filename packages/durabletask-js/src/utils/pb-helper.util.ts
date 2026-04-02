@@ -185,7 +185,8 @@ export function newSubOrchestrationFailedEvent(eventId: number, ex: Error): pb.H
   return event;
 }
 
-export function newFailureDetails(e: unknown): pb.TaskFailureDetails {
+export function newFailureDetails(e: unknown, _depth: number = 0): pb.TaskFailureDetails {
+  const MAX_CAUSE_DEPTH = 10;
   const failure = new pb.TaskFailureDetails();
   // Use e.name (which can be customized) over constructor.name (which is always the class name)
   // This allows users to set error.name = "CustomError" and have it preserved in failure details
@@ -200,6 +201,12 @@ export function newFailureDetails(e: unknown): pb.TaskFailureDetails {
     const sv = new StringValue();
     sv.setValue(stack);
     failure.setStacktrace(sv);
+  }
+
+  // Populate innerFailure from error.cause to preserve the full error chain.
+  // A depth limit guards against pathological circular cause chains.
+  if (e instanceof Error && e.cause && _depth < MAX_CAUSE_DEPTH) {
+    failure.setInnerfailure(newFailureDetails(e.cause, _depth + 1));
   }
 
   return failure;
