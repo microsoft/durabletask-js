@@ -51,7 +51,10 @@ export class DurableTaskAzureManagedConnectionString {
     if (!value || value === "") {
       return undefined;
     }
-    return value.split(",");
+    return value
+      .split(",")
+      .map((t) => t.trim())
+      .filter((t) => t !== "");
   }
 
   /**

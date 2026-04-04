@@ -137,6 +137,36 @@ describe("DurableTaskAzureManagedConnectionString", () => {
 
       expect(tenants).toEqual(["tenant1", "tenant2"]);
     });
+
+    it("should trim whitespace from each tenant value", () => {
+      const connectionStringWithSpaces =
+        VALID_CONNECTION_STRING + ";AdditionallyAllowedTenants=tenant1, tenant2 , tenant3";
+
+      const connectionString = new DurableTaskAzureManagedConnectionString(connectionStringWithSpaces);
+      const tenants = connectionString.getAdditionallyAllowedTenants();
+
+      expect(tenants).toEqual(["tenant1", "tenant2", "tenant3"]);
+    });
+
+    it("should filter out empty entries from trailing commas", () => {
+      const connectionStringWithTrailingComma =
+        VALID_CONNECTION_STRING + ";AdditionallyAllowedTenants=tenant1,tenant2,";
+
+      const connectionString = new DurableTaskAzureManagedConnectionString(connectionStringWithTrailingComma);
+      const tenants = connectionString.getAdditionallyAllowedTenants();
+
+      expect(tenants).toEqual(["tenant1", "tenant2"]);
+    });
+
+    it("should handle wildcard tenant value", () => {
+      const connectionStringWithWildcard =
+        VALID_CONNECTION_STRING + ";AdditionallyAllowedTenants=*";
+
+      const connectionString = new DurableTaskAzureManagedConnectionString(connectionStringWithWildcard);
+      const tenants = connectionString.getAdditionallyAllowedTenants();
+
+      expect(tenants).toEqual(["*"]);
+    });
   });
 
   describe("getClientId", () => {
