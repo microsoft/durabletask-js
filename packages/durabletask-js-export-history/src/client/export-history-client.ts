@@ -225,13 +225,17 @@ export class ExportHistoryJobClient {
       request,
     );
 
-    // Then terminate the linked export orchestration if it exists
+    // Then terminate the linked export orchestration if it exists.
+    // Only swallow "not found" errors (orchestration doesn't exist or already purged).
+    // Re-throw all other errors (network failures, auth errors, timeouts, etc.).
     try {
       await this.client.terminateOrchestration(orchestrationInstanceId, "Export job deleted");
       await this.client.waitForOrchestrationCompletion(orchestrationInstanceId, false, 30);
       await this.client.purgeOrchestration(orchestrationInstanceId);
-    } catch {
-      // Orchestration instance doesn't exist or already purged - this is expected
+    } catch (e: unknown) {
+      if (!isNotFoundError(e)) {
+        throw e;
+      }
     }
   }
 }
@@ -267,4 +271,23 @@ function matchesFilter(state: ExportJobState, filter: ExportJobQuery): boolean {
     filter.createdTo === undefined ||
     (state.createdAt !== undefined && new Date(state.createdAt) <= filter.createdTo);
   return statusMatches && createdFromMatches && createdToMatches;
+}
+
+/** gRPC status code for NOT_FOUND (well-known constant from the gRPC spec). */
+const GRPC_STATUS_NOT_FOUND = 5;
+
+/**
+ * Checks whether an error is a gRPC NOT_FOUND error.
+ *
+ * Uses duck typing to inspect the error's `code` property without requiring
+ * a direct dependency on `@grpc/grpc-js`. gRPC `ServiceError` objects always
+ * carry a numeric `code` field matching the standard gRPC status codes.
+ */
+function isNotFoundError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code: unknown }).code === GRPC_STATUS_NOT_FOUND
+  );
 }
