@@ -994,6 +994,14 @@ export class TaskHubGrpcClient {
     input?: unknown,
     options?: SignalEntityOptions,
   ): Promise<void> {
+    if (!id) {
+      throw new Error("signalEntity: 'id' is required.");
+    }
+
+    if (!operationName) {
+      throw new Error("signalEntity: 'operationName' is required and cannot be empty.");
+    }
+
     const req = new pb.SignalEntityRequest();
     req.setInstanceid(id.toString());
     req.setRequestid(randomUUID());
@@ -1047,6 +1055,10 @@ export class TaskHubGrpcClient {
     id: EntityInstanceId,
     includeState: boolean = true,
   ): Promise<EntityMetadata<T> | undefined> {
+    if (!id) {
+      throw new Error("getEntity: 'id' is required.");
+    }
+
     const req = new pb.GetEntityRequest();
     req.setInstanceid(id.toString());
     req.setIncludestate(includeState);

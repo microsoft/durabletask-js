@@ -351,3 +351,62 @@ describe("EntityInstanceId.fromString", () => {
     expect(() => EntityInstanceId.fromString("@onlyname")).toThrow();
   });
 });
+
+describe("Entity Client Input Validation", () => {
+  // Validation guards throw before any gRPC call, so no connection is needed.
+  const { TaskHubGrpcClient } = require("../src");
+  let client: InstanceType<typeof TaskHubGrpcClient>;
+
+  beforeEach(() => {
+    client = new TaskHubGrpcClient({ hostAddress: "localhost:4001" });
+  });
+
+  describe("signalEntity", () => {
+    it("should throw when id is null", async () => {
+      await expect(client.signalEntity(null as any, "op")).rejects.toThrow(
+        "signalEntity: 'id' is required.",
+      );
+    });
+
+    it("should throw when id is undefined", async () => {
+      await expect(client.signalEntity(undefined as any, "op")).rejects.toThrow(
+        "signalEntity: 'id' is required.",
+      );
+    });
+
+    it("should throw when operationName is empty string", async () => {
+      const entityId = new EntityInstanceId("counter", "my-counter");
+      await expect(client.signalEntity(entityId, "")).rejects.toThrow(
+        "signalEntity: 'operationName' is required and cannot be empty.",
+      );
+    });
+
+    it("should throw when operationName is null", async () => {
+      const entityId = new EntityInstanceId("counter", "my-counter");
+      await expect(client.signalEntity(entityId, null as any)).rejects.toThrow(
+        "signalEntity: 'operationName' is required and cannot be empty.",
+      );
+    });
+
+    it("should throw when operationName is undefined", async () => {
+      const entityId = new EntityInstanceId("counter", "my-counter");
+      await expect(client.signalEntity(entityId, undefined as any)).rejects.toThrow(
+        "signalEntity: 'operationName' is required and cannot be empty.",
+      );
+    });
+  });
+
+  describe("getEntity", () => {
+    it("should throw when id is null", async () => {
+      await expect(client.getEntity(null as any)).rejects.toThrow(
+        "getEntity: 'id' is required.",
+      );
+    });
+
+    it("should throw when id is undefined", async () => {
+      await expect(client.getEntity(undefined as any)).rejects.toThrow(
+        "getEntity: 'id' is required.",
+      );
+    });
+  });
+});
