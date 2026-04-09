@@ -62,6 +62,7 @@ export class InMemoryOrchestrationBackend {
   private readonly activityQueue: ActivityWorkItem[] = [];
   private readonly stateWaiters: Map<string, StateWaiter[]> = new Map();
   private readonly pendingTimers: Set<ReturnType<typeof setTimeout>> = new Set();
+  private readonly instanceTimers: Map<string, Set<ReturnType<typeof setTimeout>>> = new Map();
   private nextCompletionToken: number = 1;
   private readonly maxHistorySize: number;
 
@@ -217,6 +218,7 @@ export class InMemoryOrchestrationBackend {
 
     this.instances.delete(instanceId);
     this.stateWaiters.delete(instanceId);
+    this.cancelInstanceTimers(instanceId);
     return true;
   }
 
@@ -394,6 +396,7 @@ export class InMemoryOrchestrationBackend {
       clearTimeout(timer);
     }
     this.pendingTimers.clear();
+    this.instanceTimers.clear();
   }
 
   /**
@@ -543,6 +546,7 @@ export class InMemoryOrchestrationBackend {
 
     const timerHandle = setTimeout(() => {
       this.pendingTimers.delete(timerHandle);
+      this.removeInstanceTimer(instance.instanceId, timerHandle);
       const currentInstance = this.instances.get(instance.instanceId);
       if (currentInstance && !this.isTerminalStatus(currentInstance.status)) {
         const timerFiredEvent = pbh.newTimerFiredEvent(timerId, fireAt);
@@ -552,6 +556,7 @@ export class InMemoryOrchestrationBackend {
       }
     }, delay);
     this.pendingTimers.add(timerHandle);
+    this.addInstanceTimer(instance.instanceId, timerHandle);
   }
 
   private processCreateSubOrchestrationAction(instance: OrchestrationInstance, action: pb.OrchestratorAction): void {
@@ -635,6 +640,36 @@ export class InMemoryOrchestrationBackend {
       } catch {
         // Target instance may not exist - ignore
       }
+    }
+  }
+
+  private addInstanceTimer(instanceId: string, timerHandle: ReturnType<typeof setTimeout>): void {
+    let timers = this.instanceTimers.get(instanceId);
+    if (!timers) {
+      timers = new Set();
+      this.instanceTimers.set(instanceId, timers);
+    }
+    timers.add(timerHandle);
+  }
+
+  private removeInstanceTimer(instanceId: string, timerHandle: ReturnType<typeof setTimeout>): void {
+    const timers = this.instanceTimers.get(instanceId);
+    if (timers) {
+      timers.delete(timerHandle);
+      if (timers.size === 0) {
+        this.instanceTimers.delete(instanceId);
+      }
+    }
+  }
+
+  private cancelInstanceTimers(instanceId: string): void {
+    const timers = this.instanceTimers.get(instanceId);
+    if (timers) {
+      for (const timer of timers) {
+        clearTimeout(timer);
+        this.pendingTimers.delete(timer);
+      }
+      this.instanceTimers.delete(instanceId);
     }
   }
 
