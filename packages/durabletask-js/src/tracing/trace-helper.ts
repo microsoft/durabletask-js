@@ -690,9 +690,14 @@ export function setOrchestrationStatusFromActions(
         span.setAttribute(DurableTaskAttributes.TASK_STATUS, statusName);
       }
 
-      // Match .NET: set span error status when orchestration completes with Failed
+      // Match .NET: set span error status when orchestration completes with Failed.
+      // Read error message from failureDetails (where setFailed() stores it),
+      // falling back to result for backwards compatibility.
       if (status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED) {
-        const errorMessage = completeAction.getResult()?.getValue() ?? "Orchestration failed";
+        const errorMessage =
+          completeAction.getFailuredetails()?.getErrormessage() ||
+          completeAction.getResult()?.getValue() ||
+          "Orchestration failed";
         span.setStatus({ code: otel.SpanStatusCode.ERROR, message: errorMessage });
       } else {
         span.setStatus({ code: otel.SpanStatusCode.OK });

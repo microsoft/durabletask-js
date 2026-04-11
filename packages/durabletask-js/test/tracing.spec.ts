@@ -1124,15 +1124,17 @@ describe("Trace Helper - setOrchestrationStatusFromActions", () => {
     expect(spans[0].status.code).toBe(otel.SpanStatusCode.OK);
   });
 
-  it("should set status attribute for failed orchestration and ERROR span status", () => {
+  it("should set status attribute for failed orchestration and ERROR span status with failureDetails", () => {
     const tracer = otel.trace.getTracer(TRACER_NAME);
     const span = tracer.startSpan("orch-status-failed");
 
+    // Match the real runtime path: setFailed() sets failureDetails but NOT result
     const completeAction = new pb.CompleteOrchestrationAction();
     completeAction.setOrchestrationstatus(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
-    const resultValue = new StringValue();
-    resultValue.setValue("User code threw an error");
-    completeAction.setResult(resultValue);
+    const failureDetails = new pb.TaskFailureDetails();
+    failureDetails.setErrormessage("User code threw an error");
+    failureDetails.setErrortype("Error");
+    completeAction.setFailuredetails(failureDetails);
 
     const action = new pb.OrchestratorAction();
     action.setCompleteorchestration(completeAction);
@@ -1144,6 +1146,46 @@ describe("Trace Helper - setOrchestrationStatusFromActions", () => {
     expect(spans[0].attributes[DurableTaskAttributes.TASK_STATUS]).toBe("Failed");
     expect(spans[0].status.code).toBe(otel.SpanStatusCode.ERROR);
     expect(spans[0].status.message).toBe("User code threw an error");
+  });
+
+  it("should fall back to result field for failed orchestration error message", () => {
+    const tracer = otel.trace.getTracer(TRACER_NAME);
+    const span = tracer.startSpan("orch-status-failed-result-fallback");
+
+    // Edge case: no failureDetails, but result is set (backwards compatibility)
+    const completeAction = new pb.CompleteOrchestrationAction();
+    completeAction.setOrchestrationstatus(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    const resultValue = new StringValue();
+    resultValue.setValue("Legacy error message");
+    completeAction.setResult(resultValue);
+
+    const action = new pb.OrchestratorAction();
+    action.setCompleteorchestration(completeAction);
+
+    setOrchestrationStatusFromActions(span, [action]);
+    span.end();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].status.code).toBe(otel.SpanStatusCode.ERROR);
+    expect(spans[0].status.message).toBe("Legacy error message");
+  });
+
+  it("should use default error message when neither failureDetails nor result is set", () => {
+    const tracer = otel.trace.getTracer(TRACER_NAME);
+    const span = tracer.startSpan("orch-status-failed-no-details");
+
+    const completeAction = new pb.CompleteOrchestrationAction();
+    completeAction.setOrchestrationstatus(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+
+    const action = new pb.OrchestratorAction();
+    action.setCompleteorchestration(completeAction);
+
+    setOrchestrationStatusFromActions(span, [action]);
+    span.end();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].status.code).toBe(otel.SpanStatusCode.ERROR);
+    expect(spans[0].status.message).toBe("Orchestration failed");
   });
 
   it("should not set status when no completion action present", () => {
