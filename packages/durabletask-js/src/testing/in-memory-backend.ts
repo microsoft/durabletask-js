@@ -623,7 +623,7 @@ export class InMemoryOrchestrationBackend {
         this.enqueueOrchestration(parentInstanceId);
       })
       .catch(() => {
-        // Timeout or reset - sub-orchestration watcher cancelled, nothing to do
+        // Reset — sub-orchestration watcher cancelled, nothing to do
       });
   }
 
