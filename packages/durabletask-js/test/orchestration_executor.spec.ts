@@ -1554,7 +1554,7 @@ describe("Orchestration Executor", () => {
     { description: "undefined", yieldedValue: undefined as any },
   ])(
     "should fail when orchestrator yields $description as its first value",
-    async ({ description, yieldedValue }) => {
+    async ({ description: _description, yieldedValue }) => {
       // An orchestrator that yields a non-Task value as its first yield should fail with a clear error
       const badOrchestrator: TOrchestrator = async function* (_ctx: OrchestrationContext): any {
         yield yieldedValue;
