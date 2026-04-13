@@ -299,7 +299,16 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     // If a number is passed, we use it as the number of seconds to wait
     // we use instanceof Date as number is not a native Javascript type
     if (!(fireAt instanceof Date)) {
+      if (typeof fireAt !== "number" || !Number.isFinite(fireAt)) {
+        throw new Error(
+          `createTimer requires a finite number (seconds) or a valid Date, but received ${String(fireAt)}`,
+        );
+      }
       fireAt = new Date(this._currentUtcDatetime.getTime() + fireAt * 1000);
+    } else if (isNaN(fireAt.getTime())) {
+      throw new Error(
+        "createTimer received an invalid Date object (NaN timestamp)",
+      );
     }
 
     const action = ph.newCreateTimerAction(id, fireAt);
