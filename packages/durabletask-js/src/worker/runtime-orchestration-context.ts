@@ -109,8 +109,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   async run(generator: Generator<Task<any>, any, any>) {
     this._generator = generator;
 
-    // TODO: do something with this task
-    // start the generator
+    // Start the generator
     const { value, done } = await this._generator.next();
 
     // if the generator finished, complete the orchestration.
@@ -119,12 +118,15 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
       return;
     }
 
-    // TODO: check if the task is null?
+    if (!(value instanceof Task)) {
+      throw new Error("The orchestrator generator yielded a non-Task object");
+    }
+
     this._previousTask = value;
 
     // If the yielded task is already complete (e.g., whenAll with an empty array),
     // resume immediately so the generator can continue.
-    if (this._previousTask instanceof Task && this._previousTask.isComplete) {
+    if (this._previousTask.isComplete) {
       await this.resume();
     }
   }
