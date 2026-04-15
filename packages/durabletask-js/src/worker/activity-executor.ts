@@ -32,10 +32,14 @@ export class ActivityExecutor {
     // Log activity start (EventId 603)
     WorkerLogs.activityStarted(this._logger, orchestrationId, name);
 
-    const activityInput = encodedInput ? JSON.parse(encodedInput) : undefined;
     const ctx = new ActivityContext(orchestrationId, taskId);
 
     try {
+      // Deserialize the input inside the try-catch so that malformed JSON
+      // is reported through the same activityFailed log path (EventId 605)
+      // as any other activity execution error.
+      const activityInput = encodedInput ? JSON.parse(encodedInput) : undefined;
+
       // Execute the activity function
       let activityOutput = fn(ctx, activityInput);
 
