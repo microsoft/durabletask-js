@@ -351,3 +351,96 @@ describe("EntityInstanceId.fromString", () => {
     expect(() => EntityInstanceId.fromString("@onlyname")).toThrow();
   });
 });
+
+describe("getEntities query normalization", () => {
+  const { TaskHubGrpcClient } = require("../src");
+
+  function getStub(client: InstanceType<typeof TaskHubGrpcClient>): any {
+    return (client as any)._stub;
+  }
+
+  function mockQueryEntities(
+    client: InstanceType<typeof TaskHubGrpcClient>,
+    captureRequest: (req: pb.QueryEntitiesRequest) => void,
+  ): void {
+    getStub(client).queryEntities = (req: pb.QueryEntitiesRequest, _metadata: any, callback: any) => {
+      captureRequest(req);
+      const res = new pb.QueryEntitiesResponse();
+      callback(null, res);
+      return {};
+    };
+  }
+
+  it("should normalize mixed-case instanceIdStartsWith prefix", async () => {
+    const client = new TaskHubGrpcClient({ hostAddress: "localhost:4001" });
+    let capturedReq: pb.QueryEntitiesRequest | undefined;
+
+    mockQueryEntities(client, (req) => { capturedReq = req; });
+
+    const query: EntityQuery = { instanceIdStartsWith: "Counter" };
+    const pageable = client.getEntities(query);
+
+    // Consume the first page to trigger the gRPC call
+    for await (const _entity of pageable) {
+      // no-op
+    }
+
+    expect(capturedReq).toBeDefined();
+    const protoPrefix = capturedReq!.getQuery()?.getInstanceidstartswith()?.getValue();
+    expect(protoPrefix).toBe("@counter");
+  });
+
+  it("should normalize prefix with name and key separator", async () => {
+    const client = new TaskHubGrpcClient({ hostAddress: "localhost:4001" });
+    let capturedReq: pb.QueryEntitiesRequest | undefined;
+
+    mockQueryEntities(client, (req) => { capturedReq = req; });
+
+    const query: EntityQuery = { instanceIdStartsWith: "Counter@User-123" };
+    const pageable = client.getEntities(query);
+
+    for await (const _entity of pageable) {
+      // no-op
+    }
+
+    expect(capturedReq).toBeDefined();
+    const protoPrefix = capturedReq!.getQuery()?.getInstanceidstartswith()?.getValue();
+    expect(protoPrefix).toBe("@counter@User-123");
+  });
+
+  it("should not set prefix when instanceIdStartsWith is undefined", async () => {
+    const client = new TaskHubGrpcClient({ hostAddress: "localhost:4001" });
+    let capturedReq: pb.QueryEntitiesRequest | undefined;
+
+    mockQueryEntities(client, (req) => { capturedReq = req; });
+
+    const query: EntityQuery = {};
+    const pageable = client.getEntities(query);
+
+    for await (const _entity of pageable) {
+      // no-op
+    }
+
+    expect(capturedReq).toBeDefined();
+    const protoPrefix = capturedReq!.getQuery()?.getInstanceidstartswith();
+    expect(protoPrefix).toBeUndefined();
+  });
+
+  it("should preserve already-normalized prefix", async () => {
+    const client = new TaskHubGrpcClient({ hostAddress: "localhost:4001" });
+    let capturedReq: pb.QueryEntitiesRequest | undefined;
+
+    mockQueryEntities(client, (req) => { capturedReq = req; });
+
+    const query: EntityQuery = { instanceIdStartsWith: "@counter@" };
+    const pageable = client.getEntities(query);
+
+    for await (const _entity of pageable) {
+      // no-op
+    }
+
+    expect(capturedReq).toBeDefined();
+    const protoPrefix = capturedReq!.getQuery()?.getInstanceidstartswith()?.getValue();
+    expect(protoPrefix).toBe("@counter@");
+  });
+});
