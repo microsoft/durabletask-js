@@ -620,6 +620,71 @@ describe("In-Memory Backend", () => {
       expect(state?.runtimeStatus).toEqual(OrchestrationStatus.SUSPENDED);
     });
 
+    it("should notify state waiters on resume", async () => {
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        yield ctx.waitForExternalEvent("proceed");
+        return "done";
+      };
+
+      worker.addOrchestrator(orchestrator);
+      await worker.start();
+
+      const id = await client.scheduleNewOrchestration(orchestrator);
+      await client.waitForOrchestrationStart(id, false, 10);
+
+      await client.suspendOrchestration(id);
+
+      // Set up a waiter for RUNNING status, then resume
+      const runningPromise = backend.waitForState(
+        id,
+        (inst) => backend.toClientStatus(inst.status) === OrchestrationStatus.RUNNING,
+        5000,
+      );
+
+      await client.resumeOrchestration(id);
+
+      const runningInstance = await runningPromise;
+      expect(runningInstance).toBeDefined();
+      expect(backend.toClientStatus(runningInstance!.status)).toEqual(OrchestrationStatus.RUNNING);
+    });
+
+    it("should be a no-op when suspending a completed instance", async () => {
+      // eslint-disable-next-line require-yield
+      const orchestrator: TOrchestrator = async function* (_ctx: OrchestrationContext): any {
+        return "done";
+      };
+
+      worker.addOrchestrator(orchestrator);
+      await worker.start();
+
+      const id = await client.scheduleNewOrchestration(orchestrator);
+      const state = await client.waitForOrchestrationCompletion(id, true, 10);
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+
+      // Suspend on a completed instance should be a no-op
+      await client.suspendOrchestration(id);
+      const afterSuspend = await client.getOrchestrationState(id);
+      expect(afterSuspend?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    });
+
+    it("should be a no-op when resuming a non-suspended instance", async () => {
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        yield ctx.waitForExternalEvent("proceed");
+        return "done";
+      };
+
+      worker.addOrchestrator(orchestrator);
+      await worker.start();
+
+      const id = await client.scheduleNewOrchestration(orchestrator);
+      await client.waitForOrchestrationStart(id, false, 10);
+
+      // Resume on a RUNNING (non-suspended) instance should be a no-op
+      await client.resumeOrchestration(id);
+      const state = await client.getOrchestrationState(id);
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.RUNNING);
+    });
+
     it("should notify state waiters on suspend", async () => {
       const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
         yield ctx.waitForExternalEvent("proceed");
