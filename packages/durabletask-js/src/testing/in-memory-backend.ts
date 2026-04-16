@@ -174,6 +174,10 @@ export class InMemoryOrchestrationBackend {
       throw new Error(`Orchestration instance '${instanceId}' not found`);
     }
 
+    if (this.isTerminalStatus(instance.status)) {
+      return; // Cannot suspend a completed/failed/terminated instance
+    }
+
     if (instance.status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_SUSPENDED) {
       return;
     }
@@ -202,11 +206,17 @@ export class InMemoryOrchestrationBackend {
       throw new Error(`Orchestration instance '${instanceId}' not found`);
     }
 
-    // Transition from SUSPENDED back to RUNNING to match real sidecar behavior.
-    // Only update if the instance was actually suspended.
-    if (instance.status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_SUSPENDED) {
-      instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING;
+    // No-op for terminal or non-suspended instances
+    if (this.isTerminalStatus(instance.status)) {
+      return;
     }
+
+    if (instance.status !== pb.OrchestrationStatus.ORCHESTRATION_STATUS_SUSPENDED) {
+      return;
+    }
+
+    // Transition from SUSPENDED back to RUNNING to match real sidecar behavior.
+    instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING;
 
     const event = pbh.newResumeEvent();
     instance.pendingEvents.push(event);
