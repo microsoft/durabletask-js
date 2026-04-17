@@ -967,9 +967,12 @@ export class TaskHubGrpcWorker {
 
     // Add V2 operationInfos if provided (used by DTS backend)
     if (operationInfos && operationInfos.length > 0) {
-      // Take only as many operationInfos as there are results
+      // Take only as many operationInfos as there are results.
+      // Use resultsCount directly (not `resultsCount || operationInfos.length`)
+      // because 0 is a valid count when a framework-level error produces zero
+      // individual results; the falsy-OR would incorrectly include all infos.
       const resultsCount = batchResult.getResultsList().length;
-      const infosToInclude = operationInfos.slice(0, resultsCount || operationInfos.length);
+      const infosToInclude = operationInfos.slice(0, resultsCount);
       batchResult.setOperationinfosList(infosToInclude);
     }
 
