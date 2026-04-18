@@ -422,4 +422,57 @@ describe("TaskEntity", () => {
       );
     });
   });
+
+  describe("lifecycle method exclusion", () => {
+    it("should not dispatch to overridden initializeState as an operation", async () => {
+      const entity = new CounterEntity();
+      const { operation } = createMockOperation("initializeState", undefined, { count: 42 });
+
+      // initializeState is a lifecycle method, not a user-facing operation.
+      // Even though CounterEntity overrides it, it should not be callable.
+      await expect(entity.run(operation)).rejects.toThrow(
+        "No suitable method found for entity operation 'initializeState'",
+      );
+    });
+
+    it("should not dispatch to initializeState case-insensitively", async () => {
+      const entity = new CounterEntity();
+      const { operation } = createMockOperation("INITIALIZESTATE", undefined, { count: 42 });
+
+      await expect(entity.run(operation)).rejects.toThrow(
+        "No suitable method found for entity operation 'INITIALIZESTATE'",
+      );
+    });
+
+    it("should still call initializeState internally when state is null", async () => {
+      const entity = new CounterEntity();
+      // No initial state — initializeState should be called internally
+      const { operation } = createMockOperation("get", undefined, undefined);
+
+      const result = await entity.run(operation);
+
+      // initializeState returns { count: 0 }, so get() returns 0
+      expect(result).toBe(0);
+    });
+
+    it("should not dispatch to 'run' as an operation", async () => {
+      // Verify that 'run' remains excluded from dispatch
+      class SimpleEntity extends TaskEntity<{ value: number }> {
+        getValue(): number {
+          return this.state.value;
+        }
+
+        protected initializeState(): { value: number } {
+          return { value: 0 };
+        }
+      }
+
+      const entity = new SimpleEntity();
+      const { operation } = createMockOperation("run", undefined, { value: 10 });
+
+      await expect(entity.run(operation)).rejects.toThrow(
+        "No suitable method found for entity operation 'run'",
+      );
+    });
+  });
 });
