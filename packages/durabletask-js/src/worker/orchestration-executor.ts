@@ -28,6 +28,7 @@ import { RuntimeOrchestrationContext } from "./runtime-orchestration-context";
 import {
   EntityOperationFailedException,
   createTaskFailureDetails,
+  TaskFailureDetails as EntityTaskFailureDetails,
 } from "../entities/entity-operation-failed-exception";
 
 /**
@@ -598,19 +599,28 @@ export class OrchestrationExecutor {
     // If in a critical section, recover the lock for this entity
     ctx._entityFeature.recoverLockAfterCall(pendingCall.entityId);
 
-    // Convert failure details and throw EntityOperationFailedException
+    // Convert failure details and fail the task with EntityOperationFailedException
     const failureDetails = createTaskFailureDetails(failedEvent?.getFailuredetails());
     if (!failureDetails) {
-      pendingCall.task.fail(
-        `Entity operation '${pendingCall.operationName}' failed with unknown error`,
+      const unknownFailure: EntityTaskFailureDetails = {
+        errorType: "UnknownError",
+        errorMessage: `Entity operation '${pendingCall.operationName}' failed with unknown error`,
+      };
+      const exception = new EntityOperationFailedException(
+        pendingCall.entityId,
+        pendingCall.operationName,
+        unknownFailure,
+        failedEvent?.getFailuredetails(),
       );
+      pendingCall.task.failWithError(exception);
     } else {
       const exception = new EntityOperationFailedException(
         pendingCall.entityId,
         pendingCall.operationName,
         failureDetails,
+        failedEvent?.getFailuredetails(),
       );
-      pendingCall.task.fail(exception.message, failedEvent?.getFailuredetails());
+      pendingCall.task.failWithError(exception);
     }
 
     await ctx.resume();

@@ -3,6 +3,8 @@
 
 import { EntityInstanceId } from "./entity-instance-id";
 import * as pb from "../proto/orchestrator_service_pb";
+import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
+import { TaskFailedError } from "../task/exception/task-failed-error";
 
 /**
  * Details about a task failure.
@@ -53,13 +55,35 @@ export function createTaskFailureDetails(proto: pb.TaskFailureDetails | undefine
 }
 
 /**
+ * Converts an entity TaskFailureDetails interface to a protobuf TaskFailureDetails message.
+ */
+function toProtoFailureDetails(details: TaskFailureDetails): pb.TaskFailureDetails {
+  const proto = new pb.TaskFailureDetails();
+  proto.setErrortype(details.errorType);
+  proto.setErrormessage(details.errorMessage);
+  if (details.stackTrace) {
+    const sv = new StringValue();
+    sv.setValue(details.stackTrace);
+    proto.setStacktrace(sv);
+  }
+  if (details.innerFailure) {
+    proto.setInnerfailure(toProtoFailureDetails(details.innerFailure));
+  }
+  return proto;
+}
+
+/**
  * Exception that gets thrown when an entity operation fails with an unhandled exception.
  *
  * @remarks
+ * Extends `TaskFailedError` so that existing `catch` blocks checking
+ * `instanceof TaskFailedError` continue to work, while also allowing
+ * more specific `instanceof EntityOperationFailedException` checks.
+ *
  * Detailed information associated with a particular operation failure, including exception details,
  * can be found in the `failureDetails` property.
  */
-export class EntityOperationFailedException extends Error {
+export class EntityOperationFailedException extends TaskFailedError {
   /**
    * The ID of the entity.
    */
@@ -81,9 +105,18 @@ export class EntityOperationFailedException extends Error {
    * @param entityId - The entity ID.
    * @param operationName - The operation name.
    * @param failureDetails - The failure details.
+   * @param protoFailureDetails - Optional protobuf failure details. If not provided,
+   *   they are constructed from `failureDetails`.
    */
-  constructor(entityId: EntityInstanceId, operationName: string, failureDetails: TaskFailureDetails) {
-    super(EntityOperationFailedException.getExceptionMessage(operationName, entityId, failureDetails));
+  constructor(
+    entityId: EntityInstanceId,
+    operationName: string,
+    failureDetails: TaskFailureDetails,
+    protoFailureDetails?: pb.TaskFailureDetails,
+  ) {
+    const message = EntityOperationFailedException.getExceptionMessage(operationName, entityId, failureDetails);
+    const protoDetails = protoFailureDetails ?? toProtoFailureDetails(failureDetails);
+    super(message, protoDetails);
     this.name = "EntityOperationFailedException";
     this.entityId = entityId;
     this.operationName = operationName;
