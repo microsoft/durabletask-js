@@ -312,6 +312,58 @@ describe("OrchestrationContext.sendEvent", () => {
     // No data should be set (or empty)
     expect(sendEvent?.getData()?.getValue() ?? "").toEqual("");
   });
+
+  it("should fail the orchestration when eventName is empty", async () => {
+    const orchestrator: TOrchestrator = async (ctx: OrchestrationContext) => {
+      ctx.sendEvent("target-instance-id", "", { data: "value" });
+      return "done";
+    };
+
+    const registry = new Registry();
+    const name = registry.addOrchestrator(orchestrator);
+    const newEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(name, TEST_INSTANCE_ID),
+    ];
+    const executor = new OrchestrationExecutor(registry);
+    const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+
+    // The orchestration should fail because sendEvent throws on empty eventName
+    expect(result.actions.length).toEqual(1);
+    const completeAction = result.actions[0].getCompleteorchestration();
+    expect(completeAction?.getOrchestrationstatus()).toEqual(
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+    );
+    expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain(
+      "'eventName' is required and cannot be empty",
+    );
+  });
+
+  it("should fail the orchestration when instanceId is empty", async () => {
+    const orchestrator: TOrchestrator = async (ctx: OrchestrationContext) => {
+      ctx.sendEvent("", "my-event", { data: "value" });
+      return "done";
+    };
+
+    const registry = new Registry();
+    const name = registry.addOrchestrator(orchestrator);
+    const newEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(name, TEST_INSTANCE_ID),
+    ];
+    const executor = new OrchestrationExecutor(registry);
+    const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+
+    // The orchestration should fail because sendEvent throws on empty instanceId
+    expect(result.actions.length).toEqual(1);
+    const completeAction = result.actions[0].getCompleteorchestration();
+    expect(completeAction?.getOrchestrationstatus()).toEqual(
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+    );
+    expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain(
+      "'instanceId' is required and cannot be empty",
+    );
+  });
 });
 
 describe("OrchestrationContext.newGuid", () => {

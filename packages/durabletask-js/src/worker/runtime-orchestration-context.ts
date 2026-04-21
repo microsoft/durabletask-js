@@ -360,6 +360,10 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   }
 
   waitForExternalEvent<T>(name: string): Task<T> {
+    if (!name) {
+      throw new Error("waitForExternalEvent: 'name' is required and cannot be empty.");
+    }
+
     // Check to see if this event has already been received, in which case we
     // can return it immediately. Otherwise, record out intent to receive an
     // event with the given name so that we can resume the generator when it
@@ -439,6 +443,14 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
    * Sends an event to another orchestration instance.
    */
   sendEvent(instanceId: string, eventName: string, eventData?: any): void {
+    if (!instanceId) {
+      throw new Error("sendEvent: 'instanceId' is required and cannot be empty.");
+    }
+
+    if (!eventName) {
+      throw new Error("sendEvent: 'eventName' is required and cannot be empty.");
+    }
+
     const id = this.nextSequenceNumber();
     const encodedData = eventData !== undefined ? JSON.stringify(eventData) : undefined;
     const action = ph.newSendEventAction(id, instanceId, eventName, encodedData);
