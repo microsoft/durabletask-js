@@ -1589,5 +1589,111 @@ describe("Retroactive span emission", () => {
       // Only the parent orch span should exist
       expect(spans.length).toBe(1);
     });
+
+    it("should emit activity span when TaskScheduled and TaskCompleted arrive in the same newEvents batch", () => {
+      const tracer = otel.trace.getTracer(TRACER_NAME);
+      const orchSpan = tracer.startSpan("test-orch");
+      const schedulingTime = new Date("2025-06-01T08:00:00Z");
+
+      // Both scheduling and completion are in newEvents (no pastEvents)
+      const scheduledEvent = makeHistoryEvent(1, schedulingTime);
+      const taskScheduled = new pb.TaskScheduledEvent();
+      taskScheduled.setName("FastActivity");
+      scheduledEvent.setTaskscheduled(taskScheduled);
+
+      const completedEvent = makeHistoryEvent(2);
+      const taskCompleted = new pb.TaskCompletedEvent();
+      taskCompleted.setTaskscheduledid(1);
+      completedEvent.setTaskcompleted(taskCompleted);
+
+      processNewEventsForTracing(orchSpan, [], [scheduledEvent, completedEvent], "same-batch-instance", "SameBatchOrch");
+      orchSpan.end();
+
+      const spans = exporter.getFinishedSpans();
+      const activitySpan = spans.find((s: any) => s.name === "activity:FastActivity");
+      expect(activitySpan).toBeDefined();
+      expect(activitySpan!.kind).toBe(otel.SpanKind.CLIENT);
+      expect(activitySpan!.attributes[DurableTaskAttributes.TASK_INSTANCE_ID]).toBe("same-batch-instance");
+      expect(activitySpan!.startTime[0]).toBe(Math.floor(schedulingTime.getTime() / 1000));
+    });
+
+    it("should emit activity span with error when TaskScheduled and TaskFailed arrive in the same newEvents batch", () => {
+      const tracer = otel.trace.getTracer(TRACER_NAME);
+      const orchSpan = tracer.startSpan("test-orch");
+
+      const scheduledEvent = makeHistoryEvent(3, new Date());
+      const taskScheduled = new pb.TaskScheduledEvent();
+      taskScheduled.setName("FailFastActivity");
+      scheduledEvent.setTaskscheduled(taskScheduled);
+
+      const failedEvent = makeHistoryEvent(4);
+      const taskFailed = new pb.TaskFailedEvent();
+      taskFailed.setTaskscheduledid(3);
+      const failureDetails = new pb.TaskFailureDetails();
+      failureDetails.setErrormessage("Activity not registered");
+      taskFailed.setFailuredetails(failureDetails);
+      failedEvent.setTaskfailed(taskFailed);
+
+      processNewEventsForTracing(orchSpan, [], [scheduledEvent, failedEvent], "fail-batch-instance", "FailBatchOrch");
+      orchSpan.end();
+
+      const spans = exporter.getFinishedSpans();
+      const activitySpan = spans.find((s: any) => s.name === "activity:FailFastActivity");
+      expect(activitySpan).toBeDefined();
+      expect(activitySpan!.status.code).toBe(otel.SpanStatusCode.ERROR);
+      expect(activitySpan!.status.message).toBe("Activity not registered");
+    });
+
+    it("should emit sub-orchestration span when created and completed arrive in the same newEvents batch", () => {
+      const tracer = otel.trace.getTracer(TRACER_NAME);
+      const orchSpan = tracer.startSpan("test-orch");
+      const creationTime = new Date("2025-06-01T09:00:00Z");
+
+      const createdEvent = makeHistoryEvent(5, creationTime);
+      const subOrchCreated = new pb.SubOrchestrationInstanceCreatedEvent();
+      subOrchCreated.setName("QuickChild");
+      createdEvent.setSuborchestrationinstancecreated(subOrchCreated);
+
+      const completedEvent = makeHistoryEvent(6);
+      const subOrchCompleted = new pb.SubOrchestrationInstanceCompletedEvent();
+      subOrchCompleted.setTaskscheduledid(5);
+      completedEvent.setSuborchestrationinstancecompleted(subOrchCompleted);
+
+      processNewEventsForTracing(orchSpan, [], [createdEvent, completedEvent], "sub-batch-instance", "SubBatchOrch");
+      orchSpan.end();
+
+      const spans = exporter.getFinishedSpans();
+      const subOrchSpan = spans.find((s: any) => s.name === "orchestration:QuickChild");
+      expect(subOrchSpan).toBeDefined();
+      expect(subOrchSpan!.kind).toBe(otel.SpanKind.CLIENT);
+      expect(subOrchSpan!.startTime[0]).toBe(Math.floor(creationTime.getTime() / 1000));
+    });
+
+    it("should emit timer span when TimerCreated and TimerFired arrive in the same newEvents batch", () => {
+      const tracer = otel.trace.getTracer(TRACER_NAME);
+      const orchSpan = tracer.startSpan("test-orch");
+      const timerCreationTime = new Date("2025-06-01T10:00:00Z");
+      const timerFireTime = new Date("2025-06-01T10:00:01Z");
+
+      const createdEvent = makeHistoryEvent(7, timerCreationTime);
+      createdEvent.setTimercreated(new pb.TimerCreatedEvent());
+
+      const firedEvent = makeHistoryEvent(8);
+      const timerFired = new pb.TimerFiredEvent();
+      timerFired.setTimerid(7);
+      const fireAtTs = new Timestamp();
+      fireAtTs.fromDate(timerFireTime);
+      timerFired.setFireat(fireAtTs);
+      firedEvent.setTimerfired(timerFired);
+
+      processNewEventsForTracing(orchSpan, [], [createdEvent, firedEvent], "timer-batch-instance", "TimerBatchOrch");
+      orchSpan.end();
+
+      const spans = exporter.getFinishedSpans();
+      const timerSpan = spans.find((s: any) => s.name === "orchestration:TimerBatchOrch:timer");
+      expect(timerSpan).toBeDefined();
+      expect(timerSpan!.kind).toBe(otel.SpanKind.INTERNAL);
+      expect(timerSpan!.startTime[0]).toBe(Math.floor(timerCreationTime.getTime() / 1000));
+    });
   });
 });

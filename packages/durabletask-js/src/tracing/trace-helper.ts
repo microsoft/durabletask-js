@@ -461,12 +461,27 @@ export function processNewEventsForTracing(
   if (!orchestrationSpan) return;
   if (!getTracingContext()) return;
 
-  // Build lookup maps from past events
+  // Build lookup maps from both past and new events.
+  // Including newEvents is necessary because scheduling events (TaskScheduled,
+  // SubOrchestrationInstanceCreated, TimerCreated) and their corresponding
+  // completion events can arrive in the same batch when tasks complete quickly.
+  // Without indexing newEvents, these same-batch completions produce no tracing span.
   const taskScheduledEvents = new Map<number, pb.HistoryEvent>();
   const subOrchCreatedEvents = new Map<number, pb.HistoryEvent>();
   const timerCreatedEvents = new Map<number, pb.HistoryEvent>();
 
   for (const event of pastEvents) {
+    const eventId = event.getEventid();
+    if (event.hasTaskscheduled()) {
+      taskScheduledEvents.set(eventId, event);
+    } else if (event.hasSuborchestrationinstancecreated()) {
+      subOrchCreatedEvents.set(eventId, event);
+    } else if (event.hasTimercreated()) {
+      timerCreatedEvents.set(eventId, event);
+    }
+  }
+
+  for (const event of newEvents) {
     const eventId = event.getEventid();
     if (event.hasTaskscheduled()) {
       taskScheduledEvents.set(eventId, event);
