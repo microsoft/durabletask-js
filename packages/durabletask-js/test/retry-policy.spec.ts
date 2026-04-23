@@ -45,7 +45,7 @@ describe("RetryPolicy", () => {
           maxNumberOfAttempts: 0,
           firstRetryIntervalInMilliseconds: 1000,
         });
-      }).toThrow("maxNumberOfAttempts must be greater than zero");
+      }).toThrow("maxNumberOfAttempts must be a finite number greater than zero");
     });
 
     it("should throw error when firstRetryIntervalInMilliseconds is zero", () => {
@@ -55,7 +55,7 @@ describe("RetryPolicy", () => {
           maxNumberOfAttempts: 3,
           firstRetryIntervalInMilliseconds: 0,
         });
-      }).toThrow("firstRetryIntervalInMilliseconds must be greater than zero");
+      }).toThrow("firstRetryIntervalInMilliseconds must be a finite number greater than zero");
     });
 
     it("should throw error when firstRetryIntervalInMilliseconds is negative", () => {
@@ -65,7 +65,7 @@ describe("RetryPolicy", () => {
           maxNumberOfAttempts: 3,
           firstRetryIntervalInMilliseconds: -100,
         });
-      }).toThrow("firstRetryIntervalInMilliseconds must be greater than zero");
+      }).toThrow("firstRetryIntervalInMilliseconds must be a finite number greater than zero");
     });
 
     it("should throw error when backoffCoefficient is less than 1.0", () => {
@@ -76,7 +76,7 @@ describe("RetryPolicy", () => {
           firstRetryIntervalInMilliseconds: 1000,
           backoffCoefficient: 0.5,
         });
-      }).toThrow("backoffCoefficient must be greater than or equal to 1.0");
+      }).toThrow("backoffCoefficient must be a finite number greater than or equal to 1.0");
     });
 
     it("should throw error when maxRetryIntervalInMilliseconds is less than firstRetryInterval", () => {
@@ -87,7 +87,7 @@ describe("RetryPolicy", () => {
           firstRetryIntervalInMilliseconds: 1000,
           maxRetryIntervalInMilliseconds: 500,
         });
-      }).toThrow("maxRetryIntervalInMilliseconds must be greater than or equal to firstRetryIntervalInMilliseconds");
+      }).toThrow("maxRetryIntervalInMilliseconds must be a finite number greater than or equal to firstRetryIntervalInMilliseconds");
     });
 
     it("should throw error when retryTimeoutInMilliseconds is less than firstRetryInterval", () => {
@@ -98,7 +98,114 @@ describe("RetryPolicy", () => {
           firstRetryIntervalInMilliseconds: 1000,
           retryTimeoutInMilliseconds: 500,
         });
-      }).toThrow("retryTimeoutInMilliseconds must be greater than or equal to firstRetryIntervalInMilliseconds");
+      }).toThrow("retryTimeoutInMilliseconds must be a finite number greater than or equal to firstRetryIntervalInMilliseconds");
+    });
+
+    describe("NaN and Infinity rejection", () => {
+      it("should throw error when maxNumberOfAttempts is NaN", () => {
+        expect(() => {
+          new RetryPolicy({
+            maxNumberOfAttempts: NaN,
+            firstRetryIntervalInMilliseconds: 1000,
+          });
+        }).toThrow("maxNumberOfAttempts must be a finite number greater than zero");
+      });
+
+      it("should throw error when maxNumberOfAttempts is Infinity", () => {
+        expect(() => {
+          new RetryPolicy({
+            maxNumberOfAttempts: Infinity,
+            firstRetryIntervalInMilliseconds: 1000,
+          });
+        }).toThrow("maxNumberOfAttempts must be a finite number greater than zero");
+      });
+
+      it("should throw error when firstRetryIntervalInMilliseconds is NaN", () => {
+        expect(() => {
+          new RetryPolicy({
+            maxNumberOfAttempts: 3,
+            firstRetryIntervalInMilliseconds: NaN,
+          });
+        }).toThrow("firstRetryIntervalInMilliseconds must be a finite number greater than zero");
+      });
+
+      it("should throw error when firstRetryIntervalInMilliseconds is Infinity", () => {
+        expect(() => {
+          new RetryPolicy({
+            maxNumberOfAttempts: 3,
+            firstRetryIntervalInMilliseconds: Infinity,
+          });
+        }).toThrow("firstRetryIntervalInMilliseconds must be a finite number greater than zero");
+      });
+
+      it("should throw error when backoffCoefficient is NaN", () => {
+        expect(() => {
+          new RetryPolicy({
+            maxNumberOfAttempts: 3,
+            firstRetryIntervalInMilliseconds: 1000,
+            backoffCoefficient: NaN,
+          });
+        }).toThrow("backoffCoefficient must be a finite number greater than or equal to 1.0");
+      });
+
+      it("should throw error when backoffCoefficient is Infinity", () => {
+        expect(() => {
+          new RetryPolicy({
+            maxNumberOfAttempts: 3,
+            firstRetryIntervalInMilliseconds: 1000,
+            backoffCoefficient: Infinity,
+          });
+        }).toThrow("backoffCoefficient must be a finite number greater than or equal to 1.0");
+      });
+
+      it("should throw error when maxRetryIntervalInMilliseconds is NaN", () => {
+        expect(() => {
+          new RetryPolicy({
+            maxNumberOfAttempts: 3,
+            firstRetryIntervalInMilliseconds: 1000,
+            maxRetryIntervalInMilliseconds: NaN,
+          });
+        }).toThrow("maxRetryIntervalInMilliseconds must be a finite number greater than or equal to firstRetryIntervalInMilliseconds");
+      });
+
+      it("should throw error when maxRetryIntervalInMilliseconds is Infinity", () => {
+        expect(() => {
+          new RetryPolicy({
+            maxNumberOfAttempts: 3,
+            firstRetryIntervalInMilliseconds: 1000,
+            maxRetryIntervalInMilliseconds: Infinity,
+          });
+        }).toThrow("maxRetryIntervalInMilliseconds must be a finite number greater than or equal to firstRetryIntervalInMilliseconds");
+      });
+
+      it("should throw error when retryTimeoutInMilliseconds is NaN", () => {
+        expect(() => {
+          new RetryPolicy({
+            maxNumberOfAttempts: 3,
+            firstRetryIntervalInMilliseconds: 1000,
+            retryTimeoutInMilliseconds: NaN,
+          });
+        }).toThrow("retryTimeoutInMilliseconds must be a finite number greater than or equal to firstRetryIntervalInMilliseconds");
+      });
+
+      it("should throw error when retryTimeoutInMilliseconds is Infinity", () => {
+        expect(() => {
+          new RetryPolicy({
+            maxNumberOfAttempts: 3,
+            firstRetryIntervalInMilliseconds: 1000,
+            retryTimeoutInMilliseconds: Infinity,
+          });
+        }).toThrow("retryTimeoutInMilliseconds must be a finite number greater than or equal to firstRetryIntervalInMilliseconds");
+      });
+
+      it("should throw error when maxNumberOfAttempts is negative Infinity", () => {
+        expect(() => {
+          new RetryPolicy({
+            maxNumberOfAttempts: -Infinity,
+            firstRetryIntervalInMilliseconds: 1000,
+          });
+        }).toThrow("maxNumberOfAttempts must be a finite number greater than zero");
+      });
     });
 
     it("should accept exactly 1.0 as backoffCoefficient", () => {

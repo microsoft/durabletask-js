@@ -65,32 +65,34 @@ export class RetryPolicy {
     } = options;
 
     // Validation aligned with .NET SDK
-    if (maxNumberOfAttempts <= 0) {
-      throw new Error("maxNumberOfAttempts must be greater than zero");
+    // Use !Number.isFinite() guards to reject NaN and Infinity, which bypass
+    // comparison operators silently (e.g. NaN <= 0 is false).
+    if (!Number.isFinite(maxNumberOfAttempts) || maxNumberOfAttempts <= 0) {
+      throw new Error("maxNumberOfAttempts must be a finite number greater than zero");
     }
 
-    if (firstRetryIntervalInMilliseconds <= 0) {
-      throw new Error("firstRetryIntervalInMilliseconds must be greater than zero");
+    if (!Number.isFinite(firstRetryIntervalInMilliseconds) || firstRetryIntervalInMilliseconds <= 0) {
+      throw new Error("firstRetryIntervalInMilliseconds must be a finite number greater than zero");
     }
 
-    if (backoffCoefficient < 1.0) {
-      throw new Error("backoffCoefficient must be greater than or equal to 1.0");
+    if (!Number.isFinite(backoffCoefficient) || backoffCoefficient < 1.0) {
+      throw new Error("backoffCoefficient must be a finite number greater than or equal to 1.0");
     }
 
     if (
       maxRetryIntervalInMilliseconds !== undefined &&
       maxRetryIntervalInMilliseconds !== -1 &&
-      maxRetryIntervalInMilliseconds < firstRetryIntervalInMilliseconds
+      (!Number.isFinite(maxRetryIntervalInMilliseconds) || maxRetryIntervalInMilliseconds < firstRetryIntervalInMilliseconds)
     ) {
-      throw new Error("maxRetryIntervalInMilliseconds must be greater than or equal to firstRetryIntervalInMilliseconds");
+      throw new Error("maxRetryIntervalInMilliseconds must be a finite number greater than or equal to firstRetryIntervalInMilliseconds");
     }
 
     if (
       retryTimeoutInMilliseconds !== undefined &&
       retryTimeoutInMilliseconds !== -1 &&
-      retryTimeoutInMilliseconds < firstRetryIntervalInMilliseconds
+      (!Number.isFinite(retryTimeoutInMilliseconds) || retryTimeoutInMilliseconds < firstRetryIntervalInMilliseconds)
     ) {
-      throw new Error("retryTimeoutInMilliseconds must be greater than or equal to firstRetryIntervalInMilliseconds");
+      throw new Error("retryTimeoutInMilliseconds must be a finite number greater than or equal to firstRetryIntervalInMilliseconds");
     }
 
     this._maxNumberOfAttempts = maxNumberOfAttempts;
