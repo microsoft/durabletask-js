@@ -74,7 +74,7 @@ describe("compareVersions", () => {
     });
   });
 
-  describe("non-semantic version comparison (lexicographic)", () => {
+  describe("non-semantic version comparison (ordinal)", () => {
     it("should compare non-semver strings lexicographically", () => {
       expect(compareVersions("alpha", "beta")).toBeLessThan(0);
       expect(compareVersions("beta", "alpha")).toBeGreaterThan(0);
@@ -85,6 +85,23 @@ describe("compareVersions", () => {
       expect(compareVersions("Alpha", "alpha")).toBe(0);
       expect(compareVersions("BETA", "beta")).toBe(0);
       expect(compareVersions("Alpha", "BETA")).toBeLessThan(0);
+    });
+
+    it("should use ordinal (code-point) order, not locale order", () => {
+      // In ordinal comparison, uppercase letters (U+0041-U+005A) come before
+      // lowercase letters (U+0061-U+007A) after lowercasing they are equal.
+      // But characters outside ASCII can differ between ordinal and locale:
+      // e.g., "z" (U+007A) < "ä" (U+00E4) in ordinal, but many locales
+      // sort "ä" right after "a" which is before "z".
+      const result = compareVersions("z-pre", "ä-pre");
+      // Ordinal: "z" (U+007A) < "ä" (U+00E4), so result should be negative
+      expect(result).toBeLessThan(0);
+    });
+
+    it("should produce consistent ordinal results for accented characters", () => {
+      // "é" (U+00E9) vs "f" (U+0066) — ordinal says "f" < "é",
+      // but French locale sorts "é" right after "e" (before "f")
+      expect(compareVersions("f-rc1", "é-rc1")).toBeLessThan(0);
     });
 
     it("should compare version strings with prefixes", () => {

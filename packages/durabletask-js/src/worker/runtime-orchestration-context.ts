@@ -863,9 +863,15 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
       throw new Error("Must not enter another critical section from within a critical section.");
     }
 
-    // Sort entities for deterministic ordering (prevents deadlocks)
-    // Use the string representation for consistent ordering
-    const sortedEntities = [...entityIds].sort((a, b) => a.toString().localeCompare(b.toString()));
+    // Sort entities for deterministic ordering (prevents deadlocks).
+    // Use ordinal (code-point) comparison for cross-platform consistency,
+    // matching .NET's StringComparer.Ordinal. localeCompare() is locale-dependent
+    // and can produce different orderings on different machines/locales.
+    const sortedEntities = [...entityIds].sort((a, b) => {
+      const aStr = a.toString();
+      const bStr = b.toString();
+      return aStr < bStr ? -1 : aStr > bStr ? 1 : 0;
+    });
 
     // Remove duplicates
     const uniqueEntities: EntityInstanceId[] = [];
