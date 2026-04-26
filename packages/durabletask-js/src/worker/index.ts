@@ -49,6 +49,12 @@ export function getMethodNameForAction(action: pb.OrchestratorAction): string {
       return "callSubOrchestrator";
     case pb.OrchestratorAction.OrchestratoractiontypeCase.COMPLETEORCHESTRATION:
       return "completeOrchestration";
+    case pb.OrchestratorAction.OrchestratoractiontypeCase.SENDEVENT:
+      return "sendEvent";
+    case pb.OrchestratorAction.OrchestratoractiontypeCase.SENDENTITYMESSAGE:
+      return "sendEntityMessage";
+    case pb.OrchestratorAction.OrchestratoractiontypeCase.TERMINATEORCHESTRATION:
+      return "terminateOrchestration";
     default:
       throw new Error(`Unknown action type: ${actionType}`);
   }
