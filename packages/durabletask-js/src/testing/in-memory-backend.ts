@@ -493,14 +493,15 @@ export class InMemoryOrchestrationBackend {
       instance.failureDetails = undefined;
       instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_PENDING;
 
-      // Add carryover events
-      instance.pendingEvents = [...carryoverEvents];
-
-      // Add new execution started events
+      // Add new execution started events first, then carryover events.
+      // This matches the real sidecar behavior where OrchestratorStarted and
+      // ExecutionStarted always precede any carryover events (buffered external
+      // events from the previous iteration). OrchestratorStarted must come first
+      // because it sets currentUtcDateTime, and ExecutionStarted must come before
+      // carryover events because it initializes the orchestrator generator.
       const orchestratorStarted = pbh.newOrchestratorStartedEvent(new Date());
       const executionStarted = pbh.newExecutionStartedEvent(instance.name, instance.instanceId, newInput);
-      instance.pendingEvents.push(orchestratorStarted);
-      instance.pendingEvents.push(executionStarted);
+      instance.pendingEvents = [orchestratorStarted, executionStarted, ...carryoverEvents];
 
       this.enqueueOrchestration(instance.instanceId);
     }

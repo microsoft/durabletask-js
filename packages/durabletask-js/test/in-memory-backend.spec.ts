@@ -279,6 +279,49 @@ describe("In-Memory Backend", () => {
     expect(state?.serializedOutput).toEqual(JSON.stringify(5));
   });
 
+  it("should deliver carryover events after ExecutionStarted during continue-as-new", async () => {
+    // This test verifies that carryover events (saved external events) are
+    // delivered AFTER OrchestratorStarted and ExecutionStarted when
+    // continuing-as-new with saveEvents=true. This matches the real sidecar
+    // behavior. If carryover events were delivered before ExecutionStarted,
+    // the orchestrator generator would not be initialized yet.
+    //
+    // Scenario: An external event is raised on the orchestration. The first
+    // iteration does NOT consume it. It continues-as-new with saveEvents=true.
+    // The second iteration should receive the carried-over event.
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: { iteration: number }): any {
+      if (input.iteration === 1) {
+        // Wait for a timer to give the test time to raise an event
+        yield ctx.createTimer(0);
+        // Do NOT consume the "carry-me" event — it should be carried over
+        ctx.continueAsNew({ iteration: 2 }, true); // saveEvents = true
+      } else {
+        // Second iteration: the carried-over event should be available
+        const val = yield ctx.waitForExternalEvent("carry-me");
+        return val;
+      }
+    };
+
+    worker.addOrchestrator(orchestrator);
+    await worker.start();
+
+    const id = await client.scheduleNewOrchestration(orchestrator, { iteration: 1 });
+
+    // Wait for the orchestration to start running (timer is created)
+    await client.waitForOrchestrationStart(id, false, 5);
+
+    // Raise an external event that the first iteration won't consume
+    await client.raiseOrchestrationEvent(id, "carry-me", "carried-over-payload");
+
+    // The orchestration should continue-as-new and then complete in iteration 2
+    const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(state?.serializedOutput).toEqual(JSON.stringify("carried-over-payload"));
+  });
+
   it("should clear customStatus after continue-as-new", async () => {
     const orchestrator: TOrchestrator = async (ctx: OrchestrationContext, input: number) => {
       if (input === 1) {
