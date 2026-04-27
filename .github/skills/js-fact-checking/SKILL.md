@@ -35,7 +35,7 @@ Clearly state the specific behavioral claim you need to verify. Examples:
 Search the following authoritative sources **in priority order**:
 
 1. **Node.js Official Docs** — https://nodejs.org/api/
-   - Use `fetch_webpage` tool to retrieve the relevant API page
+   - Use `runTerminal` with `curl` to retrieve the relevant API page
    - Look for the specific section about the API in question
    - Pay attention to "Stability" markers and version-specific behavior
 

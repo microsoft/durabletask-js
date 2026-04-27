@@ -60,12 +60,12 @@ Write a **single TypeScript or JavaScript file** that:
 
 ### Script Template
 
-```typescript
+```javascript
 // Simulation: <one-line description of what we're verifying>
 // Question: <the specific behavioral question>
 // Expected: <what we expect to happen if our assumption is correct>
 
-import { EventEmitter } from "events";
+const { EventEmitter } = require("events");
 
 function main() {
   console.log("=== SIMULATION START ===");
@@ -114,13 +114,10 @@ main();
 ```bash
 cd /tmp/dt-simulation-<timestamp>
 
-# For TypeScript files:
-npx ts-node --swc simulation.ts
-
-# For plain JavaScript files:
+# Preferred: plain JavaScript (no external tooling needed)
 node simulation.js
 
-# If ts-node is not available, use Node.js directly with ESM:
+# For TypeScript files (requires Node.js >= 22.6.0):
 node --experimental-strip-types simulation.ts
 ```
 

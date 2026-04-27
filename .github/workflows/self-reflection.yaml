@@ -16,6 +16,12 @@ on:
           Leave empty to scan all merged PRs.
         required: false
         type: string
+      install_copilot:
+        description: >-
+          Whether to install copilot CLI (set to false if pre-installed on runner).
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -61,13 +67,23 @@ jobs:
 
           echo "Fetching merged PRs since ${SCAN_SINCE}..."
 
+          # Build label filter if provided
+          LABEL_FILTER=""
+          if [ -n "${{ inputs.scan_labels }}" ]; then
+            IFS=',' read -ra LABELS <<< "${{ inputs.scan_labels }}"
+            for label in "${LABELS[@]}"; do
+              LABEL_FILTER="${LABEL_FILTER} --label \"$(echo "$label" | xargs)\""
+            done
+          fi
+
           # Fetch merged PRs with reviews and comments
-          MERGED_PRS=$(gh pr list \
+          MERGED_PRS=$(eval gh pr list \
             --state merged \
             --limit 100 \
             --search "merged:>=${SCAN_SINCE}" \
+            ${LABEL_FILTER} \
             --json number,title,body,mergedAt,url,files,labels \
-            --jq 'sort_by(.mergedAt) | reverse' \
+            --jq "'sort_by(.mergedAt) | reverse'" \
             2>/dev/null || echo "[]")
 
           PR_COUNT=$(echo "$MERGED_PRS" | jq 'length')
@@ -106,6 +122,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+
+      - name: 📦 Install Copilot CLI
+        if: inputs.install_copilot != false
+        run: |
+          npm install -g @github/copilot
+          copilot --version
 
       - name: 🪞 Run Self-Reflection Agent
         run: |
