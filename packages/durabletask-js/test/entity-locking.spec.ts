@@ -79,6 +79,30 @@ function createEntityLockRequestedEvent(
   return event;
 }
 
+function createEntityUnlockSentEvent(
+  eventId: number,
+  criticalSectionId: string,
+  targetInstanceId: string,
+  parentInstanceId: string,
+): pb.HistoryEvent {
+  const event = new pb.HistoryEvent();
+  event.setEventid(eventId);
+  const ts = new Timestamp();
+  ts.fromDate(new Date());
+  event.setTimestamp(ts);
+
+  const unlockSent = new pb.EntityUnlockSentEvent();
+  unlockSent.setCriticalsectionid(criticalSectionId);
+  const targetSv = new StringValue();
+  targetSv.setValue(targetInstanceId);
+  unlockSent.setTargetinstanceid(targetSv);
+  const parentSv = new StringValue();
+  parentSv.setValue(parentInstanceId);
+  unlockSent.setParentinstanceid(parentSv);
+  event.setEntityunlocksent(unlockSent);
+  return event;
+}
+
 describe("Entity Locking (Critical Sections)", () => {
   describe("lockEntities", () => {
     it("should throw when entity list is empty", async () => {
@@ -233,6 +257,90 @@ describe("Entity Locking (Critical Sections)", () => {
 
       // Should have completion action with unlock action
       const completionAction = result2.actions.find((a) => a.hasCompleteorchestration());
+      expect(completionAction).toBeDefined();
+      expect(completionAction!.getCompleteorchestration()!.getOrchestrationstatus()).toBe(
+        pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED,
+      );
+    });
+
+    it("should handle EntityUnlockSent events during replay and not produce stale unlock actions", async () => {
+      // This test verifies that EntityUnlockSent events in the history are properly
+      // handled during replay. Before this fix, EntityUnlockSent events were silently
+      // dropped, leaving stale unlock actions in _pendingActions that would be re-sent
+      // to the sidecar on every replay.
+
+      // Arrange
+      const registry = new Registry();
+      const orchestratorStartTime = new Date();
+
+      registry.addOrchestrator(async function* testOrchestration(ctx: any) {
+        const entity = new EntityInstanceId("counter", "test");
+        const lock: LockHandle = yield ctx.entities.lockEntities(entity);
+        lock.release();
+        return "completed";
+      });
+
+      // Step 1: First execution - request lock
+      const executor1 = new OrchestrationExecutor(registry);
+      const newEvents1 = [
+        createOrchestratorStartedEvent(orchestratorStartTime),
+        createExecutionStartedEvent("testOrchestration"),
+      ];
+      const result1 = await executor1.execute("test-instance", [], newEvents1);
+
+      // Extract the lock request details
+      const lockAction = result1.actions.find((a) => a.getSendentitymessage()?.hasEntitylockrequested());
+      expect(lockAction).toBeDefined();
+      const lockRequest = lockAction!.getSendentitymessage()!.getEntitylockrequested()!;
+      const criticalSectionId = lockRequest.getCriticalsectionid();
+      const lockActionId = lockAction!.getId();
+      const lockSet = lockRequest.getLocksetList();
+
+      // Step 2: Second execution - lock granted, orchestration completes
+      const executor2 = new OrchestrationExecutor(registry);
+      const oldEvents2 = [
+        createOrchestratorStartedEvent(orchestratorStartTime),
+        createExecutionStartedEvent("testOrchestration"),
+        createEntityLockRequestedEvent(lockActionId, criticalSectionId, lockSet),
+      ];
+      const newEvents2 = [
+        createOrchestratorStartedEvent(),
+        createEntityLockGrantedEvent(criticalSectionId),
+      ];
+      const result2 = await executor2.execute("test-instance", oldEvents2, newEvents2);
+
+      // Find unlock action(s) from result2
+      const unlockActions = result2.actions.filter((a) => a.getSendentitymessage()?.hasEntityunlocksent());
+      expect(unlockActions.length).toBeGreaterThanOrEqual(1);
+
+      // Step 3: Third execution (replay of all events including EntityUnlockSent).
+      // This simulates a replay where the sidecar sends the full history including
+      // the EntityUnlockSent event that was produced in step 2.
+      const executor3 = new OrchestrationExecutor(registry);
+      const unlockActionId = unlockActions[0].getId();
+      const entityInstanceId = lockSet[0]; // e.g. "@counter@test"
+
+      const oldEvents3 = [
+        createOrchestratorStartedEvent(orchestratorStartTime),
+        createExecutionStartedEvent("testOrchestration"),
+        createEntityLockRequestedEvent(lockActionId, criticalSectionId, lockSet),
+        createOrchestratorStartedEvent(),
+        createEntityLockGrantedEvent(criticalSectionId),
+        createEntityUnlockSentEvent(unlockActionId, criticalSectionId, entityInstanceId, "test-instance"),
+      ];
+      const newEvents3 = [
+        createOrchestratorStartedEvent(),
+      ];
+
+      // Act
+      const result3 = await executor3.execute("test-instance", oldEvents3, newEvents3);
+
+      // Assert: The stale unlock actions should NOT be in the returned actions.
+      // Only the completion action should be present.
+      const staleUnlockActions = result3.actions.filter((a) => a.getSendentitymessage()?.hasEntityunlocksent());
+      expect(staleUnlockActions).toHaveLength(0);
+
+      const completionAction = result3.actions.find((a) => a.hasCompleteorchestration());
       expect(completionAction).toBeDefined();
       expect(completionAction!.getCompleteorchestration()!.getOrchestrationstatus()).toBe(
         pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED,
