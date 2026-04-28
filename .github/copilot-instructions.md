@@ -48,6 +48,9 @@ What this means in practice:
 - **No `Date.now()`** — use `context.currentUtcDateTime`
 - **No `Math.random()` or `crypto.randomUUID()`** — use `context.newGuid()` (deterministic UUID v5)
 - **No direct I/O** (HTTP calls, file reads, database queries) — use activities
+- **No locale-dependent string methods** — `toLocaleLowerCase()` and `localeCompare()` produce
+  different results depending on system locale (e.g., Turkish `İ`→`i` mapping), violating
+  replay determinism. Always use `toLowerCase()` and standard comparison operators. (learned from #180)
 - **No non-deterministic control flow** — no data-dependent branching on external state
 
 Adding, removing, or reordering `yield` statements between code versions **breaks replay**
@@ -250,6 +253,10 @@ Key test utilities:
 - File naming: `.spec.ts` suffix
 - Protobuf test helpers: factory functions create `HistoryEvent` instances without a sidecar
 - Three tiers: unit tests (no sidecar), e2e with sidecar, e2e with Azure
+- **Test/production parity:** Test client methods (e.g., `raiseOrchestrationEvent`,
+  `terminateOrchestration`) must serialize data identically to the real gRPC client.
+  Skipping `JSON.stringify()` for `null` in test code causes behavioral divergence — always
+  serialize unconditionally. (learned from #199)
 
 ---
 
@@ -264,9 +271,9 @@ These are stable architectural areas where complexity concentrates:
 2. **Timer-to-retry linkage** — Retry tasks create timers with different IDs. The maps
    connecting them are critical. Any break in linkage = silent retry failure.
 
-3. **Generator lifecycle edge cases** — What happens when the generator yields `null`?
-   When `done` is true but the loop keeps checking? The initial `next()` return value?
-   Several TODOs mark these as not fully hardened.
+3. **Generator lifecycle edge cases** — The first yield is now validated to be a `Task`
+   instance (matching `resume()`'s existing validation), but other edge cases remain:
+   what happens when `done` is true but the loop keeps checking? (learned from #164)
 
 4. **Composite task constructor side effects** — Already-complete children trigger
    `onChildCompleted()` during construction, potentially completing the composite
@@ -287,6 +294,23 @@ These are stable architectural areas where complexity concentrates:
 8. **Entity V1 vs V2 code paths** — The worker supports both entity execution paths.
    V2 is current; V1 is legacy. Incorrect version detection or mixed-version scenarios
    could cause issues.
+
+9. **JavaScript falsy checks on protobuf string fields** — Protobuf string fields default
+   to `""` (empty string), which is falsy in JavaScript. Using `if (field)` instead of
+   `if (field != null)` silently drops valid empty-string values. This caused FailureDetails
+   to be lost when error messages or types were empty strings. Always use null checks, not
+   truthiness checks, for protobuf string fields. (learned from #198)
+
+10. **Serialization of user-provided data outside try-catch** — Any `JSON.stringify()` or
+    `JSON.parse()` on user-provided data (custom status, activity input) must happen inside
+    the executor's try-catch block. If serialization throws outside the catch boundary
+    (e.g., circular references, BigInt values), the orchestration result is silently lost
+    instead of properly failing. (learned from #195, #181)
+
+11. **Entity execution not tracked for graceful shutdown** — All async work item executions
+    (orchestrations, activities, **and entities**) must be tracked in `_pendingWorkItems` so
+    that `stop()` waits for in-flight operations via `Promise.all()`. Missing tracking causes
+    data loss during graceful shutdown. (learned from #179)
 
 ---
 
