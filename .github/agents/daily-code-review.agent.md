@@ -205,6 +205,15 @@ Before opening each PR, you MUST:
 - **Never modify package.json** version fields or dependency versions.
 - **Never introduce new dependencies.**
 - **If you're not sure a change is correct, don't make it.**
+- **Fact-check JS/TS/Node.js behavioral claims.** When your fix relies on specific
+  runtime behavior (e.g., how EventEmitter handles async listeners, Promise.all
+  rejection semantics), use the `js-fact-checking` skill
+  (`.github/skills/js-fact-checking/SKILL.md`) to verify against official documentation
+  before committing the change.
+- **Simulate when uncertain.** If fact-checking returns LOW confidence or INCONCLUSIVE,
+  use the `simulation` skill (`.github/skills/simulation/SKILL.md`) to write and run a
+  minimal reproduction script that empirically verifies the behavior. Never commit a fix
+  based on an unverified assumption about runtime behavior.
 
 ### Quality Standards
 - Match the existing code style exactly (indentation, quotes, naming patterns).

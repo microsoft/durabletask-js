@@ -463,6 +463,11 @@ If verification **failed**, do NOT update labels. Instead:
   the specific bug the PR addresses — not generic functionality or synthetic test cases.
 - Samples validate the fix under **real SDK usage patterns**, simulating how an external
   developer would use the SDK in production code.
+- **Fact-check behavioral assumptions.** When writing verification samples that depend
+  on specific JS/TS/Node.js runtime behavior, use the `js-fact-checking` skill
+  (`.github/skills/js-fact-checking/SKILL.md`) to verify claims against official docs.
+  If fact-checking is inconclusive, use the `simulation` skill
+  (`.github/skills/simulation/SKILL.md`) to run a minimal reproduction first.
 - Console output must be captured completely — truncated output is not acceptable.
 - Timestamps must use ISO 8601 format.
 
