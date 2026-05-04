@@ -287,6 +287,39 @@ describe("Entity Client Proto Conversion", () => {
       expect(metadata.getSerializedstate()).toBeUndefined();
     });
 
+    it("should default lastModifiedTime to epoch when missing from proto", () => {
+      // Arrange - proto metadata without lastModifiedTime set
+      const metadata = new pb.EntityMetadata();
+      metadata.setInstanceid("@counter@test");
+      metadata.setBacklogqueuesize(0);
+      // No lastModifiedTime set
+
+      // Act - replicate the same logic as convertEntityMetadata
+      const lastModifiedTime = metadata.getLastmodifiedtime()?.toDate() ?? new Date(0);
+
+      // Assert - should default to epoch (not current time) for consistency
+      // with OrchestrationState's createdAt/lastUpdatedAt defaults
+      expect(lastModifiedTime.getTime()).toBe(0);
+    });
+
+    it("should use actual timestamp when lastModifiedTime is present in proto", () => {
+      // Arrange
+      const metadata = new pb.EntityMetadata();
+      metadata.setInstanceid("@counter@test");
+      metadata.setBacklogqueuesize(0);
+
+      const expectedDate = new Date("2026-03-15T10:30:00Z");
+      const ts = new Timestamp();
+      ts.fromDate(expectedDate);
+      metadata.setLastmodifiedtime(ts);
+
+      // Act - replicate the same logic as convertEntityMetadata
+      const lastModifiedTime = metadata.getLastmodifiedtime()?.toDate() ?? new Date(0);
+
+      // Assert - should use the actual timestamp
+      expect(lastModifiedTime.toISOString()).toBe(expectedDate.toISOString());
+    });
+
     it("should gracefully handle invalid JSON in serialized state", () => {
       // Arrange - simulate what convertEntityMetadata does
       const metadata = new pb.EntityMetadata();
