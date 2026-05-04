@@ -1205,7 +1205,7 @@ export class TaskHubGrpcClient {
     const instanceIdStr = protoMetadata.getInstanceid();
     const entityId = EntityInstanceId.fromString(instanceIdStr);
 
-    const lastModifiedTime = protoMetadata.getLastmodifiedtime()?.toDate() ?? new Date();
+    const lastModifiedTime = protoMetadata.getLastmodifiedtime()?.toDate() ?? new Date(0);
     const backlogQueueSize = protoMetadata.getBacklogqueuesize();
     const lockedBy = protoMetadata.getLockedby()?.getValue();
     const serializedState = protoMetadata.getSerializedstate()?.getValue();
