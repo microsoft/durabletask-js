@@ -162,6 +162,9 @@ export class OrchestrationExecutor {
         case pb.HistoryEvent.EventtypeCase.EVENTRAISED:
           await this.handleEventRaised(ctx, event);
           break;
+        case pb.HistoryEvent.EventtypeCase.EVENTSENT:
+          await this.handleEventSent(ctx, event);
+          break;
         case pb.HistoryEvent.EventtypeCase.EXECUTIONSUSPENDED:
           await this.handleExecutionSuspended(ctx, event);
           break;
@@ -452,6 +455,23 @@ export class OrchestrationExecutor {
       if (!ctx._isReplaying) {
         WorkerLogs.orchestrationEventBuffered(this._logger, ctx._instanceId, eventName!);
       }
+    }
+  }
+
+  private async handleEventSent(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+    // This history event confirms that a sendEvent action was successfully processed by the sidecar.
+    // Remove the action from the pending action list so we don't send it again.
+    const eventId = event.getEventid();
+    const action = ctx._pendingActions[eventId];
+    delete ctx._pendingActions[eventId];
+
+    const isSendEventAction = action?.hasSendevent();
+
+    if (!action) {
+      throw getNonDeterminismError(eventId, getName(ctx.sendEvent));
+    } else if (!isSendEventAction) {
+      const expectedMethodName = getName(ctx.sendEvent);
+      throw getWrongActionTypeError(eventId, expectedMethodName, action);
     }
   }
 
