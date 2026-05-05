@@ -236,6 +236,22 @@ export function newEventRaisedEvent(name: string, encodedInput?: string): pb.His
   return event;
 }
 
+export function newEventSentEvent(eventId: number, instanceId: string, name: string, encodedInput?: string): pb.HistoryEvent {
+  const ts = new Timestamp();
+
+  const eventSent = new pb.EventSentEvent();
+  eventSent.setInstanceid(instanceId);
+  eventSent.setName(name);
+  eventSent.setInput(getStringValue(encodedInput));
+
+  const event = new pb.HistoryEvent();
+  event.setEventid(eventId);
+  event.setTimestamp(ts);
+  event.setEventsent(eventSent);
+
+  return event;
+}
+
 export function newSuspendEvent(): pb.HistoryEvent {
   const ts = new Timestamp();
 
