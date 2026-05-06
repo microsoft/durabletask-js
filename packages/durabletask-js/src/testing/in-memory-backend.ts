@@ -82,6 +82,7 @@ export class InMemoryOrchestrationBackend {
     name: string,
     input?: string,
     scheduledStartTime?: Date,
+    parentInstance?: { name: string; instanceId: string; taskScheduledId: number },
   ): string {
     if (this.instances.has(instanceId)) {
       throw new Error(`Orchestration instance '${instanceId}' already exists`);
@@ -104,7 +105,7 @@ export class InMemoryOrchestrationBackend {
 
     // Add initial events to start the orchestration
     const orchestratorStarted = pbh.newOrchestratorStartedEvent(startTime);
-    const executionStarted = pbh.newExecutionStartedEvent(name, instanceId, input);
+    const executionStarted = pbh.newExecutionStartedEvent(name, instanceId, input, parentInstance);
 
     instance.pendingEvents.push(orchestratorStarted);
     instance.pendingEvents.push(executionStarted);
@@ -580,9 +581,13 @@ export class InMemoryOrchestrationBackend {
       instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING;
     }
 
-    // Create the sub-orchestration
+    // Create the sub-orchestration with parent instance info
     try {
-      this.createInstance(subInstanceId, name, input);
+      this.createInstance(subInstanceId, name, input, undefined, {
+        name: instance.name,
+        instanceId: instance.instanceId,
+        taskScheduledId: taskId,
+      });
 
       // Watch for sub-orchestration completion
       this.watchSubOrchestration(instance.instanceId, subInstanceId, taskId);
