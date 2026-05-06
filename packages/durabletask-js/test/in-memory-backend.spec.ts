@@ -196,6 +196,57 @@ describe("In-Memory Backend", () => {
     expect(state?.serializedOutput).toContain("caught:");
   });
 
+  it("should set parent instance info on sub-orchestrations", async () => {
+    let capturedParent: import("../src").ParentOrchestrationInstance | undefined;
+
+    const childOrchestrator: TOrchestrator = async (ctx: OrchestrationContext) => {
+      capturedParent = ctx.parent;
+      return "child-done";
+    };
+
+    const parentOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const result = yield ctx.callSubOrchestrator(childOrchestrator);
+      return result;
+    };
+
+    worker.addOrchestrator(childOrchestrator);
+    worker.addOrchestrator(parentOrchestrator);
+    await worker.start();
+
+    const id = await client.scheduleNewOrchestration(parentOrchestrator);
+    const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+
+    // Verify parent instance info was populated on the sub-orchestration context
+    expect(capturedParent).toBeDefined();
+    expect(capturedParent?.name).toEqual(getName(parentOrchestrator));
+    expect(capturedParent?.instanceId).toEqual(id);
+    expect(typeof capturedParent?.taskScheduledId).toEqual("number");
+  });
+
+  it("should not set parent instance info on top-level orchestrations", async () => {
+    let capturedParent: import("../src").ParentOrchestrationInstance | undefined;
+
+    const topLevelOrchestrator: TOrchestrator = async (ctx: OrchestrationContext) => {
+      capturedParent = ctx.parent;
+      return "done";
+    };
+
+    worker.addOrchestrator(topLevelOrchestrator);
+    await worker.start();
+
+    const id = await client.scheduleNewOrchestration(topLevelOrchestrator);
+    const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+
+    // Top-level orchestrations should have no parent
+    expect(capturedParent).toBeUndefined();
+  });
+
   it("should handle external events", async () => {
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
       const value = yield ctx.waitForExternalEvent("my_event");
