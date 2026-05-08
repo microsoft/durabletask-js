@@ -1130,7 +1130,14 @@ describe("Orchestration Executor", () => {
     startTime?: Date,
   ) {
     const registry = new Registry();
-    const name = registry.addOrchestrator(orchestrator);
+    let name: string;
+    try {
+      name = registry.addOrchestrator(orchestrator);
+    } catch {
+      // Anonymous inline orchestrators in tests: register with a default name
+      name = "testOrchestrator";
+      registry.addNamedOrchestrator(name, orchestrator);
+    }
     const allEvents = [
       newOrchestratorStartedEvent(startTime),
       newExecutionStartedEvent(name, TEST_INSTANCE_ID, input !== undefined ? JSON.stringify(input) : undefined),
