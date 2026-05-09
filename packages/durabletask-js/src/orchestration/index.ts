@@ -27,20 +27,19 @@ export function newOrchestrationState(
     );
   }
 
-  // Convert Timestamp seconds and nanos to Date
+  // Convert Timestamp seconds and nanos to Date.
+  // Default to epoch (new Date(0)) when timestamps are missing, consistent with
+  // _createOrchestrationStateFromProto in client.ts.
   const tsCreated = state?.getCreatedtimestamp();
   const tsUpdated = state?.getLastupdatedtimestamp();
 
-  let tsCreatedParsed = new Date();
-  let tsUpdatedParsed = new Date();
+  const createdAt = tsCreated
+    ? new Date(tsCreated.getSeconds() * 1000 + tsCreated.getNanos() / 1000000)
+    : new Date(0);
 
-  if (tsCreated) {
-    tsCreatedParsed = new Date(tsCreated.getSeconds() * 1000 + tsCreated.getNanos() / 1000000);
-  }
-
-  if (tsUpdated) {
-    tsUpdatedParsed = new Date(tsUpdated.getSeconds() * 1000 + tsUpdated.getNanos() / 1000000);
-  }
+  const lastUpdatedAt = tsUpdated
+    ? new Date(tsUpdated.getSeconds() * 1000 + tsUpdated.getNanos() / 1000000)
+    : new Date(0);
 
   const tags = mapToRecord(state?.getTagsMap());
 
@@ -48,8 +47,8 @@ export function newOrchestrationState(
     instanceId,
     state?.getName() ?? "",
     fromProtobuf(state?.getOrchestrationstatus() ?? 0),
-    new Date(tsCreatedParsed),
-    new Date(tsUpdatedParsed),
+    createdAt,
+    lastUpdatedAt,
     state?.getInput()?.getValue(),
     state?.getOutput()?.getValue(),
     state?.getCustomstatus()?.getValue(),
