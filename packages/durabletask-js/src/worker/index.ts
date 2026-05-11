@@ -58,7 +58,7 @@ export function getNewEventSummary(newEvents: pb.HistoryEvent[]): string {
   if (!newEvents?.length) {
     return "[]";
   } else if (newEvents.length == 1) {
-    const enumKey = enumValueToKey(pb.HistoryEvent.EventtypeCase, newEvents[0].getEventtypeCase());
+    const enumKey = enumValueToKey(pb.HistoryEvent.EventtypeCase, newEvents[0].getEventtypeCase()) ?? "UNKNOWN";
     return `[${enumKey}]`;
   } else {
     const counts = new Map<string, number>();
