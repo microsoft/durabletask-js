@@ -396,7 +396,9 @@ export class TaskEntityShim {
         failureDetails.setErrortype(error.name);
         failureDetails.setErrormessage(error.message);
         if (error.stack) {
-          failureDetails.setStacktrace(new StringValue().setValue(error.stack));
+          const stackValue = new StringValue();
+          stackValue.setValue(error.stack);
+          failureDetails.setStacktrace(stackValue);
         }
       } else {
         failureDetails.setErrortype("Error");
