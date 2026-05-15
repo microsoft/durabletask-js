@@ -616,9 +616,14 @@ export class TaskHubGrpcWorker {
   ): void {
     const workPromise = this._executeOrchestratorInternal(req, completionToken, stub);
     this._pendingWorkItems.add(workPromise);
-    workPromise.finally(() => {
-      this._pendingWorkItems.delete(workPromise);
-    });
+    workPromise
+      .catch((e: unknown) => {
+        const error = e instanceof Error ? e : new Error(String(e));
+        WorkerLogs.executionError(this._logger, req.getInstanceid() ?? "(unknown)", error);
+      })
+      .finally(() => {
+        this._pendingWorkItems.delete(workPromise);
+      });
   }
 
   /**
@@ -804,9 +809,14 @@ export class TaskHubGrpcWorker {
   ): void {
     const workPromise = this._executeActivityInternal(req, completionToken, stub);
     this._pendingWorkItems.add(workPromise);
-    workPromise.finally(() => {
-      this._pendingWorkItems.delete(workPromise);
-    });
+    workPromise
+      .catch((e: unknown) => {
+        const error = e instanceof Error ? e : new Error(String(e));
+        WorkerLogs.workerError(this._logger, error);
+      })
+      .finally(() => {
+        this._pendingWorkItems.delete(workPromise);
+      });
   }
 
   /**
@@ -887,9 +897,14 @@ export class TaskHubGrpcWorker {
   ): void {
     const workPromise = this._executeEntityInternal(req, completionToken, stub, operationInfos);
     this._pendingWorkItems.add(workPromise);
-    workPromise.finally(() => {
-      this._pendingWorkItems.delete(workPromise);
-    });
+    workPromise
+      .catch((e: unknown) => {
+        const error = e instanceof Error ? e : new Error(String(e));
+        WorkerLogs.workerError(this._logger, error);
+      })
+      .finally(() => {
+        this._pendingWorkItems.delete(workPromise);
+      });
   }
 
   /**
