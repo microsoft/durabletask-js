@@ -155,7 +155,12 @@ export class TestOrchestrationWorker {
         failureDetails,
       );
 
-      this.backend.completeOrchestration(instanceId, completionToken, [failAction]);
+      try {
+        this.backend.completeOrchestration(instanceId, completionToken, [failAction]);
+      } catch {
+        // Instance may have been purged or the backend reset during processing.
+        // Nothing more we can do — the orchestration result is lost.
+      }
     }
   }
 
