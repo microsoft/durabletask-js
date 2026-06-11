@@ -173,7 +173,17 @@ jobs:
 
       - name: 🐳 Start DTS emulator
         run: |
-          docker pull mcr.microsoft.com/dts/dts-emulator:latest
+          for attempt in 1 2 3; do
+            if docker pull mcr.microsoft.com/dts/dts-emulator:latest; then
+              break
+            fi
+
+            if [ "$attempt" = "3" ]; then
+              exit 1
+            fi
+
+            sleep $((attempt * 10))
+          done
           docker run --name dtsemulator -d -p 8080:8080 mcr.microsoft.com/dts/dts-emulator:latest
 
       - name: ⏳ Wait for DTS emulator
