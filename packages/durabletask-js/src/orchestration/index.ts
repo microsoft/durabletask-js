@@ -27,20 +27,11 @@ export function newOrchestrationState(
     );
   }
 
-  // Convert Timestamp seconds and nanos to Date
   const tsCreated = state?.getCreatedtimestamp();
   const tsUpdated = state?.getLastupdatedtimestamp();
 
-  let tsCreatedParsed = new Date();
-  let tsUpdatedParsed = new Date();
-
-  if (tsCreated) {
-    tsCreatedParsed = new Date(tsCreated.getSeconds() * 1000 + tsCreated.getNanos() / 1000000);
-  }
-
-  if (tsUpdated) {
-    tsUpdatedParsed = new Date(tsUpdated.getSeconds() * 1000 + tsUpdated.getNanos() / 1000000);
-  }
+  const createdAt = tsCreated ? tsCreated.toDate() : new Date(0);
+  const lastUpdatedAt = tsUpdated ? tsUpdated.toDate() : new Date(0);
 
   const tags = mapToRecord(state?.getTagsMap());
 
@@ -48,8 +39,8 @@ export function newOrchestrationState(
     instanceId,
     state?.getName() ?? "",
     fromProtobuf(state?.getOrchestrationstatus() ?? 0),
-    new Date(tsCreatedParsed),
-    new Date(tsUpdatedParsed),
+    createdAt,
+    lastUpdatedAt,
     state?.getInput()?.getValue(),
     state?.getOutput()?.getValue(),
     state?.getCustomstatus()?.getValue(),
