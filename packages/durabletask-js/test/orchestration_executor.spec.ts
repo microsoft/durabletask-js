@@ -1133,7 +1133,10 @@ describe("Orchestration Executor", () => {
     let name: string;
     try {
       name = registry.addOrchestrator(orchestrator);
-    } catch {
+    } catch (e: unknown) {
+      if (!(e instanceof Error) || e.message !== "A non-empty orchestrator name is required.") {
+        throw e;
+      }
       // Anonymous inline orchestrators in tests: register with a default name
       name = "testOrchestrator";
       registry.addNamedOrchestrator(name, orchestrator);
