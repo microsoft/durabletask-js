@@ -606,6 +606,19 @@ export class TaskHubGrpcWorker {
     return undefined;
   }
 
+  private _trackPendingWorkItem(workPromise: Promise<void>, onError: (error: Error) => void): void {
+    const handledPromise = workPromise
+      .catch((e: unknown) => {
+        const error = e instanceof Error ? e : new Error(String(e));
+        onError(error);
+      })
+      .finally(() => {
+        this._pendingWorkItems.delete(handledPromise);
+      });
+
+    this._pendingWorkItems.add(handledPromise);
+  }
+
   /**
    * Executes an orchestrator request and tracks it as a pending work item.
    */
@@ -615,9 +628,8 @@ export class TaskHubGrpcWorker {
     stub: stubs.TaskHubSidecarServiceClient,
   ): void {
     const workPromise = this._executeOrchestratorInternal(req, completionToken, stub);
-    this._pendingWorkItems.add(workPromise);
-    workPromise.finally(() => {
-      this._pendingWorkItems.delete(workPromise);
+    this._trackPendingWorkItem(workPromise, (error) => {
+      WorkerLogs.executionError(this._logger, req.getInstanceid() || "(unknown)", error);
     });
   }
 
@@ -803,9 +815,8 @@ export class TaskHubGrpcWorker {
     stub: stubs.TaskHubSidecarServiceClient,
   ): void {
     const workPromise = this._executeActivityInternal(req, completionToken, stub);
-    this._pendingWorkItems.add(workPromise);
-    workPromise.finally(() => {
-      this._pendingWorkItems.delete(workPromise);
+    this._trackPendingWorkItem(workPromise, (error) => {
+      WorkerLogs.workerError(this._logger, error);
     });
   }
 
@@ -886,9 +897,8 @@ export class TaskHubGrpcWorker {
     operationInfos?: pb.OperationInfo[],
   ): void {
     const workPromise = this._executeEntityInternal(req, completionToken, stub, operationInfos);
-    this._pendingWorkItems.add(workPromise);
-    workPromise.finally(() => {
-      this._pendingWorkItems.delete(workPromise);
+    this._trackPendingWorkItem(workPromise, (error) => {
+      WorkerLogs.workerError(this._logger, error);
     });
   }
 
@@ -985,9 +995,8 @@ export class TaskHubGrpcWorker {
     stub: stubs.TaskHubSidecarServiceClient,
   ): void {
     const workPromise = this._executeEntityV2Internal(req, completionToken, stub);
-    this._pendingWorkItems.add(workPromise);
-    workPromise.finally(() => {
-      this._pendingWorkItems.delete(workPromise);
+    this._trackPendingWorkItem(workPromise, (error) => {
+      WorkerLogs.workerError(this._logger, error);
     });
   }
 
