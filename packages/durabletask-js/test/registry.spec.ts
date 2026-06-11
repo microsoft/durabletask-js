@@ -243,6 +243,11 @@ describe("Registry", () => {
       expect(result).toBe("");
     });
 
+    it("should return empty string for arrow function with nested named function", () => {
+      const result = registry._getFunctionName(Function("return () => { function inner() {} }")());
+      expect(result).toBe("");
+    });
+
     it("should return empty string for anonymous function expression", () => {
       const result = registry._getFunctionName(Function("return function() {}")());
       expect(result).toBe("");

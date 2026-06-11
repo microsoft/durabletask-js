@@ -175,26 +175,11 @@ export class Registry {
       return fn.name;
     }
 
-    const fnStr = fn.toString();
-    const funcIdx = fnStr.indexOf("function");
-
-    // Arrow functions and other non-traditional syntax don't contain "function"
-    if (funcIdx === -1) {
+    const match = /^\s*(?:async\s+)?function\s*\*?\s*([^(]*)\(/.exec(fn.toString());
+    if (!match) {
       return "";
     }
 
-    let start = funcIdx + "function".length;
-
-    // Skip the '*' for generator functions (function*() {})
-    if (start < fnStr.length && fnStr[start] === "*") {
-      start++;
-    }
-
-    const end = fnStr.indexOf("(", start);
-    if (end === -1) {
-      return "";
-    }
-
-    return fnStr.slice(start, end).trim() || "";
+    return match[1].trim();
   }
 }
