@@ -149,7 +149,7 @@ jobs:
       - name: 🧪 Run sample — ${{ matrix.sample }}
         run: |
           echo "Running sample: ${{ matrix.sample }}"
-          ./node_modules/.bin/ts-node --swc ./examples/azure-managed/${{ matrix.sample }}/index.ts
+          npm run example -- ./examples/azure-managed/${{ matrix.sample }}/index.ts
         timeout-minutes: 2
 
   # -----------------------------------------------------------------------
@@ -206,7 +206,7 @@ jobs:
       - name: 🧪 Run sample — ${{ matrix.sample }}
         run: |
           echo "Running sample: ${{ matrix.sample }}"
-          ./node_modules/.bin/ts-node --swc ./examples/azure-managed/${{ matrix.sample }}/index.ts
+          npm run example -- ./examples/azure-managed/${{ matrix.sample }}/index.ts
         timeout-minutes: 5
 
       - name: 🧹 Stop DTS emulator
