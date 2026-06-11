@@ -175,11 +175,43 @@ export class Registry {
       return fn.name;
     }
 
-    const match = /^\s*(?:async\s+)?function\s*\*?\s*([^(]*)\(/.exec(fn.toString());
-    if (!match) {
+    const fnStr = fn.toString().trimStart();
+    let start = 0;
+    const isWhitespace = (char: string | undefined) => char !== undefined && char.trim() === "";
+
+    if (fnStr.startsWith("async")) {
+      const afterAsync = "async".length;
+      if (!isWhitespace(fnStr[afterAsync])) {
+        return "";
+      }
+
+      start = afterAsync;
+      while (isWhitespace(fnStr[start])) {
+        start++;
+      }
+    }
+
+    if (!fnStr.startsWith("function", start)) {
       return "";
     }
 
-    return match[1].trim();
+    start += "function".length;
+    while (isWhitespace(fnStr[start])) {
+      start++;
+    }
+
+    if (fnStr[start] === "*") {
+      start++;
+      while (isWhitespace(fnStr[start])) {
+        start++;
+      }
+    }
+
+    const end = fnStr.indexOf("(", start);
+    if (end === -1) {
+      return "";
+    }
+
+    return fnStr.slice(start, end).trim();
   }
 }
