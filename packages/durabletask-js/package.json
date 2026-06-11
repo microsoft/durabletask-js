@@ -38,7 +38,7 @@
   },
   "homepage": "https://github.com/microsoft/durabletask-js#readme",
   "dependencies": {
-    "@grpc/grpc-js": "^1.14.3",
+    "@grpc/grpc-js": "^1.14.4",
     "google-protobuf": "^3.21.2"
   },
   "devDependencies": {
