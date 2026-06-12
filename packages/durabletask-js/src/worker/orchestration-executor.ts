@@ -13,6 +13,7 @@ import { Logger, ConsoleLogger } from "../types/logger.type";
 import { getName } from "../task";
 import * as WorkerLogs from "./logs";
 import { OrchestrationStateError } from "../task/exception/orchestration-state-error";
+import { NonDeterminismError } from "../task/exception/non-determinism-error";
 import { CompletableTask } from "../task/completable-task";
 import { RetryableTask } from "../task/retryable-task";
 import { RetryHandlerTask } from "../task/retry-handler-task";
@@ -161,6 +162,9 @@ export class OrchestrationExecutor {
           break;
         case pb.HistoryEvent.EventtypeCase.EVENTRAISED:
           await this.handleEventRaised(ctx, event);
+          break;
+        case pb.HistoryEvent.EventtypeCase.EVENTSENT:
+          await this.handleEventSent(ctx, event);
           break;
         case pb.HistoryEvent.EventtypeCase.EXECUTIONSUSPENDED:
           await this.handleExecutionSuspended(ctx, event);
@@ -453,6 +457,42 @@ export class OrchestrationExecutor {
         WorkerLogs.orchestrationEventBuffered(this._logger, ctx._instanceId, eventName!);
       }
     }
+  }
+
+  private async handleEventSent(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+    // This history event confirms that a sendEvent action was successfully processed by the sidecar.
+    const eventId = event.getEventid();
+    const action = ctx._pendingActions[eventId];
+
+    const isSendEventAction = action?.hasSendevent();
+
+    if (!action) {
+      throw getNonDeterminismError(eventId, getName(ctx.sendEvent));
+    } else if (!isSendEventAction) {
+      const expectedMethodName = getName(ctx.sendEvent);
+      throw new NonDeterminismError(
+        `A previous execution called ${expectedMethodName} with ID=${eventId}, but the current execution is instead trying to call a different method as part of rebuilding its history.`,
+      );
+    }
+
+    const eventSent = event.getEventsent();
+    const expectedEventName = eventSent?.getName();
+    const sendEventAction = action.getSendevent()!;
+    const actualEventName = sendEventAction.getName();
+    if (expectedEventName !== actualEventName) {
+      throw getWrongActionNameError(eventId, getName(ctx.sendEvent), expectedEventName, actualEventName);
+    }
+
+    const expectedInstanceId = eventSent?.getInstanceid();
+    const actualInstanceId = sendEventAction.getInstance()?.getInstanceid();
+    if (expectedInstanceId !== actualInstanceId) {
+      throw new NonDeterminismError(
+        `Failed to restore orchestration state due to a history mismatch: A previous execution called ${getName(ctx.sendEvent)} with target instance '${expectedInstanceId}' and sequence number ${eventId}, but the current execution is instead trying to target instance '${actualInstanceId}' as part of rebuilding its history.`,
+      );
+    }
+
+    // Remove the action from the pending action list only after replay validation succeeds.
+    delete ctx._pendingActions[eventId];
   }
 
   private async handleExecutionSuspended(ctx: RuntimeOrchestrationContext, _event: pb.HistoryEvent): Promise<void> {
