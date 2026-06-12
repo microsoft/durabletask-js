@@ -461,10 +461,8 @@ export class OrchestrationExecutor {
 
   private async handleEventSent(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
     // This history event confirms that a sendEvent action was successfully processed by the sidecar.
-    // Remove the action from the pending action list so we don't send it again.
     const eventId = event.getEventid();
     const action = ctx._pendingActions[eventId];
-    delete ctx._pendingActions[eventId];
 
     const isSendEventAction = action?.hasSendevent();
 
@@ -479,10 +477,22 @@ export class OrchestrationExecutor {
 
     const eventSent = event.getEventsent();
     const expectedEventName = eventSent?.getName();
-    const actualEventName = action.getSendevent()?.getName();
+    const sendEventAction = action.getSendevent()!;
+    const actualEventName = sendEventAction.getName();
     if (expectedEventName !== actualEventName) {
       throw getWrongActionNameError(eventId, getName(ctx.sendEvent), expectedEventName, actualEventName);
     }
+
+    const expectedInstanceId = eventSent?.getInstanceid();
+    const actualInstanceId = sendEventAction.getInstance()?.getInstanceid();
+    if (expectedInstanceId !== actualInstanceId) {
+      throw new NonDeterminismError(
+        `Failed to restore orchestration state due to a history mismatch: A previous execution called ${getName(ctx.sendEvent)} with target instance '${expectedInstanceId}' and sequence number ${eventId}, but the current execution is instead trying to target instance '${actualInstanceId}' as part of rebuilding its history.`,
+      );
+    }
+
+    // Remove the action from the pending action list only after replay validation succeeds.
+    delete ctx._pendingActions[eventId];
   }
 
   private async handleExecutionSuspended(ctx: RuntimeOrchestrationContext, _event: pb.HistoryEvent): Promise<void> {

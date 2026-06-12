@@ -2189,6 +2189,35 @@ describe("EventSent Handler", () => {
     expect(failureDetails?.getErrormessage()).toContain("my-event");
   });
 
+  it("should throw NonDeterminismError when EVENTSENT target instance does not match sendEvent action", async () => {
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      ctx.sendEvent("target-instance", "my-event", { key: "value" });
+      yield ctx.createTimer(1);
+    };
+
+    const registry = new Registry();
+    const name = registry.addOrchestrator(orchestrator);
+
+    const oldEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(name, "test-instance"),
+      newEventSentEvent(1, "different-target", "my-event", JSON.stringify({ key: "value" })),
+    ];
+
+    const executor = new OrchestrationExecutor(registry);
+    const result = await executor.execute("test-instance", oldEvents, [newOrchestratorStartedEvent()]);
+
+    const completeAction = result.actions.find((a) => a.hasCompleteorchestration());
+    expect(completeAction).toBeDefined();
+    expect(completeAction?.getCompleteorchestration()?.getOrchestrationstatus()).toEqual(
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+    );
+    const failureDetails = completeAction?.getCompleteorchestration()?.getFailuredetails();
+    expect(failureDetails?.getErrortype()).toEqual("NonDeterminismError");
+    expect(failureDetails?.getErrormessage()).toContain("different-target");
+    expect(failureDetails?.getErrormessage()).toContain("target-instance");
+  });
+
   it("should throw NonDeterminismError when EVENTSENT event has no matching action", async () => {
     // Orchestrator does NOT call sendEvent but gets an EVENTSENT history event
     const myActivity = () => "result";
