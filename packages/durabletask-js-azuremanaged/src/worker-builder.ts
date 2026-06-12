@@ -10,6 +10,7 @@ import {
   TActivity,
   TInput,
   TOutput,
+  EntityFactory,
   Logger,
   ConsoleLogger,
   VersioningOptions,
@@ -25,6 +26,7 @@ export class DurableTaskAzureManagedWorkerBuilder {
   private _grpcChannelOptions: grpc.ChannelOptions = {};
   private _orchestrators: { name?: string; fn: TOrchestrator }[] = [];
   private _activities: { name?: string; fn: TActivity<TInput, TOutput> }[] = [];
+  private _entities: { name?: string; factory: EntityFactory }[] = [];
   private _logger: Logger = new ConsoleLogger();
   private _shutdownTimeoutMs?: number;
   private _versioning?: VersioningOptions;
@@ -186,6 +188,30 @@ export class DurableTaskAzureManagedWorkerBuilder {
   }
 
   /**
+   * Registers an entity factory with the worker.
+   * The entity name is derived from the factory function name.
+   *
+   * @param factory The entity factory function.
+   * @returns This builder instance.
+   */
+  addEntity(factory: EntityFactory): DurableTaskAzureManagedWorkerBuilder {
+    this._entities.push({ factory });
+    return this;
+  }
+
+  /**
+   * Registers a named entity factory with the worker.
+   *
+   * @param name The name of the entity.
+   * @param factory The entity factory function.
+   * @returns This builder instance.
+   */
+  addNamedEntity(name: string, factory: EntityFactory): DurableTaskAzureManagedWorkerBuilder {
+    this._entities.push({ name, factory });
+    return this;
+  }
+
+  /**
    * Sets the logger to use for logging.
    * Defaults to ConsoleLogger.
    *
@@ -286,6 +312,15 @@ export class DurableTaskAzureManagedWorkerBuilder {
         worker.addNamedActivity(name, fn);
       } else {
         worker.addActivity(fn);
+      }
+    }
+
+    // Register all entities
+    for (const { name, factory } of this._entities) {
+      if (name) {
+        worker.addNamedEntity(name, factory);
+      } else {
+        worker.addEntity(factory);
       }
     }
 
