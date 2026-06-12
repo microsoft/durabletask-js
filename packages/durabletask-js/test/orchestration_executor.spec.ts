@@ -2128,6 +2128,51 @@ describe("Orchestration Executor", () => {
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify("recovered"));
   });
+
+  it("should not produce duplicate completion actions when setFailed is called after setComplete", async () => {
+    // Scenario: An orchestrator completes immediately (returns without yielding).
+    // During replay, the history has a TaskScheduled event that the orchestrator
+    // did NOT produce (simulating a non-determinism situation). The executor
+    // calls setComplete when the generator finishes, then the subsequent
+    // TaskScheduled event validation fails with a NonDeterminismError.
+    // Without the _isComplete guard in setFailed(), this would produce two
+    // completion actions (one COMPLETED, one FAILED).
+    const immediateOrchestrator: TOrchestrator = async (_ctx: OrchestrationContext) => {
+      return "done";
+    };
+
+    const registry = new Registry();
+    const name = registry.addOrchestrator(immediateOrchestrator);
+
+    // Old events simulate a previous execution that scheduled an activity,
+    // but the current code no longer does that (non-determinism).
+    const oldEvents = [
+      newOrchestratorStartedEvent(new Date()),
+      newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined),
+      // This TaskScheduled event has no matching pending action after the
+      // orchestrator completes immediately, triggering a NonDeterminismError.
+      // Use taskId=99 to avoid colliding with the completeOrchestration action's
+      // sequence number (which would be 1).
+      newTaskScheduledEvent(99, "SomeActivity"),
+    ];
+
+    const newEvents = [newOrchestratorStartedEvent(new Date())];
+
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    // The key assertion: there should be exactly ONE completion action, not two.
+    // The NonDeterminismError that occurs after the generator completes should
+    // override the completion status to FAILED (not produce duplicates).
+    const completeActions = result.actions.filter((a) => a.hasCompleteorchestration());
+    expect(completeActions.length).toEqual(1);
+
+    const completeAction = completeActions[0].getCompleteorchestration()!;
+    expect(completeAction.getOrchestrationstatus()).toEqual(
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+    );
+    expect(completeAction.getFailuredetails()?.getErrortype()).toEqual("NonDeterminismError");
+  });
 });
 
 describe("EventSent Handler", () => {

@@ -224,6 +224,17 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   }
 
   setFailed(e: Error) {
+    // If already complete, remove the previous completion action to prevent
+    // duplicate completion actions in the response
+    if (this._isComplete) {
+      for (const [id, action] of Object.entries(this._pendingActions)) {
+        if (action.hasCompleteorchestration()) {
+          delete this._pendingActions[Number(id)];
+          break;
+        }
+      }
+    }
+
     this._isComplete = true;
     this._completionStatus = pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED;
     // Note: Do NOT clear pending actions here - fire-and-forget actions like sendEvent
