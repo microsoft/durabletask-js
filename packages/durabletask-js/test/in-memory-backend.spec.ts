@@ -13,6 +13,7 @@ import {
   Task,
   TOrchestrator,
 } from "../src";
+import * as pb from "../src/proto/orchestrator_service_pb";
 
 describe("In-Memory Backend", () => {
   let backend: InMemoryOrchestrationBackend;
@@ -292,8 +293,9 @@ describe("In-Memory Backend", () => {
 
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: { iteration: number }): any {
       if (input.iteration === 1) {
-        // Wait for a timer to give the test time to raise an event
-        yield ctx.createTimer(0);
+        // Wait for a separate event so the test can deterministically enqueue
+        // the carryover event before continue-as-new runs.
+        yield ctx.waitForExternalEvent("continue");
         // Do NOT consume the "carry-me" event — it should be carried over
         ctx.continueAsNew({ iteration: 2 }, true); // saveEvents = true
       } else {
@@ -308,11 +310,12 @@ describe("In-Memory Backend", () => {
 
     const id = await client.scheduleNewOrchestration(orchestrator, { iteration: 1 });
 
-    // Wait for the orchestration to start running (timer is created)
+    // Wait for the orchestration to start and block on the "continue" event.
     await client.waitForOrchestrationStart(id, false, 5);
 
     // Raise an external event that the first iteration won't consume
     await client.raiseOrchestrationEvent(id, "carry-me", "carried-over-payload");
+    await client.raiseOrchestrationEvent(id, "continue");
 
     // The orchestration should continue-as-new and then complete in iteration 2
     const state = await client.waitForOrchestrationCompletion(id, true, 10);
@@ -320,6 +323,16 @@ describe("In-Memory Backend", () => {
     expect(state).toBeDefined();
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
     expect(state?.serializedOutput).toEqual(JSON.stringify("carried-over-payload"));
+
+    const history = backend.getInstance(id)?.history ?? [];
+    const iterationStart = history.findIndex(
+      (event) => event.getEventtypeCase() === pb.HistoryEvent.EventtypeCase.ORCHESTRATORSTARTED,
+    );
+    expect(iterationStart).toBeGreaterThanOrEqual(0);
+    expect(history[iterationStart]?.getEventtypeCase()).toBe(pb.HistoryEvent.EventtypeCase.ORCHESTRATORSTARTED);
+    expect(history[iterationStart + 1]?.getEventtypeCase()).toBe(pb.HistoryEvent.EventtypeCase.EXECUTIONSTARTED);
+    expect(history[iterationStart + 2]?.getEventtypeCase()).toBe(pb.HistoryEvent.EventtypeCase.EVENTRAISED);
+    expect(history[iterationStart + 2]?.getEventraised()?.getName()).toBe("carry-me");
   });
 
   it("should clear customStatus after continue-as-new", async () => {
