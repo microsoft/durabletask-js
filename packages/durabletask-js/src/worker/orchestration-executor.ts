@@ -13,6 +13,7 @@ import { Logger, ConsoleLogger } from "../types/logger.type";
 import { getName } from "../task";
 import * as WorkerLogs from "./logs";
 import { OrchestrationStateError } from "../task/exception/orchestration-state-error";
+import { NonDeterminismError } from "../task/exception/non-determinism-error";
 import { CompletableTask } from "../task/completable-task";
 import { RetryableTask } from "../task/retryable-task";
 import { RetryHandlerTask } from "../task/retry-handler-task";
@@ -471,7 +472,16 @@ export class OrchestrationExecutor {
       throw getNonDeterminismError(eventId, getName(ctx.sendEvent));
     } else if (!isSendEventAction) {
       const expectedMethodName = getName(ctx.sendEvent);
-      throw getWrongActionTypeError(eventId, expectedMethodName, action);
+      throw new NonDeterminismError(
+        `A previous execution called ${expectedMethodName} with ID=${eventId}, but the current execution is instead trying to call a different method as part of rebuilding its history.`,
+      );
+    }
+
+    const eventSent = event.getEventsent();
+    const expectedEventName = eventSent?.getName();
+    const actualEventName = action.getSendevent()?.getName();
+    if (expectedEventName !== actualEventName) {
+      throw getWrongActionNameError(eventId, getName(ctx.sendEvent), expectedEventName, actualEventName);
     }
   }
 
