@@ -175,10 +175,43 @@ export class Registry {
       return fn.name;
     }
 
-    const fnStr = fn.toString();
-    const start = fnStr.indexOf("function") + "function".length;
-    const end = fnStr.indexOf("(", start);
+    const fnStr = fn.toString().trimStart();
+    let start = 0;
+    const isWhitespace = (char: string | undefined) => char !== undefined && char.trim() === "";
 
-    return fnStr.slice(start, end).trim() || "";
+    if (fnStr.startsWith("async")) {
+      const afterAsync = "async".length;
+      if (!isWhitespace(fnStr[afterAsync])) {
+        return "";
+      }
+
+      start = afterAsync;
+      while (isWhitespace(fnStr[start])) {
+        start++;
+      }
+    }
+
+    if (!fnStr.startsWith("function", start)) {
+      return "";
+    }
+
+    start += "function".length;
+    while (isWhitespace(fnStr[start])) {
+      start++;
+    }
+
+    if (fnStr[start] === "*") {
+      start++;
+      while (isWhitespace(fnStr[start])) {
+        start++;
+      }
+    }
+
+    const end = fnStr.indexOf("(", start);
+    if (end === -1) {
+      return "";
+    }
+
+    return fnStr.slice(start, end).trim();
   }
 }
