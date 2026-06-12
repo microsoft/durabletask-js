@@ -4,6 +4,7 @@
 import * as pb from "../proto/orchestrator_service_pb";
 import * as pbh from "../utils/pb-helper.util";
 import { OrchestrationStatus as ClientOrchestrationStatus } from "../orchestration/enum/orchestration-status.enum";
+import { ParentOrchestrationInstance } from "../types/parent-orchestration-instance.type";
 
 /**
  * Internal orchestration instance state stored by the in-memory backend.
@@ -82,7 +83,7 @@ export class InMemoryOrchestrationBackend {
     name: string,
     input?: string,
     scheduledStartTime?: Date,
-    parentInstance?: { name: string; instanceId: string; taskScheduledId: number },
+    parentInstance?: ParentOrchestrationInstance,
   ): string {
     if (this.instances.has(instanceId)) {
       throw new Error(`Orchestration instance '${instanceId}' already exists`);
