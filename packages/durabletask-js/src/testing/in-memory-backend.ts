@@ -174,9 +174,17 @@ export class InMemoryOrchestrationBackend {
       throw new Error(`Orchestration instance '${instanceId}' not found`);
     }
 
+    if (this.isTerminalStatus(instance.status)) {
+      return; // Cannot suspend a completed/failed/terminated instance
+    }
+
     if (instance.status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_SUSPENDED) {
       return;
     }
+
+    // Update status immediately to match real sidecar behavior, where the
+    // suspend RPC transitions the orchestration to SUSPENDED right away.
+    instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_SUSPENDED;
 
     const event = pbh.newSuspendEvent();
     instance.pendingEvents.push(event);
@@ -185,6 +193,8 @@ export class InMemoryOrchestrationBackend {
     if (!this.orchestrationQueueSet.has(instanceId)) {
       this.enqueueOrchestration(instanceId);
     }
+
+    this.notifyWaiters(instanceId);
   }
 
   /**
@@ -196,6 +206,18 @@ export class InMemoryOrchestrationBackend {
       throw new Error(`Orchestration instance '${instanceId}' not found`);
     }
 
+    // No-op for terminal or non-suspended instances
+    if (this.isTerminalStatus(instance.status)) {
+      return;
+    }
+
+    if (instance.status !== pb.OrchestrationStatus.ORCHESTRATION_STATUS_SUSPENDED) {
+      return;
+    }
+
+    // Transition from SUSPENDED back to RUNNING to match real sidecar behavior.
+    instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING;
+
     const event = pbh.newResumeEvent();
     instance.pendingEvents.push(event);
     instance.lastUpdatedAt = new Date();
@@ -203,6 +225,8 @@ export class InMemoryOrchestrationBackend {
     if (!this.orchestrationQueueSet.has(instanceId)) {
       this.enqueueOrchestration(instanceId);
     }
+
+    this.notifyWaiters(instanceId);
   }
 
   /**
