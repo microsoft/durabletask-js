@@ -47,6 +47,17 @@ function createActionWithType(
   return action;
 }
 
+function createSendEntityMessageAction(
+  configure: (message: pb.SendEntityMessageAction) => void,
+): pb.OrchestratorAction {
+  const sendEntityMessage = new pb.SendEntityMessageAction();
+  configure(sendEntityMessage);
+
+  const action = new pb.OrchestratorAction();
+  action.setSendentitymessage(sendEntityMessage);
+  return action;
+}
+
 describe("Worker helper functions", () => {
   describe("getMethodNameForAction", () => {
     it("should return 'callActivity' for SCHEDULETASK", () => {
@@ -74,9 +85,37 @@ describe("Worker helper functions", () => {
       expect(getMethodNameForAction(action)).toBe("sendEvent");
     });
 
-    it("should return 'sendEntityMessage' for SENDENTITYMESSAGE", () => {
+    it("should return 'sendEntityMessage' for SENDENTITYMESSAGE with unknown subtype", () => {
       const action = createActionWithType(pb.OrchestratorAction.OrchestratoractiontypeCase.SENDENTITYMESSAGE);
       expect(getMethodNameForAction(action)).toBe("sendEntityMessage");
+    });
+
+    it("should return 'callEntity' for SENDENTITYMESSAGE entity operation call", () => {
+      const action = createSendEntityMessageAction((message) => {
+        message.setEntityoperationcalled(new pb.EntityOperationCalledEvent());
+      });
+      expect(getMethodNameForAction(action)).toBe("callEntity");
+    });
+
+    it("should return 'signalEntity' for SENDENTITYMESSAGE entity operation signal", () => {
+      const action = createSendEntityMessageAction((message) => {
+        message.setEntityoperationsignaled(new pb.EntityOperationSignaledEvent());
+      });
+      expect(getMethodNameForAction(action)).toBe("signalEntity");
+    });
+
+    it("should return 'lockEntities' for SENDENTITYMESSAGE entity lock request", () => {
+      const action = createSendEntityMessageAction((message) => {
+        message.setEntitylockrequested(new pb.EntityLockRequestedEvent());
+      });
+      expect(getMethodNameForAction(action)).toBe("lockEntities");
+    });
+
+    it("should return 'lockRelease' for SENDENTITYMESSAGE entity unlock sent", () => {
+      const action = createSendEntityMessageAction((message) => {
+        message.setEntityunlocksent(new pb.EntityUnlockSentEvent());
+      });
+      expect(getMethodNameForAction(action)).toBe("lockRelease");
     });
 
     it("should return 'terminateOrchestration' for TERMINATEORCHESTRATION", () => {
@@ -102,12 +141,14 @@ describe("Worker helper functions", () => {
     });
 
     it("should return a NonDeterminismError for entity message action", () => {
-      const action = createActionWithType(pb.OrchestratorAction.OrchestratoractiontypeCase.SENDENTITYMESSAGE);
+      const action = createSendEntityMessageAction((message) => {
+        message.setEntityoperationcalled(new pb.EntityOperationCalledEvent());
+      });
       const error = getWrongActionTypeError(3, "createTimer", action);
 
       expect(error).toBeInstanceOf(NonDeterminismError);
       expect(error.message).toContain("createTimer");
-      expect(error.message).toContain("sendEntityMessage");
+      expect(error.message).toContain("callEntity");
       expect(error.message).toContain("ID=3");
     });
 
