@@ -193,6 +193,9 @@ export class OrchestrationExecutor {
         case pb.HistoryEvent.EventtypeCase.ENTITYLOCKGRANTED:
           await this.handleEntityLockGranted(ctx, event);
           break;
+        case pb.HistoryEvent.EventtypeCase.ENTITYUNLOCKSENT:
+          await this.handleEntityUnlockSent(ctx, event);
+          break;
         default:
           WorkerLogs.orchestrationUnknownEvent(this._logger, eventTypeName, eventType);
       }
@@ -688,6 +691,16 @@ export class OrchestrationExecutor {
     // Complete the lock acquisition
     ctx._entityFeature.completeLockAcquisition(criticalSectionId);
     await ctx.resume();
+  }
+
+  private async handleEntityUnlockSent(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+    this.validateEntityAction(
+      ctx,
+      event,
+      "lockRelease",
+      (msg) => msg.hasEntityunlocksent(),
+      "lockRelease (EntityUnlockSent)",
+    );
   }
 
   private validateEntityAction(
