@@ -152,7 +152,7 @@ describe("CompletableTask", () => {
 
     it("should notify parent via onChildCompleted when parent is set", () => {
       const child = new CompletableTask<number>();
-      // Use WhenAllTask as the parent since CompositeTask is abstract
+      // Use WhenAllTask because it completes when its child reports completion.
       const parent = new WhenAllTask<number>([child]);
 
       expect(parent.isComplete).toBe(false);
