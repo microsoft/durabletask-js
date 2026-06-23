@@ -149,16 +149,15 @@ describe("Entity Locking (Critical Sections)", () => {
       expect(lockSet[2]).toBe("@counter@c");
     });
 
-    it("should sort entities by ordinal (code-point) order, not locale order", async () => {
+    it("should sort entities by ordinal UTF-16 code unit order, not locale order", async () => {
       // Arrange
-      // In many locales, localeCompare() sorts accented characters adjacent to their
-      // base letters (e.g., "ä" near "a"). Ordinal (code-point) comparison places
-      // them by their Unicode value instead. This ensures consistent cross-platform
-      // ordering that matches the .NET SDK's StringComparer.Ordinal.
+      // JS < / > string comparison uses UTF-16 code unit ordering. This keeps
+      // lock acquisition deterministic and avoids locale-aware collation where
+      // lowercase letters may sort before uppercase letters.
       const registry = new Registry();
 
       registry.addOrchestrator(async function* testOrchestration(ctx: any) {
-        // "Z" (U+005A) < "a" (U+0061) in ordinal order,
+        // "Z" (0x005A) < "a" (0x0061) in UTF-16 code unit order,
         // but "a" < "Z" in most locale-aware collations
         const entityZ = new EntityInstanceId("store", "Z");
         const entityA = new EntityInstanceId("store", "a");

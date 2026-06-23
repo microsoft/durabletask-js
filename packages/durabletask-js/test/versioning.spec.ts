@@ -87,14 +87,13 @@ describe("compareVersions", () => {
       expect(compareVersions("Alpha", "BETA")).toBeLessThan(0);
     });
 
-    it("should use ordinal (code-point) order, not locale order", () => {
-      // In ordinal comparison, uppercase letters (U+0041-U+005A) come before
-      // lowercase letters (U+0061-U+007A) after lowercasing they are equal.
-      // But characters outside ASCII can differ between ordinal and locale:
-      // e.g., "z" (U+007A) < "ä" (U+00E4) in ordinal, but many locales
+    it("should use deterministic ordinal UTF-16 code unit order, not locale order", () => {
+      // compareVersions lowercases strings before comparing them with JS < / >.
+      // This avoids locale-dependent collation for non-semver versions:
+      // e.g., "z" (0x007A) < "ä" (0x00E4) in UTF-16 code unit order, but many locales
       // sort "ä" right after "a" which is before "z".
       const result = compareVersions("z-pre", "ä-pre");
-      // Ordinal: "z" (U+007A) < "ä" (U+00E4), so result should be negative
+      // Ordinal UTF-16: "z" (0x007A) < "ä" (0x00E4), so result should be negative
       expect(result).toBeLessThan(0);
     });
 

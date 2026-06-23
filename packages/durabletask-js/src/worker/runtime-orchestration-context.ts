@@ -864,7 +864,7 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
     }
 
     // Sort entities for deterministic ordering (prevents deadlocks).
-    // Use ordinal (code-point) comparison for cross-platform consistency,
+    // Use ordinal (UTF-16 code unit) comparison for cross-platform consistency,
     // matching .NET's StringComparer.Ordinal. localeCompare() is locale-dependent
     // and can produce different orderings on different machines/locales.
     const sortedEntities = [...entityIds].sort((a, b) => {
