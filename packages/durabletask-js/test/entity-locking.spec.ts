@@ -173,6 +173,43 @@ describe("Entity Locking (Critical Sections)", () => {
       expect(lockSet[2]).toBe("@counter@c");
     });
 
+    it("should sort entities by ordinal UTF-16 code unit order, not locale order", async () => {
+      // Arrange
+      // JS < / > string comparison uses UTF-16 code unit ordering. This keeps
+      // lock acquisition deterministic and avoids locale-aware collation where
+      // lowercase letters may sort before uppercase letters.
+      const registry = new Registry();
+
+      registry.addOrchestrator(async function* testOrchestration(ctx: any) {
+        // "Z" (0x005A) < "a" (0x0061) in UTF-16 code unit order,
+        // but "a" < "Z" in most locale-aware collations
+        const entityZ = new EntityInstanceId("store", "Z");
+        const entityA = new EntityInstanceId("store", "a");
+        yield ctx.entities.lockEntities(entityA, entityZ);
+      });
+
+      const executor = new OrchestrationExecutor(registry);
+      const newEvents = [
+        createOrchestratorStartedEvent(),
+        createExecutionStartedEvent("testOrchestration"),
+      ];
+
+      // Act
+      const result = await executor.execute("test-instance", [], newEvents);
+
+      // Assert
+      const lockAction = result.actions.find((a) => a.getSendentitymessage()?.hasEntitylockrequested());
+      expect(lockAction).toBeDefined();
+
+      const lockEvent = lockAction!.getSendentitymessage()!.getEntitylockrequested()!;
+      const lockSet = lockEvent.getLocksetList();
+
+      // Ordinal order: "@store@Z" (U+005A) comes before "@store@a" (U+0061)
+      expect(lockSet.length).toBe(2);
+      expect(lockSet[0]).toBe("@store@Z");
+      expect(lockSet[1]).toBe("@store@a");
+    });
+
     it("should remove duplicate entities", async () => {
       // Arrange
       const registry = new Registry();
