@@ -63,6 +63,8 @@ export class RetryPolicy {
       retryTimeoutInMilliseconds,
       handleFailure,
     } = options;
+    const resolvedMaxRetryIntervalInMilliseconds = maxRetryIntervalInMilliseconds ?? 3600000;
+    const resolvedRetryTimeoutInMilliseconds = retryTimeoutInMilliseconds ?? -1;
 
     // Validation aligned with .NET SDK
     // Use !Number.isFinite() guards to reject NaN and Infinity, which bypass
@@ -80,17 +82,16 @@ export class RetryPolicy {
     }
 
     if (
-      maxRetryIntervalInMilliseconds !== undefined &&
-      maxRetryIntervalInMilliseconds !== -1 &&
-      (!Number.isFinite(maxRetryIntervalInMilliseconds) || maxRetryIntervalInMilliseconds < firstRetryIntervalInMilliseconds)
+      resolvedMaxRetryIntervalInMilliseconds !== -1 &&
+      (!Number.isFinite(resolvedMaxRetryIntervalInMilliseconds) ||
+        resolvedMaxRetryIntervalInMilliseconds < firstRetryIntervalInMilliseconds)
     ) {
       throw new Error("maxRetryIntervalInMilliseconds must be a finite number greater than or equal to firstRetryIntervalInMilliseconds");
     }
 
     if (
-      retryTimeoutInMilliseconds !== undefined &&
-      retryTimeoutInMilliseconds !== -1 &&
-      (!Number.isFinite(retryTimeoutInMilliseconds) || retryTimeoutInMilliseconds < firstRetryIntervalInMilliseconds)
+      resolvedRetryTimeoutInMilliseconds !== -1 &&
+      (!Number.isFinite(resolvedRetryTimeoutInMilliseconds) || resolvedRetryTimeoutInMilliseconds < firstRetryIntervalInMilliseconds)
     ) {
       throw new Error("retryTimeoutInMilliseconds must be a finite number greater than or equal to firstRetryIntervalInMilliseconds");
     }
@@ -99,9 +100,9 @@ export class RetryPolicy {
     this._firstRetryIntervalInMilliseconds = firstRetryIntervalInMilliseconds;
     this._backoffCoefficient = backoffCoefficient;
     // Default to 1 hour (3600000ms) if not specified, -1 means infinite
-    this._maxRetryIntervalInMilliseconds = maxRetryIntervalInMilliseconds ?? 3600000;
+    this._maxRetryIntervalInMilliseconds = resolvedMaxRetryIntervalInMilliseconds;
     // Default to -1 (infinite) if not specified
-    this._retryTimeoutInMilliseconds = retryTimeoutInMilliseconds ?? -1;
+    this._retryTimeoutInMilliseconds = resolvedRetryTimeoutInMilliseconds;
     // Default to always retry (return true for all failures)
     this._handleFailure = handleFailure ?? (() => true);
   }

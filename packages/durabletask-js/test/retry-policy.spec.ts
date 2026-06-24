@@ -90,6 +90,16 @@ describe("RetryPolicy", () => {
       }).toThrow("maxRetryIntervalInMilliseconds must be a finite number greater than or equal to firstRetryIntervalInMilliseconds");
     });
 
+    it("should throw error when default maxRetryInterval is less than firstRetryInterval", () => {
+      // Arrange & Act & Assert
+      expect(() => {
+        new RetryPolicy({
+          maxNumberOfAttempts: 3,
+          firstRetryIntervalInMilliseconds: 3600001,
+        });
+      }).toThrow("maxRetryIntervalInMilliseconds must be a finite number greater than or equal to firstRetryIntervalInMilliseconds");
+    });
+
     it("should throw error when retryTimeoutInMilliseconds is less than firstRetryInterval", () => {
       // Arrange & Act & Assert
       expect(() => {
