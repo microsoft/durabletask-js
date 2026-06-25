@@ -63,43 +63,46 @@ export class RetryPolicy {
       retryTimeoutInMilliseconds,
       handleFailure,
     } = options;
+    const resolvedMaxRetryIntervalInMilliseconds = maxRetryIntervalInMilliseconds ?? 3600000;
+    const resolvedRetryTimeoutInMilliseconds = retryTimeoutInMilliseconds ?? -1;
 
     // Validation aligned with .NET SDK
-    if (maxNumberOfAttempts <= 0) {
-      throw new Error("maxNumberOfAttempts must be greater than zero");
+    // Use !Number.isFinite() guards to reject NaN and Infinity, which bypass
+    // comparison operators silently (e.g. NaN <= 0 is false).
+    if (!Number.isFinite(maxNumberOfAttempts) || maxNumberOfAttempts <= 0) {
+      throw new Error("maxNumberOfAttempts must be a finite number greater than zero");
     }
 
-    if (firstRetryIntervalInMilliseconds <= 0) {
-      throw new Error("firstRetryIntervalInMilliseconds must be greater than zero");
+    if (!Number.isFinite(firstRetryIntervalInMilliseconds) || firstRetryIntervalInMilliseconds <= 0) {
+      throw new Error("firstRetryIntervalInMilliseconds must be a finite number greater than zero");
     }
 
-    if (backoffCoefficient < 1.0) {
-      throw new Error("backoffCoefficient must be greater than or equal to 1.0");
-    }
-
-    if (
-      maxRetryIntervalInMilliseconds !== undefined &&
-      maxRetryIntervalInMilliseconds !== -1 &&
-      maxRetryIntervalInMilliseconds < firstRetryIntervalInMilliseconds
-    ) {
-      throw new Error("maxRetryIntervalInMilliseconds must be greater than or equal to firstRetryIntervalInMilliseconds");
+    if (!Number.isFinite(backoffCoefficient) || backoffCoefficient < 1.0) {
+      throw new Error("backoffCoefficient must be a finite number greater than or equal to 1.0");
     }
 
     if (
-      retryTimeoutInMilliseconds !== undefined &&
-      retryTimeoutInMilliseconds !== -1 &&
-      retryTimeoutInMilliseconds < firstRetryIntervalInMilliseconds
+      resolvedMaxRetryIntervalInMilliseconds !== -1 &&
+      (!Number.isFinite(resolvedMaxRetryIntervalInMilliseconds) ||
+        resolvedMaxRetryIntervalInMilliseconds < firstRetryIntervalInMilliseconds)
     ) {
-      throw new Error("retryTimeoutInMilliseconds must be greater than or equal to firstRetryIntervalInMilliseconds");
+      throw new Error("maxRetryIntervalInMilliseconds must be a finite number greater than or equal to firstRetryIntervalInMilliseconds");
+    }
+
+    if (
+      resolvedRetryTimeoutInMilliseconds !== -1 &&
+      (!Number.isFinite(resolvedRetryTimeoutInMilliseconds) || resolvedRetryTimeoutInMilliseconds < firstRetryIntervalInMilliseconds)
+    ) {
+      throw new Error("retryTimeoutInMilliseconds must be a finite number greater than or equal to firstRetryIntervalInMilliseconds");
     }
 
     this._maxNumberOfAttempts = maxNumberOfAttempts;
     this._firstRetryIntervalInMilliseconds = firstRetryIntervalInMilliseconds;
     this._backoffCoefficient = backoffCoefficient;
     // Default to 1 hour (3600000ms) if not specified, -1 means infinite
-    this._maxRetryIntervalInMilliseconds = maxRetryIntervalInMilliseconds ?? 3600000;
+    this._maxRetryIntervalInMilliseconds = resolvedMaxRetryIntervalInMilliseconds;
     // Default to -1 (infinite) if not specified
-    this._retryTimeoutInMilliseconds = retryTimeoutInMilliseconds ?? -1;
+    this._retryTimeoutInMilliseconds = resolvedRetryTimeoutInMilliseconds;
     // Default to always retry (return true for all failures)
     this._handleFailure = handleFailure ?? (() => true);
   }
