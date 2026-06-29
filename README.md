@@ -21,7 +21,7 @@ const orchestrationResponseBytes = await worker.processOrchestratorRequest(orche
 const entityResponseBytes = await worker.processEntityBatchRequest(entityBatchRequestBytes);
 ```
 
-`TaskHubGrpcClient` connects to a gRPC endpoint using `new TaskHubGrpcClient({ endpoint, taskHub })` or the existing `hostAddress` option. It exposes orchestration start/query/event/terminate/suspend/resume/purge APIs and entity signal/read/query/clean APIs. Azure-managed scheduler connection strings remain in `@microsoft/durabletask-js-azuremanaged`.
+`TaskHubGrpcClient` already exposes orchestration start/query/event/terminate/suspend/resume/purge APIs and entity signal/read/query/clean APIs through its existing `hostAddress` and `metadataGenerator` options. Host integrations that need task-hub routing metadata should provide it through `metadataGenerator`, keeping host-specific metadata policy outside the core client. Azure-managed scheduler connection strings remain in `@microsoft/durabletask-js-azuremanaged`.
 
 ## npm packages
 

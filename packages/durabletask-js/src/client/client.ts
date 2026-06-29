@@ -51,33 +51,12 @@ import {
 // Re-export MetadataGenerator for backward compatibility
 export { MetadataGenerator } from "../utils/grpc-helper.util";
 
-function createMetadataGenerator(
-  metadataGenerator?: MetadataGenerator,
-  taskHub?: string,
-): MetadataGenerator | undefined {
-  if (!taskHub) {
-    return metadataGenerator;
-  }
-
-  return async () => {
-    const metadata = metadataGenerator ? await metadataGenerator() : new grpc.Metadata();
-    if (metadata.get("taskhub").length === 0) {
-      metadata.set("taskhub", taskHub);
-    }
-    return metadata;
-  };
-}
-
 /**
  * Options for creating a TaskHubGrpcClient.
  */
 export interface TaskHubGrpcClientOptions {
   /** The host address to connect to. Defaults to "localhost:4001". */
   hostAddress?: string;
-  /** Alias for hostAddress, intended for host integrations that expose an endpoint setting. */
-  endpoint?: string;
-  /** Optional task hub name to send as gRPC metadata using the "taskhub" key. */
-  taskHub?: string;
   /** gRPC channel options. */
   options?: grpc.ChannelOptions;
   /** Whether to use TLS. Defaults to false. */
@@ -144,18 +123,16 @@ export class TaskHubGrpcClient {
     let resolvedMetadataGenerator: MetadataGenerator | undefined;
     let resolvedLogger: Logger | undefined;
     let resolvedDefaultVersion: string | undefined;
-    let resolvedTaskHub: string | undefined;
 
     if (typeof hostAddressOrOptions === "object" && hostAddressOrOptions !== null) {
       // Options object constructor
-      resolvedHostAddress = hostAddressOrOptions.hostAddress ?? hostAddressOrOptions.endpoint;
+      resolvedHostAddress = hostAddressOrOptions.hostAddress;
       resolvedOptions = hostAddressOrOptions.options;
       resolvedUseTLS = hostAddressOrOptions.useTLS;
       resolvedCredentials = hostAddressOrOptions.credentials;
       resolvedMetadataGenerator = hostAddressOrOptions.metadataGenerator;
       resolvedLogger = hostAddressOrOptions.logger;
       resolvedDefaultVersion = hostAddressOrOptions.defaultVersion;
-      resolvedTaskHub = hostAddressOrOptions.taskHub;
     } else {
       // Deprecated positional parameters constructor
       resolvedHostAddress = hostAddressOrOptions;
@@ -167,7 +144,7 @@ export class TaskHubGrpcClient {
     }
 
     this._stub = new GrpcClient(resolvedHostAddress, resolvedOptions, resolvedUseTLS, resolvedCredentials).stub;
-    this._metadataGenerator = createMetadataGenerator(resolvedMetadataGenerator, resolvedTaskHub);
+    this._metadataGenerator = resolvedMetadataGenerator;
     this._logger = resolvedLogger ?? new ConsoleLogger();
     this._defaultVersion = resolvedDefaultVersion;
   }
