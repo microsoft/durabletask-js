@@ -7,6 +7,22 @@ This repo contains a JavaScript/TypeScript SDK for use with the [Azure Durable T
 
 > Note that this SDK does **not** provide the [Azure Durable Functions](https://learn.microsoft.com/azure/azure-functions/durable/durable-functions-overview) programming model, decorators, or worker-indexing metadata. If you are looking for a JavaScript SDK for Azure Durable Functions, please see [this repo](https://github.com/Azure/azure-functions-durable-js). This package exposes low-level TaskHubSidecarService gRPC/protobuf helpers that host integrations can reuse; those helpers follow this package's Node.js 22+ requirement.
 
+## Low-level host integration APIs
+
+Host integrations that already own trigger metadata and transport encoding can depend on the `@microsoft/durabletask-js` package directly. `TaskHubGrpcWorker` registers orchestrators, activities, and entities, and can process raw TaskHubSidecarService protobuf payloads without starting the long-running gRPC worker loop:
+
+```typescript
+const worker = new TaskHubGrpcWorker();
+worker.addOrchestrator(myOrchestrator);
+worker.addActivity(myActivity);
+worker.addEntity(myEntity);
+
+const orchestrationResponseBytes = await worker.processOrchestratorRequest(orchestrationRequestBytes);
+const entityResponseBytes = await worker.processEntityBatchRequest(entityBatchRequestBytes);
+```
+
+`TaskHubGrpcClient` connects to a gRPC endpoint using `new TaskHubGrpcClient({ endpoint, taskHub })` or the existing `hostAddress` option. It exposes orchestration start/query/event/terminate/suspend/resume/purge APIs and entity signal/read/query/clean APIs. Azure-managed scheduler connection strings remain in `@microsoft/durabletask-js-azuremanaged`.
+
 ## npm packages
 
 The following npm packages are available for download.

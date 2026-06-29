@@ -105,6 +105,25 @@ describe("Functions gRPC support surface", () => {
     expect(completed?.getResult()?.getValue()).toBe('"done"');
   });
 
+  it("processes serialized orchestration request bytes", async () => {
+    const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+    const orchestrator: TOrchestrator = async (_ctx: OrchestrationContext) => "done";
+    const name = worker.addOrchestrator(orchestrator);
+
+    const request = new OrchestratorRequest();
+    request.setInstanceid(TEST_INSTANCE_ID);
+    request.setNeweventsList([
+      newOrchestratorStartedEvent(new Date("2026-01-01T00:00:00.000Z")),
+      newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined),
+    ]);
+
+    const responseBytes = await worker.processOrchestratorRequest(Buffer.from(request.serializeBinary()));
+    const response = OrchestratorResponse.deserializeBinary(responseBytes);
+
+    expect(response.getInstanceid()).toBe(TEST_INSTANCE_ID);
+    expect(response.getActionsList()[0].getCompleteorchestration()?.getResult()?.getValue()).toBe('"done"');
+  });
+
   it("executes a single entity batch request without using the gRPC worker loop", async () => {
     const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
     worker.addNamedEntity("counter", () => new CounterEntity());
@@ -116,6 +135,18 @@ describe("Functions gRPC support surface", () => {
 
     expect(response.getCompletiontoken()).toBe(COMPLETION_TOKEN);
     expect(response.getResultsList()).toHaveLength(1);
+    expect(response.getResultsList()[0].getSuccess()?.getResult()?.getValue()).toBe("1");
+    expect(response.getEntitystate()?.getValue()).toBe("1");
+  });
+
+  it("processes serialized entity batch request bytes", async () => {
+    const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+    worker.addNamedEntity("counter", () => new CounterEntity());
+
+    const request = createEntityBatchRequest("counter", "key1");
+    const responseBytes = await worker.processEntityBatchRequest(request.serializeBinary());
+    const response = EntityBatchResult.deserializeBinary(responseBytes);
+
     expect(response.getResultsList()[0].getSuccess()?.getResult()?.getValue()).toBe("1");
     expect(response.getEntitystate()?.getValue()).toBe("1");
   });

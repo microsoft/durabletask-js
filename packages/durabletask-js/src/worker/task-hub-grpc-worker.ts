@@ -339,6 +339,20 @@ export class TaskHubGrpcWorker {
   }
 
   /**
+   * Processes a serialized TaskHubSidecarService OrchestratorRequest and returns
+   * the serialized OrchestratorResponse.
+   *
+   * @remarks
+   * Host integrations should handle any transport-specific base64 conversion and
+   * pass raw protobuf bytes to this method.
+   */
+  async processOrchestratorRequest(request: Uint8Array | Buffer): Promise<Uint8Array> {
+    const req = pb.OrchestratorRequest.deserializeBinary(request);
+    const response = await this.executeOrchestratorRequest(req);
+    return response.serializeBinary();
+  }
+
+  /**
    * Executes a single entity batch request and returns the result without
    * completing it over gRPC.
    *
@@ -358,6 +372,20 @@ export class TaskHubGrpcWorker {
       completionToken,
       { logger: this._logger, versioning: this._versioning },
     );
+  }
+
+  /**
+   * Processes a serialized TaskHubSidecarService EntityBatchRequest and returns
+   * the serialized EntityBatchResult.
+   *
+   * @remarks
+   * Host integrations should handle any transport-specific base64 conversion and
+   * pass raw protobuf bytes to this method.
+   */
+  async processEntityBatchRequest(request: Uint8Array | Buffer): Promise<Uint8Array> {
+    const req = pb.EntityBatchRequest.deserializeBinary(request);
+    const response = await this.executeEntityBatchRequest(req);
+    return response.serializeBinary();
   }
 
   /**
