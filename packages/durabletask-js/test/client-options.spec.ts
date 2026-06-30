@@ -38,6 +38,5 @@ describe("TaskHubGrpcClient", () => {
 
       expect(client).toBeDefined();
     });
-
   });
 });

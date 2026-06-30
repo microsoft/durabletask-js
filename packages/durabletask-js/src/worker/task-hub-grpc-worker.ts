@@ -13,25 +13,30 @@ import { GrpcClient } from "../client/client-grpc";
 import { Empty } from "google-protobuf/google/protobuf/empty_pb";
 import * as pbh from "../utils/pb-helper.util";
 import { callWithMetadata, MetadataGenerator } from "../utils/grpc-helper.util";
+import { OrchestrationExecutor } from "./orchestration-executor";
 import { ActivityExecutor } from "./activity-executor";
+import { TaskEntityShim } from "./entity-executor";
+import { EntityInstanceId } from "../entities/entity-instance-id";
 import { EntityFactory } from "../entities/task-entity";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 import { Logger, ConsoleLogger } from "../types/logger.type";
 import { ExponentialBackoff, sleep, withTimeout } from "../utils/backoff.util";
-import { VersioningOptions } from "./versioning-options";
+import { VersioningOptions, VersionMatchStrategy, VersionFailureStrategy } from "./versioning-options";
 import { WorkItemFilters, generateWorkItemFiltersFromRegistry, toGrpcWorkItemFilters } from "./work-item-filters";
+import { compareVersions } from "../utils/versioning.util";
 import * as WorkerLogs from "./logs";
 import {
+  DurableTaskAttributes,
+  startSpanForOrchestrationExecution,
   startSpanForTaskExecution,
+  processActionsForTracing,
+  createOrchestrationTraceContextPb,
+  setOrchestrationStatusFromActions,
+  processNewEventsForTracing,
   setSpanError,
   setSpanOk,
   endSpan,
 } from "../tracing";
-import {
-  executeEntityBatchWorkItem,
-  executeEntityWorkItem,
-  executeOrchestratorWorkItem,
-} from "./work-item-executor";
 
 /** Default timeout in milliseconds for graceful shutdown. */
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30000;
@@ -309,99 +314,55 @@ export class TaskHubGrpcWorker {
   }
 
   /**
-   * Executes a single orchestration request and returns the response without
-   * completing it over gRPC.
+   * Processes a single serialized TaskHubSidecarService OrchestratorRequest and
+   * returns the serialized OrchestratorResponse.
+   *
+   * @param request - The protobuf-encoded OrchestratorRequest bytes.
+   * @returns The protobuf-encoded OrchestratorResponse bytes.
    *
    * @remarks
-   * This is intended for host integrations, such as Azure Functions, that
-   * receive a base64-encoded TaskHubSidecarService OrchestratorRequest and need
-   * to return a base64-encoded OrchestratorResponse. It follows this package's
-   * runtime support matrix, which currently requires Node.js 22 or higher.
+   * This is intended for host integrations, such as Azure Functions, that drive a
+   * single orchestration work item per invocation instead of running the
+   * long-lived gRPC worker loop. It reuses the same execution path as the worker
+   * loop, capturing the response in-process rather than completing it over gRPC.
+   * Host integrations own any transport-specific encoding (for example base64).
    */
-  async executeOrchestratorRequest(
-    req: pb.OrchestratorRequest,
-    completionToken: string = "",
-  ): Promise<pb.OrchestratorResponse> {
-    const result = await executeOrchestratorWorkItem(
-      this._registry,
-      req,
-      completionToken,
-      { logger: this._logger, versioning: this._versioning },
-    );
+  async processOrchestratorRequest(request: Uint8Array): Promise<Uint8Array> {
+    const req = pb.OrchestratorRequest.deserializeBinary(request);
+    const stub = new CapturingSidecarStub();
+    await this._executeOrchestratorInternal(req, "", stub as unknown as stubs.TaskHubSidecarServiceClient);
 
-    if (result.kind === "abandoned") {
-      throw new Error(
-        `Orchestrator work item was rejected: ${result.errorMessage ?? result.errorType ?? "unknown reason"}`,
-      );
+    if (!stub.orchestratorResponse) {
+      throw new Error("Orchestrator execution did not produce a response.");
     }
 
-    return result.response;
+    return stub.orchestratorResponse.serializeBinary();
   }
 
   /**
-   * Processes a serialized TaskHubSidecarService OrchestratorRequest and returns
-   * the serialized OrchestratorResponse.
+   * Processes a single serialized TaskHubSidecarService EntityBatchRequest and
+   * returns the serialized EntityBatchResult.
+   *
+   * @param request - The protobuf-encoded EntityBatchRequest bytes.
+   * @returns The protobuf-encoded EntityBatchResult bytes.
    *
    * @remarks
-   * Host integrations should handle any transport-specific base64 conversion and
-   * pass raw protobuf bytes to this method.
+   * This is intended for host integrations, such as Azure Functions, that drive a
+   * single entity batch work item per invocation instead of running the
+   * long-lived gRPC worker loop. It reuses the same execution path as the worker
+   * loop, capturing the result in-process rather than completing it over gRPC.
+   * Host integrations own any transport-specific encoding (for example base64).
    */
-  async processOrchestratorRequest(request: Uint8Array | Buffer): Promise<Uint8Array> {
-    const req = pb.OrchestratorRequest.deserializeBinary(request);
-    const response = await this.executeOrchestratorRequest(req);
-    return response.serializeBinary();
-  }
-
-  /**
-   * Executes a single entity batch request and returns the result without
-   * completing it over gRPC.
-   *
-   * @remarks
-   * This is intended for host integrations, such as Azure Functions, that
-   * receive a base64-encoded TaskHubSidecarService EntityBatchRequest and need
-   * to return a base64-encoded EntityBatchResult. It follows this package's
-   * runtime support matrix, which currently requires Node.js 22 or higher.
-   */
-  async executeEntityBatchRequest(
-    req: pb.EntityBatchRequest,
-    completionToken: string = "",
-  ): Promise<pb.EntityBatchResult> {
-    return executeEntityBatchWorkItem(
-      this._registry,
-      req,
-      completionToken,
-      { logger: this._logger, versioning: this._versioning },
-    );
-  }
-
-  /**
-   * Processes a serialized TaskHubSidecarService EntityBatchRequest and returns
-   * the serialized EntityBatchResult.
-   *
-   * @remarks
-   * Host integrations should handle any transport-specific base64 conversion and
-   * pass raw protobuf bytes to this method.
-   */
-  async processEntityBatchRequest(request: Uint8Array | Buffer): Promise<Uint8Array> {
+  async processEntityBatchRequest(request: Uint8Array): Promise<Uint8Array> {
     const req = pb.EntityBatchRequest.deserializeBinary(request);
-    const response = await this.executeEntityBatchRequest(req);
-    return response.serializeBinary();
-  }
+    const stub = new CapturingSidecarStub();
+    await this._executeEntityInternal(req, "", stub as unknown as stubs.TaskHubSidecarServiceClient);
 
-  /**
-   * Executes a single V2 entity request and returns the batch result without
-   * completing it over gRPC.
-   */
-  async executeEntityRequest(
-    req: pb.EntityRequest,
-    completionToken: string = "",
-  ): Promise<pb.EntityBatchResult> {
-    return executeEntityWorkItem(
-      this._registry,
-      req,
-      completionToken,
-      { logger: this._logger, versioning: this._versioning },
-    );
+    if (!stub.entityResult) {
+      throw new Error("Entity batch execution did not produce a result.");
+    }
+
+    return stub.entityResult.serializeBinary();
   }
 
   /**
@@ -615,6 +576,88 @@ export class TaskHubGrpcWorker {
     return request;
   }
 
+  /**
+   * Result of version compatibility check.
+   */
+  private _checkVersionCompatibility(req: pb.OrchestratorRequest): {
+    compatible: boolean;
+    shouldFail: boolean;
+    orchestrationVersion?: string;
+    errorType?: string;
+    errorMessage?: string;
+  } {
+    // If no versioning options configured or match strategy is None, always compatible
+    if (!this._versioning || this._versioning.matchStrategy === VersionMatchStrategy.None) {
+      return { compatible: true, shouldFail: false };
+    }
+
+    // Extract orchestration version from ExecutionStarted event
+    const orchestrationVersion = this._getOrchestrationVersion(req);
+    const workerVersion = this._versioning.version;
+
+    // If worker version is not set, process all
+    if (!workerVersion) {
+      return { compatible: true, shouldFail: false };
+    }
+
+    let compatible = false;
+    let errorType = "VersionMismatch";
+    let errorMessage = "";
+
+    switch (this._versioning.matchStrategy) {
+      case VersionMatchStrategy.Strict:
+        // Only process if versions match (using semantic comparison)
+        compatible = compareVersions(orchestrationVersion, workerVersion) === 0;
+        if (!compatible) {
+          errorMessage = `The orchestration version '${orchestrationVersion ?? ""}' does not match the worker version '${workerVersion}'.`;
+        }
+        break;
+
+      case VersionMatchStrategy.CurrentOrOlder:
+        // Process if orchestration version is current or older
+        if (!orchestrationVersion) {
+          // Empty orchestration version is considered older
+          compatible = true;
+        } else {
+          compatible = compareVersions(orchestrationVersion, workerVersion) <= 0;
+          if (!compatible) {
+            errorMessage = `The orchestration version '${orchestrationVersion}' is greater than the worker version '${workerVersion}'.`;
+          }
+        }
+        break;
+
+      default:
+        // Unknown match strategy - treat as version error
+        compatible = false;
+        errorType = "VersionError";
+        errorMessage = `The version match strategy '${this._versioning.matchStrategy}' is unknown.`;
+        break;
+    }
+
+    if (!compatible) {
+      const shouldFail = this._versioning.failureStrategy === VersionFailureStrategy.Fail;
+      return { compatible: false, shouldFail, orchestrationVersion, errorType, errorMessage };
+    }
+
+    return { compatible: true, shouldFail: false };
+  }
+
+  /**
+   * Extracts the orchestration version from the ExecutionStarted event in the request.
+   */
+  private _getOrchestrationVersion(req: pb.OrchestratorRequest): string | undefined {
+    // Look for ExecutionStarted event in both past and new events
+    const allEvents = [...req.getPasteventsList(), ...req.getNeweventsList()];
+
+    for (const event of allEvents) {
+      if (event.hasExecutionstarted()) {
+        return event.getExecutionstarted()?.getVersion()?.getValue();
+      }
+    }
+
+    return undefined;
+  }
+
   private _trackPendingWorkItem(workPromise: Promise<void>, onError: (error: Error) => void): void {
     const handledPromise = workPromise
       .catch((e: unknown) => {
@@ -650,29 +693,165 @@ export class TaskHubGrpcWorker {
     completionToken: string,
     stub: stubs.TaskHubSidecarServiceClient,
   ): Promise<void> {
-    const result = await executeOrchestratorWorkItem(
-      this._registry,
-      req,
-      completionToken,
-      { logger: this._logger, versioning: this._versioning },
-    );
+    const instanceId = req.getInstanceid();
 
-    if (result.kind === "abandoned") {
-      try {
-        await callWithMetadata(
-          stub.abandonTaskOrchestratorWorkItem.bind(stub),
-          result.abandonRequest,
-          this._metadataGenerator,
+    if (!instanceId) {
+      throw new Error(`Could not execute the orchestrator as the instanceId was not provided (${instanceId})`);
+    }
+
+    // Check version compatibility if versioning is enabled
+    const versionCheckResult = this._checkVersionCompatibility(req);
+    if (!versionCheckResult.compatible) {
+      if (versionCheckResult.shouldFail) {
+        // Fail the orchestration with version mismatch error
+        WorkerLogs.versionMismatchFail(
+          this._logger,
+          instanceId,
+          versionCheckResult.errorType!,
+          versionCheckResult.errorMessage!,
         );
-      } catch (e: unknown) {
-        const error = e instanceof Error ? e : new Error(String(e));
-        WorkerLogs.completionError(this._logger, req.getInstanceid(), error);
+
+        const failureDetails = pbh.newVersionMismatchFailureDetails(
+          versionCheckResult.errorType!,
+          versionCheckResult.errorMessage!,
+        );
+
+        const actions = [
+          pbh.newCompleteOrchestrationAction(
+            -1,
+            pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+            undefined,
+            failureDetails,
+          ),
+        ];
+
+        const res = new pb.OrchestratorResponse();
+        res.setInstanceid(instanceId);
+        res.setCompletiontoken(completionToken);
+        res.setActionsList(actions);
+
+        try {
+          await callWithMetadata(stub.completeOrchestratorTask.bind(stub), res, this._metadataGenerator);
+        } catch (e: unknown) {
+          const error = e instanceof Error ? e : new Error(String(e));
+          WorkerLogs.completionError(this._logger, instanceId, error);
+        }
+        return;
+      } else {
+        // Reject the work item - explicitly abandon it so it can be picked up by another worker
+        WorkerLogs.versionMismatchAbandon(
+          this._logger,
+          instanceId,
+          versionCheckResult.errorType!,
+          versionCheckResult.errorMessage!,
+        );
+
+        try {
+          const abandonRequest = new pb.AbandonOrchestrationTaskRequest();
+          abandonRequest.setCompletiontoken(completionToken);
+          await callWithMetadata(stub.abandonTaskOrchestratorWorkItem.bind(stub), abandonRequest, this._metadataGenerator);
+        } catch (e: unknown) {
+          const error = e instanceof Error ? e : new Error(String(e));
+          WorkerLogs.completionError(this._logger, instanceId, error);
+        }
+        return;
       }
-      return;
+    }
+
+    // Find the ExecutionStartedEvent from either past or new events for tracing
+    const allProtoEvents = [...req.getPasteventsList(), ...req.getNeweventsList()];
+    let executionStartedProtoEvent: pb.ExecutionStartedEvent | undefined;
+    for (const protoEvent of allProtoEvents) {
+      if (protoEvent.hasExecutionstarted()) {
+        executionStartedProtoEvent = protoEvent.getExecutionstarted()!;
+        break;
+      }
+    }
+
+    // Start the orchestration span BEFORE execution so failures are traced
+    const orchTraceContext = req.getOrchestrationtracecontext();
+    const tracingResult = executionStartedProtoEvent
+      ? startSpanForOrchestrationExecution(executionStartedProtoEvent, orchTraceContext, instanceId)
+      : undefined;
+
+    // Emit retroactive spans for tasks/sub-orchestrations that completed/failed and timers
+    // that fired. This follows the .NET SDK pattern where these spans are emitted from
+    // history events BEFORE the orchestrator executor runs.
+    const orchName = executionStartedProtoEvent?.getName() ?? "";
+    if (tracingResult) {
+      processNewEventsForTracing(
+        tracingResult.span,
+        req.getPasteventsList(),
+        req.getNeweventsList(),
+        instanceId,
+        orchName,
+      );
+    }
+
+    let res;
+
+    try {
+      const executor = new OrchestrationExecutor(this._registry, this._logger);
+      const result = await executor.execute(req.getInstanceid(), req.getPasteventsList(), req.getNeweventsList());
+
+      // Process actions to inject trace context into scheduled tasks, sub-orchestrations, etc.
+      if (tracingResult) {
+        const executionId = req.getExecutionid()?.getValue();
+        processActionsForTracing(tracingResult.span, result.actions, orchName, instanceId, executionId);
+      }
+
+      res = new pb.OrchestratorResponse();
+      res.setInstanceid(req.getInstanceid());
+      res.setCompletiontoken(completionToken);
+      res.setActionsList(result.actions);
+      if (result.customStatus !== undefined) {
+        res.setCustomstatus(pbh.getStringValue(result.customStatus));
+      }
+
+      // Set the OrchestrationTraceContext on the response for replay continuity
+      if (tracingResult) {
+        const orchTraceCtxPb = createOrchestrationTraceContextPb(tracingResult.spanInfo);
+        res.setOrchestrationtracecontext(orchTraceCtxPb);
+
+        // Set orchestration completion status attribute and span status
+        // (OK for success, ERROR for failed orchestrations — matching .NET)
+        setOrchestrationStatusFromActions(tracingResult.span, result.actions);
+      }
+    } catch (e: unknown) {
+      const error = e instanceof Error ? e : new Error(String(e));
+      WorkerLogs.executionError(this._logger, req.getInstanceid(), error);
+
+      // Record the failure on the tracing span
+      if (tracingResult) {
+        setSpanError(tracingResult.span, error);
+        // Set just the status attribute — don't call setOrchestrationStatusFromActions
+        // which would overwrite the specific error message with a generic one
+        tracingResult.span.setAttribute(DurableTaskAttributes.TASK_STATUS, "Failed");
+      }
+
+      const failureDetails = pbh.newFailureDetails(error);
+
+      const actions = [
+        pbh.newCompleteOrchestrationAction(
+          -1,
+          pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+          undefined,
+          failureDetails,
+        ),
+      ];
+
+      res = new pb.OrchestratorResponse();
+      res.setInstanceid(req.getInstanceid());
+      res.setCompletiontoken(completionToken);
+      res.setActionsList(actions);
+    } finally {
+      // Always end the orchestration span, regardless of success or failure.
+      // Status (OK/Error) is set in the respective try/catch branches above.
+      endSpan(tracingResult?.span);
     }
 
     try {
-      await callWithMetadata(stub.completeOrchestratorTask.bind(stub), result.response, this._metadataGenerator);
+      await callWithMetadata(stub.completeOrchestratorTask.bind(stub), res, this._metadataGenerator);
     } catch (e: unknown) {
       const error = e instanceof Error ? e : new Error(String(e));
       WorkerLogs.completionError(this._logger, req.getInstanceid(), error);
@@ -784,8 +963,8 @@ export class TaskHubGrpcWorker {
    * @param operationInfos - Optional V2 operation info list to include in the result.
    *
    * @remarks
-   * This method delegates execution to the shared single-work-item executor and sends the
-   * result back to the sidecar.
+   * This method looks up the entity by name, creates a TaskEntityShim, executes the batch,
+   * and sends the result back to the sidecar.
    */
   private async _executeEntityInternal(
     req: pb.EntityBatchRequest,
@@ -793,13 +972,69 @@ export class TaskHubGrpcWorker {
     stub: stubs.TaskHubSidecarServiceClient,
     operationInfos?: pb.OperationInfo[],
   ): Promise<void> {
-    const batchResult = await executeEntityBatchWorkItem(
-      this._registry,
-      req,
-      completionToken,
-      { logger: this._logger, versioning: this._versioning },
-      operationInfos,
-    );
+    const instanceIdString = req.getInstanceid();
+
+    if (!instanceIdString) {
+      throw new Error("Entity request does not contain an instance id");
+    }
+
+    // Parse the entity instance ID (format: @name@key)
+    let entityId: EntityInstanceId;
+    try {
+      entityId = EntityInstanceId.fromString(instanceIdString);
+    } catch (e: any) {
+      WorkerLogs.entityInstanceIdParseError(this._logger, instanceIdString, e);
+      // Return error result for all operations
+      const batchResult = this._createEntityNotFoundResult(
+        req,
+        completionToken,
+        `Invalid entity instance id format: '${instanceIdString}'`,
+      );
+      await this._sendEntityResult(batchResult, stub);
+      return;
+    }
+
+    let batchResult: pb.EntityBatchResult;
+
+    try {
+      // Look up the entity factory by name
+      const factory = this._registry.getEntity(entityId.name);
+
+      if (factory) {
+        // Create the entity instance and execute the batch
+        const entity = factory();
+        const shim = new TaskEntityShim(entity, entityId);
+        batchResult = await shim.executeAsync(req);
+        batchResult.setCompletiontoken(completionToken);
+      } else {
+        // Entity not found - return error result for all operations
+        WorkerLogs.entityNotFound(this._logger, entityId.name);
+        batchResult = this._createEntityNotFoundResult(
+          req,
+          completionToken,
+          `No entity task named '${entityId.name}' was found.`,
+        );
+      }
+    } catch (e: any) {
+      // Framework-level error - return result with failure details
+      // This will cause the batch to be abandoned and retried
+      WorkerLogs.entityExecutionFailed(this._logger, entityId.name, e);
+
+      const failureDetails = pbh.newFailureDetails(e);
+
+      batchResult = new pb.EntityBatchResult();
+      batchResult.setCompletiontoken(completionToken);
+      batchResult.setFailuredetails(failureDetails);
+    }
+
+    // Add V2 operationInfos if provided (used by DTS backend)
+    if (operationInfos && operationInfos.length > 0) {
+      // Take only as many operationInfos as there are results
+      const resultsCount = batchResult.getResultsList().length;
+      const infosToInclude = operationInfos.slice(0, resultsCount || operationInfos.length);
+      batchResult.setOperationinfosList(infosToInclude);
+    }
+
     await this._sendEntityResult(batchResult, stub);
   }
 
@@ -825,21 +1060,139 @@ export class TaskHubGrpcWorker {
    * @param stub - The gRPC stub for completing the task.
    *
    * @remarks
-   * This method delegates V2 entity execution to the shared single-work-item executor and
-   * sends the result back to the sidecar.
+   * This method handles the V2 entity request format which uses HistoryEvent
+   * instead of OperationRequest. It converts the V2 format to V1 format
+   * (EntityBatchRequest) and delegates to the existing execution logic.
    */
   private async _executeEntityV2Internal(
     req: pb.EntityRequest,
     completionToken: string,
     stub: stubs.TaskHubSidecarServiceClient,
   ): Promise<void> {
-    const batchResult = await executeEntityWorkItem(
-      this._registry,
-      req,
-      completionToken,
-      { logger: this._logger, versioning: this._versioning },
-    );
-    await this._sendEntityResult(batchResult, stub);
+    // Convert EntityRequest (V2) to EntityBatchRequest (V1) format
+    const batchRequest = new pb.EntityBatchRequest();
+    batchRequest.setInstanceid(req.getInstanceid());
+
+    // Copy entity state
+    const entityState = req.getEntitystate();
+    if (entityState) {
+      batchRequest.setEntitystate(entityState);
+    }
+
+    // Convert HistoryEvent operations to OperationRequest format
+    // Also build the operationInfos list for V2 responses
+    const historyEvents = req.getOperationrequestsList();
+    const operations: pb.OperationRequest[] = [];
+    const operationInfos: pb.OperationInfo[] = [];
+
+    for (const event of historyEvents) {
+      const eventType = event.getEventtypeCase();
+
+      if (eventType === pb.HistoryEvent.EventtypeCase.ENTITYOPERATIONSIGNALED) {
+        const signaled = event.getEntityoperationsignaled();
+        if (signaled) {
+          const opRequest = new pb.OperationRequest();
+          opRequest.setOperation(signaled.getOperation());
+          opRequest.setRequestid(signaled.getRequestid());
+          const input = signaled.getInput();
+          if (input) {
+            opRequest.setInput(input);
+          }
+          operations.push(opRequest);
+
+          // Build OperationInfo for signaled operations (no response destination)
+          const opInfo = new pb.OperationInfo();
+          opInfo.setRequestid(signaled.getRequestid());
+          // Signals don't send a response, so responseDestination is null
+          operationInfos.push(opInfo);
+        }
+      } else if (eventType === pb.HistoryEvent.EventtypeCase.ENTITYOPERATIONCALLED) {
+        const called = event.getEntityoperationcalled();
+        if (called) {
+          const opRequest = new pb.OperationRequest();
+          opRequest.setOperation(called.getOperation());
+          opRequest.setRequestid(called.getRequestid());
+          const input = called.getInput();
+          if (input) {
+            opRequest.setInput(input);
+          }
+          operations.push(opRequest);
+
+          // Build OperationInfo for called operations (with response destination)
+          const opInfo = new pb.OperationInfo();
+          opInfo.setRequestid(called.getRequestid());
+
+          // Called operations send responses to the parent orchestration
+          const parentInstanceId = called.getParentinstanceid();
+          const parentExecutionId = called.getParentexecutionid();
+          if (parentInstanceId || parentExecutionId) {
+            const responseDestination = new pb.OrchestrationInstance();
+            if (parentInstanceId) {
+              responseDestination.setInstanceid(parentInstanceId.getValue());
+            }
+            if (parentExecutionId) {
+              // executionId needs to be wrapped in a StringValue
+              const execIdValue = new StringValue();
+              execIdValue.setValue(parentExecutionId.getValue());
+              responseDestination.setExecutionid(execIdValue);
+            }
+            opInfo.setResponsedestination(responseDestination);
+          }
+          operationInfos.push(opInfo);
+        }
+      } else {
+        WorkerLogs.entityUnknownOperationEventType(this._logger, eventType.toString());
+      }
+    }
+
+    batchRequest.setOperationsList(operations);
+
+    // Delegate to the V1 execution logic with V2 operationInfos
+    await this._executeEntityInternal(batchRequest, completionToken, stub, operationInfos);
+  }
+
+  /**
+   * Creates an EntityBatchResult for when an entity is not found.
+   *
+   * @remarks
+   * Returns a non-retriable error for each operation in the batch.
+   */
+  private _createEntityNotFoundResult(
+    req: pb.EntityBatchRequest,
+    completionToken: string,
+    errorMessage: string,
+  ): pb.EntityBatchResult {
+    const batchResult = new pb.EntityBatchResult();
+    batchResult.setCompletiontoken(completionToken);
+
+    // State is unmodified - return the original state
+    const originalState = req.getEntitystate();
+    if (originalState) {
+      batchResult.setEntitystate(originalState);
+    }
+
+    // Create a failure result for each operation in the batch
+    const operations = req.getOperationsList();
+    const results: pb.OperationResult[] = [];
+
+    for (let i = 0; i < operations.length; i++) {
+      const result = new pb.OperationResult();
+      const failure = new pb.OperationResultFailure();
+      const failureDetails = new pb.TaskFailureDetails();
+
+      failureDetails.setErrortype("EntityTaskNotFound");
+      failureDetails.setErrormessage(errorMessage);
+      failureDetails.setIsnonretriable(true);
+
+      failure.setFailuredetails(failureDetails);
+      result.setFailure(failure);
+      results.push(result);
+    }
+
+    batchResult.setResultsList(results);
+    batchResult.setActionsList([]);
+
+    return batchResult;
   }
 
   /**
@@ -854,5 +1207,48 @@ export class TaskHubGrpcWorker {
     } catch (e: any) {
       WorkerLogs.entityResponseDeliveryFailed(this._logger, e);
     }
+  }
+}
+
+/**
+ * A minimal in-process stand-in for the TaskHubSidecarService client that captures the
+ * completion payload instead of sending it over gRPC.
+ *
+ * @remarks
+ * This lets host integrations reuse the worker's existing execution path for a single work
+ * item (see {@link TaskHubGrpcWorker.processOrchestratorRequest} and
+ * {@link TaskHubGrpcWorker.processEntityBatchRequest}) without opening a gRPC channel. Only the
+ * completion/abandon methods used by those execution paths are implemented.
+ */
+class CapturingSidecarStub {
+  orchestratorResponse?: pb.OrchestratorResponse;
+  entityResult?: pb.EntityBatchResult;
+  abandonRequest?: pb.AbandonOrchestrationTaskRequest;
+
+  completeOrchestratorTask(
+    request: pb.OrchestratorResponse,
+    _metadata: grpc.Metadata,
+    callback: (error: grpc.ServiceError | null, response: Empty) => void,
+  ): void {
+    this.orchestratorResponse = request;
+    callback(null, new Empty());
+  }
+
+  completeEntityTask(
+    request: pb.EntityBatchResult,
+    _metadata: grpc.Metadata,
+    callback: (error: grpc.ServiceError | null, response: Empty) => void,
+  ): void {
+    this.entityResult = request;
+    callback(null, new Empty());
+  }
+
+  abandonTaskOrchestratorWorkItem(
+    request: pb.AbandonOrchestrationTaskRequest,
+    _metadata: grpc.Metadata,
+    callback: (error: grpc.ServiceError | null, response: Empty) => void,
+  ): void {
+    this.abandonRequest = request;
+    callback(null, new Empty());
   }
 }

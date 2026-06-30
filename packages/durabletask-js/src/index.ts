@@ -4,18 +4,6 @@
 // Client and Worker
 export { TaskHubGrpcClient, TaskHubGrpcClientOptions, MetadataGenerator } from "./client/client";
 export { TaskHubGrpcWorker, TaskHubGrpcWorkerOptions } from "./worker/task-hub-grpc-worker";
-export { Registry } from "./worker/registry";
-export {
-  WorkItemExecutorOptions,
-  CompletedOrchestratorWorkItemResult,
-  AbandonedOrchestratorWorkItemResult,
-  EntityBatchRequestConversion,
-  OrchestratorWorkItemResult,
-  executeOrchestratorWorkItem,
-  executeEntityBatchWorkItem,
-  executeEntityWorkItem,
-  convertEntityRequestToBatchRequest,
-} from "./worker/work-item-executor";
 export { VersioningOptions, VersionMatchStrategy, VersionFailureStrategy } from "./worker/versioning-options";
 export {
   WorkItemFilters,
@@ -80,25 +68,7 @@ export {
 } from "./orchestration/history-event";
 
 // Proto types (for advanced usage)
-export {
-  OrchestrationStatus as ProtoOrchestrationStatus,
-  OrchestratorRequest,
-  OrchestratorResponse,
-  EntityBatchRequest,
-  EntityBatchResult,
-  EntityRequest,
-} from "./proto/orchestrator_service_pb";
-
-// Base64 protobuf helpers for host integrations
-export {
-  decodeBase64Protobuf,
-  encodeBase64Protobuf,
-  decodeOrchestratorRequestFromBase64,
-  encodeOrchestratorResponseToBase64,
-  decodeEntityBatchRequestFromBase64,
-  encodeEntityBatchResultToBase64,
-  decodeEntityRequestFromBase64,
-} from "./protocol/base64-protobuf";
+export { OrchestrationStatus as ProtoOrchestrationStatus } from "./proto/orchestrator_service_pb";
 
 // Failure details
 export { FailureDetails, TaskFailureDetails } from "./task/failure-details";
