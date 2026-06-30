@@ -876,6 +876,30 @@ describe("Orchestration Executor", () => {
     }
   });
 
+  it("should fail the orchestration when waitForExternalEvent is called with an empty name", async () => {
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
+      const res = yield ctx.waitForExternalEvent("");
+      return res;
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+
+    const newEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
+
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+
+    // The orchestration should fail because waitForExternalEvent throws on empty name
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+    );
+    expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain(
+      "'name' is required and cannot be empty",
+    );
+  });
+
   it("should be able to continue-as-new", async () => {
     for (const saveEvent of [true, false]) {
       const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: number): any {
