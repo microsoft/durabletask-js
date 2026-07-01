@@ -3,9 +3,20 @@
 
 import { EntityInstanceId } from "../src/entities/entity-instance-id";
 import { EntityQuery } from "../src/entities/entity-query";
+import { EntityMetadata } from "../src/entities/entity-metadata";
+import { TaskHubGrpcClient } from "../src/client/client";
 import * as pb from "../src/proto/orchestrator_service_pb";
 import { Timestamp } from "google-protobuf/google/protobuf/timestamp_pb";
 import { StringValue, Int32Value } from "google-protobuf/google/protobuf/wrappers_pb";
+
+type EntityMetadataConverter = {
+  convertEntityMetadata<T>(protoMetadata: pb.EntityMetadata, includeState: boolean): EntityMetadata<T>;
+};
+
+function convertEntityMetadata<T>(metadata: pb.EntityMetadata, includeState = false): EntityMetadata<T> {
+  const client = new TaskHubGrpcClient({ hostAddress: "localhost:4001" });
+  return (client as unknown as EntityMetadataConverter).convertEntityMetadata<T>(metadata, includeState);
+}
 
 // Note: These are unit tests for the entity client methods.
 // They test the proto request/response conversion logic.
@@ -285,6 +296,39 @@ describe("Entity Client Proto Conversion", () => {
       // Assert
       expect(metadata.getLockedby()).toBeUndefined();
       expect(metadata.getSerializedstate()).toBeUndefined();
+    });
+
+    it("should default lastModifiedTime to epoch when missing from proto", () => {
+      // Arrange - proto metadata without lastModifiedTime set
+      const metadata = new pb.EntityMetadata();
+      metadata.setInstanceid("@counter@test");
+      metadata.setBacklogqueuesize(0);
+      // No lastModifiedTime set
+
+      // Act
+      const result = convertEntityMetadata(metadata);
+
+      // Assert - should default to epoch (not current time) for consistency
+      // with OrchestrationState's createdAt/lastUpdatedAt defaults
+      expect(result.lastModifiedTime.getTime()).toBe(0);
+    });
+
+    it("should use actual timestamp when lastModifiedTime is present in proto", () => {
+      // Arrange
+      const metadata = new pb.EntityMetadata();
+      metadata.setInstanceid("@counter@test");
+      metadata.setBacklogqueuesize(0);
+
+      const expectedDate = new Date("2026-03-15T10:30:00Z");
+      const ts = new Timestamp();
+      ts.fromDate(expectedDate);
+      metadata.setLastmodifiedtime(ts);
+
+      // Act
+      const result = convertEntityMetadata(metadata);
+
+      // Assert - should use the actual timestamp
+      expect(result.lastModifiedTime.toISOString()).toBe(expectedDate.toISOString());
     });
 
     it("should gracefully handle invalid JSON in serialized state", () => {

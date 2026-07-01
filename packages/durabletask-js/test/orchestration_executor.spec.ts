@@ -5,6 +5,7 @@ import { CompleteOrchestrationAction, OrchestratorAction } from "../src/proto/or
 import { OrchestrationContext } from "../src/task/context/orchestration-context";
 import {
   newEventRaisedEvent,
+  newEventSentEvent,
   newExecutionStartedEvent,
   newOrchestratorStartedEvent,
   newResumeEvent,
@@ -875,6 +876,30 @@ describe("Orchestration Executor", () => {
     }
   });
 
+  it("should fail the orchestration when waitForExternalEvent is called with an empty name", async () => {
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
+      const res = yield ctx.waitForExternalEvent("");
+      return res;
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+
+    const newEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
+
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+
+    // The orchestration should fail because waitForExternalEvent throws on empty name
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+    );
+    expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain(
+      "'name' is required and cannot be empty",
+    );
+  });
+
   it("should be able to continue-as-new", async () => {
     for (const saveEvent of [true, false]) {
       const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: number): any {
@@ -1130,7 +1155,17 @@ describe("Orchestration Executor", () => {
     startTime?: Date,
   ) {
     const registry = new Registry();
-    const name = registry.addOrchestrator(orchestrator);
+    let name: string;
+    try {
+      name = registry.addOrchestrator(orchestrator);
+    } catch (e: unknown) {
+      if (!(e instanceof Error) || e.message !== "A non-empty orchestrator name is required.") {
+        throw e;
+      }
+      // Anonymous inline orchestrators in tests: register with a default name
+      name = "testOrchestrator";
+      registry.addNamedOrchestrator(name, orchestrator);
+    }
     const allEvents = [
       newOrchestratorStartedEvent(startTime),
       newExecutionStartedEvent(name, TEST_INSTANCE_ID, input !== undefined ? JSON.stringify(input) : undefined),
@@ -2116,6 +2151,221 @@ describe("Orchestration Executor", () => {
     const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify("recovered"));
+  });
+
+  it("should not produce duplicate completion actions when setFailed is called after setComplete", async () => {
+    // Scenario: An orchestrator completes immediately (returns without yielding).
+    // During replay, the history has a TaskScheduled event that the orchestrator
+    // did NOT produce (simulating a non-determinism situation). The executor
+    // calls setComplete when the generator finishes, then the subsequent
+    // TaskScheduled event validation fails with a NonDeterminismError.
+    // Without the _isComplete guard in setFailed(), this would produce two
+    // completion actions (one COMPLETED, one FAILED).
+    const immediateOrchestrator: TOrchestrator = async (_ctx: OrchestrationContext) => {
+      return "done";
+    };
+
+    const registry = new Registry();
+    const name = registry.addOrchestrator(immediateOrchestrator);
+
+    // Old events simulate a previous execution that scheduled an activity,
+    // but the current code no longer does that (non-determinism).
+    const oldEvents = [
+      newOrchestratorStartedEvent(new Date()),
+      newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined),
+      // This TaskScheduled event has no matching pending action after the
+      // orchestrator completes immediately, triggering a NonDeterminismError.
+      // Use taskId=99 to avoid colliding with the completeOrchestration action's
+      // sequence number (which would be 1).
+      newTaskScheduledEvent(99, "SomeActivity"),
+    ];
+
+    const newEvents = [newOrchestratorStartedEvent(new Date())];
+
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+
+    // The key assertion: there should be exactly ONE completion action, not two.
+    // The NonDeterminismError that occurs after the generator completes should
+    // override the completion status to FAILED (not produce duplicates).
+    const completeActions = result.actions.filter((a) => a.hasCompleteorchestration());
+    expect(completeActions.length).toEqual(1);
+
+    const completeAction = completeActions[0].getCompleteorchestration()!;
+    expect(completeAction.getOrchestrationstatus()).toEqual(
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+    );
+    expect(completeAction.getFailuredetails()?.getErrortype()).toEqual("NonDeterminismError");
+  });
+});
+
+describe("EventSent Handler", () => {
+  it("should remove sendEvent action from pendingActions on replay when EVENTSENT event is received", async () => {
+    // Orchestrator sends an event then calls an activity
+    const myActivity = () => "activity-result";
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      ctx.sendEvent("target-instance", "my-event", { key: "value" });
+      const result = yield ctx.callActivity(myActivity);
+      return result;
+    };
+
+    const registry = new Registry();
+    const name = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(myActivity);
+
+    // Simulate replay: oldEvents contain the execution start, EventSent confirmation,
+    // TaskScheduled confirmation, and task completion
+    const oldEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(name, "test-instance"),
+      // EventSent confirms the sendEvent action (ID=1 since it's the first action)
+      newEventSentEvent(1, "target-instance", "my-event", JSON.stringify({ key: "value" })),
+      // TaskScheduled confirms the activity action (ID=2)
+      newTaskScheduledEvent(2, activityName),
+      newTaskCompletedEvent(2, JSON.stringify("activity-result")),
+    ];
+
+    const newEvents = [newOrchestratorStartedEvent()];
+
+    const executor = new OrchestrationExecutor(registry);
+    const result = await executor.execute("test-instance", oldEvents, newEvents);
+
+    // Only the complete action should remain - sendEvent should NOT be re-sent
+    expect(result.actions.length).toEqual(1);
+    const action = result.actions[0];
+    expect(action.hasCompleteorchestration()).toBe(true);
+    expect(action.getCompleteorchestration()?.getResult()?.getValue()).toEqual(
+      JSON.stringify("activity-result"),
+    );
+  });
+
+  it("should throw NonDeterminismError when EVENTSENT event name does not match sendEvent action", async () => {
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      ctx.sendEvent("target-instance", "my-event", { key: "value" });
+      yield ctx.createTimer(1);
+    };
+
+    const registry = new Registry();
+    const name = registry.addOrchestrator(orchestrator);
+
+    const oldEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(name, "test-instance"),
+      newEventSentEvent(1, "target-instance", "different-event", JSON.stringify({ key: "value" })),
+    ];
+
+    const executor = new OrchestrationExecutor(registry);
+    const result = await executor.execute("test-instance", oldEvents, [newOrchestratorStartedEvent()]);
+
+    const completeAction = result.actions.find((a) => a.hasCompleteorchestration());
+    expect(completeAction).toBeDefined();
+    expect(completeAction?.getCompleteorchestration()?.getOrchestrationstatus()).toEqual(
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+    );
+    const failureDetails = completeAction?.getCompleteorchestration()?.getFailuredetails();
+    expect(failureDetails?.getErrortype()).toEqual("NonDeterminismError");
+    expect(failureDetails?.getErrormessage()).toContain("different-event");
+    expect(failureDetails?.getErrormessage()).toContain("my-event");
+  });
+
+  it("should throw NonDeterminismError when EVENTSENT target instance does not match sendEvent action", async () => {
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      ctx.sendEvent("target-instance", "my-event", { key: "value" });
+      yield ctx.createTimer(1);
+    };
+
+    const registry = new Registry();
+    const name = registry.addOrchestrator(orchestrator);
+
+    const oldEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(name, "test-instance"),
+      newEventSentEvent(1, "different-target", "my-event", JSON.stringify({ key: "value" })),
+    ];
+
+    const executor = new OrchestrationExecutor(registry);
+    const result = await executor.execute("test-instance", oldEvents, [newOrchestratorStartedEvent()]);
+
+    const completeAction = result.actions.find((a) => a.hasCompleteorchestration());
+    expect(completeAction).toBeDefined();
+    expect(completeAction?.getCompleteorchestration()?.getOrchestrationstatus()).toEqual(
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+    );
+    const failureDetails = completeAction?.getCompleteorchestration()?.getFailuredetails();
+    expect(failureDetails?.getErrortype()).toEqual("NonDeterminismError");
+    expect(failureDetails?.getErrormessage()).toContain("different-target");
+    expect(failureDetails?.getErrormessage()).toContain("target-instance");
+  });
+
+  it("should throw NonDeterminismError when EVENTSENT event has no matching action", async () => {
+    // Orchestrator does NOT call sendEvent but gets an EVENTSENT history event
+    const myActivity = () => "result";
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const result = yield ctx.callActivity(myActivity);
+      return result;
+    };
+
+    const registry = new Registry();
+    const name = registry.addOrchestrator(orchestrator);
+    registry.addActivity(myActivity);
+
+    // oldEvents contain an EVENTSENT event with ID=99 that has no corresponding action
+    const oldEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(name, "test-instance"),
+      newEventSentEvent(99, "target-instance", "phantom-event"),
+    ];
+
+    const newEvents = [newOrchestratorStartedEvent()];
+
+    const executor = new OrchestrationExecutor(registry);
+    const result = await executor.execute("test-instance", oldEvents, newEvents);
+
+    // Should fail with NonDeterminismError
+    const completeAction = result.actions.find((a) => a.hasCompleteorchestration());
+    expect(completeAction).toBeDefined();
+    expect(completeAction?.getCompleteorchestration()?.getOrchestrationstatus()).toEqual(
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+    );
+    const failureDetails = completeAction?.getCompleteorchestration()?.getFailuredetails();
+    expect(failureDetails?.getErrortype()).toEqual("NonDeterminismError");
+    expect(failureDetails?.getErrormessage()).toMatch(/sendEvent.*ID=99/);
+  });
+
+  it("should throw when EVENTSENT event matches a non-sendEvent action type", async () => {
+    // Orchestrator calls an activity (creates ScheduleTask action with ID=1)
+    // but history says ID=1 is an EventSent event
+    const myActivity = () => "result";
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const result = yield ctx.callActivity(myActivity);
+      return result;
+    };
+
+    const registry = new Registry();
+    const name = registry.addOrchestrator(orchestrator);
+    registry.addActivity(myActivity);
+
+    // EVENTSENT event with ID=1 conflicts with ScheduleTask action at ID=1
+    const oldEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(name, "test-instance"),
+      newEventSentEvent(1, "target-instance", "my-event"),
+    ];
+
+    const newEvents = [newOrchestratorStartedEvent()];
+
+    const executor = new OrchestrationExecutor(registry);
+    const result = await executor.execute("test-instance", oldEvents, newEvents);
+
+    // Should fail with NonDeterminismError (wrong action type)
+    const completeAction = result.actions.find((a) => a.hasCompleteorchestration());
+    expect(completeAction).toBeDefined();
+    expect(completeAction?.getCompleteorchestration()?.getOrchestrationstatus()).toEqual(
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+    );
+    const failureDetails = completeAction?.getCompleteorchestration()?.getFailuredetails();
+    expect(failureDetails?.getErrortype()).toEqual("NonDeterminismError");
+    expect(failureDetails?.getErrormessage()).toMatch(/sendEvent/);
   });
 });
 

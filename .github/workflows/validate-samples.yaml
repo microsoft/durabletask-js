@@ -136,10 +136,20 @@ jobs:
             packages/*/node_modules
           key: sdk-build-${{ github.sha }}-node${{ matrix.node-version }}
 
+      - name: 📦 Ensure sample runtime dependencies
+        run: |
+          if [ ! -x ./node_modules/.bin/ts-node ] || \
+             [ ! -d ./node_modules/@swc/core ] || \
+             [ ! -f ./packages/durabletask-js/dist/index.js ] || \
+             [ ! -f ./packages/durabletask-js-azuremanaged/dist/index.js ]; then
+            npm ci
+            npm run build
+          fi
+
       - name: 🧪 Run sample — ${{ matrix.sample }}
         run: |
           echo "Running sample: ${{ matrix.sample }}"
-          npx ts-node --swc ./examples/azure-managed/${{ matrix.sample }}/index.ts
+          npm run example -- ./examples/azure-managed/${{ matrix.sample }}/index.ts
         timeout-minutes: 2
 
   # -----------------------------------------------------------------------
@@ -163,7 +173,17 @@ jobs:
 
       - name: 🐳 Start DTS emulator
         run: |
-          docker pull mcr.microsoft.com/dts/dts-emulator:latest
+          for attempt in 1 2 3; do
+            if docker pull mcr.microsoft.com/dts/dts-emulator:latest; then
+              break
+            fi
+
+            if [ "$attempt" = "3" ]; then
+              exit 1
+            fi
+
+            sleep $((attempt * 10))
+          done
           docker run --name dtsemulator -d -p 8080:8080 mcr.microsoft.com/dts/dts-emulator:latest
 
       - name: ⏳ Wait for DTS emulator
@@ -183,10 +203,20 @@ jobs:
             packages/*/node_modules
           key: sdk-build-${{ github.sha }}-node${{ matrix.node-version }}
 
+      - name: 📦 Ensure sample runtime dependencies
+        run: |
+          if [ ! -x ./node_modules/.bin/ts-node ] || \
+             [ ! -d ./node_modules/@swc/core ] || \
+             [ ! -f ./packages/durabletask-js/dist/index.js ] || \
+             [ ! -f ./packages/durabletask-js-azuremanaged/dist/index.js ]; then
+            npm ci
+            npm run build
+          fi
+
       - name: 🧪 Run sample — ${{ matrix.sample }}
         run: |
           echo "Running sample: ${{ matrix.sample }}"
-          npx ts-node --swc ./examples/azure-managed/${{ matrix.sample }}/index.ts
+          npm run example -- ./examples/azure-managed/${{ matrix.sample }}/index.ts
         timeout-minutes: 5
 
       - name: 🧹 Stop DTS emulator

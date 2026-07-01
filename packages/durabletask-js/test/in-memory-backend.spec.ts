@@ -13,6 +13,7 @@ import {
   Task,
   TOrchestrator,
 } from "../src";
+import * as pb from "../src/proto/orchestrator_service_pb";
 
 describe("In-Memory Backend", () => {
   let backend: InMemoryOrchestrationBackend;
@@ -196,6 +197,57 @@ describe("In-Memory Backend", () => {
     expect(state?.serializedOutput).toContain("caught:");
   });
 
+  it("should set parent instance info on sub-orchestrations", async () => {
+    let capturedParent: import("../src").ParentOrchestrationInstance | undefined;
+
+    const childOrchestrator: TOrchestrator = async (ctx: OrchestrationContext) => {
+      capturedParent = ctx.parent;
+      return "child-done";
+    };
+
+    const parentOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const result = yield ctx.callSubOrchestrator(childOrchestrator);
+      return result;
+    };
+
+    worker.addOrchestrator(childOrchestrator);
+    worker.addOrchestrator(parentOrchestrator);
+    await worker.start();
+
+    const id = await client.scheduleNewOrchestration(parentOrchestrator);
+    const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+
+    // Verify parent instance info was populated on the sub-orchestration context
+    expect(capturedParent).toBeDefined();
+    expect(capturedParent?.name).toEqual(getName(parentOrchestrator));
+    expect(capturedParent?.instanceId).toEqual(id);
+    expect(typeof capturedParent?.taskScheduledId).toEqual("number");
+  });
+
+  it("should not set parent instance info on top-level orchestrations", async () => {
+    let capturedParent: import("../src").ParentOrchestrationInstance | undefined;
+
+    const topLevelOrchestrator: TOrchestrator = async (ctx: OrchestrationContext) => {
+      capturedParent = ctx.parent;
+      return "done";
+    };
+
+    worker.addOrchestrator(topLevelOrchestrator);
+    await worker.start();
+
+    const id = await client.scheduleNewOrchestration(topLevelOrchestrator);
+    const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+
+    // Top-level orchestrations should have no parent
+    expect(capturedParent).toBeUndefined();
+  });
+
   it("should handle external events", async () => {
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
       const value = yield ctx.waitForExternalEvent("my_event");
@@ -277,6 +329,61 @@ describe("In-Memory Backend", () => {
     expect(state).toBeDefined();
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
     expect(state?.serializedOutput).toEqual(JSON.stringify(5));
+  });
+
+  it("should deliver carryover events after ExecutionStarted during continue-as-new", async () => {
+    // This test verifies that carryover events (saved external events) are
+    // delivered AFTER OrchestratorStarted and ExecutionStarted when
+    // continuing-as-new with saveEvents=true. This matches the real sidecar
+    // behavior. If carryover events were delivered before ExecutionStarted,
+    // the orchestrator generator would not be initialized yet.
+    //
+    // Scenario: An external event is raised on the orchestration. The first
+    // iteration does NOT consume it. It continues-as-new with saveEvents=true.
+    // The second iteration should receive the carried-over event.
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: { iteration: number }): any {
+      if (input.iteration === 1) {
+        // Wait for a separate event so the test can deterministically enqueue
+        // the carryover event before continue-as-new runs.
+        yield ctx.waitForExternalEvent("continue");
+        // Do NOT consume the "carry-me" event — it should be carried over
+        ctx.continueAsNew({ iteration: 2 }, true); // saveEvents = true
+      } else {
+        // Second iteration: the carried-over event should be available
+        const val = yield ctx.waitForExternalEvent("carry-me");
+        return val;
+      }
+    };
+
+    worker.addOrchestrator(orchestrator);
+    await worker.start();
+
+    const id = await client.scheduleNewOrchestration(orchestrator, { iteration: 1 });
+
+    // Wait for the orchestration to start and block on the "continue" event.
+    await client.waitForOrchestrationStart(id, false, 5);
+
+    // Raise an external event that the first iteration won't consume
+    await client.raiseOrchestrationEvent(id, "carry-me", "carried-over-payload");
+    await client.raiseOrchestrationEvent(id, "continue");
+
+    // The orchestration should continue-as-new and then complete in iteration 2
+    const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(state?.serializedOutput).toEqual(JSON.stringify("carried-over-payload"));
+
+    const history = backend.getInstance(id)?.history ?? [];
+    const iterationStart = history.findIndex(
+      (event) => event.getEventtypeCase() === pb.HistoryEvent.EventtypeCase.ORCHESTRATORSTARTED,
+    );
+    expect(iterationStart).toBeGreaterThanOrEqual(0);
+    expect(history[iterationStart]?.getEventtypeCase()).toBe(pb.HistoryEvent.EventtypeCase.ORCHESTRATORSTARTED);
+    expect(history[iterationStart + 1]?.getEventtypeCase()).toBe(pb.HistoryEvent.EventtypeCase.EXECUTIONSTARTED);
+    expect(history[iterationStart + 2]?.getEventtypeCase()).toBe(pb.HistoryEvent.EventtypeCase.EVENTRAISED);
+    expect(history[iterationStart + 2]?.getEventraised()?.getName()).toBe("carry-me");
   });
 
   it("should clear customStatus after continue-as-new", async () => {
@@ -529,5 +636,186 @@ describe("In-Memory Backend", () => {
     backend.reset();
 
     await expect(waitPromise).rejects.toThrow("Backend was reset");
+  });
+
+  describe("suspend and resume status", () => {
+    it("should update status to SUSPENDED when suspend is called", async () => {
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        yield ctx.waitForExternalEvent("proceed");
+        return "done";
+      };
+
+      worker.addOrchestrator(orchestrator);
+      await worker.start();
+
+      const id = await client.scheduleNewOrchestration(orchestrator);
+      await client.waitForOrchestrationStart(id, false, 10);
+
+      await client.suspendOrchestration(id);
+
+      const state = await client.getOrchestrationState(id);
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.SUSPENDED);
+    });
+
+    it("should update status to RUNNING when resume is called after suspend", async () => {
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        yield ctx.waitForExternalEvent("proceed");
+        return "done";
+      };
+
+      worker.addOrchestrator(orchestrator);
+      await worker.start();
+
+      const id = await client.scheduleNewOrchestration(orchestrator);
+      await client.waitForOrchestrationStart(id, false, 10);
+
+      await client.suspendOrchestration(id);
+      let state = await client.getOrchestrationState(id);
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.SUSPENDED);
+
+      await client.resumeOrchestration(id);
+      state = await client.getOrchestrationState(id);
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.RUNNING);
+    });
+
+    it("should complete successfully after suspend and resume", async () => {
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        const val: number = yield ctx.waitForExternalEvent("proceed");
+        return val * 2;
+      };
+
+      worker.addOrchestrator(orchestrator);
+      await worker.start();
+
+      const id = await client.scheduleNewOrchestration(orchestrator);
+      await client.waitForOrchestrationStart(id, false, 10);
+
+      // Suspend the orchestration
+      await client.suspendOrchestration(id);
+      let state = await client.getOrchestrationState(id);
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.SUSPENDED);
+
+      // Send an event while suspended (will be buffered)
+      await client.raiseOrchestrationEvent(id, "proceed", 21);
+
+      // Resume the orchestration
+      await client.resumeOrchestration(id);
+
+      // Wait for completion — the buffered event should be processed
+      state = await client.waitForOrchestrationCompletion(id, true, 10);
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+      expect(state?.serializedOutput).toEqual(JSON.stringify(42));
+    });
+
+    it("should be idempotent when suspend is called twice", async () => {
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        yield ctx.waitForExternalEvent("proceed");
+        return "done";
+      };
+
+      worker.addOrchestrator(orchestrator);
+      await worker.start();
+
+      const id = await client.scheduleNewOrchestration(orchestrator);
+      await client.waitForOrchestrationStart(id, false, 10);
+
+      // Call suspend twice — should not throw
+      await client.suspendOrchestration(id);
+      await client.suspendOrchestration(id);
+
+      const state = await client.getOrchestrationState(id);
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.SUSPENDED);
+    });
+
+    it("should notify state waiters on resume", async () => {
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        yield ctx.waitForExternalEvent("proceed");
+        return "done";
+      };
+
+      worker.addOrchestrator(orchestrator);
+      await worker.start();
+
+      const id = await client.scheduleNewOrchestration(orchestrator);
+      await client.waitForOrchestrationStart(id, false, 10);
+
+      await client.suspendOrchestration(id);
+
+      // Set up a waiter for RUNNING status, then resume
+      const runningPromise = backend.waitForState(
+        id,
+        (inst) => backend.toClientStatus(inst.status) === OrchestrationStatus.RUNNING,
+        5000,
+      );
+
+      await client.resumeOrchestration(id);
+
+      const runningInstance = await runningPromise;
+      expect(runningInstance).toBeDefined();
+      expect(backend.toClientStatus(runningInstance!.status)).toEqual(OrchestrationStatus.RUNNING);
+    });
+
+    it("should be a no-op when suspending a completed instance", async () => {
+      // eslint-disable-next-line require-yield
+      const orchestrator: TOrchestrator = async function* (_ctx: OrchestrationContext): any {
+        return "done";
+      };
+
+      worker.addOrchestrator(orchestrator);
+      await worker.start();
+
+      const id = await client.scheduleNewOrchestration(orchestrator);
+      const state = await client.waitForOrchestrationCompletion(id, true, 10);
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+
+      // Suspend on a completed instance should be a no-op
+      await client.suspendOrchestration(id);
+      const afterSuspend = await client.getOrchestrationState(id);
+      expect(afterSuspend?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    });
+
+    it("should be a no-op when resuming a non-suspended instance", async () => {
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        yield ctx.waitForExternalEvent("proceed");
+        return "done";
+      };
+
+      worker.addOrchestrator(orchestrator);
+      await worker.start();
+
+      const id = await client.scheduleNewOrchestration(orchestrator);
+      await client.waitForOrchestrationStart(id, false, 10);
+
+      // Resume on a RUNNING (non-suspended) instance should be a no-op
+      await client.resumeOrchestration(id);
+      const state = await client.getOrchestrationState(id);
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.RUNNING);
+    });
+
+    it("should notify state waiters on suspend", async () => {
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        yield ctx.waitForExternalEvent("proceed");
+        return "done";
+      };
+
+      worker.addOrchestrator(orchestrator);
+      await worker.start();
+
+      const id = await client.scheduleNewOrchestration(orchestrator);
+      await client.waitForOrchestrationStart(id, false, 10);
+
+      // Set up a waiter for SUSPENDED status, then suspend
+      const suspendedPromise = backend.waitForState(
+        id,
+        (inst) => backend.toClientStatus(inst.status) === OrchestrationStatus.SUSPENDED,
+        5000,
+      );
+
+      await client.suspendOrchestration(id);
+
+      const suspendedInstance = await suspendedPromise;
+      expect(suspendedInstance).toBeDefined();
+      expect(backend.toClientStatus(suspendedInstance!.status)).toEqual(OrchestrationStatus.SUSPENDED);
+    });
   });
 });

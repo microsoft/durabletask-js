@@ -4,6 +4,7 @@
 import * as pb from "../proto/orchestrator_service_pb";
 import * as pbh from "../utils/pb-helper.util";
 import { OrchestrationStatus as ClientOrchestrationStatus } from "../orchestration/enum/orchestration-status.enum";
+import { ParentOrchestrationInstance } from "../types/parent-orchestration-instance.type";
 
 /**
  * Internal orchestration instance state stored by the in-memory backend.
@@ -82,6 +83,7 @@ export class InMemoryOrchestrationBackend {
     name: string,
     input?: string,
     scheduledStartTime?: Date,
+    parentInstance?: ParentOrchestrationInstance,
   ): string {
     if (this.instances.has(instanceId)) {
       throw new Error(`Orchestration instance '${instanceId}' already exists`);
@@ -104,7 +106,7 @@ export class InMemoryOrchestrationBackend {
 
     // Add initial events to start the orchestration
     const orchestratorStarted = pbh.newOrchestratorStartedEvent(startTime);
-    const executionStarted = pbh.newExecutionStartedEvent(name, instanceId, input);
+    const executionStarted = pbh.newExecutionStartedEvent(name, instanceId, input, parentInstance);
 
     instance.pendingEvents.push(orchestratorStarted);
     instance.pendingEvents.push(executionStarted);
@@ -172,9 +174,17 @@ export class InMemoryOrchestrationBackend {
       throw new Error(`Orchestration instance '${instanceId}' not found`);
     }
 
+    if (this.isTerminalStatus(instance.status)) {
+      return; // Cannot suspend a completed/failed/terminated instance
+    }
+
     if (instance.status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_SUSPENDED) {
       return;
     }
+
+    // Update status immediately to match real sidecar behavior, where the
+    // suspend RPC transitions the orchestration to SUSPENDED right away.
+    instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_SUSPENDED;
 
     const event = pbh.newSuspendEvent();
     instance.pendingEvents.push(event);
@@ -183,6 +193,8 @@ export class InMemoryOrchestrationBackend {
     if (!this.orchestrationQueueSet.has(instanceId)) {
       this.enqueueOrchestration(instanceId);
     }
+
+    this.notifyWaiters(instanceId);
   }
 
   /**
@@ -194,6 +206,18 @@ export class InMemoryOrchestrationBackend {
       throw new Error(`Orchestration instance '${instanceId}' not found`);
     }
 
+    // No-op for terminal or non-suspended instances
+    if (this.isTerminalStatus(instance.status)) {
+      return;
+    }
+
+    if (instance.status !== pb.OrchestrationStatus.ORCHESTRATION_STATUS_SUSPENDED) {
+      return;
+    }
+
+    // Transition from SUSPENDED back to RUNNING to match real sidecar behavior.
+    instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING;
+
     const event = pbh.newResumeEvent();
     instance.pendingEvents.push(event);
     instance.lastUpdatedAt = new Date();
@@ -201,6 +225,8 @@ export class InMemoryOrchestrationBackend {
     if (!this.orchestrationQueueSet.has(instanceId)) {
       this.enqueueOrchestration(instanceId);
     }
+
+    this.notifyWaiters(instanceId);
   }
 
   /**
@@ -493,14 +519,15 @@ export class InMemoryOrchestrationBackend {
       instance.failureDetails = undefined;
       instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_PENDING;
 
-      // Add carryover events
-      instance.pendingEvents = [...carryoverEvents];
-
-      // Add new execution started events
+      // Add new execution started events first, then carryover events.
+      // This matches the real sidecar behavior where OrchestratorStarted and
+      // ExecutionStarted always precede any carryover events (buffered external
+      // events from the previous iteration). OrchestratorStarted must come first
+      // because it sets currentUtcDateTime, and ExecutionStarted must come before
+      // carryover events because it initializes the orchestrator generator.
       const orchestratorStarted = pbh.newOrchestratorStartedEvent(new Date());
       const executionStarted = pbh.newExecutionStartedEvent(instance.name, instance.instanceId, newInput);
-      instance.pendingEvents.push(orchestratorStarted);
-      instance.pendingEvents.push(executionStarted);
+      instance.pendingEvents = [orchestratorStarted, executionStarted, ...carryoverEvents];
 
       this.enqueueOrchestration(instance.instanceId);
     }
@@ -580,9 +607,13 @@ export class InMemoryOrchestrationBackend {
       instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING;
     }
 
-    // Create the sub-orchestration
+    // Create the sub-orchestration with parent instance info
     try {
-      this.createInstance(subInstanceId, name, input);
+      this.createInstance(subInstanceId, name, input, undefined, {
+        name: instance.name,
+        instanceId: instance.instanceId,
+        taskScheduledId: taskId,
+      });
 
       // Watch for sub-orchestration completion
       this.watchSubOrchestration(instance.instanceId, subInstanceId, taskId);

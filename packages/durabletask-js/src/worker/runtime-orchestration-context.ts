@@ -224,6 +224,17 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   }
 
   setFailed(e: Error) {
+    // If already complete, remove the previous completion action to prevent
+    // duplicate completion actions in the response
+    if (this._isComplete) {
+      for (const [id, action] of Object.entries(this._pendingActions)) {
+        if (action.hasCompleteorchestration()) {
+          delete this._pendingActions[Number(id)];
+          break;
+        }
+      }
+    }
+
     this._isComplete = true;
     this._completionStatus = pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED;
     // Note: Do NOT clear pending actions here - fire-and-forget actions like sendEvent
@@ -360,6 +371,10 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   }
 
   waitForExternalEvent<T>(name: string): Task<T> {
+    if (!name) {
+      throw new Error("waitForExternalEvent: 'name' is required and cannot be empty.");
+    }
+
     // Check to see if this event has already been received, in which case we
     // can return it immediately. Otherwise, record out intent to receive an
     // event with the given name so that we can resume the generator when it
@@ -439,6 +454,14 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
    * Sends an event to another orchestration instance.
    */
   sendEvent(instanceId: string, eventName: string, eventData?: any): void {
+    if (!instanceId) {
+      throw new Error("sendEvent: 'instanceId' is required and cannot be empty.");
+    }
+
+    if (!eventName) {
+      throw new Error("sendEvent: 'eventName' is required and cannot be empty.");
+    }
+
     const id = this.nextSequenceNumber();
     const encodedData = eventData !== undefined ? JSON.stringify(eventData) : undefined;
     const action = ph.newSendEventAction(id, instanceId, eventName, encodedData);
@@ -863,9 +886,15 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
       throw new Error("Must not enter another critical section from within a critical section.");
     }
 
-    // Sort entities for deterministic ordering (prevents deadlocks)
-    // Use the string representation for consistent ordering
-    const sortedEntities = [...entityIds].sort((a, b) => a.toString().localeCompare(b.toString()));
+    // Sort entities for deterministic ordering (prevents deadlocks).
+    // Use ordinal (UTF-16 code unit) comparison for cross-platform consistency,
+    // matching .NET's StringComparer.Ordinal. localeCompare() is locale-dependent
+    // and can produce different orderings on different machines/locales.
+    const sortedEntities = [...entityIds].sort((a, b) => {
+      const aStr = a.toString();
+      const bStr = b.toString();
+      return aStr < bStr ? -1 : aStr > bStr ? 1 : 0;
+    });
 
     // Remove duplicates
     const uniqueEntities: EntityInstanceId[] = [];
