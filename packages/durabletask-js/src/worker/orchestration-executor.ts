@@ -610,7 +610,6 @@ export class OrchestrationExecutor {
         pendingCall.entityId,
         pendingCall.operationName,
         unknownFailure,
-        failedEvent?.getFailuredetails(),
       );
       pendingCall.task.failWithError(exception);
     } else {
@@ -618,7 +617,6 @@ export class OrchestrationExecutor {
         pendingCall.entityId,
         pendingCall.operationName,
         failureDetails,
-        failedEvent?.getFailuredetails(),
       );
       pendingCall.task.failWithError(exception);
     }

@@ -66,7 +66,7 @@ describe("EntityOperationFailedException", () => {
       expect(exception instanceof EntityOperationFailedException).toBe(true);
     });
 
-    it("should be instanceof TaskFailedError", () => {
+    it("should not be instanceof TaskFailedError", () => {
       // Arrange
       const entityId = new EntityInstanceId("counter", "my-counter");
       const failureDetails: TaskFailureDetails = {
@@ -78,10 +78,7 @@ describe("EntityOperationFailedException", () => {
       const exception = new EntityOperationFailedException(entityId, "op", failureDetails);
 
       // Assert
-      expect(exception instanceof TaskFailedError).toBe(true);
-      expect(exception.details).toBeDefined();
-      expect(exception.details.errorType).toBe("Error");
-      expect(exception.details.message).toBe("Something went wrong");
+      expect(exception instanceof TaskFailedError).toBe(false);
     });
 
     it("should include stack trace", () => {

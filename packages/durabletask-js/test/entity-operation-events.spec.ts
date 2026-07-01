@@ -6,7 +6,6 @@ import { Registry } from "../src/worker/registry";
 import { OrchestrationContext } from "../src/task/context/orchestration-context";
 import { EntityInstanceId } from "../src/entities/entity-instance-id";
 import { EntityOperationFailedException } from "../src/entities/entity-operation-failed-exception";
-import { TaskFailedError } from "../src/task/exception/task-failed-error";
 import * as pb from "../src/proto/orchestrator_service_pb";
 import * as ph from "../src/utils/pb-helper.util";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
@@ -230,7 +229,6 @@ describe("OrchestrationExecutor Entity Operation Events", () => {
       // Assert - error should be EntityOperationFailedException
       expect(caughtError).toBeDefined();
       expect(caughtError).toBeInstanceOf(EntityOperationFailedException);
-      expect(caughtError).toBeInstanceOf(TaskFailedError);
       expect(caughtError!.message).toContain("badOperation");
       expect(caughtError!.message).toContain("Operation not supported");
 
@@ -281,7 +279,7 @@ describe("OrchestrationExecutor Entity Operation Events", () => {
       expect(completeAction.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
     });
 
-    it("should throw EntityOperationFailedException with TaskFailedError details when uncaught", async () => {
+    it("should throw EntityOperationFailedException details when uncaught", async () => {
       // Arrange — verify the uncaught path produces an EntityOperationFailedException in the
       // orchestration failure details message, matching the documented API contract
       const orchestrator = async function* (ctx: OrchestrationContext): AsyncGenerator<Task<number>, string, number> {

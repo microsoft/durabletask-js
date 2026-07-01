@@ -40,10 +40,10 @@ export class CompletableTask<T> extends Task<T> {
 
   /**
    * Fails the task with a pre-constructed error.
-   * Use this when a more specific error subclass (e.g., EntityOperationFailedException)
+   * Use this when a more specific error type (e.g., EntityOperationFailedException)
    * should be preserved as the task's exception rather than wrapping in a generic TaskFailedError.
    */
-  failWithError(error: TaskFailedError): void {
+  failWithError(error: Error): void {
     if (this._isComplete) {
       throw new Error("Task is already completed");
     }
