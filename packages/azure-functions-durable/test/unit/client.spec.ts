@@ -102,10 +102,7 @@ describe("DurableFunctionsClient", () => {
   });
 
   it("mirrors the Azure Functions gRPC metadata interceptor", async () => {
-    const metadata = await createAzureFunctionsMetadataGenerator(
-      "functions-taskhub",
-      "code=secret",
-    )();
+    const metadata = await createAzureFunctionsMetadataGenerator("functions-taskhub")();
 
     expect(metadata.get("taskhub")).toEqual(["functions-taskhub"]);
     expect(metadata.get("x-user-agent")[0]).toMatch(/^durable-functions\//);

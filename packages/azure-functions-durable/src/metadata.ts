@@ -7,7 +7,6 @@ import { getUserAgent } from "./user-agent";
 
 export function createAzureFunctionsMetadataGenerator(
   taskHubName: string,
-  _requiredQueryStringParameters: string = "",
 ): MetadataGenerator {
   const userAgent = getUserAgent();
 

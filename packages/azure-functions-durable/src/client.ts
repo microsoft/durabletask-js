@@ -45,10 +45,7 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
     super({
       hostAddress: getGrpcHostAddress(rpcBaseUrl),
       useTLS: false,
-      metadataGenerator: createAzureFunctionsMetadataGenerator(
-        taskHubName,
-        requiredQueryStringParameters,
-      ),
+      metadataGenerator: createAzureFunctionsMetadataGenerator(taskHubName),
     });
 
     this.taskHubName = taskHubName;
