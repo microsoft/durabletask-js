@@ -29,7 +29,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/microsoft/durabletask-js.git",
-    "directory": "packages/azure-functions-durable-js"
+    "directory": "packages/azure-functions-durable"
   },
   "keywords": [
     "azure-functions",
@@ -44,7 +44,7 @@
   "bugs": {
     "url": "https://github.com/microsoft/durabletask-js/issues"
   },
-  "homepage": "https://github.com/microsoft/durabletask-js/tree/main/packages/azure-functions-durable-js#readme",
+  "homepage": "https://github.com/microsoft/durabletask-js/tree/main/packages/azure-functions-durable#readme",
   "engines": {
     "node": ">=22.0.0"
   },
