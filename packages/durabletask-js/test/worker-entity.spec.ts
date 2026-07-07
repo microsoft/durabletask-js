@@ -434,8 +434,7 @@ describe("TaskHubGrpcWorker", () => {
       expect(result.getOperationinfosList()[1].getRequestid()).toBe("req-2");
     });
 
-    it("should include zero operationInfos when entity run() throws on V2 execution", async () => {
-      // Arrange - entity whose run() throws
+    it("should include operationInfos matching result count when entity run() throws on V2 execution", async () => {
       const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
 
       class ThrowingEntity implements ITaskEntity {
