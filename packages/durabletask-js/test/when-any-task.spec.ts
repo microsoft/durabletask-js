@@ -148,4 +148,25 @@ describe("WhenAnyTask", () => {
     expect(task.isComplete).toBe(false);
     expect(task.isFailed).toBe(false);
   });
+
+  // Issue #217: a failed completion settles WhenAny immediately and is treated the
+  // same as a successful one — failures are not tracked separately, so a later
+  // successful child does not override the already-settled failed child.
+  it("should keep the first failed child as the result even if a later child succeeds", () => {
+    const child1 = new CompletableTask<number>();
+    const child2 = new CompletableTask<number>();
+    const task = new WhenAnyTask([child1, child2]);
+
+    child1.fail("first failed");
+
+    expect(task.isComplete).toBe(true);
+    // WhenAny itself is not failed — it simply returns the settled (failed) child.
+    expect(task.isFailed).toBe(false);
+    expect(task.getResult()).toBe(child1);
+
+    // A subsequent successful completion must not replace the already-settled failed child.
+    child2.complete(99);
+    expect(task.getResult()).toBe(child1);
+    expect(task.getResult().isFailed).toBe(true);
+  });
 });
