@@ -12,8 +12,9 @@ This preview includes the low-level host integration pieces:
 - HTTP management payload helpers for Durable HTTP starter responses.
 - `DurableFunctionsWorker`, which accepts base64-encoded protobuf work-item payloads from the Functions host and delegates execution to the core worker byte processors.
 - `addDurableGrpcMetadata`, which stamps `durableRequiresGrpc: true` onto durable trigger and client binding metadata.
+- The authoring model (`app.orchestration` / `app.activity` / `app.entity`, `input.durableClient`, `getClient`) and a **classic (v3) backward-compatibility** layer (see below).
 
-The full Durable Functions JavaScript authoring model is not included yet. Use `@microsoft/durabletask-js` APIs directly for orchestrator, activity, and entity implementations in this phase.
+Orchestrator, activity, and entity bodies can be written either in the core `@microsoft/durabletask-js` style or in the classic `durable-functions` v3 style; both run on the gRPC engine.
 
 ## Client binding
 
@@ -62,16 +63,64 @@ worker.addOrchestrator(myOrchestrator);
 const encodedResponse = await worker.handleOrchestratorRequest(encodedRequest);
 ```
 
-## Phase 2 plan
+## Classic (v3) backward compatibility
 
-Phase 2 will port the full Durable Functions JavaScript authoring surface onto the core SDK. Planned work:
+Orchestrators and entities may be written in the legacy `durable-functions` v3 style. The style is
+detected by parameter count and adapted onto the core engine — the classic API surface forwards to
+the core context, it does not re-implement the v3 replay engine.
 
-- `src/app.ts`: add `DFApp` and `Blueprint` equivalents that mirror Python `decorators/durable_app.py` and register Azure Functions v4 handlers.
-- `src/decorators/`: add durable trigger and durable client binding helpers that call `addDurableGrpcMetadata` and emit `durableRequiresGrpc: true`.
-- `src/orchestrator.ts`: add an `Orchestrator` wrapper that converts Functions invocation payloads into `DurableFunctionsWorker.handleOrchestratorRequest` calls.
-- `src/entity.ts`: add entity handler glue over `DurableFunctionsWorker.handleEntityBatchRequest`.
-- `src/input.ts`: add a durable client input helper that constructs `DurableFunctionsClient` from the host binding payload.
-- `test/authoring/`: add parity tests for `DFApp`, `Blueprint`, orchestration trigger registration, entity trigger registration, durable client input registration, and generated binding metadata.
+- **Classic orchestrator** — a single-parameter generator using `context.df.*`:
+
+  ```typescript
+  import * as df from "durable-functions";
+
+  df.app.orchestration("helloOrchestrator", function* (context) {
+    const input = context.df.getInput();
+    const retry = new df.RetryOptions(5000, 3);
+    const r = yield context.df.callActivityWithRetry("sayHello", retry, input);
+    const all = yield context.df.Task.all([context.df.callActivity("a"), context.df.callActivity("b")]);
+    return [r, all];
+  });
+  ```
+
+- **Core-native orchestrator** — a two-parameter `(ctx, input)` generator using `ctx.*`, passed through unchanged:
+
+  ```typescript
+  df.app.orchestration("helloOrchestrator", async function* (ctx, input) {
+    return yield ctx.callActivity("sayHello", input);
+  });
+  ```
+
+- **Classic entity** — a single-parameter function using `context.df.*`; core-native zero-argument
+  `EntityFactory` handlers pass through unchanged:
+
+  ```typescript
+  df.app.entity("Counter", (context) => {
+    const current = context.df.getState(() => 0);
+    switch (context.df.operationName) {
+      case "add": context.df.setState(current + context.df.getInput()); break;
+      case "get": context.df.setResult(current); break;
+    }
+  });
+  ```
+
+`RetryOptions` and the deprecated `DurableOrchestrationClient` alias are also provided for source
+compatibility.
+
+## Phase 2 status
+
+Implemented in this phase:
+
+- `src/app.ts`: `app.orchestration` / `app.activity` / `app.entity` registration over a shared worker.
+- `src/trigger.ts` / `src/input.ts`: durable triggers and the `durableClient` input binding, all emitting `durableRequiresGrpc: true`.
+- `src/get-client.ts`: `getClient(context)` constructs a `DurableFunctionsClient` from the host binding.
+- `src/orchestration-context.ts` / `src/entity-context.ts`: classic (v3) `context.df.*` adapters plus `wrapOrchestrator` / `wrapEntity`.
+- `src/retry-options.ts`: classic `RetryOptions` mapping to the core `RetryPolicy`.
+- `src/orchestration-status.ts` / `src/entity-state-response.ts` / `src/purge-history-result.ts`: classic (v3) client query-return types (`DurableOrchestrationStatus`, `OrchestrationRuntimeStatus`, `EntityStateResponse`, `PurgeHistoryResult`), surfaced through `DurableFunctionsClient.getStatus` / `readEntityState` / `purgeInstanceHistory`. `context.df.callHttp` is present but throws (no durabletask durable-HTTP equivalent).
+
+Deferred:
+
+- **Functions data converter.** The core SDK serializes at the protobuf string boundary with plain `JSON.stringify` / `JSON.parse` and exposes no pluggable converter injection point, so the Python provider's `FunctionsDataConverter` (custom-object `{__class__,__module__,__data__}` envelope) cannot be ported here without a core change. This package keeps the plain-JSON contract for now.
 
 Open questions for the Functions extension team:
 

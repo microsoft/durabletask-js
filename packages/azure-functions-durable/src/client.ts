@@ -2,12 +2,25 @@
 // Licensed under the MIT License.
 
 import { HttpRequest, HttpResponse } from "@azure/functions";
-import { TaskHubGrpcClient } from "@microsoft/durabletask-js";
+import {
+  EntityInstanceId,
+  OrchestrationQuery,
+  OrchestrationStatus,
+  TaskHubGrpcClient,
+} from "@microsoft/durabletask-js";
 import {
   HttpManagementPayload,
   createHttpManagementPayload as createPayload,
 } from "./http-management-payload";
+import { EntityStateResponse } from "./entity-state-response";
 import { createAzureFunctionsMetadataGenerator } from "./metadata";
+import {
+  DurableOrchestrationStatus,
+  OrchestrationRuntimeStatus,
+  fromOrchestrationRuntimeStatus,
+  toDurableOrchestrationStatus,
+} from "./orchestration-status";
+import { PurgeHistoryResult } from "./purge-history-result";
 
 export interface DurableFunctionsClientConfig {
   taskHubName?: string;
@@ -41,11 +54,21 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
     const taskHubName = config.taskHubName ?? "";
     const requiredQueryStringParameters = config.requiredQueryStringParameters ?? "";
     const rpcBaseUrl = requireString(config.rpcBaseUrl, "rpcBaseUrl");
+    const maxGrpcMessageSizeInBytes = config.maxGrpcMessageSizeInBytes ?? 0;
 
     super({
       hostAddress: getGrpcHostAddress(rpcBaseUrl),
       useTLS: false,
       metadataGenerator: createAzureFunctionsMetadataGenerator(taskHubName),
+      // Honor the host-provided gRPC message size limit, matching the Python provider. When unset
+      // (0), the gRPC library defaults are left in place.
+      options:
+        maxGrpcMessageSizeInBytes > 0
+          ? {
+              "grpc.max_receive_message_length": maxGrpcMessageSizeInBytes,
+              "grpc.max_send_message_length": maxGrpcMessageSizeInBytes,
+            }
+          : undefined,
     });
 
     this.taskHubName = taskHubName;
@@ -56,7 +79,7 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
     this.requiredQueryStringParameters = requiredQueryStringParameters;
     this.rpcBaseUrl = rpcBaseUrl;
     this.httpBaseUrl = config.httpBaseUrl ?? "";
-    this.maxGrpcMessageSizeInBytes = config.maxGrpcMessageSizeInBytes ?? 0;
+    this.maxGrpcMessageSizeInBytes = maxGrpcMessageSizeInBytes;
     this.grpcHttpClientTimeout = config.grpcHttpClientTimeout;
   }
 
@@ -77,7 +100,155 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
     const instanceStatusUrl = getInstanceStatusUrl(request, instanceId);
     return createPayload(instanceId, instanceStatusUrl, this.requiredQueryStringParameters);
   }
+
+  /**
+   * Starts a new orchestration instance (classic Durable Functions v3 `startNew` alias).
+   *
+   * @param orchestratorName - The name of the orchestrator to start.
+   * @param options - Optional input and instance ID.
+   * @returns The instance ID of the started orchestration.
+   */
+  async startNew(
+    orchestratorName: string,
+    options?: { input?: unknown; instanceId?: string },
+  ): Promise<string> {
+    return this.scheduleNewOrchestration(
+      orchestratorName,
+      options?.input,
+      options?.instanceId !== undefined ? { instanceId: options.instanceId } : undefined,
+    );
+  }
+
+  /**
+   * Gets the status of an orchestration instance in the classic Durable Functions (v3) shape.
+   *
+   * @param instanceId - The ID of the orchestration instance to query.
+   * @param options - When `showInput` is `false`, input/output payloads are not fetched.
+   * @returns The instance status, or `undefined` if the instance does not exist.
+   */
+  async getStatus(
+    instanceId: string,
+    options?: { showInput?: boolean },
+  ): Promise<DurableOrchestrationStatus | undefined> {
+    const state = await this.getOrchestrationState(instanceId, options?.showInput ?? true);
+    return state ? toDurableOrchestrationStatus(state) : undefined;
+  }
+
+  /**
+   * Gets the status of all orchestration instances (classic Durable Functions v3 shape).
+   */
+  async getStatusAll(): Promise<DurableOrchestrationStatus[]> {
+    return this.collectStatuses({ fetchInputsAndOutputs: true });
+  }
+
+  /**
+   * Gets the status of orchestration instances matching a filter (classic Durable Functions v3 shape).
+   *
+   * @param filter - Creation-time window and/or runtime-status filter.
+   */
+  async getStatusBy(filter: {
+    createdTimeFrom?: Date;
+    createdTimeTo?: Date;
+    runtimeStatus?: OrchestrationRuntimeStatus[];
+  }): Promise<DurableOrchestrationStatus[]> {
+    return this.collectStatuses({
+      createdFrom: filter.createdTimeFrom,
+      createdTo: filter.createdTimeTo,
+      statuses: filter.runtimeStatus?.map(fromOrchestrationRuntimeStatus),
+      fetchInputsAndOutputs: true,
+    });
+  }
+
+  /**
+   * Waits up to a timeout for an orchestration to complete; if it does, returns an HTTP response with
+   * its output/status, otherwise returns the same 202 check-status response as
+   * {@link createCheckStatusResponse}. Classic Durable Functions v3 behavior.
+   *
+   * @param request - The incoming HTTP request (used to build management URLs on timeout).
+   * @param instanceId - The orchestration instance to wait for.
+   * @param waitOptions - Optional total wait timeout in milliseconds (default 10s).
+   */
+  async waitForCompletionOrCreateCheckStatusResponse(
+    request: HttpRequest,
+    instanceId: string,
+    waitOptions?: { timeoutInMilliseconds?: number },
+  ): Promise<HttpResponse> {
+    const timeoutSeconds = Math.max(
+      1,
+      Math.ceil((waitOptions?.timeoutInMilliseconds ?? 10000) / 1000),
+    );
+    try {
+      const state = await this.waitForOrchestrationCompletion(instanceId, true, timeoutSeconds);
+      if (state) {
+        const headers = { "content-type": "application/json" };
+        if (state.runtimeStatus === OrchestrationStatus.COMPLETED) {
+          return new HttpResponse({ status: 200, body: state.serializedOutput ?? "null", headers });
+        }
+        if (state.runtimeStatus === OrchestrationStatus.FAILED) {
+          return new HttpResponse({
+            status: 500,
+            body: JSON.stringify(toDurableOrchestrationStatus(state)),
+            headers,
+          });
+        }
+        if (state.runtimeStatus === OrchestrationStatus.TERMINATED) {
+          return new HttpResponse({
+            status: 200,
+            body: JSON.stringify(toDurableOrchestrationStatus(state)),
+            headers,
+          });
+        }
+      }
+    } catch {
+      // Timed out (or not yet terminal) waiting for completion: fall through to the check-status
+      // response so the caller can poll the management endpoints.
+    }
+    return this.createCheckStatusResponse(request, instanceId);
+  }
+
+  /**
+   * Reads the state of a durable entity in the classic Durable Functions (v3) shape.
+   *
+   * @param entityId - The target entity instance ID.
+   * @param includeState - Whether to include the entity state in the response (default `true`).
+   */
+  async readEntityState<T = unknown>(
+    entityId: EntityInstanceId,
+    includeState = true,
+  ): Promise<EntityStateResponse<T>> {
+    const metadata = await this.getEntity<T>(entityId, includeState);
+    if (!metadata) {
+      return new EntityStateResponse<T>(false);
+    }
+    return new EntityStateResponse<T>(true, metadata.state);
+  }
+
+  /**
+   * Purges the history of a single orchestration instance, returning the classic Durable Functions
+   * (v3) {@link PurgeHistoryResult}.
+   *
+   * @param instanceId - The ID of the orchestration instance to purge.
+   */
+  async purgeInstanceHistory(instanceId: string): Promise<PurgeHistoryResult> {
+    const result = await this.purgeOrchestration(instanceId);
+    return new PurgeHistoryResult(result?.deletedInstanceCount ?? 0);
+  }
+
+  /** @hidden Iterates the core paged query and maps each instance to the v3 status shape. */
+  private async collectStatuses(query: OrchestrationQuery): Promise<DurableOrchestrationStatus[]> {
+    const results: DurableOrchestrationStatus[] = [];
+    for await (const state of this.getAllInstances(query)) {
+      results.push(toDurableOrchestrationStatus(state));
+    }
+    return results;
+  }
 }
+
+/**
+ * @deprecated Use {@link DurableFunctionsClient} instead. Retained as a classic Durable Functions
+ * (v3) alias so existing code that imports `DurableOrchestrationClient` keeps working.
+ */
+export class DurableOrchestrationClient extends DurableFunctionsClient {}
 
 export function getGrpcHostAddress(rpcBaseUrl: string): string {
   try {

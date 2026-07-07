@@ -1223,7 +1223,6 @@ export class TaskHubGrpcWorker {
 class CapturingSidecarStub {
   orchestratorResponse?: pb.OrchestratorResponse;
   entityResult?: pb.EntityBatchResult;
-  abandonRequest?: pb.AbandonOrchestrationTaskRequest;
 
   completeOrchestratorTask(
     request: pb.OrchestratorResponse,
@@ -1244,11 +1243,13 @@ class CapturingSidecarStub {
   }
 
   abandonTaskOrchestratorWorkItem(
-    request: pb.AbandonOrchestrationTaskRequest,
+    _request: pb.AbandonOrchestrationTaskRequest,
     _metadata: grpc.Metadata,
     callback: (error: grpc.ServiceError | null, response: Empty) => void,
   ): void {
-    this.abandonRequest = request;
+    // Abandon is a no-op for the single-work-item host path: the version-mismatch abandon branch
+    // in _executeOrchestratorInternal calls this, but processOrchestratorRequest only surfaces a
+    // completion response. Matches the Python provider, whose null stub no-ops abandon.
     callback(null, new Empty());
   }
 }

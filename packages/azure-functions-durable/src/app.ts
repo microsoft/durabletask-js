@@ -10,6 +10,8 @@ import {
 } from "@azure/functions";
 import { EntityFactory, TOrchestrator } from "@microsoft/durabletask-js";
 import * as trigger from "./trigger";
+import { ClassicEntity, wrapEntity } from "./entity-context";
+import { ClassicOrchestrator, wrapOrchestrator } from "./orchestration-context";
 import { DurableFunctionsWorker } from "./worker";
 
 // A single worker owns the orchestrator/entity registry for the whole function app. It is never
@@ -33,10 +35,12 @@ interface ExtraRegistrationOptions {
   extraOutputs?: FunctionOutput[];
 }
 
-export type OrchestrationHandler = TOrchestrator;
+// Handlers accept both the core-native form and the classic Durable Functions (v3) form; the
+// wrappers below detect which was provided and adapt the classic form onto the core engine.
+export type OrchestrationHandler = TOrchestrator | ClassicOrchestrator;
 export type OrchestrationOptions = ExtraRegistrationOptions & { handler: OrchestrationHandler };
 
-export type EntityHandler = EntityFactory;
+export type EntityHandler = EntityFactory | ClassicEntity;
 export type EntityOptions = ExtraRegistrationOptions & { handler: EntityHandler };
 
 export type ActivityHandler = FunctionHandler;
@@ -52,7 +56,7 @@ export function orchestration(
   handlerOrOptions: OrchestrationHandler | OrchestrationOptions,
 ): void {
   const options = normalizeOptions(handlerOrOptions);
-  sharedWorker.addNamedOrchestrator(functionName, options.handler);
+  sharedWorker.addNamedOrchestrator(functionName, wrapOrchestrator(options.handler));
   azFuncApp.generic(functionName, {
     ...extraBindings(options),
     trigger: trigger.orchestration(),
@@ -67,7 +71,7 @@ export function orchestration(
  */
 export function entity(functionName: string, handlerOrOptions: EntityHandler | EntityOptions): void {
   const options = normalizeOptions(handlerOrOptions);
-  sharedWorker.addNamedEntity(functionName, options.handler);
+  sharedWorker.addNamedEntity(functionName, wrapEntity(options.handler));
   azFuncApp.generic(functionName, {
     ...extraBindings(options),
     trigger: trigger.entity(),

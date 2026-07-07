@@ -34,9 +34,17 @@ describe("DurableFunctionsClient", () => {
       expect(typeof client.signalEntity).toBe("function");
       expect(typeof client.getEntity).toBe("function");
       expect(Object.getOwnPropertyNames(DurableFunctionsClient.prototype).sort()).toEqual([
+        "collectStatuses",
         "constructor",
         "createCheckStatusResponse",
         "createHttpManagementPayload",
+        "getStatus",
+        "getStatusAll",
+        "getStatusBy",
+        "purgeInstanceHistory",
+        "readEntityState",
+        "startNew",
+        "waitForCompletionOrCreateCheckStatusResponse",
       ]);
     } finally {
       await client.stop();
