@@ -169,7 +169,7 @@ export abstract class TaskEntity<TState> implements ITaskEntity {
         if (name.toLowerCase() === operationName) {
           const prop = (this as unknown as Record<string, unknown>)[name];
           // Skip non-functions and built-in methods
-          if (typeof prop === "function" && name !== "constructor" && name !== "run") {
+          if (typeof prop === "function" && name !== "constructor" && name !== "run" && name !== "initializeState") {
             return name;
           }
         }
