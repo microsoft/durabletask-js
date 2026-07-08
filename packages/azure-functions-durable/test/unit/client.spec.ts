@@ -85,6 +85,45 @@ describe("DurableFunctionsClient", () => {
     }
   });
 
+  it("creates HTTP management payload URLs from baseUrl for the classic v3 single-argument call", async () => {
+    const client = new DurableFunctionsClient({
+      ...CLIENT_CONFIG,
+      baseUrl: "https://public.example/runtime/webhooks/durabletask/",
+    });
+
+    try {
+      const payload = client.createHttpManagementPayload("instance 1");
+
+      expect(payload.id).toBe("instance 1");
+      expect(payload.statusQueryGetUri).toBe(
+        "https://public.example/runtime/webhooks/durabletask/instances/instance%201?code=secret&taskHub=functions-taskhub",
+      );
+      expect(payload.terminatePostUri).toBe(
+        "https://public.example/runtime/webhooks/durabletask/instances/instance%201/terminate?reason={text}&code=secret&taskHub=functions-taskhub",
+      );
+    } finally {
+      await client.stop();
+    }
+  });
+
+  it("throws when createHttpManagementPayload is called without an instance id", async () => {
+    const client = new DurableFunctionsClient(CLIENT_CONFIG);
+    const request = new HttpRequest({
+      method: "POST",
+      url: "https://public.example/api/start",
+    });
+
+    try {
+      expect(() =>
+        (client.createHttpManagementPayload as unknown as (request: HttpRequest) => unknown)(
+          request,
+        ),
+      ).toThrow(TypeError);
+    } finally {
+      await client.stop();
+    }
+  });
+
   it("creates 202 check status responses with Location and JSON body", async () => {
     const client = new DurableFunctionsClient(CLIENT_CONFIG);
     const request = new HttpRequest({

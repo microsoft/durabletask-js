@@ -96,8 +96,35 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
     });
   }
 
-  createHttpManagementPayload(request: HttpRequest, instanceId: string): HttpManagementPayload {
-    const instanceStatusUrl = getInstanceStatusUrl(request, instanceId);
+  /**
+   * Builds the {@link HttpManagementPayload} of management URLs for an orchestration instance.
+   *
+   * @remarks
+   * Two call styles are supported (mirroring the Python provider's backward-compatible surface):
+   * - `createHttpManagementPayload(request, instanceId)` (recommended): builds the URLs relative to
+   *   the incoming request's origin.
+   * - `createHttpManagementPayload(instanceId)` (classic Durable Functions v3 style): builds the
+   *   URLs from the client binding's `baseUrl` when no request is available.
+   */
+  createHttpManagementPayload(instanceId: string): HttpManagementPayload;
+  createHttpManagementPayload(request: HttpRequest, instanceId: string): HttpManagementPayload;
+  createHttpManagementPayload(
+    requestOrInstanceId: HttpRequest | string,
+    instanceId?: string,
+  ): HttpManagementPayload {
+    // Classic Durable Functions (v3) accepted a single positional `instanceId`. Detect that call
+    // style (a lone string argument) and fall back to the client binding's `baseUrl` when building
+    // the payload URLs.
+    let request: HttpRequest | undefined;
+    if (typeof requestOrInstanceId === "string") {
+      instanceId = requestOrInstanceId;
+    } else {
+      request = requestOrInstanceId;
+    }
+    if (instanceId === undefined) {
+      throw new TypeError("instanceId is required.");
+    }
+    const instanceStatusUrl = getInstanceStatusUrl(request, instanceId, this.baseUrl);
     return createPayload(instanceId, instanceStatusUrl, this.requiredQueryStringParameters);
   }
 
@@ -262,10 +289,20 @@ export function getGrpcHostAddress(rpcBaseUrl: string): string {
   }
 }
 
-function getInstanceStatusUrl(request: HttpRequest, instanceId: string): string {
-  const requestUrl = new URL(request.url);
+function getInstanceStatusUrl(
+  request: HttpRequest | undefined,
+  instanceId: string,
+  baseUrl: string,
+): string {
   const encodedInstanceId = encodeURIComponent(instanceId);
-  return `${requestUrl.protocol}//${requestUrl.host}/runtime/webhooks/durabletask/instances/${encodedInstanceId}`;
+  if (request !== undefined) {
+    const requestUrl = new URL(request.url);
+    return `${requestUrl.protocol}//${requestUrl.host}/runtime/webhooks/durabletask/instances/${encodedInstanceId}`;
+  }
+  // No request (classic Durable Functions v3 single-argument call): fall back to the base URL
+  // supplied in the client binding configuration.
+  const trimmedBaseUrl = baseUrl.replace(/\/+$/, "");
+  return `${trimmedBaseUrl}/instances/${encodedInstanceId}`;
 }
 
 function parseClientConfig(clientConfig: DurableFunctionsClientInput): DurableFunctionsClientConfig {
