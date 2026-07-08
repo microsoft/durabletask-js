@@ -305,9 +305,11 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
         );
       }
       fireAt = new Date(this._currentUtcDatetime.getTime() + fireAt * 1000);
-    } else if (isNaN(fireAt.getTime())) {
+    }
+
+    if (isNaN(fireAt.getTime())) {
       throw new Error(
-        "createTimer received an invalid Date object (NaN timestamp)",
+        "createTimer received or produced an invalid Date (NaN timestamp)",
       );
     }
 

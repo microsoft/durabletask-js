@@ -118,6 +118,29 @@ describe("createTimer input validation", () => {
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("invalid Date");
   });
 
+  it("should reject a finite number that produces an invalid Date", async () => {
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext) {
+      yield ctx.createTimer(Number.MAX_VALUE);
+    };
+
+    const registry = new Registry();
+    const name = registry.addOrchestrator(orchestrator);
+    const startTime = new Date("2025-01-01T00:00:00Z");
+    const newEvents = [
+      newOrchestratorStartedEvent(startTime),
+      newExecutionStartedEvent(name, TEST_INSTANCE_ID),
+    ];
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+
+    const completeAction = getCompleteAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+    );
+    expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("createTimer");
+    expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("invalid Date");
+  });
+
   it("should accept a valid positive number (seconds)", async () => {
     const delaySeconds = 30;
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext) {
