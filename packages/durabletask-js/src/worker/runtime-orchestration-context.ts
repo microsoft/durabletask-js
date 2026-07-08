@@ -296,24 +296,29 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   createTimer(fireAt: number | Date): Task<any> {
     const id = this.nextSequenceNumber();
 
-    // If a number is passed, we use it as the number of seconds to wait
-    // we use instanceof Date as number is not a native Javascript type
-    if (!(fireAt instanceof Date)) {
-      if (typeof fireAt !== "number" || !Number.isFinite(fireAt)) {
+    let fireAtDate: Date;
+    if (typeof fireAt === "number") {
+      if (!Number.isFinite(fireAt)) {
         throw new Error(
           `createTimer requires a finite number (seconds) or a valid Date, but received ${String(fireAt)}`,
         );
       }
-      fireAt = new Date(this._currentUtcDatetime.getTime() + fireAt * 1000);
+      fireAtDate = new Date(this._currentUtcDatetime.getTime() + fireAt * 1000);
+    } else if (fireAt instanceof Date) {
+      fireAtDate = fireAt;
+    } else {
+      throw new Error(
+        `createTimer requires a finite number (seconds) or a valid Date, but received ${String(fireAt)}`,
+      );
     }
 
-    if (isNaN(fireAt.getTime())) {
+    if (Number.isNaN(fireAtDate.getTime())) {
       throw new Error(
         "createTimer received or produced an invalid Date (NaN timestamp)",
       );
     }
 
-    const action = ph.newCreateTimerAction(id, fireAt);
+    const action = ph.newCreateTimerAction(id, fireAtDate);
     this._pendingActions[action.getId()] = action;
 
     const timerTask = new CompletableTask();
