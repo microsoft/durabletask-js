@@ -6,6 +6,7 @@ import {
   EntityInstanceId,
   OrchestrationQuery,
   OrchestrationStatus,
+  PurgeInstanceCriteria,
   TaskHubGrpcClient,
 } from "@microsoft/durabletask-js";
 import {
@@ -259,6 +260,100 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
   async purgeInstanceHistory(instanceId: string): Promise<PurgeHistoryResult> {
     const result = await this.purgeOrchestration(instanceId);
     return new PurgeHistoryResult(result?.deletedInstanceCount ?? 0);
+  }
+
+  /**
+   * Purges the history of orchestration instances matching a filter (classic Durable Functions v3
+   * shape), returning a {@link PurgeHistoryResult}.
+   *
+   * @deprecated Use {@link purgeOrchestration} with a {@link PurgeInstanceCriteria} instead.
+   * @param createdTimeFrom - Lower bound (inclusive) of the instance creation-time window.
+   * @param createdTimeTo - Optional upper bound of the creation-time window.
+   * @param runtimeStatus - Optional runtime-status filter.
+   */
+  async purgeInstanceHistoryBy(
+    createdTimeFrom: Date,
+    createdTimeTo?: Date,
+    runtimeStatus?: OrchestrationRuntimeStatus[],
+  ): Promise<PurgeHistoryResult> {
+    const criteria = new PurgeInstanceCriteria();
+    criteria.setCreatedTimeFrom(createdTimeFrom);
+    criteria.setCreatedTimeTo(createdTimeTo);
+    if (runtimeStatus) {
+      criteria.setRuntimeStatusList(runtimeStatus.map(fromOrchestrationRuntimeStatus));
+    }
+    const result = await this.purgeOrchestration(criteria);
+    return new PurgeHistoryResult(result?.deletedInstanceCount ?? 0);
+  }
+
+  /**
+   * Raises an external event to an orchestration instance (classic Durable Functions v3 alias).
+   *
+   * @deprecated Use {@link raiseOrchestrationEvent} instead.
+   * @param instanceId - The orchestration instance to raise the event on.
+   * @param eventName - The name of the event (case-insensitive).
+   * @param eventData - Optional JSON-serializable event payload.
+   */
+  async raiseEvent(instanceId: string, eventName: string, eventData?: unknown): Promise<void> {
+    await this.raiseOrchestrationEvent(instanceId, eventName, eventData ?? null);
+  }
+
+  /**
+   * Terminates an orchestration instance (classic Durable Functions v3 alias).
+   *
+   * @deprecated Use {@link terminateOrchestration} instead.
+   * @param instanceId - The orchestration instance to terminate.
+   * @param reason - Optional reason recorded as the terminated instance's output.
+   */
+  async terminate(instanceId: string, reason?: unknown): Promise<void> {
+    await this.terminateOrchestration(instanceId, reason ?? null);
+  }
+
+  /**
+   * Suspends a running orchestration instance (classic Durable Functions v3 alias).
+   *
+   * @deprecated Use {@link suspendOrchestration} instead.
+   * @param instanceId - The orchestration instance to suspend.
+   * @param _reason - Accepted for classic v3 signature compatibility; ignored (the core engine does
+   *   not record a suspend reason).
+   */
+  async suspend(instanceId: string, _reason?: string): Promise<void> {
+    await this.suspendOrchestration(instanceId);
+  }
+
+  /**
+   * Resumes a suspended orchestration instance (classic Durable Functions v3 alias).
+   *
+   * @deprecated Use {@link resumeOrchestration} instead.
+   * @param instanceId - The orchestration instance to resume.
+   * @param _reason - Accepted for classic v3 signature compatibility; ignored.
+   */
+  async resume(instanceId: string, _reason?: string): Promise<void> {
+    await this.resumeOrchestration(instanceId);
+  }
+
+  /**
+   * Rewinds a failed orchestration instance so it retries from its point of failure (classic
+   * Durable Functions v3 alias).
+   *
+   * @deprecated Use {@link rewindInstance} instead.
+   * @param instanceId - The failed orchestration instance to rewind.
+   * @param reason - Optional reason describing why the instance is being rewound.
+   */
+  async rewind(instanceId: string, reason?: string): Promise<void> {
+    await this.rewindInstance(instanceId, reason ?? "");
+  }
+
+  /**
+   * Restarts an orchestration instance with its original input (classic Durable Functions v3 alias).
+   *
+   * @deprecated Use {@link restartOrchestration} instead.
+   * @param instanceId - The orchestration instance to restart.
+   * @param restartWithNewInstanceId - When `true`, the restarted instance is assigned a new ID.
+   * @returns The instance ID of the restarted orchestration.
+   */
+  async restart(instanceId: string, restartWithNewInstanceId = false): Promise<string> {
+    return this.restartOrchestration(instanceId, restartWithNewInstanceId);
   }
 
   /** @hidden Iterates the core paged query and maps each instance to the v3 status shape. */

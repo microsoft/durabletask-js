@@ -2,9 +2,10 @@
 // Licensed under the MIT License.
 
 import { HttpRequest } from "@azure/functions";
-import { TaskHubGrpcClient } from "@microsoft/durabletask-js";
+import { PurgeInstanceCriteria, TaskHubGrpcClient } from "@microsoft/durabletask-js";
 import { DurableFunctionsClient, getGrpcHostAddress } from "../../src/client";
 import { createAzureFunctionsMetadataGenerator } from "../../src/metadata";
+import { OrchestrationRuntimeStatus } from "../../src/orchestration-status";
 
 const CLIENT_CONFIG = {
   taskHubName: "functions-taskhub",
@@ -33,6 +34,13 @@ describe("DurableFunctionsClient", () => {
       expect(typeof client.purgeOrchestration).toBe("function");
       expect(typeof client.signalEntity).toBe("function");
       expect(typeof client.getEntity).toBe("function");
+      expect(typeof client.raiseEvent).toBe("function");
+      expect(typeof client.terminate).toBe("function");
+      expect(typeof client.suspend).toBe("function");
+      expect(typeof client.resume).toBe("function");
+      expect(typeof client.rewind).toBe("function");
+      expect(typeof client.restart).toBe("function");
+      expect(typeof client.purgeInstanceHistoryBy).toBe("function");
       expect(Object.getOwnPropertyNames(DurableFunctionsClient.prototype).sort()).toEqual([
         "collectStatuses",
         "constructor",
@@ -42,10 +50,62 @@ describe("DurableFunctionsClient", () => {
         "getStatusAll",
         "getStatusBy",
         "purgeInstanceHistory",
+        "purgeInstanceHistoryBy",
+        "raiseEvent",
         "readEntityState",
+        "restart",
+        "resume",
+        "rewind",
         "startNew",
+        "suspend",
+        "terminate",
         "waitForCompletionOrCreateCheckStatusResponse",
       ]);
+    } finally {
+      await client.stop();
+    }
+  });
+
+  it("forwards classic Durable Functions v3 lifecycle aliases to the core methods", async () => {
+    const client = new DurableFunctionsClient(CLIENT_CONFIG);
+
+    try {
+      const raise = jest.spyOn(client, "raiseOrchestrationEvent").mockResolvedValue(undefined);
+      await client.raiseEvent("id-1", "evt", { a: 1 });
+      expect(raise).toHaveBeenCalledWith("id-1", "evt", { a: 1 });
+
+      const terminate = jest.spyOn(client, "terminateOrchestration").mockResolvedValue(undefined);
+      await client.terminate("id-1", "cancelled");
+      expect(terminate).toHaveBeenCalledWith("id-1", "cancelled");
+
+      const suspend = jest.spyOn(client, "suspendOrchestration").mockResolvedValue(undefined);
+      await client.suspend("id-1", "ignored-reason");
+      expect(suspend).toHaveBeenCalledWith("id-1");
+
+      const resume = jest.spyOn(client, "resumeOrchestration").mockResolvedValue(undefined);
+      await client.resume("id-1", "ignored-reason");
+      expect(resume).toHaveBeenCalledWith("id-1");
+
+      const rewind = jest.spyOn(client, "rewindInstance").mockResolvedValue(undefined);
+      await client.rewind("id-1", "retrying");
+      expect(rewind).toHaveBeenCalledWith("id-1", "retrying");
+
+      const restart = jest.spyOn(client, "restartOrchestration").mockResolvedValue("id-2");
+      await expect(client.restart("id-1", true)).resolves.toBe("id-2");
+      expect(restart).toHaveBeenCalledWith("id-1", true);
+
+      const purge = jest.spyOn(client, "purgeOrchestration").mockResolvedValue(undefined);
+      const purgeResult = await client.purgeInstanceHistoryBy(
+        new Date("2020-01-01T00:00:00.000Z"),
+        new Date("2020-02-01T00:00:00.000Z"),
+        [OrchestrationRuntimeStatus.Completed],
+      );
+      expect(purgeResult.instancesDeleted).toBe(0);
+      expect(purge).toHaveBeenCalledTimes(1);
+      const criteria = purge.mock.calls[0][0] as PurgeInstanceCriteria;
+      expect(criteria.getCreatedTimeFrom()).toEqual(new Date("2020-01-01T00:00:00.000Z"));
+      expect(criteria.getCreatedTimeTo()).toEqual(new Date("2020-02-01T00:00:00.000Z"));
+      expect(criteria.getRuntimeStatusList()).toHaveLength(1);
     } finally {
       await client.stop();
     }
