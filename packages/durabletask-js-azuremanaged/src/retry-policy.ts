@@ -88,7 +88,9 @@ function statusCodeToName(code: GrpcStatus): string {
  * @returns A JSON string representing the service config.
  */
 export function createServiceConfig(options?: ClientRetryOptions): string {
-  const maxAttempts = options?.maxRetries ?? DEFAULT_MAX_ATTEMPTS;
+  // gRPC maxAttempts includes the original attempt, while maxRetries means
+  // retries *after* the initial call. Convert by adding 1.
+  const maxAttempts = options?.maxRetries != null ? options.maxRetries + 1 : DEFAULT_MAX_ATTEMPTS;
   const initialBackoffMs = options?.initialBackoffMs ?? DEFAULT_INITIAL_BACKOFF_MS;
   const maxBackoffMs = options?.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS;
   const backoffMultiplier = options?.backoffMultiplier ?? DEFAULT_BACKOFF_MULTIPLIER;
