@@ -65,6 +65,28 @@ describe("DurableEntityContext", () => {
     expect(getStoredState()).toBe(15);
   });
 
+  it("reports isNewlyConstructed based on whether prior state existed", () => {
+    const fresh = new DurableEntityContext(createFakeOperation({ name: "add" }).operation);
+    expect(fresh.isNewlyConstructed).toBe(true);
+
+    const existing = new DurableEntityContext(
+      createFakeOperation({ name: "add", initialState: 1 }).operation,
+    );
+    expect(existing.isNewlyConstructed).toBe(false);
+  });
+
+  it("exposes the entity id object and signals other entities through the core context", () => {
+    const { operation } = createFakeOperation({ name: "op", initialState: 1 });
+    const df = new DurableEntityContext(operation);
+
+    expect(df.entityId).toBe(operation.context.id);
+    expect(df.entityId.toString()).toBe("@counter@user-1");
+
+    const target = new EntityInstanceId("Other", "k-9");
+    df.signalEntity(target, "poke", 42);
+    expect(operation.context.signalEntity).toHaveBeenCalledWith(target, "poke", 42);
+  });
+
   it("returns the initializer default when there is no state", () => {
     const { operation } = createFakeOperation({ name: "get" });
     const df = new DurableEntityContext(operation);

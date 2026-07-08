@@ -38,5 +38,6 @@ export {
   toDurableOrchestrationStatus,
   toOrchestrationRuntimeStatus,
 } from "./orchestration-status";
+export { EntityId } from "./entity-id";
 export { EntityStateResponse } from "./entity-state-response";
 export { PurgeHistoryResult } from "./purge-history-result";

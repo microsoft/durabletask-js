@@ -62,6 +62,16 @@ describe("DurableOrchestrationContext", () => {
     expect(new DurableOrchestrationContext(childCtx, undefined).parentInstanceId).toBe("parent-1");
   });
 
+  it("tracks the custom status locally and forwards it to the core context", () => {
+    const { ctx, raw } = createFakeCoreContext();
+    const df = new DurableOrchestrationContext(ctx, undefined);
+
+    expect(df.customStatus).toBeUndefined();
+    df.setCustomStatus({ stage: "processing" });
+    expect(df.customStatus).toEqual({ stage: "processing" });
+    expect(raw.setCustomStatus).toHaveBeenCalledWith({ stage: "processing" });
+  });
+
   it("forwards callActivity and callActivityWithRetry to the core context", () => {
     const { ctx, raw } = createFakeCoreContext();
     const df = new DurableOrchestrationContext(ctx, undefined);

@@ -1,7 +1,12 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { EntityFactory, ITaskEntity, TaskEntityOperation } from "@microsoft/durabletask-js";
+import {
+  EntityFactory,
+  EntityInstanceId,
+  ITaskEntity,
+  TaskEntityOperation,
+} from "@microsoft/durabletask-js";
 
 /**
  * Classic Durable Functions (v3) entity context, exposed to migrating entity functions as
@@ -15,8 +20,11 @@ import { EntityFactory, ITaskEntity, TaskEntityOperation } from "@microsoft/dura
 export class DurableEntityContext {
   private _result: unknown;
   private _resultSet = false;
+  private readonly _isNewlyConstructed: boolean;
 
-  constructor(private readonly _operation: TaskEntityOperation) {}
+  constructor(private readonly _operation: TaskEntityOperation) {
+    this._isNewlyConstructed = !_operation.state.hasState;
+  }
 
   /** The name of the current operation. */
   get operationName(): string {
@@ -36,6 +44,16 @@ export class DurableEntityContext {
   /** The entity instance ID in `@name@key` form. */
   get instanceId(): string {
     return this._operation.context.id.toString();
+  }
+
+  /** The entity instance ID as an {@link EntityInstanceId} object. */
+  get entityId(): EntityInstanceId {
+    return this._operation.context.id;
+  }
+
+  /** Whether this entity had no state prior to the current operation (freshly constructed). */
+  get isNewlyConstructed(): boolean {
+    return this._isNewlyConstructed;
   }
 
   /** Gets the input for the current operation. */
@@ -67,6 +85,21 @@ export class DurableEntityContext {
   /** Deletes this entity after the operation completes. */
   destructOnExit(): void {
     this._operation.state.setState(undefined);
+  }
+
+  /**
+   * Signals another entity operation without waiting for a response (fire-and-forget).
+   *
+   * @param entityId - The target entity.
+   * @param operationName - The name of the operation to invoke.
+   * @param operationInput - Optional input for the operation.
+   */
+  signalEntity(
+    entityId: EntityInstanceId,
+    operationName: string,
+    operationInput?: unknown,
+  ): void {
+    this._operation.context.signalEntity(entityId, operationName, operationInput);
   }
 
   /** @hidden Returns the explicitly-set result, or the provided fallback when none was set. */

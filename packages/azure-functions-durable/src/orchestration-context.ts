@@ -21,6 +21,8 @@ import { RetryOptions } from "./retry-options";
  * `durable-functions` `context.df.*` API run unchanged on the gRPC/durabletask engine.
  */
 export class DurableOrchestrationContext {
+  private _customStatus: unknown;
+
   constructor(
     private readonly _ctx: OrchestrationContext,
     private readonly _input: unknown,
@@ -49,6 +51,11 @@ export class DurableOrchestrationContext {
   /** The version assigned to the current orchestration instance (empty string if none). */
   get version(): string {
     return this._ctx.version;
+  }
+
+  /** The custom status set during this execution via {@link setCustomStatus} (or `undefined`). */
+  get customStatus(): unknown {
+    return this._customStatus;
   }
 
   /**
@@ -127,6 +134,7 @@ export class DurableOrchestrationContext {
 
   /** Sets the orchestration's custom status payload. */
   setCustomStatus(customStatus: unknown): void {
+    this._customStatus = customStatus;
     this._ctx.setCustomStatus(customStatus);
   }
 
