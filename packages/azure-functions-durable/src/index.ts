@@ -41,3 +41,11 @@ export {
 export { EntityId } from "./entity-id";
 export { EntityStateResponse } from "./entity-state-response";
 export { PurgeHistoryResult } from "./purge-history-result";
+
+// Legacy durable-functions v3 API compatibility aliases (types only). These let orchestrator/
+// activity code written against the classic `durable-functions` v3 API type-check unchanged.
+export type { ActivityHandler } from "./app";
+export type {
+  ClassicOrchestrator as OrchestrationHandler,
+  ClassicOrchestrationContext as OrchestrationContext,
+} from "./orchestration-context";
