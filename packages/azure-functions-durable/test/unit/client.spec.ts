@@ -46,6 +46,7 @@ describe("DurableFunctionsClient", () => {
         "constructor",
         "createCheckStatusResponse",
         "createHttpManagementPayload",
+        "getClientResponseLinks",
         "getStatus",
         "getStatusAll",
         "getStatusBy",
@@ -86,9 +87,9 @@ describe("DurableFunctionsClient", () => {
       await client.resume("id-1", "ignored-reason");
       expect(resume).toHaveBeenCalledWith("id-1");
 
-      const rewind = jest.spyOn(client, "rewindInstance").mockResolvedValue(undefined);
-      await client.rewind("id-1", "retrying");
-      expect(rewind).toHaveBeenCalledWith("id-1", "retrying");
+      await expect(client.rewind("id-1", "retrying")).rejects.toThrow(
+        "rewind is not yet supported",
+      );
 
       const restart = jest.spyOn(client, "restartOrchestration").mockResolvedValue("id-2");
       await expect(client.restart("id-1", true)).resolves.toBe("id-2");
@@ -179,6 +180,22 @@ describe("DurableFunctionsClient", () => {
           request,
         ),
       ).toThrow(TypeError);
+    } finally {
+      await client.stop();
+    }
+  });
+
+  it("exposes getClientResponseLinks as a deprecated alias of createHttpManagementPayload", async () => {
+    const client = new DurableFunctionsClient(CLIENT_CONFIG);
+    const request = new HttpRequest({
+      method: "POST",
+      url: "https://public.example/api/start",
+    });
+
+    try {
+      expect(client.getClientResponseLinks(request, "abc")).toEqual(
+        client.createHttpManagementPayload(request, "abc"),
+      );
     } finally {
       await client.stop();
     }

@@ -130,8 +130,26 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
   }
 
   /**
+   * Deprecated alias for {@link createHttpManagementPayload} (classic Durable Functions v3 shape).
+   *
+   * @deprecated Use {@link createHttpManagementPayload} instead.
+   * @param request - The incoming HTTP request, or `undefined` to build the URLs from the client
+   *   binding's `baseUrl`.
+   * @param instanceId - The orchestration instance to build management URLs for.
+   */
+  getClientResponseLinks(
+    request: HttpRequest | undefined,
+    instanceId: string,
+  ): HttpManagementPayload {
+    return request === undefined
+      ? this.createHttpManagementPayload(instanceId)
+      : this.createHttpManagementPayload(request, instanceId);
+  }
+
+  /**
    * Starts a new orchestration instance (classic Durable Functions v3 `startNew` alias).
    *
+   * @deprecated Use {@link scheduleNewOrchestration} instead.
    * @param orchestratorName - The name of the orchestrator to start.
    * @param options - Optional input and instance ID.
    * @returns The instance ID of the started orchestration.
@@ -150,6 +168,7 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
   /**
    * Gets the status of an orchestration instance in the classic Durable Functions (v3) shape.
    *
+   * @deprecated Use {@link getOrchestrationState} instead.
    * @param instanceId - The ID of the orchestration instance to query.
    * @param options - When `showInput` is `false`, input/output payloads are not fetched.
    * @returns The instance status, or `undefined` if the instance does not exist.
@@ -164,6 +183,8 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
 
   /**
    * Gets the status of all orchestration instances (classic Durable Functions v3 shape).
+   *
+   * @deprecated Use {@link getAllInstances} instead.
    */
   async getStatusAll(): Promise<DurableOrchestrationStatus[]> {
     return this.collectStatuses({ fetchInputsAndOutputs: true });
@@ -172,6 +193,7 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
   /**
    * Gets the status of orchestration instances matching a filter (classic Durable Functions v3 shape).
    *
+   * @deprecated Use {@link getAllInstances} instead.
    * @param filter - Creation-time window and/or runtime-status filter.
    */
   async getStatusBy(filter: {
@@ -192,6 +214,8 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    * its output/status, otherwise returns the same 202 check-status response as
    * {@link createCheckStatusResponse}. Classic Durable Functions v3 behavior.
    *
+   * @deprecated Use {@link waitForOrchestrationCompletion} together with
+   *   {@link createCheckStatusResponse} instead.
    * @param request - The incoming HTTP request (used to build management URLs on timeout).
    * @param instanceId - The orchestration instance to wait for.
    * @param waitOptions - Optional total wait timeout in milliseconds (default 10s).
@@ -237,6 +261,7 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
   /**
    * Reads the state of a durable entity in the classic Durable Functions (v3) shape.
    *
+   * @deprecated Use {@link getEntity} instead.
    * @param entityId - The target entity instance ID.
    * @param includeState - Whether to include the entity state in the response (default `true`).
    */
@@ -255,6 +280,7 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    * Purges the history of a single orchestration instance, returning the classic Durable Functions
    * (v3) {@link PurgeHistoryResult}.
    *
+   * @deprecated Use {@link purgeOrchestration} instead.
    * @param instanceId - The ID of the orchestration instance to purge.
    */
   async purgeInstanceHistory(instanceId: string): Promise<PurgeHistoryResult> {
@@ -336,12 +362,16 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    * Rewinds a failed orchestration instance so it retries from its point of failure (classic
    * Durable Functions v3 alias).
    *
-   * @deprecated Use {@link rewindInstance} instead.
-   * @param instanceId - The failed orchestration instance to rewind.
-   * @param reason - Optional reason describing why the instance is being rewound.
+   * @remarks
+   * Not supported: the durabletask engine has no rewind equivalent yet. This mirrors the Python
+   * provider, which raises for the same reason.
+   * @deprecated Not supported; rewind has no durabletask equivalent yet.
+   * @param _instanceId - The failed orchestration instance to rewind.
+   * @param _reason - Optional reason describing why the instance is being rewound.
+   * @throws Always throws: rewind is not yet supported.
    */
-  async rewind(instanceId: string, reason?: string): Promise<void> {
-    await this.rewindInstance(instanceId, reason ?? "");
+  async rewind(_instanceId: string, _reason?: string): Promise<void> {
+    throw new Error("rewind is not yet supported by durabletask.");
   }
 
   /**
