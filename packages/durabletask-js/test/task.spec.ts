@@ -27,6 +27,12 @@ function makeFailureDetails(
   return details;
 }
 
+function getTaskFailedError(task: Task<unknown>): TaskFailedError {
+  const exception = task.getException();
+  expect(exception).toBeInstanceOf(TaskFailedError);
+  return exception as TaskFailedError;
+}
+
 describe("Task (base class)", () => {
   // Task is not abstract, so we can instantiate it directly for testing
   // its base-class behavior.
@@ -197,7 +203,7 @@ describe("CompletableTask", () => {
       const details = makeFailureDetails("detailed error", "CustomError", "at line 42");
       task.fail("detailed error", details);
 
-      const exception = task.getException();
+      const exception = getTaskFailedError(task);
       expect(exception.details.message).toBe("detailed error");
       expect(exception.details.errorType).toBe("CustomError");
       expect(exception.details.stackTrace).toBe("at line 42");
@@ -207,7 +213,7 @@ describe("CompletableTask", () => {
       const task = new CompletableTask<string>();
       task.fail("no details");
 
-      const exception = task.getException();
+      const exception = getTaskFailedError(task);
       // Default TaskFailureDetails has empty strings for message and errorType
       expect(exception.details.message).toBe("");
       expect(exception.details.errorType).toBe("");

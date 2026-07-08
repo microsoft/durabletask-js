@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { TaskFailedError } from "./exception/task-failed-error";
 import { CompositeTask } from "./composite-task";
 
 /**
@@ -9,7 +8,7 @@ import { CompositeTask } from "./composite-task";
  */
 export class Task<T> {
   _result: T | undefined;
-  _exception: TaskFailedError | undefined;
+  _exception: Error | undefined;
   _parent: CompositeTask<T> | undefined;
   _isComplete: boolean = false;
 
@@ -51,7 +50,7 @@ export class Task<T> {
   /**
    * Get the exception that caused the task to fail
    */
-  getException(): TaskFailedError {
+  getException(): Error {
     if (!this._exception) {
       throw new Error("Task did not fail");
     }

@@ -641,20 +641,18 @@ export class OrchestrationExecutor {
     // If in a critical section, recover the lock for this entity
     ctx._entityFeature.recoverLockAfterCall(pendingCall.entityId);
 
-    // Convert failure details and throw EntityOperationFailedException
-    const failureDetails = createTaskFailureDetails(failedEvent?.getFailuredetails());
-    if (!failureDetails) {
-      pendingCall.task.fail(
-        `Entity operation '${pendingCall.operationName}' failed with unknown error`,
-      );
-    } else {
-      const exception = new EntityOperationFailedException(
-        pendingCall.entityId,
-        pendingCall.operationName,
-        failureDetails,
-      );
-      pendingCall.task.fail(exception.message, failedEvent?.getFailuredetails());
-    }
+    const failureDetails =
+      createTaskFailureDetails(failedEvent?.getFailuredetails()) ??
+      {
+        errorType: "UnknownError",
+        errorMessage: `Entity operation '${pendingCall.operationName}' failed with unknown error`,
+      };
+    const exception = new EntityOperationFailedException(
+      pendingCall.entityId,
+      pendingCall.operationName,
+      failureDetails,
+    );
+    pendingCall.task.failWithError(exception);
 
     await ctx.resume();
   }
