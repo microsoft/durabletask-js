@@ -2419,7 +2419,8 @@ describe("Entity call on classic (Azure Storage) backend — EVENTSENT/EVENTRAIS
     // No result delivered → orchestrator is still awaiting the entity, so it hasn't completed.
     expect(callResult).toBeUndefined();
     expect(result2.actions.find((a) => a.hasCompleteorchestration())).toBeUndefined();
-    expect(result2.actions.find((a) => a.hasSendentitymessage())).toBeUndefined();
+    expect(result2.actions.find((a) => a.hasSendentitymessage())).toBeUndefined();
+
   });
 
   it("accepts EVENTSENT confirming a signalEntity SIGNAL action without throwing", async () => {
@@ -2456,6 +2457,7 @@ describe("Entity call on classic (Azure Storage) backend — EVENTSENT/EVENTRAIS
         a.getCompleteorchestration()!.getOrchestrationstatus() ===
           pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
     );
+    expect(result2.actions.find((a) => a.hasSendentitymessage())).toBeUndefined();
     expect(failed).toBeUndefined();
   });
 
