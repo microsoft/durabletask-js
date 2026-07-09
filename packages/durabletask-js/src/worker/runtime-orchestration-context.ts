@@ -12,6 +12,7 @@ import { RetryTaskBase, RetryTaskType } from "../task/retry-task-base";
 import { RetryableTask } from "../task/retryable-task";
 import { RetryHandlerTask } from "../task/retry-handler-task";
 import { RetryTimerTask } from "../task/retry-timer-task";
+import { TimerTask } from "../task/timer-task";
 import { TaskOptions, SubOrchestrationOptions, isRetryPolicy, isRetryHandler } from "../task/options";
 import { toAsyncRetryHandler } from "../task/retry/retry-handler";
 import { TActivity } from "../types/activity.type";
@@ -306,7 +307,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
    * @param fireAt Date The date when the timer should fire
    * @returns
    */
-  createTimer(fireAt: number | Date): Task<any> {
+  createTimer(fireAt: number | Date): TimerTask {
     const id = this.nextSequenceNumber();
 
     let fireAtDate: Date;
@@ -334,7 +335,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     const action = ph.newCreateTimerAction(id, fireAtDate);
     this._pendingActions[action.getId()] = action;
 
-    const timerTask = new CompletableTask();
+    const timerTask = new TimerTask(this, id);
     this._pendingTasks[id] = timerTask;
 
     return timerTask;
