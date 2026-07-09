@@ -17,10 +17,10 @@ import { EntityStateResponse } from "./entity-state-response";
 import { createAzureFunctionsMetadataGenerator } from "./metadata";
 import {
   DurableOrchestrationStatus,
-  OrchestrationRuntimeStatus,
   fromOrchestrationRuntimeStatus,
   toDurableOrchestrationStatus,
 } from "./orchestration-status";
+import { OrchestrationFilter } from "./orchestration-filter";
 import { PurgeHistoryResult } from "./purge-history-result";
 
 export interface DurableFunctionsClientConfig {
@@ -196,11 +196,7 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    * @deprecated Use {@link getAllInstances} instead.
    * @param filter - Creation-time window and/or runtime-status filter.
    */
-  async getStatusBy(filter: {
-    createdTimeFrom?: Date;
-    createdTimeTo?: Date;
-    runtimeStatus?: OrchestrationRuntimeStatus[];
-  }): Promise<DurableOrchestrationStatus[]> {
+  async getStatusBy(filter: OrchestrationFilter): Promise<DurableOrchestrationStatus[]> {
     return this.collectStatuses({
       createdFrom: filter.createdTimeFrom,
       createdTo: filter.createdTimeTo,
@@ -295,11 +291,7 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    * @deprecated Use {@link purgeOrchestration} with a {@link PurgeInstanceCriteria} instead.
    * @param filter - Creation-time window and/or runtime-status filter.
    */
-  async purgeInstanceHistoryBy(filter: {
-    createdTimeFrom?: Date;
-    createdTimeTo?: Date;
-    runtimeStatus?: OrchestrationRuntimeStatus[];
-  }): Promise<PurgeHistoryResult> {
+  async purgeInstanceHistoryBy(filter: OrchestrationFilter): Promise<PurgeHistoryResult> {
     const criteria = new PurgeInstanceCriteria();
     criteria.setCreatedTimeFrom(filter.createdTimeFrom);
     criteria.setCreatedTimeTo(filter.createdTimeTo);
