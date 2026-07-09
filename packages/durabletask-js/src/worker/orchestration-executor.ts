@@ -512,7 +512,8 @@ export class OrchestrationExecutor {
 
   /**
    * Decodes a DTFx ResponseMessage JSON wrapper (as delivered via EVENTRAISED on the classic
-   * backend) into either a success result or a failure. Mirrors the Java SDK's decoding.
+   * backend) into either a success result or a failure. Mirrors the Java SDK's decoding, with one
+   * deliberate enhancement (see below).
    *
    * The wrapper shape is:
    *   - `result`         — the serialized operation result (double-encoded string; may be null/absent).
@@ -520,10 +521,18 @@ export class OrchestrationExecutor {
    *                        (the C# property is ErrorMessage but its [DataMember(Name = "exceptionType")]
    *                        overrides the JSON key). Omitted when null.
    *   - `failureDetails` — optional structured `{ ErrorType, ErrorMessage, StackTrace, ... }` (PascalCase).
+   *
+   * NOTE (intentionally beyond the Java SDK): the Java SDK builds `new FailureDetails(errorType,
+   * errorMessage, null, false)`, dropping the stack trace. Over gRPC the classic backend uses
+   * DurableTask.Core native entities, whose ResponseMessage.FailureDetails carries a real StackTrace,
+   * so we propagate it into `EntityOperationFailedException.failureDetails.stackTrace`. Do not "fix"
+   * this back to null for Java parity — the extra fidelity is the point.
    */
   private decodeEntityResponseMessage(
     rawInput: string | undefined,
-  ): { isFailure: false; result: any } | { isFailure: true; errorType: string; errorMessage: string } {
+  ):
+    | { isFailure: false; result: any }
+    | { isFailure: true; errorType: string; errorMessage: string; stackTrace?: string } {
     if (rawInput === undefined || rawInput === "") {
       return { isFailure: false, result: undefined };
     }
@@ -552,6 +561,7 @@ export class OrchestrationExecutor {
       // The "exceptionType" JSON field actually carries the error message (misleading name).
       let errorMessage = hasExceptionType ? String(exceptionType) : "Entity operation failed";
       let errorType = "unknown";
+      let stackTrace: string | undefined;
 
       if (hasFailureDetails && typeof failureDetails === "object") {
         if (failureDetails.ErrorType !== undefined && failureDetails.ErrorType !== null) {
@@ -560,9 +570,12 @@ export class OrchestrationExecutor {
         if (failureDetails.ErrorMessage !== undefined && failureDetails.ErrorMessage !== null) {
           errorMessage = String(failureDetails.ErrorMessage);
         }
+        if (failureDetails.StackTrace !== undefined && failureDetails.StackTrace !== null) {
+          stackTrace = String(failureDetails.StackTrace);
+        }
       }
 
-      return { isFailure: true, errorType, errorMessage };
+      return { isFailure: true, errorType, errorMessage, stackTrace };
     }
 
     // Success — extract the inner (double-encoded) result value.

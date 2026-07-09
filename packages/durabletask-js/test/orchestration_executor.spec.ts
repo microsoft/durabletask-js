@@ -2420,7 +2420,6 @@ describe("Entity call on classic (Azure Storage) backend — EVENTSENT/EVENTRAIS
     expect(callResult).toBeUndefined();
     expect(result2.actions.find((a) => a.hasCompleteorchestration())).toBeUndefined();
     expect(result2.actions.find((a) => a.hasSendentitymessage())).toBeUndefined();
-
   });
 
   it("accepts EVENTSENT confirming a signalEntity SIGNAL action without throwing", async () => {
@@ -2529,10 +2528,16 @@ describe("Entity call on classic (Azure Storage) backend — EVENTSENT/EVENTRAIS
     const requestId = callAction.getSendentitymessage()!.getEntityoperationcalled()!.getRequestid();
     const seqId = callAction.getId();
 
-    // Failure ResponseMessage: "result" is present (null) alongside structured failureDetails.
+    // Failure ResponseMessage: "result" is present (null) alongside structured failureDetails,
+    // including a StackTrace (the classic backend uses DurableTask.Core native entities over gRPC,
+    // whose FailureDetails carries a real stack trace).
     const responseJson = JSON.stringify({
       result: null,
-      failureDetails: { ErrorType: "InvalidOperationException", ErrorMessage: "boom" },
+      failureDetails: {
+        ErrorType: "InvalidOperationException",
+        ErrorMessage: "boom",
+        StackTrace: "   at Counter.Get() in Counter.cs:line 42",
+      },
     });
     const oldEvents2 = [...startEvents];
     const newEvents2 = [
@@ -2549,6 +2554,7 @@ describe("Entity call on classic (Azure Storage) backend — EVENTSENT/EVENTRAIS
     expect(entityError.entityId.key).toBe("my-counter");
     expect(entityError.failureDetails.errorType).toBe("InvalidOperationException");
     expect(entityError.failureDetails.errorMessage).toBe("boom");
+    expect(entityError.failureDetails.stackTrace).toBe("   at Counter.Get() in Counter.cs:line 42");
   });
 
   it("rejects callEntity with EntityOperationFailedException when EVENTRAISED carries an exceptionType-only ResponseMessage", async () => {
@@ -2591,6 +2597,8 @@ describe("Entity call on classic (Azure Storage) backend — EVENTSENT/EVENTRAIS
     const entityError = caughtError as EntityOperationFailedException;
     expect(entityError.failureDetails.errorType).toBe("unknown");
     expect(entityError.failureDetails.errorMessage).toBe("Something failed");
+    // WebJobs-variant path carries no structured failureDetails, so there is no stack trace.
+    expect(entityError.failureDetails.stackTrace).toBeUndefined();
   });
 });
 
