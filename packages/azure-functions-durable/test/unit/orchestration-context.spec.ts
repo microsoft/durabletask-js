@@ -22,6 +22,12 @@ function createFakeCoreContext() {
     callEntity: jest.fn().mockReturnValue("callEntity-task"),
     signalEntity: jest.fn(),
   };
+  const replaySafeLogger = {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  };
   const ctx = {
     instanceId: "instance-1",
     isReplaying: true,
@@ -35,9 +41,10 @@ function createFakeCoreContext() {
     setCustomStatus: jest.fn(),
     sendEvent: jest.fn(),
     newGuid: jest.fn().mockReturnValue("guid-1"),
+    createReplaySafeLogger: jest.fn(() => replaySafeLogger),
     entities,
   };
-  return { ctx: ctx as unknown as OrchestrationContext, raw: ctx, entities };
+  return { ctx: ctx as unknown as OrchestrationContext, raw: ctx, entities, replaySafeLogger };
 }
 
 describe("DurableOrchestrationContext", () => {
@@ -200,5 +207,29 @@ describe("wrapOrchestrator", () => {
     const final = await gen.next("ACTIVITY_RESULT");
     expect(final.done).toBe(true);
     expect(final.value).toBe("done:ACTIVITY_RESULT");
+  });
+
+  it("exposes a replay-safe logger as context.log/error on the classic context", async () => {
+    // A classic orchestrator may be a plain (non-generator) function that returns a value; the
+    // wrapper still invokes it with the full classic context, so log wiring is exercised here.
+    const classic = (context: ClassicOrchestrationContext): string => {
+      context.log("hi");
+      context.error("boom");
+      return "logged";
+    };
+
+    const { ctx, replaySafeLogger } = createFakeCoreContext();
+    const wrapped = wrapOrchestrator(classic);
+    const gen = wrapped(ctx, undefined) as AsyncGenerator<unknown, unknown, unknown>;
+
+    const done = await gen.next();
+    expect(done.done).toBe(true);
+    expect(done.value).toBe("logged");
+    // The wrapper builds the classic context's log methods from the CORE replay-safe logger.
+    expect(
+      (ctx as unknown as { createReplaySafeLogger: jest.Mock }).createReplaySafeLogger,
+    ).toHaveBeenCalledTimes(1);
+    expect(replaySafeLogger.info).toHaveBeenCalledWith("hi");
+    expect(replaySafeLogger.error).toHaveBeenCalledWith("boom");
   });
 });

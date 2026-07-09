@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 import {
+  ConsoleLogger,
   EntityInstanceId,
   OrchestrationContext,
   Task,
@@ -183,6 +184,18 @@ export class DurableOrchestrationContext {
 /** The object passed to a classic (v3) orchestrator function; its `df` is the durable context. */
 export interface ClassicOrchestrationContext {
   df: DurableOrchestrationContext;
+  /** Replay-safe log at info level (suppressed during replay). Alias of {@link info}. */
+  log(...args: unknown[]): void;
+  /** Replay-safe error log (suppressed during replay). */
+  error(...args: unknown[]): void;
+  /** Replay-safe warning log (suppressed during replay). */
+  warn(...args: unknown[]): void;
+  /** Replay-safe info log (suppressed during replay). */
+  info(...args: unknown[]): void;
+  /** Replay-safe debug log (suppressed during replay). */
+  debug(...args: unknown[]): void;
+  /** Replay-safe trace log (mapped to debug; suppressed during replay). */
+  trace(...args: unknown[]): void;
 }
 
 /**
@@ -216,7 +229,20 @@ export function wrapOrchestrator(handler: TOrchestrator | ClassicOrchestrator): 
       input: unknown,
     ): AsyncGenerator<Task<unknown>, unknown, unknown> {
       const df = new DurableOrchestrationContext(ctx, input);
-      const result = classic({ df });
+      // Replay-safe logger: output is suppressed while the engine replays history, matching the
+      // .NET/Python providers. Core Logger has no `trace`/plain `log`, so log→info and trace→debug.
+      const logger = ctx.createReplaySafeLogger(new ConsoleLogger());
+      const toArgs = (a: unknown[]) => a as [string, ...unknown[]];
+      const classicCtx: ClassicOrchestrationContext = {
+        df,
+        log: (...a) => logger.info(...toArgs(a)),
+        info: (...a) => logger.info(...toArgs(a)),
+        warn: (...a) => logger.warn(...toArgs(a)),
+        error: (...a) => logger.error(...toArgs(a)),
+        debug: (...a) => logger.debug(...toArgs(a)),
+        trace: (...a) => logger.debug(...toArgs(a)),
+      };
+      const result = classic(classicCtx);
       if (isGenerator(result)) {
         return yield* result;
       }
