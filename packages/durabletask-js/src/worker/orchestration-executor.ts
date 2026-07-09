@@ -500,6 +500,7 @@ export class OrchestrationExecutor {
       const exception = new EntityOperationFailedException(pendingCall.entityId, pendingCall.operationName, {
         errorType: decoded.errorType,
         errorMessage: decoded.errorMessage,
+        stackTrace: decoded.stackTrace,
       });
       pendingCall.task.failWithError(exception);
     } else {
