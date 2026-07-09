@@ -96,11 +96,11 @@ describe("DurableFunctionsClient", () => {
       expect(restart).toHaveBeenCalledWith("id-1", true);
 
       const purge = jest.spyOn(client, "purgeOrchestration").mockResolvedValue(undefined);
-      const purgeResult = await client.purgeInstanceHistoryBy(
-        new Date("2020-01-01T00:00:00.000Z"),
-        new Date("2020-02-01T00:00:00.000Z"),
-        [OrchestrationRuntimeStatus.Completed],
-      );
+      const purgeResult = await client.purgeInstanceHistoryBy({
+        createdTimeFrom: new Date("2020-01-01T00:00:00.000Z"),
+        createdTimeTo: new Date("2020-02-01T00:00:00.000Z"),
+        runtimeStatus: [OrchestrationRuntimeStatus.Completed],
+      });
       expect(purgeResult.instancesDeleted).toBe(0);
       expect(purge).toHaveBeenCalledTimes(1);
       const criteria = purge.mock.calls[0][0] as PurgeInstanceCriteria;

@@ -293,20 +293,18 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    * shape), returning a {@link PurgeHistoryResult}.
    *
    * @deprecated Use {@link purgeOrchestration} with a {@link PurgeInstanceCriteria} instead.
-   * @param createdTimeFrom - Lower bound (inclusive) of the instance creation-time window.
-   * @param createdTimeTo - Optional upper bound of the creation-time window.
-   * @param runtimeStatus - Optional runtime-status filter.
+   * @param filter - Creation-time window and/or runtime-status filter.
    */
-  async purgeInstanceHistoryBy(
-    createdTimeFrom: Date,
-    createdTimeTo?: Date,
-    runtimeStatus?: OrchestrationRuntimeStatus[],
-  ): Promise<PurgeHistoryResult> {
+  async purgeInstanceHistoryBy(filter: {
+    createdTimeFrom?: Date;
+    createdTimeTo?: Date;
+    runtimeStatus?: OrchestrationRuntimeStatus[];
+  }): Promise<PurgeHistoryResult> {
     const criteria = new PurgeInstanceCriteria();
-    criteria.setCreatedTimeFrom(createdTimeFrom);
-    criteria.setCreatedTimeTo(createdTimeTo);
-    if (runtimeStatus) {
-      criteria.setRuntimeStatusList(runtimeStatus.map(fromOrchestrationRuntimeStatus));
+    criteria.setCreatedTimeFrom(filter.createdTimeFrom);
+    criteria.setCreatedTimeTo(filter.createdTimeTo);
+    if (filter.runtimeStatus) {
+      criteria.setRuntimeStatusList(filter.runtimeStatus.map(fromOrchestrationRuntimeStatus));
     }
     const result = await this.purgeOrchestration(criteria);
     return new PurgeHistoryResult(result?.deletedInstanceCount ?? 0);
