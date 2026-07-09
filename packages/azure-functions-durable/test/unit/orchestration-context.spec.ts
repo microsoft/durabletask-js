@@ -171,7 +171,7 @@ describe("wrapOrchestrator", () => {
     expect(wrapOrchestrator(native)).toBe(native);
   });
 
-  it("wraps a single-parameter classic orchestrator and drives it through context.df", () => {
+  it("wraps a single-parameter classic orchestrator and drives it through context.df", async () => {
     const classic = function* (
       context: ClassicOrchestrationContext,
     ): Generator<Task<unknown>, string, unknown> {
@@ -185,14 +185,19 @@ describe("wrapOrchestrator", () => {
     expect(wrapped).not.toBe(classic);
 
     const { ctx, raw } = createFakeCoreContext();
-    const gen = wrapped(ctx, "INPUT") as Generator<unknown, unknown, unknown>;
+    // The engine gates on Symbol.asyncIterator: the wrapper MUST return an async generator or the
+    // core executor never drives it (it would complete immediately with the raw return value).
+    const gen = wrapped(ctx, "INPUT") as AsyncGenerator<unknown, unknown, unknown>;
+    expect(typeof (gen as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator]).toBe(
+      "function",
+    );
 
-    const firstYield = gen.next();
+    const firstYield = await gen.next();
     expect(raw.callActivity).toHaveBeenCalledWith("a", "INPUT");
     expect(firstYield.value).toBe("callActivity-task");
     expect(firstYield.done).toBe(false);
 
-    const final = gen.next("ACTIVITY_RESULT");
+    const final = await gen.next("ACTIVITY_RESULT");
     expect(final.done).toBe(true);
     expect(final.value).toBe("done:ACTIVITY_RESULT");
   });

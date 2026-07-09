@@ -207,10 +207,14 @@ export type ClassicOrchestrator = (
 export function wrapOrchestrator(handler: TOrchestrator | ClassicOrchestrator): TOrchestrator {
   if (typeof handler === "function" && handler.length === 1) {
     const classic = handler as ClassicOrchestrator;
-    const wrapped = function* (
+    // The core engine only drives orchestrators whose invocation returns an ASYNC generator
+    // (it gates on Symbol.asyncIterator). Classic v3 orchestrators are SYNC generators, so the
+    // wrapper must itself be an async generator that delegates to the classic one via `yield*`;
+    // that forwards each core Task to the engine and pipes sent results back into the classic body.
+    const wrapped = async function* (
       ctx: OrchestrationContext,
       input: unknown,
-    ): Generator<Task<unknown>, unknown, unknown> {
+    ): AsyncGenerator<Task<unknown>, unknown, unknown> {
       const df = new DurableOrchestrationContext(ctx, input);
       const result = classic({ df });
       if (isGenerator(result)) {
@@ -218,7 +222,7 @@ export function wrapOrchestrator(handler: TOrchestrator | ClassicOrchestrator): 
       }
       return result;
     };
-    return wrapped as TOrchestrator;
+    return wrapped as unknown as TOrchestrator;
   }
   return handler as TOrchestrator;
 }
