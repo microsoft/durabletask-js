@@ -31,6 +31,8 @@ import { CompletableTask } from "../src/task/completable-task";
 import { Task } from "../src/task/task";
 import { getName, whenAll, whenAny } from "../src/task";
 import { RuntimeOrchestrationContext } from "../src/worker/runtime-orchestration-context";
+import { EntityInstanceId } from "../src/entities/entity-instance-id";
+import { EntityOperationFailedException } from "../src/entities/entity-operation-failed-exception";
 
 // Use NoOpLogger to suppress log output during tests
 const testLogger = new NoOpLogger();
@@ -2366,6 +2368,237 @@ describe("EventSent Handler", () => {
     const failureDetails = completeAction?.getCompleteorchestration()?.getFailuredetails();
     expect(failureDetails?.getErrortype()).toEqual("NonDeterminismError");
     expect(failureDetails?.getErrormessage()).toMatch(/sendEvent/);
+  });
+});
+
+describe("Entity call on classic (Azure Storage) backend — EVENTSENT/EVENTRAISED", () => {
+  const ENTITY_INSTANCE_ID = new EntityInstanceId("counter", "my-counter").toString();
+
+  // On the classic backend the Durable Functions gRPC shim turns a callEntity into a classic
+  // send-event: the request confirmation replays as EVENTSENT and the result as EVENTRAISED
+  // (name = requestId, input = a DTFx ResponseMessage JSON). These tests exercise that path.
+
+  it("accepts EVENTSENT confirming a callEntity CALL action without throwing (removes it from pendingActions)", async () => {
+    let callResult: number | undefined;
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const entityId = new EntityInstanceId("counter", "my-counter");
+      const result: number = yield ctx.entities.callEntity<number>(entityId, "get");
+      callResult = result;
+      return result;
+    };
+
+    const registry = new Registry();
+    registry.addNamedOrchestrator("TestOrchestrator", orchestrator);
+    const executor = new OrchestrationExecutor(registry);
+
+    const startEvents = [
+      newOrchestratorStartedEvent(new Date()),
+      newExecutionStartedEvent("TestOrchestrator", "test-instance"),
+    ];
+
+    // Phase 1: capture the entity call action and its sequence id / requestId.
+    const result1 = await executor.execute("test-instance", [], startEvents);
+    const callAction = result1.actions[0];
+    expect(callAction.hasSendentitymessage()).toBe(true);
+    expect(callAction.getSendentitymessage()!.hasEntityoperationcalled()).toBe(true);
+    const seqId = callAction.getId();
+
+    // Phase 2: replay with only the EVENTSENT confirmation (no response yet). This must NOT throw
+    // a NonDeterminismError, and — since the result hasn't arrived — the call stays pending.
+    const oldEvents2 = [...startEvents, newEventSentEvent(seqId, ENTITY_INSTANCE_ID, "get")];
+    const newEvents2 = [newOrchestratorStartedEvent(new Date())];
+    const result2 = await executor.execute("test-instance", oldEvents2, newEvents2);
+
+    const failed = result2.actions.find(
+      (a) =>
+        a.hasCompleteorchestration() &&
+        a.getCompleteorchestration()!.getOrchestrationstatus() ===
+          pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+    );
+    expect(failed).toBeUndefined();
+    // No result delivered → orchestrator is still awaiting the entity, so it hasn't completed.
+    expect(callResult).toBeUndefined();
+    expect(result2.actions.find((a) => a.hasCompleteorchestration())).toBeUndefined();
+    expect(result2.actions.find((a) => a.hasSendentitymessage())).toBeUndefined();
+  });
+
+  it("accepts EVENTSENT confirming a signalEntity SIGNAL action without throwing", async () => {
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const entityId = new EntityInstanceId("counter", "my-counter");
+      ctx.entities.signalEntity(entityId, "add", 5);
+      // Suspend on a timer so replay has to reconcile the (unconfirmed) timer and the signal.
+      yield ctx.createTimer(1);
+    };
+
+    const registry = new Registry();
+    registry.addNamedOrchestrator("TestOrchestrator", orchestrator);
+    const executor = new OrchestrationExecutor(registry);
+
+    const startEvents = [
+      newOrchestratorStartedEvent(new Date()),
+      newExecutionStartedEvent("TestOrchestrator", "test-instance"),
+    ];
+
+    const result1 = await executor.execute("test-instance", [], startEvents);
+    const signalAction = result1.actions.find((a) => a.hasSendentitymessage());
+    expect(signalAction).toBeDefined();
+    expect(signalAction!.getSendentitymessage()!.hasEntityoperationsignaled()).toBe(true);
+    const seqId = signalAction!.getId();
+
+    // Replay with the EVENTSENT confirming the signal. Must not throw NonDeterminismError.
+    const oldEvents2 = [...startEvents, newEventSentEvent(seqId, ENTITY_INSTANCE_ID, "add")];
+    const newEvents2 = [newOrchestratorStartedEvent(new Date())];
+    const result2 = await executor.execute("test-instance", oldEvents2, newEvents2);
+
+    const failed = result2.actions.find(
+      (a) =>
+        a.hasCompleteorchestration() &&
+        a.getCompleteorchestration()!.getOrchestrationstatus() ===
+          pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+    );
+    expect(result2.actions.find((a) => a.hasSendentitymessage())).toBeUndefined();
+    expect(failed).toBeUndefined();
+  });
+
+  it("resolves callEntity when confirmed via EVENTSENT then result delivered via EVENTRAISED", async () => {
+    let callResult: number | undefined;
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const entityId = new EntityInstanceId("counter", "my-counter");
+      const result: number = yield ctx.entities.callEntity<number>(entityId, "get");
+      callResult = result;
+      return result;
+    };
+
+    const registry = new Registry();
+    registry.addNamedOrchestrator("TestOrchestrator", orchestrator);
+    const executor = new OrchestrationExecutor(registry);
+
+    const startEvents = [
+      newOrchestratorStartedEvent(new Date()),
+      newExecutionStartedEvent("TestOrchestrator", "test-instance"),
+    ];
+
+    const result1 = await executor.execute("test-instance", [], startEvents);
+    const callAction = result1.actions[0];
+    const requestId = callAction.getSendentitymessage()!.getEntityoperationcalled()!.getRequestid();
+    const seqId = callAction.getId();
+
+    // Classic backend: EVENTSENT confirms the send, then EVENTRAISED (name = requestId) delivers
+    // the DTFx ResponseMessage wrapper. The result value is double-encoded (42 -> "42").
+    const oldEvents2 = [...startEvents];
+    const newEvents2 = [
+      newOrchestratorStartedEvent(new Date()),
+      newEventSentEvent(seqId, ENTITY_INSTANCE_ID, "get"),
+      newEventRaisedEvent(requestId, JSON.stringify({ result: "42" })),
+    ];
+    const result2 = await executor.execute("test-instance", oldEvents2, newEvents2);
+
+    expect(callResult).toBe(42);
+    const completeAction = result2.actions.find((a) => a.hasCompleteorchestration());
+    expect(completeAction).toBeDefined();
+    expect(completeAction!.getCompleteorchestration()!.getOrchestrationstatus()).toEqual(
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED,
+    );
+    expect(completeAction!.getCompleteorchestration()!.getResult()?.getValue()).toEqual(JSON.stringify(42));
+  });
+
+  it("rejects callEntity with EntityOperationFailedException when EVENTRAISED carries a failureDetails ResponseMessage", async () => {
+    let caughtError: Error | undefined;
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const entityId = new EntityInstanceId("counter", "my-counter");
+      try {
+        yield ctx.entities.callEntity<number>(entityId, "get");
+      } catch (e) {
+        caughtError = e as Error;
+      }
+      return "handled";
+    };
+
+    const registry = new Registry();
+    registry.addNamedOrchestrator("TestOrchestrator", orchestrator);
+    const executor = new OrchestrationExecutor(registry);
+
+    const startEvents = [
+      newOrchestratorStartedEvent(new Date()),
+      newExecutionStartedEvent("TestOrchestrator", "test-instance"),
+    ];
+
+    const result1 = await executor.execute("test-instance", [], startEvents);
+    const callAction = result1.actions[0];
+    const requestId = callAction.getSendentitymessage()!.getEntityoperationcalled()!.getRequestid();
+    const seqId = callAction.getId();
+
+    // Failure ResponseMessage: "result" is present (null) alongside structured failureDetails,
+    // including a StackTrace (the classic backend uses DurableTask.Core native entities over gRPC,
+    // whose FailureDetails carries a real stack trace).
+    const responseJson = JSON.stringify({
+      result: null,
+      failureDetails: {
+        ErrorType: "InvalidOperationException",
+        ErrorMessage: "boom",
+        StackTrace: "   at Counter.Get() in Counter.cs:line 42",
+      },
+    });
+    const oldEvents2 = [...startEvents];
+    const newEvents2 = [
+      newOrchestratorStartedEvent(new Date()),
+      newEventSentEvent(seqId, ENTITY_INSTANCE_ID, "get"),
+      newEventRaisedEvent(requestId, responseJson),
+    ];
+    await executor.execute("test-instance", oldEvents2, newEvents2);
+
+    expect(caughtError).toBeInstanceOf(EntityOperationFailedException);
+    const entityError = caughtError as EntityOperationFailedException;
+    expect(entityError.operationName).toBe("get");
+    expect(entityError.entityId.name).toBe("counter");
+    expect(entityError.entityId.key).toBe("my-counter");
+    expect(entityError.failureDetails.errorType).toBe("InvalidOperationException");
+    expect(entityError.failureDetails.errorMessage).toBe("boom");
+    expect(entityError.failureDetails.stackTrace).toBe("   at Counter.Get() in Counter.cs:line 42");
+  });
+
+  it("rejects callEntity with EntityOperationFailedException when EVENTRAISED carries an exceptionType-only ResponseMessage", async () => {
+    let caughtError: Error | undefined;
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const entityId = new EntityInstanceId("counter", "my-counter");
+      try {
+        yield ctx.entities.callEntity<number>(entityId, "get");
+      } catch (e) {
+        caughtError = e as Error;
+      }
+      return "handled";
+    };
+
+    const registry = new Registry();
+    registry.addNamedOrchestrator("TestOrchestrator", orchestrator);
+    const executor = new OrchestrationExecutor(registry);
+
+    const startEvents = [
+      newOrchestratorStartedEvent(new Date()),
+      newExecutionStartedEvent("TestOrchestrator", "test-instance"),
+    ];
+
+    const result1 = await executor.execute("test-instance", [], startEvents);
+    const callAction = result1.actions[0];
+    const requestId = callAction.getSendentitymessage()!.getEntityoperationcalled()!.getRequestid();
+    const seqId = callAction.getId();
+
+    // WebJobs-variant failure: "exceptionType" present (carries the error message), no failureDetails.
+    const responseJson = JSON.stringify({ result: "serialized-exception", exceptionType: "Something failed" });
+    const oldEvents2 = [...startEvents];
+    const newEvents2 = [
+      newOrchestratorStartedEvent(new Date()),
+      newEventSentEvent(seqId, ENTITY_INSTANCE_ID, "get"),
+      newEventRaisedEvent(requestId, responseJson),
+    ];
+    await executor.execute("test-instance", oldEvents2, newEvents2);
+
+    expect(caughtError).toBeInstanceOf(EntityOperationFailedException);
+    const entityError = caughtError as EntityOperationFailedException;
+    expect(entityError.failureDetails.errorType).toBe("unknown");
+    expect(entityError.failureDetails.errorMessage).toBe("Something failed");
+    // WebJobs-variant path carries no structured failureDetails, so there is no stack trace.
+    expect(entityError.failureDetails.stackTrace).toBeUndefined();
   });
 });
 
