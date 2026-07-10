@@ -1,21 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import * as pb from "../proto/orchestrator_service_pb";
 import { CompletableTask } from "./completable-task";
-
-/**
- * Minimal structural view of the orchestration context bookkeeping that a
- * {@link TimerTask} needs in order to cancel a pending timer.
- *
- * This is intentionally a narrow interface (rather than importing
- * `RuntimeOrchestrationContext`) so that `TimerTask` has no circular dependency
- * on the worker runtime. The concrete context satisfies it structurally.
- */
-export interface TimerBookkeeping {
-  _pendingActions: Record<number, pb.OrchestratorAction>;
-  _pendingTasks: Record<number, CompletableTask<any>>;
-}
 
 /**
  * A durable timer task returned by `OrchestrationContext.createTimer`.
@@ -24,6 +10,11 @@ export interface TimerBookkeeping {
  * canceled. Canceling is the classic "timeout vs. work" pattern: when a racing
  * task wins (e.g. via `whenAny`), the losing timeout timer is canceled so the
  * orchestration is no longer waiting on it.
+ *
+ * `TimerTask` is decoupled from the orchestration context's internal
+ * bookkeeping: the context injects a cancel handler via {@link setCancelHandler}
+ * and this class knows nothing about pending actions or tasks. This mirrors the
+ * `CancellableTask.set_cancel_handler` pattern in the Python SDK.
  *
  * @example Cancel the loser of a race
  * ```typescript
@@ -36,22 +27,8 @@ export interface TimerBookkeeping {
  * ```
  */
 export class TimerTask extends CompletableTask<undefined> {
-  private readonly _bookkeeping: TimerBookkeeping;
-  private readonly _timerId: number;
+  private _cancelHandler?: () => void;
   private _isCanceled = false;
-
-  /**
-   * Creates a new TimerTask.
-   *
-   * @param bookkeeping - The orchestration context bookkeeping holding the pending
-   *   actions and tasks (the concrete `RuntimeOrchestrationContext` satisfies this).
-   * @param timerId - The sequence id of the timer's `CreateTimer` action / pending task.
-   */
-  constructor(bookkeeping: TimerBookkeeping, timerId: number) {
-    super();
-    this._bookkeeping = bookkeeping;
-    this._timerId = timerId;
-  }
 
   /**
    * Whether this timer has been canceled via {@link cancel}.
@@ -61,20 +38,37 @@ export class TimerTask extends CompletableTask<undefined> {
   }
 
   /**
+   * Registers the handler invoked when this timer is first canceled.
+   *
+   * The orchestration context supplies a closure that removes the timer's
+   * pending `CreateTimer` action and pending-task entry, so this class needs no
+   * knowledge of the context's internals.
+   *
+   * @param handler - Called once, when {@link cancel} first transitions the timer
+   *   to the canceled state.
+   */
+  setCancelHandler(handler: () => void): void {
+    this._cancelHandler = handler;
+  }
+
+  /**
    * Cancels this timer so the orchestration stops waiting on it.
    *
-   * Semantics:
-   * - If the timer's `CreateTimer` action has not yet been dispatched to the
-   *   sidecar (i.e. it is still pending in the current turn), it is removed so
-   *   the timer is never scheduled at all.
-   * - If the timer was already scheduled on a prior turn, it is removed from the
-   *   pending-task set so the orchestrator no longer waits on it; the backend
-   *   timer is reaped when the orchestration completes, and a late `TimerFired`
-   *   event is ignored because no pending task remains for it.
+   * The actual bookkeeping is performed by the cancel handler injected via
+   * {@link setCancelHandler}. The orchestration context's handler:
+   * - Removes the timer's `CreateTimer` action if it has not yet been dispatched
+   *   to the sidecar (i.e. it is still pending in the current turn), so the timer
+   *   is never scheduled at all.
+   * - Otherwise drops the timer from the pending-task set so the orchestrator no
+   *   longer waits on it; the backend timer is reaped when the orchestration
+   *   completes, and a late `TimerFired` event is ignored because no pending task
+   *   remains for it.
    *
    * This is deterministic and replay-safe: it consumes no sequence number and
-   * only deletes bookkeeping entries by key. Calling `cancel()` after the timer
-   * has already fired (completed) or after it was already canceled is a no-op.
+   * only runs the injected handler. Cancel does NOT mark the task complete
+   * (`isCompleted` stays false). Calling `cancel()` after the timer has already
+   * fired (completed) or after it was already canceled is a no-op, so the handler
+   * runs at most once.
    */
   cancel(): void {
     if (this._isComplete || this._isCanceled) {
@@ -83,11 +77,6 @@ export class TimerTask extends CompletableTask<undefined> {
     }
 
     this._isCanceled = true;
-
-    // Drop the pending CreateTimer action (if it has not been dispatched yet)
-    // so it is not scheduled, and stop tracking this timer as outstanding so
-    // the orchestrator is no longer waiting on it.
-    delete this._bookkeeping._pendingActions[this._timerId];
-    delete this._bookkeeping._pendingTasks[this._timerId];
+    this._cancelHandler?.();
   }
 }

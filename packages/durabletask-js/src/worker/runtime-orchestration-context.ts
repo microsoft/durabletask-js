@@ -335,7 +335,11 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     const action = ph.newCreateTimerAction(id, fireAtDate);
     this._pendingActions[action.getId()] = action;
 
-    const timerTask = new TimerTask(this, id);
+    const timerTask = new TimerTask();
+    timerTask.setCancelHandler(() => {
+      delete this._pendingActions[id];
+      delete this._pendingTasks[id];
+    });
     this._pendingTasks[id] = timerTask;
 
     return timerTask;
