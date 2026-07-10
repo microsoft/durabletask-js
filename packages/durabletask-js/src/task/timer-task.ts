@@ -18,9 +18,11 @@ import { CompletableTask } from "./completable-task";
  *
  * @example Cancel the loser of a race
  * ```typescript
+ * import { whenAny } from "@microsoft/durabletask-js";
+ *
  * const timeoutTask = context.createTimer(expirationDate);
  * const workTask = context.callActivity("DoWork");
- * const winner = yield context.whenAny([timeoutTask, workTask]);
+ * const winner = yield whenAny([timeoutTask, workTask]);
  * if (winner === workTask && !timeoutTask.isCompleted) {
  *   timeoutTask.cancel();
  * }
@@ -44,6 +46,8 @@ export class TimerTask extends CompletableTask<undefined> {
    * pending `CreateTimer` action and pending-task entry, so this class needs no
    * knowledge of the context's internals.
    *
+   * @internal Invoked by the orchestration context when the timer is created.
+   *   Not part of the public `TimerTask` surface; orchestrator code must not call it.
    * @param handler - Called once, when {@link cancel} first transitions the timer
    *   to the canceled state.
    */

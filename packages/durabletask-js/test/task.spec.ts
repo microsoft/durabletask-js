@@ -138,6 +138,14 @@ describe("Task (base class)", () => {
       expect(() => task.result).not.toThrow();
       expect(task.result).toBeUndefined();
     });
+
+    it("result returns undefined for a failed task even if _result was set", () => {
+      const t = new CompletableTask<string>();
+      t._result = "stale";
+      t.fail("boom");
+      expect(t.result).toBeUndefined();
+      expect(t.isFaulted).toBe(true);
+    });
   });
 
   describe("isCompleted / isFaulted (v3 aliases)", () => {

@@ -55,7 +55,7 @@ export class Task<T> {
    * Durable Functions `Task.result` shape.
    */
   get result(): T | undefined {
-    return this._isComplete ? this._result : undefined;
+    return this._isComplete && !this._exception ? this._result : undefined;
   }
 
   /**
