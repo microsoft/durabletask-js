@@ -113,6 +113,69 @@ describe("Task (base class)", () => {
       expect(task.isFailed).toBe(true);
     });
   });
+
+  // v3 Durable Functions-aligned aliases (see issue #292).
+  describe("result (v3 alias)", () => {
+    it("should return undefined (not throw) when the task is not complete", () => {
+      const task = new Task<number>();
+      expect(() => task.result).not.toThrow();
+      expect(task.result).toBeUndefined();
+    });
+
+    it("should return the value when the task completed successfully", () => {
+      const task = new Task<number>();
+      task._result = 42;
+      task._isComplete = true;
+
+      expect(task.result).toBe(42);
+    });
+
+    it("should return undefined (not throw) when the task has failed", () => {
+      const task = new Task<number>();
+      task._exception = new TaskFailedError("boom", makeFailureDetails());
+      task._isComplete = true;
+
+      expect(() => task.result).not.toThrow();
+      expect(task.result).toBeUndefined();
+    });
+
+    it("result returns undefined for a failed task even if _result was set", () => {
+      const t = new CompletableTask<string>();
+      t._result = "stale";
+      t.fail("boom");
+      expect(t.result).toBeUndefined();
+      expect(t.isFaulted).toBe(true);
+    });
+  });
+
+  describe("isCompleted / isFaulted (v3 aliases)", () => {
+    it("isCompleted should mirror isComplete across states", () => {
+      const task = new Task<number>();
+      expect(task.isCompleted).toBe(false);
+
+      task._isComplete = true;
+      expect(task.isCompleted).toBe(true);
+      expect(task.isCompleted).toBe(task.isComplete);
+    });
+
+    it("isFaulted should mirror isFailed across states", () => {
+      const task = new Task<number>();
+      expect(task.isFaulted).toBe(false);
+
+      task._exception = new TaskFailedError("err", makeFailureDetails());
+      expect(task.isFaulted).toBe(true);
+      expect(task.isFaulted).toBe(task.isFailed);
+    });
+
+    it("isFaulted should be false for a successfully completed task", () => {
+      const task = new Task<number>();
+      task._result = 1;
+      task._isComplete = true;
+
+      expect(task.isCompleted).toBe(true);
+      expect(task.isFaulted).toBe(false);
+    });
+  });
 });
 
 describe("CompletableTask", () => {

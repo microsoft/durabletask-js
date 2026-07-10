@@ -2369,6 +2369,147 @@ describe("EventSent Handler", () => {
     expect(failureDetails?.getErrortype()).toEqual("NonDeterminismError");
     expect(failureDetails?.getErrormessage()).toMatch(/sendEvent/);
   });
+
+  // Regression coverage for issue #292: the classic "activity vs. timeout" race
+  // where the winner cancels the loser timer (cancellable TimerTask).
+  it("should complete the timer-vs-activity race when the activity wins and the loser timer is canceled", async () => {
+    const hello = (_: any, name: string) => `Hello ${name}!`;
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const timeoutTask = ctx.createTimer(new Date(ctx.currentUtcDateTime.getTime() + 24 * 60 * 60 * 1000));
+      const activityTask = ctx.callActivity(hello, "Tokyo");
+
+      const winner = yield whenAny([timeoutTask, activityTask]);
+
+      // Identity must be preserved: whenAny returns the exact activity task instance.
+      if (winner === activityTask) {
+        if (!timeoutTask.isCompleted) {
+          timeoutTask.cancel();
+        }
+        return activityTask.getResult();
+      }
+      return "timed out";
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(hello);
+
+    // Turn 1: schedules the timer (action 1) and the activity (action 2), then yields on whenAny.
+    const startTime = new Date(2020, 0, 1, 12, 0, 0);
+    let executor = new OrchestrationExecutor(registry, testLogger);
+    let result = await executor.execute(TEST_INSTANCE_ID, [], [
+      newOrchestratorStartedEvent(startTime),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID),
+    ]);
+    expect(result.actions.length).toEqual(2);
+    expect(result.actions[0].hasCreatetimer()).toBeTruthy();
+    expect(result.actions[1].hasScheduletask()).toBeTruthy();
+
+    // Turn 2: the activity completes first; the timer has NOT fired.
+    const timerFireAt = new Date(startTime.getTime() + 24 * 60 * 60 * 1000);
+    const oldEvents = [
+      newOrchestratorStartedEvent(startTime),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID),
+      newTimerCreatedEvent(1, timerFireAt),
+      newTaskScheduledEvent(2, activityName, JSON.stringify("Tokyo")),
+    ];
+    const encodedOutput = JSON.stringify(hello(null, "Tokyo"));
+    executor = new OrchestrationExecutor(registry, testLogger);
+    result = await executor.execute(TEST_INSTANCE_ID, oldEvents, [newTaskCompletedEvent(2, encodedOutput)]);
+
+    // A single CompleteOrchestration action, carrying the activity's result, and
+    // no leftover CreateTimer action (the canceled timer must not be rescheduled).
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(completeAction?.getResult()?.getValue()).toEqual(encodedOutput);
+    expect(result.actions.some((a) => a.hasCreatetimer())).toBe(false);
+  });
+
+  it("should complete normally when the timer wins the race (no regression to timer firing)", async () => {
+    const hello = (_: any, name: string) => `Hello ${name}!`;
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const timeoutTask = ctx.createTimer(new Date(ctx.currentUtcDateTime.getTime() + 24 * 60 * 60 * 1000));
+      const activityTask = ctx.callActivity(hello, "Tokyo");
+
+      const winner = yield whenAny([timeoutTask, activityTask]);
+
+      if (winner === timeoutTask) {
+        return "timed out";
+      }
+      return activityTask.getResult();
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(hello);
+
+    const startTime = new Date(2020, 0, 1, 12, 0, 0);
+    const timerFireAt = new Date(startTime.getTime() + 24 * 60 * 60 * 1000);
+    const oldEvents = [
+      newOrchestratorStartedEvent(startTime),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID),
+      newTimerCreatedEvent(1, timerFireAt),
+      newTaskScheduledEvent(2, activityName, JSON.stringify("Tokyo")),
+    ];
+
+    // The timer fires first: the orchestration should still complete via the timeout branch.
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, [newTimerFiredEvent(1, timerFireAt)]);
+
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify("timed out"));
+  });
+
+  it("should ignore a fired event for a canceled timer (replay-safe) and keep running", async () => {
+    const hello = (_: any, name: string) => `Hello ${name}!`;
+
+    // The orchestration cancels the timer, then continues with more work. A late
+    // TimerFired event for the canceled timer must be ignored (no crash, no
+    // premature completion) rather than resuming the orchestrator.
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const timeoutTask = ctx.createTimer(new Date(ctx.currentUtcDateTime.getTime() + 24 * 60 * 60 * 1000));
+      const activityTask = ctx.callActivity(hello, "Tokyo");
+
+      const winner = yield whenAny([timeoutTask, activityTask]);
+      if (winner === activityTask && !timeoutTask.isCompleted) {
+        timeoutTask.cancel();
+      }
+
+      // Continue after canceling the timer.
+      const second = yield ctx.callActivity(hello, "Seattle");
+      return second;
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(hello);
+
+    const startTime = new Date(2020, 0, 1, 12, 0, 0);
+    const timerFireAt = new Date(startTime.getTime() + 24 * 60 * 60 * 1000);
+    const oldEvents = [
+      newOrchestratorStartedEvent(startTime),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID),
+      newTimerCreatedEvent(1, timerFireAt),
+      newTaskScheduledEvent(2, activityName, JSON.stringify("Tokyo")),
+    ];
+
+    // The first activity completes AND the (canceled) timer fires in the same batch.
+    const encodedOutput = JSON.stringify(hello(null, "Tokyo"));
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, [
+      newTaskCompletedEvent(2, encodedOutput),
+      newTimerFiredEvent(1, timerFireAt),
+    ]);
+
+    // The fired canceled timer is ignored; the orchestration schedules the second
+    // activity and is NOT complete.
+    expect(result.actions.length).toEqual(1);
+    expect(result.actions[0].hasScheduletask()).toBeTruthy();
+    expect(result.actions.some((a) => a.hasCompleteorchestration())).toBe(false);
+  });
 });
 
 describe("Entity call on classic (Azure Storage) backend — EVENTSENT/EVENTRAISED", () => {
