@@ -126,4 +126,25 @@ describe("WhenAllTask", () => {
     child3.complete(3);
     expect(task.pendingTasks()).toBe(0);
   });
+
+  // Issue #217: failed child completions are counted in the same _completedTasks
+  // counter as successful ones. There is no separate failed-task counter, so a
+  // failing child increments completedTasks just like a successful one before
+  // fail-fast completion kicks in.
+  it("should count both successful and failed children in completedTasks", () => {
+    const child1 = new CompletableTask<number>();
+    const child2 = new CompletableTask<number>();
+    const child3 = new CompletableTask<number>();
+    const task = new WhenAllTask([child1, child2, child3]);
+
+    child1.complete(1);
+    expect(task.completedTasks).toBe(1);
+
+    // The failing child increments the same counter before fail-fast completes the task.
+    child2.fail("child failed");
+
+    expect(task.completedTasks).toBe(2);
+    expect(task.isComplete).toBe(true);
+    expect(task.isFailed).toBe(true);
+  });
 });
