@@ -782,8 +782,14 @@ export class InMemoryOrchestrationBackend {
       const subInstanceId = subInfo.getInstanceid();
       const subInstance = this.instances.get(subInstanceId);
       if (!subInstance) {
-        // Sub-orchestration was purged — re-create it so it runs fresh.
-        this.createInstance(subInstanceId, subInfo.getName(), subInfo.getInput()?.getValue());
+        // Sub-orchestration was purged — re-create it so it runs fresh. Pass the parent
+        // metadata (mirroring processCreateSubOrchestrationAction) so the re-created sub keeps
+        // its parentInstance link and can route its completion back to this orchestration.
+        this.createInstance(subInstanceId, subInfo.getName(), subInfo.getInput()?.getValue(), undefined, {
+          name: instance.name,
+          instanceId: instance.instanceId,
+          taskScheduledId: taskId,
+        });
       } else if (subInstance.status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED) {
         this.prepareRewind(subInstance, reason);
       }
