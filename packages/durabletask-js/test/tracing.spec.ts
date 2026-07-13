@@ -1188,6 +1188,34 @@ describe("Trace Helper - setOrchestrationStatusFromActions", () => {
     expect(spans[0].status.message).toBe("Orchestration failed");
   });
 
+  it("should preserve an explicitly empty failureDetails message over the result/default fallback", () => {
+    const tracer = otel.trace.getTracer(TRACER_NAME);
+    const span = tracer.startSpan("orch-status-failed-empty-message");
+
+    // failureDetails is present (orchestration failed) but the error message is
+    // empty. failureDetails is authoritative, so nullish coalescing must keep the
+    // empty string rather than falling through to result/"Orchestration failed".
+    const completeAction = new pb.CompleteOrchestrationAction();
+    completeAction.setOrchestrationstatus(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    const failureDetails = new pb.TaskFailureDetails();
+    failureDetails.setErrormessage("");
+    failureDetails.setErrortype("Error");
+    completeAction.setFailuredetails(failureDetails);
+    const resultValue = new StringValue();
+    resultValue.setValue("Should not be used");
+    completeAction.setResult(resultValue);
+
+    const action = new pb.OrchestratorAction();
+    action.setCompleteorchestration(completeAction);
+
+    setOrchestrationStatusFromActions(span, [action]);
+    span.end();
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans[0].status.code).toBe(otel.SpanStatusCode.ERROR);
+    expect(spans[0].status.message).toBe("");
+  });
+
   it("should not set status when no completion action present", () => {
     const tracer = otel.trace.getTracer(TRACER_NAME);
     const span = tracer.startSpan("orch-status-none");
