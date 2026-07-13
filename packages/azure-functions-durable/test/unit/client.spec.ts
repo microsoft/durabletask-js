@@ -87,9 +87,9 @@ describe("DurableFunctionsClient", () => {
       await client.resume("id-1", "ignored-reason");
       expect(resume).toHaveBeenCalledWith("id-1");
 
-      await expect(client.rewind("id-1", "retrying")).rejects.toThrow(
-        "rewind is not yet supported",
-      );
+      const rewind = jest.spyOn(client, "rewindInstance").mockResolvedValue(undefined);
+      await client.rewind("id-1", "retrying");
+      expect(rewind).toHaveBeenCalledWith("id-1", "retrying");
 
       const restart = jest.spyOn(client, "restartOrchestration").mockResolvedValue("id-2");
       await expect(client.restart("id-1", true)).resolves.toBe("id-2");
@@ -107,6 +107,26 @@ describe("DurableFunctionsClient", () => {
       expect(criteria.getCreatedTimeFrom()).toEqual(new Date("2020-01-01T00:00:00.000Z"));
       expect(criteria.getCreatedTimeTo()).toEqual(new Date("2020-02-01T00:00:00.000Z"));
       expect(criteria.getRuntimeStatusList()).toHaveLength(1);
+    } finally {
+      await client.stop();
+    }
+  });
+
+  it("rewind() delegates to core rewindInstance() and no longer throws", async () => {
+    const client = new DurableFunctionsClient(CLIENT_CONFIG);
+
+    try {
+      const rewindInstance = jest
+        .spyOn(client, "rewindInstance")
+        .mockResolvedValue(undefined);
+
+      // Regression: previously threw "rewind is not yet supported by durabletask."
+      await expect(client.rewind("inst-1", "because")).resolves.toBeUndefined();
+      expect(rewindInstance).toHaveBeenCalledWith("inst-1", "because");
+
+      // The optional reason defaults to an empty string when omitted.
+      await client.rewind("inst-2");
+      expect(rewindInstance).toHaveBeenCalledWith("inst-2", "");
     } finally {
       await client.stop();
     }

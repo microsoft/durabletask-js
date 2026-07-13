@@ -81,6 +81,30 @@ describe("toDurableOrchestrationStatus", () => {
     expect(status.customStatus).toBeUndefined();
     expect(status.runtimeStatus).toBe(OrchestrationRuntimeStatus.Running);
   });
+
+  it("treats empty-string payloads as undefined and still parses valid siblings", () => {
+    // Regression: empty serialized fields previously threw
+    // "SyntaxError: Unexpected end of JSON input" from JSON.parse("").
+    const state = new OrchestrationState(
+      "instance-3",
+      "orch",
+      OrchestrationStatus.RUNNING,
+      new Date(),
+      new Date(),
+      JSON.stringify({ a: 1 }), // valid input still round-trips
+      "", // empty output -> undefined (previously threw)
+      "", // empty custom status -> undefined (previously threw)
+    );
+
+    let status!: DurableOrchestrationStatus;
+    expect(() => {
+      status = toDurableOrchestrationStatus(state);
+    }).not.toThrow();
+
+    expect(status.input).toEqual({ a: 1 });
+    expect(status.output).toBeUndefined();
+    expect(status.customStatus).toBeUndefined();
+  });
 });
 
 describe("EntityStateResponse / PurgeHistoryResult", () => {

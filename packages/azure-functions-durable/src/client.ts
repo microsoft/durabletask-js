@@ -352,16 +352,11 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    * Rewinds a failed orchestration instance so it retries from its point of failure (classic
    * Durable Functions v3 alias).
    *
-   * @remarks
-   * Not supported: the durabletask engine has no rewind equivalent yet. This mirrors the Python
-   * provider, which raises for the same reason.
-   * @deprecated Not supported; rewind has no durabletask equivalent yet.
-   * @param _instanceId - The failed orchestration instance to rewind.
-   * @param _reason - Optional reason describing why the instance is being rewound.
-   * @throws Always throws: rewind is not yet supported.
+   * @param instanceId - The failed orchestration instance to rewind.
+   * @param reason - Optional reason describing why the instance is being rewound.
    */
-  async rewind(_instanceId: string, _reason?: string): Promise<void> {
-    throw new Error("rewind is not yet supported by durabletask.");
+  async rewind(instanceId: string, reason?: string): Promise<void> {
+    await this.rewindInstance(instanceId, reason ?? "");
   }
 
   /**

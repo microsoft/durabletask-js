@@ -123,5 +123,5 @@ export function toDurableOrchestrationStatus(state: OrchestrationState): Durable
 
 /** @hidden */
 function parseJson(value: string | undefined): unknown {
-  return value === undefined ? undefined : JSON.parse(value);
+  return value === undefined || value === "" ? undefined : JSON.parse(value);
 }
