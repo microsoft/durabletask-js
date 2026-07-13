@@ -103,7 +103,7 @@ describe("Rewind Instance E2E Tests", () => {
     });
 
     // Skip these tests if the backend doesn't support rewind (emulator returns UNIMPLEMENTED)
-    it.skip("should rewind a failed orchestration instance (requires backend support)", async () => {
+    it("should rewind a failed orchestration instance (requires backend support)", async () => {
       const instanceId = generateUniqueInstanceId("rewind-test");
 
       taskHubWorker.addOrchestrator(failOnceOrchestrator);
@@ -127,9 +127,9 @@ describe("Rewind Instance E2E Tests", () => {
       expect(rewindedState).toBeDefined();
       expect(rewindedState?.runtimeStatus).toBe(OrchestrationStatus.COMPLETED);
       expect(rewindedState?.serializedOutput).toContain("Success on attempt");
-    });
+    }, 90000);
 
-    it.skip("should rewind a failed orchestration with a descriptive reason (requires backend support)", async () => {
+    it("should rewind a failed orchestration with a descriptive reason (requires backend support)", async () => {
       const instanceId = generateUniqueInstanceId("rewind-reason");
       const rewindReason = "Rewinding due to transient network failure";
 
@@ -147,7 +147,7 @@ describe("Rewind Instance E2E Tests", () => {
       // Verify it can complete after rewind
       const rewindedState = await taskHubClient.waitForOrchestrationCompletion(instanceId, true, 30);
       expect(rewindedState?.runtimeStatus).toBe(OrchestrationStatus.COMPLETED);
-    });
+    }, 90000);
   });
 
   describe("rewindInstance - negative cases", () => {
@@ -157,8 +157,8 @@ describe("Rewind Instance E2E Tests", () => {
     };
 
     // An orchestrator that waits for an event (stays in Running state)
-    const waitingOrchestrator: TOrchestrator = async (ctx: OrchestrationContext) => {
-      const approval = await ctx.waitForExternalEvent("approval");
+    const waitingOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const approval = yield ctx.waitForExternalEvent("approval");
       return `Approved: ${approval}`;
     };
 
@@ -185,7 +185,7 @@ describe("Rewind Instance E2E Tests", () => {
       await expect(taskHubClient.rewindInstance(instanceId, "Test rewind")).rejects.toThrow();
     }, 60000);
 
-    it.skip("should throw an error when rewinding a running orchestration (requires backend support)", async () => {
+    it("should throw an error when rewinding a running orchestration (requires backend support)", async () => {
       const instanceId = generateUniqueInstanceId("rewind-running");
 
       taskHubWorker.addOrchestrator(waitingOrchestrator);
@@ -208,9 +208,9 @@ describe("Rewind Instance E2E Tests", () => {
         await taskHubClient.terminateOrchestration(instanceId, "Test cleanup");
         await taskHubClient.waitForOrchestrationCompletion(instanceId, false, 30);
       }
-    });
+    }, 60000);
 
-    it.skip("should throw an error when rewinding a terminated orchestration (requires backend support)", async () => {
+    it("should throw an error when rewinding a terminated orchestration (requires backend support)", async () => {
       const instanceId = generateUniqueInstanceId("rewind-terminated");
 
       taskHubWorker.addOrchestrator(waitingOrchestrator);
@@ -227,7 +227,7 @@ describe("Rewind Instance E2E Tests", () => {
 
       // Try to rewind a terminated orchestration - should fail
       await expect(taskHubClient.rewindInstance(instanceId, "Test rewind")).rejects.toThrow();
-    });
+    }, 60000);
 
     it("should throw an error when instanceId is empty", async () => {
       await expect(taskHubClient.rewindInstance("", "Test rewind")).rejects.toThrow("instanceId is required");
