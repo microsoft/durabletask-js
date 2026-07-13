@@ -25,6 +25,7 @@ import type { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 import { OrchestratorNotRegisteredError } from "./exception/orchestrator-not-registered-error";
 import { StopIterationError } from "./exception/stop-iteration-error";
 import { Registry } from "./registry";
+import { buildRewindResult } from "./rewind";
 import { RuntimeOrchestrationContext } from "./runtime-orchestration-context";
 import {
   EntityOperationFailedException,
@@ -63,6 +64,23 @@ export class OrchestrationExecutor {
   ): Promise<OrchestrationExecutionResult> {
     if (!newEvents?.length) {
       throw new OrchestrationStateError("The new history event list must have at least one event in it");
+    }
+
+    // Check for rewind BEFORE replay. A rewind is indicated by an executionRewound event in
+    // newEvents. We look for an executionCompleted event in the committed history (oldEvents)
+    // to decide whether to rewind or replay:
+    //   1. executionCompleted IS present -> the orchestration reached a terminal state (e.g.
+    //      failed). This is a *new* rewind that the worker must short-circuit by building
+    //      clean history.
+    //   2. executionCompleted is NOT present -> the backend already processed the
+    //      RewindOrchestrationAction and removed executionCompleted from the committed history.
+    //      Here the executionRewound event in newEvents acts as a "jump-start": it wakes the
+    //      orchestration so that normal replay re-emits scheduleTask actions for the removed
+    //      activities, causing the previously-failed work to rerun. No further rewrite is
+    //      needed, so we fall through to the normal replay path below.
+    const hasRewindInNew = newEvents.some((e) => e.hasExecutionrewound());
+    if (hasRewindInNew && oldEvents.some((e) => e.hasExecutioncompleted())) {
+      return buildRewindResult(oldEvents, newEvents);
     }
 
     const ctx = new RuntimeOrchestrationContext(instanceId);
@@ -174,6 +192,11 @@ export class OrchestrationExecutor {
           break;
         case pb.HistoryEvent.EventtypeCase.EXECUTIONTERMINATED:
           await this.handleExecutionTerminated(ctx, event);
+          break;
+        case pb.HistoryEvent.EventtypeCase.EXECUTIONREWOUND:
+          // Informational event added when an orchestration is rewound. No action needed.
+          // (The rewind history rewrite happens in buildRewindResult before replay; when a
+          // rewound instance is re-dispatched this event simply jump-starts the replay.)
           break;
         case pb.HistoryEvent.EventtypeCase.ENTITYOPERATIONCALLED:
           await this.handleEntityOperationCalled(ctx, event);
