@@ -27,6 +27,12 @@ function makeFailureDetails(
   return details;
 }
 
+function getTaskFailedError(task: Task<unknown>): TaskFailedError {
+  const exception = task.getException();
+  expect(exception).toBeInstanceOf(TaskFailedError);
+  return exception as TaskFailedError;
+}
+
 describe("Task (base class)", () => {
   // Task is not abstract, so we can instantiate it directly for testing
   // its base-class behavior.
@@ -105,6 +111,69 @@ describe("Task (base class)", () => {
       const task = new Task<string>();
       task._exception = new TaskFailedError("err", makeFailureDetails());
       expect(task.isFailed).toBe(true);
+    });
+  });
+
+  // v3 Durable Functions-aligned aliases (see issue #292).
+  describe("result (v3 alias)", () => {
+    it("should return undefined (not throw) when the task is not complete", () => {
+      const task = new Task<number>();
+      expect(() => task.result).not.toThrow();
+      expect(task.result).toBeUndefined();
+    });
+
+    it("should return the value when the task completed successfully", () => {
+      const task = new Task<number>();
+      task._result = 42;
+      task._isComplete = true;
+
+      expect(task.result).toBe(42);
+    });
+
+    it("should return undefined (not throw) when the task has failed", () => {
+      const task = new Task<number>();
+      task._exception = new TaskFailedError("boom", makeFailureDetails());
+      task._isComplete = true;
+
+      expect(() => task.result).not.toThrow();
+      expect(task.result).toBeUndefined();
+    });
+
+    it("result returns undefined for a failed task even if _result was set", () => {
+      const t = new CompletableTask<string>();
+      t._result = "stale";
+      t.fail("boom");
+      expect(t.result).toBeUndefined();
+      expect(t.isFaulted).toBe(true);
+    });
+  });
+
+  describe("isCompleted / isFaulted (v3 aliases)", () => {
+    it("isCompleted should mirror isComplete across states", () => {
+      const task = new Task<number>();
+      expect(task.isCompleted).toBe(false);
+
+      task._isComplete = true;
+      expect(task.isCompleted).toBe(true);
+      expect(task.isCompleted).toBe(task.isComplete);
+    });
+
+    it("isFaulted should mirror isFailed across states", () => {
+      const task = new Task<number>();
+      expect(task.isFaulted).toBe(false);
+
+      task._exception = new TaskFailedError("err", makeFailureDetails());
+      expect(task.isFaulted).toBe(true);
+      expect(task.isFaulted).toBe(task.isFailed);
+    });
+
+    it("isFaulted should be false for a successfully completed task", () => {
+      const task = new Task<number>();
+      task._result = 1;
+      task._isComplete = true;
+
+      expect(task.isCompleted).toBe(true);
+      expect(task.isFaulted).toBe(false);
     });
   });
 });
@@ -197,7 +266,7 @@ describe("CompletableTask", () => {
       const details = makeFailureDetails("detailed error", "CustomError", "at line 42");
       task.fail("detailed error", details);
 
-      const exception = task.getException();
+      const exception = getTaskFailedError(task);
       expect(exception.details.message).toBe("detailed error");
       expect(exception.details.errorType).toBe("CustomError");
       expect(exception.details.stackTrace).toBe("at line 42");
@@ -207,7 +276,7 @@ describe("CompletableTask", () => {
       const task = new CompletableTask<string>();
       task.fail("no details");
 
-      const exception = task.getException();
+      const exception = getTaskFailedError(task);
       // Default TaskFailureDetails has empty strings for message and errorType
       expect(exception.details.message).toBe("");
       expect(exception.details.errorType).toBe("");
@@ -244,9 +313,15 @@ describe("CompletableTask", () => {
 
       child.fail("child failed");
 
-      // WhenAllTask fails fast on first child failure
+      // WhenAll with a single child: once that child fails, all children are terminal, so the
+      // WhenAll completes (as failed) and notifies its parent. The single failure is still wrapped
+      // in an AggregateError (whenAll always aggregates), carrying the child's TaskFailedError.
       expect(parent.isComplete).toBe(true);
       expect(parent.isFailed).toBe(true);
+      const err = parent.getException();
+      expect(err).toBeInstanceOf(AggregateError);
+      expect((err as AggregateError).errors).toHaveLength(1);
+      expect((err as AggregateError).errors[0]).toBeInstanceOf(TaskFailedError);
     });
 
     it("should fail without error when no parent is set", () => {

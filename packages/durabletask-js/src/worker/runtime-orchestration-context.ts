@@ -12,6 +12,7 @@ import { RetryTaskBase, RetryTaskType } from "../task/retry-task-base";
 import { RetryableTask } from "../task/retryable-task";
 import { RetryHandlerTask } from "../task/retry-handler-task";
 import { RetryTimerTask } from "../task/retry-timer-task";
+import { TimerTask } from "../task/timer-task";
 import { TaskOptions, SubOrchestrationOptions, isRetryPolicy, isRetryHandler } from "../task/options";
 import { toAsyncRetryHandler } from "../task/retry/retry-handler";
 import { TActivity } from "../types/activity.type";
@@ -306,19 +307,39 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
    * @param fireAt Date The date when the timer should fire
    * @returns
    */
-  createTimer(fireAt: number | Date): Task<any> {
+  createTimer(fireAt: number | Date): TimerTask {
     const id = this.nextSequenceNumber();
 
-    // If a number is passed, we use it as the number of seconds to wait
-    // we use instanceof Date as number is not a native Javascript type
-    if (!(fireAt instanceof Date)) {
-      fireAt = new Date(this._currentUtcDatetime.getTime() + fireAt * 1000);
+    let fireAtDate: Date;
+    if (typeof fireAt === "number") {
+      if (!Number.isFinite(fireAt)) {
+        throw new Error(
+          `createTimer requires a finite number (seconds) or a valid Date, but received ${String(fireAt)}`,
+        );
+      }
+      fireAtDate = new Date(this._currentUtcDatetime.getTime() + fireAt * 1000);
+    } else if (fireAt instanceof Date) {
+      fireAtDate = fireAt;
+    } else {
+      throw new Error(
+        `createTimer requires a finite number (seconds) or a valid Date, but received ${String(fireAt)}`,
+      );
     }
 
-    const action = ph.newCreateTimerAction(id, fireAt);
+    if (Number.isNaN(fireAtDate.getTime())) {
+      throw new Error(
+        "createTimer received or produced an invalid Date (NaN timestamp)",
+      );
+    }
+
+    const action = ph.newCreateTimerAction(id, fireAtDate);
     this._pendingActions[action.getId()] = action;
 
-    const timerTask = new CompletableTask();
+    const timerTask = new TimerTask();
+    timerTask.setCancelHandler(() => {
+      delete this._pendingActions[id];
+      delete this._pendingTasks[id];
+    });
     this._pendingTasks[id] = timerTask;
 
     return timerTask;
@@ -371,6 +392,10 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   }
 
   waitForExternalEvent<T>(name: string): Task<T> {
+    if (!name) {
+      throw new Error("waitForExternalEvent: 'name' is required and cannot be empty.");
+    }
+
     // Check to see if this event has already been received, in which case we
     // can return it immediately. Otherwise, record out intent to receive an
     // event with the given name so that we can resume the generator when it
@@ -450,6 +475,14 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
    * Sends an event to another orchestration instance.
    */
   sendEvent(instanceId: string, eventName: string, eventData?: any): void {
+    if (!instanceId) {
+      throw new Error("sendEvent: 'instanceId' is required and cannot be empty.");
+    }
+
+    if (!eventName) {
+      throw new Error("sendEvent: 'eventName' is required and cannot be empty.");
+    }
+
     const id = this.nextSequenceNumber();
     const encodedData = eventData !== undefined ? JSON.stringify(eventData) : undefined;
     const action = ph.newSendEventAction(id, instanceId, eventName, encodedData);

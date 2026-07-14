@@ -31,6 +31,8 @@ import { CompletableTask } from "../src/task/completable-task";
 import { Task } from "../src/task/task";
 import { getName, whenAll, whenAny } from "../src/task";
 import { RuntimeOrchestrationContext } from "../src/worker/runtime-orchestration-context";
+import { EntityInstanceId } from "../src/entities/entity-instance-id";
+import { EntityOperationFailedException } from "../src/entities/entity-operation-failed-exception";
 
 // Use NoOpLogger to suppress log output during tests
 const testLogger = new NoOpLogger();
@@ -876,6 +878,30 @@ describe("Orchestration Executor", () => {
     }
   });
 
+  it("should fail the orchestration when waitForExternalEvent is called with an empty name", async () => {
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, _: any): any {
+      const res = yield ctx.waitForExternalEvent("");
+      return res;
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+
+    const newEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID)];
+
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+
+    // The orchestration should fail because waitForExternalEvent throws on empty name
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+    );
+    expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain(
+      "'name' is required and cannot be empty",
+    );
+  });
+
   it("should be able to continue-as-new", async () => {
     for (const saveEvent of [true, false]) {
       const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: number): any {
@@ -1009,7 +1035,7 @@ describe("Orchestration Executor", () => {
     expect(completeAction?.getResult()?.getValue()).toEqual("[0,1,2,3,4,5,6,7,8,9]");
   });
 
-  it("should test that a fan-in works correctly when one of the tasks fails", async () => {
+  it("should test that a fan-in completes as failed only after all tasks finish when one fails", async () => {
     const printInt = (_: any, value: number) => {
       return value.toString();
     };
@@ -1035,25 +1061,42 @@ describe("Orchestration Executor", () => {
       oldEvents.push(newTaskScheduledEvent(i + 1, activityName, i.toString()));
     }
 
-    // Chaos test with 5 tasks completing successfully, 1 failing and 4 still running
-    // we exect that the orchestration fails immediately now and does not wait for the 4 that are running
-    const newEvents: any[] = [];
-
+    // Wait-all (issue #301): 5 tasks complete successfully, 1 fails, and 4 are still running.
+    // The whenAll must NOT go terminal yet — it waits for the 4 outstanding tasks rather than
+    // failing immediately (which used to happen under fail-fast).
+    const ex = new Error("Kah-BOOOOM!!!");
+    const partialEvents: any[] = [];
     for (let i = 0; i < 5; i++) {
-      newEvents.push(newTaskCompletedEvent(i + 1, printInt(null, i)));
+      partialEvents.push(newTaskCompletedEvent(i + 1, printInt(null, i)));
+    }
+    partialEvents.push(newTaskFailedEvent(6, ex));
+
+    const waitingResult = await new OrchestrationExecutor(registry, testLogger).execute(
+      TEST_INSTANCE_ID,
+      oldEvents,
+      partialEvents,
+    );
+    // Still waiting on tasks 7-10 — no complete action is emitted.
+    expect(waitingResult.actions.some((a) => a.hasCompleteorchestration())).toBe(false);
+    expect(waitingResult.actions.length).toEqual(0);
+
+    // The remaining 4 tasks now finish (delivered in a later batch). Only now does the whenAll
+    // complete — as failed, aggregating the single failure into an AggregateError.
+    const remainingEvents: any[] = [];
+    for (let i = 6; i < 10; i++) {
+      remainingEvents.push(newTaskCompletedEvent(i + 1, printInt(null, i)));
     }
 
-    const ex = new Error("Kah-BOOOOM!!!");
-    newEvents.push(newTaskFailedEvent(6, ex));
-
-    // Now test with the full set of new events
-    // We expect the orchestration to complete
-    const executor = new OrchestrationExecutor(registry, testLogger);
-    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    const result = await new OrchestrationExecutor(registry, testLogger).execute(
+      TEST_INSTANCE_ID,
+      [...oldEvents, ...partialEvents],
+      remainingEvents,
+    );
 
     const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
-    expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("TaskFailedError");
+    // whenAll failures are aggregated — even a single failure is wrapped in an AggregateError.
+    expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("AggregateError");
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain(ex.message);
   });
 
@@ -1746,11 +1789,12 @@ describe("Orchestration Executor", () => {
 
     const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
-    expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("TaskFailedError");
+    // whenAll aggregates failures into an AggregateError (always, even for one failure).
+    expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("AggregateError");
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain(ex.message);
   });
 
-  it("should not crash when additional tasks complete after whenAll fails fast", async () => {
+  it("should complete whenAll as failed after all tasks finish when one task fails", async () => {
     const printInt = (_: any, value: number) => {
       return value.toString();
     };
@@ -1776,7 +1820,8 @@ describe("Orchestration Executor", () => {
       oldEvents.push(newTaskScheduledEvent(i + 1, activityName, i.toString()));
     }
 
-    // First task fails, then remaining tasks complete in the same batch
+    // First task fails; the remaining tasks complete in the same batch. Under wait-all the
+    // whenAll completes as failed only once every task is terminal, aggregating the failure.
     const ex = new Error("First task failed");
     const newEvents: any[] = [
       newTaskFailedEvent(1, ex),
@@ -1789,7 +1834,7 @@ describe("Orchestration Executor", () => {
 
     const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
-    expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("TaskFailedError");
+    expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("AggregateError");
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain(ex.message);
   });
 
@@ -1823,7 +1868,8 @@ describe("Orchestration Executor", () => {
       oldEvents.push(newTaskScheduledEvent(i + 1, activityName, i.toString()));
     }
 
-    // First task fails, then remaining tasks complete in the same batch
+    // First task fails; the remaining tasks complete in the same batch. The failure is caught
+    // by the orchestrator once the whenAll completes (as failed) after all tasks are terminal.
     const ex = new Error("One task failed");
     const newEvents: any[] = [
       newTaskFailedEvent(1, ex),
@@ -1837,6 +1883,62 @@ describe("Orchestration Executor", () => {
     const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify("handled"));
+  });
+
+  it("should keep waiting until all whenAll siblings fail across separate event batches (issue #301)", async () => {
+    // Regression for issue #301: when a whenAll fan-out has multiple failing siblings whose
+    // TaskFailed events arrive in separate batches, the whenAll must NOT go terminal on the
+    // first failure. If it did, the orchestration would go terminal early and the later
+    // sibling's TaskFailed would be dropped against a terminal instance, leaving a bare
+    // TaskScheduled with no completion — which is what deadlocks on rewind.
+    const printInt = (_: any, value: number) => value.toString();
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const a = ctx.callActivity(printInt, 0);
+      const b = ctx.callActivity(printInt, 1);
+      return yield whenAll([a, b]);
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(printInt);
+
+    const scheduledHistory = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID),
+      newTaskScheduledEvent(1, activityName, "0"),
+      newTaskScheduledEvent(2, activityName, "1"),
+    ];
+
+    const firstFailure = new Error("first activity failed");
+    const secondFailure = new Error("second activity failed");
+
+    // Batch 1: only the first sibling fails. The whenAll is still waiting on the second
+    // sibling, so the orchestration must NOT emit any complete action.
+    const batch1 = await new OrchestrationExecutor(registry, testLogger).execute(
+      TEST_INSTANCE_ID,
+      scheduledHistory,
+      [newTaskFailedEvent(1, firstFailure)],
+    );
+    expect(batch1.actions.some((a) => a.hasCompleteorchestration())).toBe(false);
+    expect(batch1.actions.length).toEqual(0);
+
+    // Batch 2: the second sibling fails too (delivered in a later batch, with batch 1 now part
+    // of the replayed history). Only now does the whenAll complete — as failed, aggregating BOTH
+    // sibling failures into an AggregateError whose message inlines every child message.
+    const batch2 = await new OrchestrationExecutor(registry, testLogger).execute(
+      TEST_INSTANCE_ID,
+      [...scheduledHistory, newTaskFailedEvent(1, firstFailure)],
+      [newTaskFailedEvent(2, secondFailure)],
+    );
+
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(batch2);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("AggregateError");
+    // BOTH siblings' failures are captured (proving neither TaskFailed was dropped): the
+    // aggregate message inlines every child message.
+    expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("first activity failed");
+    expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("second activity failed");
   });
 
   it("should complete nested whenAny(whenAll, whenAll) when first inner group finishes", async () => {
@@ -2010,14 +2112,15 @@ describe("Orchestration Executor", () => {
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("non-Task");
   });
 
-  it("should propagate inner whenAll failure to outer whenAny in nested composites", async () => {
+  it("should propagate inner whenAll failure to outer whenAny only after all whenAll children finish", async () => {
     const hello = (_: any, name: string) => {
       return `Hello ${name}!`;
     };
 
     // Orchestrator: yield whenAny([whenAll([a, b])])
-    // If an inner task fails, the whenAll should fail-fast and notify the outer whenAny.
-    // WhenAny completes with the failed task — the orchestrator inspects the winner.
+    // Under wait-all, the inner whenAll does NOT fail-fast: it completes (as failed) only once
+    // BOTH children are terminal, and only then notifies the outer whenAny. So the outer whenAny
+    // completes strictly later than it would have under fail-fast.
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
       const group = [ctx.callActivity(hello, "a"), ctx.callActivity(hello, "b")];
       const winner: Task<string[]> = yield whenAny([whenAll(group)]);
@@ -2035,12 +2138,24 @@ describe("Orchestration Executor", () => {
       newTaskScheduledEvent(2, activityName, JSON.stringify("b")),
     ];
 
-    // Task 1 fails — whenAll should fail-fast, and outer whenAny should complete
     const ex = new Error("task a failed");
-    const completionEvents = [newTaskFailedEvent(1, ex)];
 
-    const executor = new OrchestrationExecutor(registry, testLogger);
-    const result = await executor.execute(TEST_INSTANCE_ID, replayEvents, completionEvents);
+    // Task 1 fails but task 2 is still outstanding: the inner whenAll must keep waiting, so the
+    // outer whenAny — and therefore the orchestration — does NOT complete yet (no complete action).
+    const waitingResult = await new OrchestrationExecutor(registry, testLogger).execute(
+      TEST_INSTANCE_ID,
+      replayEvents,
+      [newTaskFailedEvent(1, ex)],
+    );
+    expect(waitingResult.actions.length).toEqual(0);
+
+    // Task 2 now completes: the inner whenAll completes as failed and notifies the outer whenAny,
+    // which resolves with the failed whenAll as its winner. The orchestrator inspects the winner.
+    const result = await new OrchestrationExecutor(registry, testLogger).execute(
+      TEST_INSTANCE_ID,
+      [...replayEvents, newTaskFailedEvent(1, ex)],
+      [newTaskCompletedEvent(2, JSON.stringify(hello(null, "b")))],
+    );
 
     const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
@@ -2342,6 +2457,378 @@ describe("EventSent Handler", () => {
     const failureDetails = completeAction?.getCompleteorchestration()?.getFailuredetails();
     expect(failureDetails?.getErrortype()).toEqual("NonDeterminismError");
     expect(failureDetails?.getErrormessage()).toMatch(/sendEvent/);
+  });
+
+  // Regression coverage for issue #292: the classic "activity vs. timeout" race
+  // where the winner cancels the loser timer (cancellable TimerTask).
+  it("should complete the timer-vs-activity race when the activity wins and the loser timer is canceled", async () => {
+    const hello = (_: any, name: string) => `Hello ${name}!`;
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const timeoutTask = ctx.createTimer(new Date(ctx.currentUtcDateTime.getTime() + 24 * 60 * 60 * 1000));
+      const activityTask = ctx.callActivity(hello, "Tokyo");
+
+      const winner = yield whenAny([timeoutTask, activityTask]);
+
+      // Identity must be preserved: whenAny returns the exact activity task instance.
+      if (winner === activityTask) {
+        if (!timeoutTask.isCompleted) {
+          timeoutTask.cancel();
+        }
+        return activityTask.getResult();
+      }
+      return "timed out";
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(hello);
+
+    // Turn 1: schedules the timer (action 1) and the activity (action 2), then yields on whenAny.
+    const startTime = new Date(2020, 0, 1, 12, 0, 0);
+    let executor = new OrchestrationExecutor(registry, testLogger);
+    let result = await executor.execute(TEST_INSTANCE_ID, [], [
+      newOrchestratorStartedEvent(startTime),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID),
+    ]);
+    expect(result.actions.length).toEqual(2);
+    expect(result.actions[0].hasCreatetimer()).toBeTruthy();
+    expect(result.actions[1].hasScheduletask()).toBeTruthy();
+
+    // Turn 2: the activity completes first; the timer has NOT fired.
+    const timerFireAt = new Date(startTime.getTime() + 24 * 60 * 60 * 1000);
+    const oldEvents = [
+      newOrchestratorStartedEvent(startTime),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID),
+      newTimerCreatedEvent(1, timerFireAt),
+      newTaskScheduledEvent(2, activityName, JSON.stringify("Tokyo")),
+    ];
+    const encodedOutput = JSON.stringify(hello(null, "Tokyo"));
+    executor = new OrchestrationExecutor(registry, testLogger);
+    result = await executor.execute(TEST_INSTANCE_ID, oldEvents, [newTaskCompletedEvent(2, encodedOutput)]);
+
+    // A single CompleteOrchestration action, carrying the activity's result, and
+    // no leftover CreateTimer action (the canceled timer must not be rescheduled).
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(completeAction?.getResult()?.getValue()).toEqual(encodedOutput);
+    expect(result.actions.some((a) => a.hasCreatetimer())).toBe(false);
+  });
+
+  it("should complete normally when the timer wins the race (no regression to timer firing)", async () => {
+    const hello = (_: any, name: string) => `Hello ${name}!`;
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const timeoutTask = ctx.createTimer(new Date(ctx.currentUtcDateTime.getTime() + 24 * 60 * 60 * 1000));
+      const activityTask = ctx.callActivity(hello, "Tokyo");
+
+      const winner = yield whenAny([timeoutTask, activityTask]);
+
+      if (winner === timeoutTask) {
+        return "timed out";
+      }
+      return activityTask.getResult();
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(hello);
+
+    const startTime = new Date(2020, 0, 1, 12, 0, 0);
+    const timerFireAt = new Date(startTime.getTime() + 24 * 60 * 60 * 1000);
+    const oldEvents = [
+      newOrchestratorStartedEvent(startTime),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID),
+      newTimerCreatedEvent(1, timerFireAt),
+      newTaskScheduledEvent(2, activityName, JSON.stringify("Tokyo")),
+    ];
+
+    // The timer fires first: the orchestration should still complete via the timeout branch.
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, [newTimerFiredEvent(1, timerFireAt)]);
+
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify("timed out"));
+  });
+
+  it("should ignore a fired event for a canceled timer (replay-safe) and keep running", async () => {
+    const hello = (_: any, name: string) => `Hello ${name}!`;
+
+    // The orchestration cancels the timer, then continues with more work. A late
+    // TimerFired event for the canceled timer must be ignored (no crash, no
+    // premature completion) rather than resuming the orchestrator.
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const timeoutTask = ctx.createTimer(new Date(ctx.currentUtcDateTime.getTime() + 24 * 60 * 60 * 1000));
+      const activityTask = ctx.callActivity(hello, "Tokyo");
+
+      const winner = yield whenAny([timeoutTask, activityTask]);
+      if (winner === activityTask && !timeoutTask.isCompleted) {
+        timeoutTask.cancel();
+      }
+
+      // Continue after canceling the timer.
+      const second = yield ctx.callActivity(hello, "Seattle");
+      return second;
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(hello);
+
+    const startTime = new Date(2020, 0, 1, 12, 0, 0);
+    const timerFireAt = new Date(startTime.getTime() + 24 * 60 * 60 * 1000);
+    const oldEvents = [
+      newOrchestratorStartedEvent(startTime),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID),
+      newTimerCreatedEvent(1, timerFireAt),
+      newTaskScheduledEvent(2, activityName, JSON.stringify("Tokyo")),
+    ];
+
+    // The first activity completes AND the (canceled) timer fires in the same batch.
+    const encodedOutput = JSON.stringify(hello(null, "Tokyo"));
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, [
+      newTaskCompletedEvent(2, encodedOutput),
+      newTimerFiredEvent(1, timerFireAt),
+    ]);
+
+    // The fired canceled timer is ignored; the orchestration schedules the second
+    // activity and is NOT complete.
+    expect(result.actions.length).toEqual(1);
+    expect(result.actions[0].hasScheduletask()).toBeTruthy();
+    expect(result.actions.some((a) => a.hasCompleteorchestration())).toBe(false);
+  });
+});
+
+describe("Entity call on classic (Azure Storage) backend — EVENTSENT/EVENTRAISED", () => {
+  const ENTITY_INSTANCE_ID = new EntityInstanceId("counter", "my-counter").toString();
+
+  // On the classic backend the Durable Functions gRPC shim turns a callEntity into a classic
+  // send-event: the request confirmation replays as EVENTSENT and the result as EVENTRAISED
+  // (name = requestId, input = a DTFx ResponseMessage JSON). These tests exercise that path.
+
+  it("accepts EVENTSENT confirming a callEntity CALL action without throwing (removes it from pendingActions)", async () => {
+    let callResult: number | undefined;
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const entityId = new EntityInstanceId("counter", "my-counter");
+      const result: number = yield ctx.entities.callEntity<number>(entityId, "get");
+      callResult = result;
+      return result;
+    };
+
+    const registry = new Registry();
+    registry.addNamedOrchestrator("TestOrchestrator", orchestrator);
+    const executor = new OrchestrationExecutor(registry);
+
+    const startEvents = [
+      newOrchestratorStartedEvent(new Date()),
+      newExecutionStartedEvent("TestOrchestrator", "test-instance"),
+    ];
+
+    // Phase 1: capture the entity call action and its sequence id / requestId.
+    const result1 = await executor.execute("test-instance", [], startEvents);
+    const callAction = result1.actions[0];
+    expect(callAction.hasSendentitymessage()).toBe(true);
+    expect(callAction.getSendentitymessage()!.hasEntityoperationcalled()).toBe(true);
+    const seqId = callAction.getId();
+
+    // Phase 2: replay with only the EVENTSENT confirmation (no response yet). This must NOT throw
+    // a NonDeterminismError, and — since the result hasn't arrived — the call stays pending.
+    const oldEvents2 = [...startEvents, newEventSentEvent(seqId, ENTITY_INSTANCE_ID, "get")];
+    const newEvents2 = [newOrchestratorStartedEvent(new Date())];
+    const result2 = await executor.execute("test-instance", oldEvents2, newEvents2);
+
+    const failed = result2.actions.find(
+      (a) =>
+        a.hasCompleteorchestration() &&
+        a.getCompleteorchestration()!.getOrchestrationstatus() ===
+          pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+    );
+    expect(failed).toBeUndefined();
+    // No result delivered → orchestrator is still awaiting the entity, so it hasn't completed.
+    expect(callResult).toBeUndefined();
+    expect(result2.actions.find((a) => a.hasCompleteorchestration())).toBeUndefined();
+    expect(result2.actions.find((a) => a.hasSendentitymessage())).toBeUndefined();
+  });
+
+  it("accepts EVENTSENT confirming a signalEntity SIGNAL action without throwing", async () => {
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const entityId = new EntityInstanceId("counter", "my-counter");
+      ctx.entities.signalEntity(entityId, "add", 5);
+      // Suspend on a timer so replay has to reconcile the (unconfirmed) timer and the signal.
+      yield ctx.createTimer(1);
+    };
+
+    const registry = new Registry();
+    registry.addNamedOrchestrator("TestOrchestrator", orchestrator);
+    const executor = new OrchestrationExecutor(registry);
+
+    const startEvents = [
+      newOrchestratorStartedEvent(new Date()),
+      newExecutionStartedEvent("TestOrchestrator", "test-instance"),
+    ];
+
+    const result1 = await executor.execute("test-instance", [], startEvents);
+    const signalAction = result1.actions.find((a) => a.hasSendentitymessage());
+    expect(signalAction).toBeDefined();
+    expect(signalAction!.getSendentitymessage()!.hasEntityoperationsignaled()).toBe(true);
+    const seqId = signalAction!.getId();
+
+    // Replay with the EVENTSENT confirming the signal. Must not throw NonDeterminismError.
+    const oldEvents2 = [...startEvents, newEventSentEvent(seqId, ENTITY_INSTANCE_ID, "add")];
+    const newEvents2 = [newOrchestratorStartedEvent(new Date())];
+    const result2 = await executor.execute("test-instance", oldEvents2, newEvents2);
+
+    const failed = result2.actions.find(
+      (a) =>
+        a.hasCompleteorchestration() &&
+        a.getCompleteorchestration()!.getOrchestrationstatus() ===
+          pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+    );
+    expect(result2.actions.find((a) => a.hasSendentitymessage())).toBeUndefined();
+    expect(failed).toBeUndefined();
+  });
+
+  it("resolves callEntity when confirmed via EVENTSENT then result delivered via EVENTRAISED", async () => {
+    let callResult: number | undefined;
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const entityId = new EntityInstanceId("counter", "my-counter");
+      const result: number = yield ctx.entities.callEntity<number>(entityId, "get");
+      callResult = result;
+      return result;
+    };
+
+    const registry = new Registry();
+    registry.addNamedOrchestrator("TestOrchestrator", orchestrator);
+    const executor = new OrchestrationExecutor(registry);
+
+    const startEvents = [
+      newOrchestratorStartedEvent(new Date()),
+      newExecutionStartedEvent("TestOrchestrator", "test-instance"),
+    ];
+
+    const result1 = await executor.execute("test-instance", [], startEvents);
+    const callAction = result1.actions[0];
+    const requestId = callAction.getSendentitymessage()!.getEntityoperationcalled()!.getRequestid();
+    const seqId = callAction.getId();
+
+    // Classic backend: EVENTSENT confirms the send, then EVENTRAISED (name = requestId) delivers
+    // the DTFx ResponseMessage wrapper. The result value is double-encoded (42 -> "42").
+    const oldEvents2 = [...startEvents];
+    const newEvents2 = [
+      newOrchestratorStartedEvent(new Date()),
+      newEventSentEvent(seqId, ENTITY_INSTANCE_ID, "get"),
+      newEventRaisedEvent(requestId, JSON.stringify({ result: "42" })),
+    ];
+    const result2 = await executor.execute("test-instance", oldEvents2, newEvents2);
+
+    expect(callResult).toBe(42);
+    const completeAction = result2.actions.find((a) => a.hasCompleteorchestration());
+    expect(completeAction).toBeDefined();
+    expect(completeAction!.getCompleteorchestration()!.getOrchestrationstatus()).toEqual(
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED,
+    );
+    expect(completeAction!.getCompleteorchestration()!.getResult()?.getValue()).toEqual(JSON.stringify(42));
+  });
+
+  it("rejects callEntity with EntityOperationFailedException when EVENTRAISED carries a failureDetails ResponseMessage", async () => {
+    let caughtError: Error | undefined;
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const entityId = new EntityInstanceId("counter", "my-counter");
+      try {
+        yield ctx.entities.callEntity<number>(entityId, "get");
+      } catch (e) {
+        caughtError = e as Error;
+      }
+      return "handled";
+    };
+
+    const registry = new Registry();
+    registry.addNamedOrchestrator("TestOrchestrator", orchestrator);
+    const executor = new OrchestrationExecutor(registry);
+
+    const startEvents = [
+      newOrchestratorStartedEvent(new Date()),
+      newExecutionStartedEvent("TestOrchestrator", "test-instance"),
+    ];
+
+    const result1 = await executor.execute("test-instance", [], startEvents);
+    const callAction = result1.actions[0];
+    const requestId = callAction.getSendentitymessage()!.getEntityoperationcalled()!.getRequestid();
+    const seqId = callAction.getId();
+
+    // Failure ResponseMessage: "result" is present (null) alongside structured failureDetails,
+    // including a StackTrace (the classic backend uses DurableTask.Core native entities over gRPC,
+    // whose FailureDetails carries a real stack trace).
+    const responseJson = JSON.stringify({
+      result: null,
+      failureDetails: {
+        ErrorType: "InvalidOperationException",
+        ErrorMessage: "boom",
+        StackTrace: "   at Counter.Get() in Counter.cs:line 42",
+      },
+    });
+    const oldEvents2 = [...startEvents];
+    const newEvents2 = [
+      newOrchestratorStartedEvent(new Date()),
+      newEventSentEvent(seqId, ENTITY_INSTANCE_ID, "get"),
+      newEventRaisedEvent(requestId, responseJson),
+    ];
+    await executor.execute("test-instance", oldEvents2, newEvents2);
+
+    expect(caughtError).toBeInstanceOf(EntityOperationFailedException);
+    const entityError = caughtError as EntityOperationFailedException;
+    expect(entityError.operationName).toBe("get");
+    expect(entityError.entityId.name).toBe("counter");
+    expect(entityError.entityId.key).toBe("my-counter");
+    expect(entityError.failureDetails.errorType).toBe("InvalidOperationException");
+    expect(entityError.failureDetails.errorMessage).toBe("boom");
+    expect(entityError.failureDetails.stackTrace).toBe("   at Counter.Get() in Counter.cs:line 42");
+  });
+
+  it("rejects callEntity with EntityOperationFailedException when EVENTRAISED carries an exceptionType-only ResponseMessage", async () => {
+    let caughtError: Error | undefined;
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const entityId = new EntityInstanceId("counter", "my-counter");
+      try {
+        yield ctx.entities.callEntity<number>(entityId, "get");
+      } catch (e) {
+        caughtError = e as Error;
+      }
+      return "handled";
+    };
+
+    const registry = new Registry();
+    registry.addNamedOrchestrator("TestOrchestrator", orchestrator);
+    const executor = new OrchestrationExecutor(registry);
+
+    const startEvents = [
+      newOrchestratorStartedEvent(new Date()),
+      newExecutionStartedEvent("TestOrchestrator", "test-instance"),
+    ];
+
+    const result1 = await executor.execute("test-instance", [], startEvents);
+    const callAction = result1.actions[0];
+    const requestId = callAction.getSendentitymessage()!.getEntityoperationcalled()!.getRequestid();
+    const seqId = callAction.getId();
+
+    // WebJobs-variant failure: "exceptionType" present (carries the error message), no failureDetails.
+    const responseJson = JSON.stringify({ result: "serialized-exception", exceptionType: "Something failed" });
+    const oldEvents2 = [...startEvents];
+    const newEvents2 = [
+      newOrchestratorStartedEvent(new Date()),
+      newEventSentEvent(seqId, ENTITY_INSTANCE_ID, "get"),
+      newEventRaisedEvent(requestId, responseJson),
+    ];
+    await executor.execute("test-instance", oldEvents2, newEvents2);
+
+    expect(caughtError).toBeInstanceOf(EntityOperationFailedException);
+    const entityError = caughtError as EntityOperationFailedException;
+    expect(entityError.failureDetails.errorType).toBe("unknown");
+    expect(entityError.failureDetails.errorMessage).toBe("Something failed");
+    // WebJobs-variant path carries no structured failureDetails, so there is no stack trace.
+    expect(entityError.failureDetails.stackTrace).toBeUndefined();
   });
 });
 

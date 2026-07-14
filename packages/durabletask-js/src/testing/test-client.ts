@@ -131,6 +131,16 @@ export class TestOrchestrationClient {
   }
 
   /**
+   * Rewinds a failed orchestration so it re-runs from the point of failure.
+   *
+   * @param instanceId The instance to rewind.
+   * @param reason Optional human-readable reason for the rewind.
+   */
+  async rewindOrchestration(instanceId: string, reason?: string): Promise<void> {
+    this.backend.rewindInstance(instanceId, reason);
+  }
+
+  /**
    * Stops the client. No-op for in-memory backend.
    */
   async stop(): Promise<void> {

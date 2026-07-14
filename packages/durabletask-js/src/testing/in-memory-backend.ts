@@ -249,6 +249,34 @@ export class InMemoryOrchestrationBackend {
   }
 
   /**
+   * Rewinds a failed orchestration instance.
+   *
+   * Validates the instance is in a failed state, then appends an ExecutionRewoundEvent to the
+   * pending events, resets the status to RUNNING, and re-enqueues the orchestration so the
+   * worker can replay it and produce a RewindOrchestrationAction with the corrected history.
+   * The actual history rewrite is performed by the SDK worker (see buildRewindResult); this
+   * backend merely applies the result. Any change to that rewrite must be mirrored here.
+   *
+   * @param instanceId The instance to rewind.
+   * @param reason Optional human-readable reason for the rewind.
+   * @throws Error with a "not found" message if the instance does not exist.
+   * @throws Error with a "not in a failed state" message if the instance is not FAILED.
+   */
+  rewindInstance(instanceId: string, reason?: string): void {
+    const instance = this.instances.get(instanceId);
+    if (!instance) {
+      throw new Error(`Orchestration instance '${instanceId}' not found`);
+    }
+
+    if (instance.status !== pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED) {
+      throw new Error(`Orchestration instance '${instanceId}' is not in a failed state`);
+    }
+
+    this.prepareRewind(instance, reason);
+    this.notifyWaiters(instanceId);
+  }
+
+  /**
    * Gets the next orchestration work item to process, if any.
    */
   getNextOrchestrationWorkItem(): OrchestrationInstance | undefined {
@@ -316,6 +344,23 @@ export class InMemoryOrchestrationBackend {
     // Process actions
     for (const action of actions) {
       this.processAction(instance, action);
+    }
+
+    // Bookend a terminal orchestration with an executionCompleted event so the committed
+    // history records the terminal result.
+    //
+    // REQUIRED — do NOT remove this as an "optimization". It is also the precondition that lets
+    // the worker detect a rewind: the executor only short-circuits into buildRewindResult when an
+    // executionCompleted event is present in the committed (old) history
+    // (see OrchestrationExecutor.execute). Without this bookend, a rewind dispatch would silently
+    // fall through to plain replay and never produce a RewindOrchestrationAction.
+    //
+    // Continue-as-new resets status to PENDING and rewind resets it to RUNNING, so neither is
+    // terminal here and neither gets a bookend.
+    if (this.isTerminalStatus(instance.status)) {
+      instance.history.push(
+        pbh.newExecutionCompletedEvent(instance.status, instance.output, instance.failureDetails),
+      );
     }
 
     // Update completion token for next execution
@@ -489,6 +534,9 @@ export class InMemoryOrchestrationBackend {
       case pb.OrchestratorAction.OrchestratoractiontypeCase.SENDEVENT:
         this.processSendEventAction(action.getSendevent()!);
         break;
+      case pb.OrchestratorAction.OrchestratoractiontypeCase.REWINDORCHESTRATION:
+        this.processRewindOrchestrationAction(instance, action.getRewindorchestration()!);
+        break;
       default:
         throw new Error(
           `Unknown orchestrator action type '${actionType}' for orchestration '${instance.instanceId}'. ` +
@@ -504,7 +552,10 @@ export class InMemoryOrchestrationBackend {
     const status = completeAction.getOrchestrationstatus();
     instance.status = status;
     instance.output = completeAction.getResult()?.getValue();
-    instance.failureDetails = completeAction.getFailuredetails();
+    // Use an explicit presence check: a protobuf singular message accessor may materialize an
+    // empty message, so only record failureDetails when the action actually carries them. This
+    // keeps the bookended executionCompleted event clean for successful completions.
+    instance.failureDetails = completeAction.hasFailuredetails() ? completeAction.getFailuredetails() : undefined;
 
     if (status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW) {
       // Handle continue-as-new
@@ -662,6 +713,97 @@ export class InMemoryOrchestrationBackend {
       .catch(() => {
         // Reset — sub-orchestration watcher cancelled, nothing to do
       });
+  }
+
+  private prepareRewind(instance: OrchestrationInstance, reason?: string): void {
+    // Reset instance state so it can be re-processed.
+    instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING;
+    instance.output = undefined;
+    instance.failureDetails = undefined;
+    instance.lastUpdatedAt = new Date();
+
+    // Seed the pending events with exactly [orchestratorStarted, executionRewound]. The worker
+    // splits (history, pendingEvents) into (oldEvents, newEvents); buildRewindResult requires
+    // newEvents to be exactly those two events (orchestratorStarted followed by the
+    // executionRewound marker). Unlike the real sidecar, this backend does not auto-prepend an
+    // orchestratorStarted per dispatch, so it is supplied here.
+    instance.pendingEvents = [pbh.newOrchestratorStartedEvent(new Date()), pbh.newExecutionRewoundEvent(reason)];
+
+    // Refresh the completion token and enqueue.
+    instance.completionToken = this.nextCompletionToken++;
+    this.enqueueOrchestration(instance.instanceId);
+  }
+
+  private processRewindOrchestrationAction(
+    instance: OrchestrationInstance,
+    rewindAction: pb.RewindOrchestrationAction,
+  ): void {
+    const newHistory = rewindAction.getNewhistoryList();
+
+    // Replace the history with the SDK-computed clean version.
+    instance.history = newHistory;
+    instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING;
+    instance.output = undefined;
+    instance.failureDetails = undefined;
+    instance.lastUpdatedAt = new Date();
+
+    // Identify sub-orchestrations that were created but did not complete successfully — they
+    // need to be recursively rewound (buildRewindResult keeps subOrchestrationInstanceCreated
+    // and removes subOrchestrationInstanceFailed, so a "created but not completed" sub is a
+    // failed one).
+    const completedSubOrchTaskIds = new Set<number>();
+    const createdSubOrchEvents = new Map<number, pb.HistoryEvent>();
+    for (const event of newHistory) {
+      if (event.hasSuborchestrationinstancecreated()) {
+        createdSubOrchEvents.set(event.getEventid(), event);
+      } else if (event.hasSuborchestrationinstancecompleted()) {
+        completedSubOrchTaskIds.add(event.getSuborchestrationinstancecompleted()!.getTaskscheduledid());
+      }
+    }
+
+    // Extract the rewind reason from the last executionRewound event.
+    let reason: string | undefined;
+    for (let i = newHistory.length - 1; i >= 0; i--) {
+      const event = newHistory[i];
+      if (event.hasExecutionrewound()) {
+        const rewound = event.getExecutionrewound()!;
+        reason = rewound.hasReason() ? rewound.getReason()!.getValue() : undefined;
+        break;
+      }
+    }
+
+    // Recursively rewind failed sub-orchestrations. If the sub was purged (no longer tracked),
+    // re-create it from the subOrchestrationInstanceCreated event so it runs fresh.
+    for (const [taskId, event] of createdSubOrchEvents) {
+      if (completedSubOrchTaskIds.has(taskId)) {
+        continue;
+      }
+      const subInfo = event.getSuborchestrationinstancecreated()!;
+      const subInstanceId = subInfo.getInstanceid();
+      const subInstance = this.instances.get(subInstanceId);
+      if (!subInstance) {
+        // Sub-orchestration was purged — re-create it so it runs fresh. Pass the parent
+        // metadata (mirroring processCreateSubOrchestrationAction) so the re-created sub keeps
+        // its parentInstance link and can route its completion back to this orchestration.
+        this.createInstance(subInstanceId, subInfo.getName(), subInfo.getInput()?.getValue(), undefined, {
+          name: instance.name,
+          instanceId: instance.instanceId,
+          taskScheduledId: taskId,
+        });
+      } else if (subInstance.status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED) {
+        this.prepareRewind(subInstance, reason);
+      }
+      this.watchSubOrchestration(instance.instanceId, subInstanceId, taskId);
+    }
+
+    // Re-enqueue so the orchestration replays with the clean history. The executionRewound
+    // event is already present in the clean history (kept by buildRewindResult), so it must
+    // NOT be re-sent as a pending event — doing so would duplicate it. A lone orchestratorStarted
+    // is enough to make the instance dispatchable; the worker replays normally because
+    // executionCompleted is no longer in the history.
+    instance.pendingEvents = [pbh.newOrchestratorStartedEvent(new Date())];
+    instance.completionToken = this.nextCompletionToken++;
+    this.enqueueOrchestration(instance.instanceId);
   }
 
   private processSendEventAction(sendEvent: pb.SendEventAction): void {

@@ -288,6 +288,42 @@ export function newTerminatedEvent(encodedOutput?: string): pb.HistoryEvent {
   return event;
 }
 
+export function newExecutionCompletedEvent(
+  status: pb.OrchestrationStatus,
+  encodedResult?: string,
+  failureDetails?: pb.TaskFailureDetails,
+): pb.HistoryEvent {
+  const executionCompletedEvent = new pb.ExecutionCompletedEvent();
+  executionCompletedEvent.setOrchestrationstatus(status);
+  executionCompletedEvent.setResult(getStringValue(encodedResult));
+  if (failureDetails) {
+    executionCompletedEvent.setFailuredetails(failureDetails);
+  }
+
+  const ts = new Timestamp();
+
+  const event = new pb.HistoryEvent();
+  event.setEventid(-1);
+  event.setTimestamp(ts);
+  event.setExecutioncompleted(executionCompletedEvent);
+
+  return event;
+}
+
+export function newExecutionRewoundEvent(reason?: string): pb.HistoryEvent {
+  const executionRewoundEvent = new pb.ExecutionRewoundEvent();
+  executionRewoundEvent.setReason(getStringValue(reason));
+
+  const ts = new Timestamp();
+
+  const event = new pb.HistoryEvent();
+  event.setEventid(-1);
+  event.setTimestamp(ts);
+  event.setExecutionrewound(executionRewoundEvent);
+
+  return event;
+}
+
 export function getStringValue(val?: string): StringValue | undefined {
   if (!val) {
     return;

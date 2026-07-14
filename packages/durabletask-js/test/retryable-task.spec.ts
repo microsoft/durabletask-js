@@ -296,6 +296,53 @@ describe("RetryableTask", () => {
       expect(delay).toBeDefined();
       expect(delay).toBeGreaterThan(0);
     });
+
+    it("should return undefined when last failure is marked non-retriable", () => {
+      // Arrange
+      const retryPolicy = new RetryPolicy({
+        maxNumberOfAttempts: 10,
+        firstRetryIntervalInMilliseconds: 1000,
+      });
+      const action = new pb.OrchestratorAction();
+      const startTime = new Date();
+      const task = new RetryableTask<string>(retryPolicy, action, startTime, "activity");
+
+      // Record a non-retriable failure (e.g., activity not found, version mismatch)
+      const failureDetails = new pb.TaskFailureDetails();
+      failureDetails.setErrortype("ActivityNotFoundError");
+      failureDetails.setErrormessage("Activity 'DoWork' is not registered");
+      failureDetails.setIsnonretriable(true);
+      task.recordFailure("Activity 'DoWork' is not registered", failureDetails);
+
+      const currentTime = new Date(startTime.getTime() + 100);
+
+      // Act
+      const delay = task.computeNextDelayInMilliseconds(currentTime);
+
+      // Assert - non-retriable failures must not be retried regardless of policy
+      expect(delay).toBeUndefined();
+    });
+
+    it("should return undefined when computed delay exceeds remaining timeout", () => {
+      // Arrange - timeout is 5000ms, elapsed is 4500ms, so remaining is 500ms.
+      // With firstRetryInterval of 1000ms, the computed delay (1000) > remaining (500).
+      const retryPolicy = new RetryPolicy({
+        maxNumberOfAttempts: 10,
+        firstRetryIntervalInMilliseconds: 1000,
+        retryTimeoutInMilliseconds: 5000,
+      });
+      const startTime = new Date();
+      const action = new pb.OrchestratorAction();
+      const task = new RetryableTask<string>(retryPolicy, action, startTime, "activity");
+      // 4500ms elapsed — within the 5000ms timeout, but delay (1000ms) exceeds remaining (500ms)
+      const currentTime = new Date(startTime.getTime() + 4500);
+
+      // Act
+      const delay = task.computeNextDelayInMilliseconds(currentTime);
+
+      // Assert - delay would overshoot the timeout, so no more retries
+      expect(delay).toBeUndefined();
+    });
   });
 
   describe("incrementAttemptCount", () => {
@@ -358,6 +405,36 @@ describe("RetryableTask", () => {
       // Assert
       expect(originalAction).toBe(action);
       expect(originalAction.getId()).toBe(42);
+    });
+  });
+
+  describe("complete", () => {
+    it("should clear failure state when retry succeeds", () => {
+      // Arrange
+      const retryPolicy = new RetryPolicy({
+        maxNumberOfAttempts: 5,
+        firstRetryIntervalInMilliseconds: 1000,
+      });
+      const action = new pb.OrchestratorAction();
+      const task = new RetryableTask<string>(retryPolicy, action, new Date(), "activity");
+
+      // Simulate a failed attempt followed by a successful retry
+      const failureDetails = new pb.TaskFailureDetails();
+      failureDetails.setErrortype("TransientError");
+      failureDetails.setErrormessage("Temporary failure");
+      task.recordFailure("Temporary failure", failureDetails);
+
+      // Verify failure is recorded
+      expect(task.lastFailure).toBeDefined();
+
+      // Act - retry succeeds
+      task.complete("success");
+
+      // Assert - failure state is cleared, result is set
+      expect(task.lastFailure).toBeUndefined();
+      expect(task.isFailed).toBe(false);
+      expect(task.getResult()).toBe("success");
+      expect(task.isComplete).toBe(true);
     });
   });
 

@@ -82,8 +82,13 @@ export class EntityOperationFailedException extends Error {
    * @param operationName - The operation name.
    * @param failureDetails - The failure details.
    */
-  constructor(entityId: EntityInstanceId, operationName: string, failureDetails: TaskFailureDetails) {
-    super(EntityOperationFailedException.getExceptionMessage(operationName, entityId, failureDetails));
+  constructor(
+    entityId: EntityInstanceId,
+    operationName: string,
+    failureDetails: TaskFailureDetails,
+  ) {
+    const message = EntityOperationFailedException.getExceptionMessage(operationName, entityId, failureDetails);
+    super(message);
     this.name = "EntityOperationFailedException";
     this.entityId = entityId;
     this.operationName = operationName;

@@ -76,6 +76,7 @@ export { FailureDetails, TaskFailureDetails } from "./task/failure-details";
 // Task utilities
 export { getName, whenAll, whenAny } from "./task";
 export { Task } from "./task/task";
+export { TimerTask } from "./task/timer-task";
 
 // Retry policies and task options
 export {
