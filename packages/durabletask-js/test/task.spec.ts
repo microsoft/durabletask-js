@@ -313,9 +313,15 @@ describe("CompletableTask", () => {
 
       child.fail("child failed");
 
-      // WhenAllTask fails fast on first child failure
+      // WhenAll with a single child: once that child fails, all children are terminal, so the
+      // WhenAll completes (as failed) and notifies its parent. The single failure is still wrapped
+      // in an AggregateError (whenAll always aggregates), carrying the child's TaskFailedError.
       expect(parent.isComplete).toBe(true);
       expect(parent.isFailed).toBe(true);
+      const err = parent.getException();
+      expect(err).toBeInstanceOf(AggregateError);
+      expect((err as AggregateError).errors).toHaveLength(1);
+      expect((err as AggregateError).errors[0]).toBeInstanceOf(TaskFailedError);
     });
 
     it("should fail without error when no parent is set", () => {

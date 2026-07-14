@@ -193,12 +193,12 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     expect(activityCounter).toEqual(10);
   }, 31000);
 
-  it("should remain completed when whenAll fail-fast is caught and other children complete later", async () => {
+  it("should remain completed when a caught whenAll failure waits for all children", async () => {
     let failActivityCounter = 0;
 
     const fastFail = async (_: ActivityContext): Promise<void> => {
       failActivityCounter++;
-      throw new Error("fast failure for whenAll fail-fast test");
+      throw new Error("fast failure for whenAll caught test");
     };
 
     const slowSuccess = async (_: ActivityContext, _input: string): Promise<void> => {
@@ -231,8 +231,9 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     expect(state?.serializedOutput).toEqual(JSON.stringify("handled-failure"));
     expect(failActivityCounter).toEqual(1);
 
-    // Verify orchestration stays COMPLETED. The sidecar won't deliver activity
-    // completion events to an already-completed orchestration, so no delay is needed.
+    // Verify the orchestration stays COMPLETED. Under wait-all the whenAll only surfaces its
+    // failure once every child is terminal, so there are no outstanding activities left to
+    // deliver events after the orchestration completes.
     const finalState = await taskHubClient.getOrchestrationState(id);
     expect(finalState).toBeDefined();
     expect(finalState?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
@@ -267,6 +268,9 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     expect(state).toBeDefined();
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
     expect(state?.failureDetails).toBeDefined();
+    // Even a single whenAll failure is wrapped in an AggregateError, and its message inlines the
+    // child failure so the per-child detail survives serialization.
+    expect(state?.failureDetails?.errorType).toEqual("AggregateError");
     expect(state?.failureDetails?.message).toContain("fast failure for whenAll uncaught test");
     expect(state?.failureDetails?.message).not.toContain("Task is already completed");
   }, 31000);
@@ -301,6 +305,40 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
     expect(state?.failureDetails).toBeDefined();
     expect(state?.failureDetails?.message).toContain("slow failure as last task");
+  }, 31000);
+
+  it("should aggregate multiple whenAll activity failures end-to-end (issue #301)", async () => {
+    const failA = async (_: ActivityContext): Promise<void> => {
+      throw new Error("activity A failed");
+    };
+
+    const failB = async (_: ActivityContext): Promise<void> => {
+      throw new Error("activity B failed");
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      // Uncaught: both activities fail, so the whenAll (and the orchestration) fails.
+      yield whenAll([ctx.callActivity(failA), ctx.callActivity(failB)]);
+    };
+
+    taskHubWorker.addActivity(failA);
+    taskHubWorker.addActivity(failB);
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(state?.failureDetails).toBeDefined();
+    // The aggregate wrapper survives the full round trip (newFailureDetails sets errorType = e.name).
+    expect(state?.failureDetails?.errorType).toEqual("AggregateError");
+    // BOTH child messages survive end-to-end — proof neither sibling's TaskFailed was dropped.
+    // Under the old fail-fast behavior only one of these would appear (the other TaskFailed hit a
+    // terminal instance and was dropped, which is exactly what deadlocked on rewind).
+    expect(state?.failureDetails?.message).toContain("activity A failed");
+    expect(state?.failureDetails?.message).toContain("activity B failed");
   }, 31000);
 
   // Issue #131: WhenAllTask constructor was resetting the _completedTasks counter,
