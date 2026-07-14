@@ -2,7 +2,19 @@
 // Licensed under the MIT License.
 
 import * as durabletask from "@microsoft/durabletask-js";
-import { EntityInstanceId, OrchestrationContext, RetryPolicy, Task, TOrchestrator } from "@microsoft/durabletask-js";
+import {
+  ActivityContext,
+  EntityInstanceId,
+  InMemoryOrchestrationBackend,
+  OrchestrationContext,
+  OrchestrationStatus,
+  RetryPolicy,
+  Task,
+  TestOrchestrationClient,
+  TestOrchestrationWorker,
+  TimerTask,
+  TOrchestrator,
+} from "@microsoft/durabletask-js";
 import {
   ClassicOrchestrationContext,
   DurableOrchestrationContext,
@@ -162,6 +174,36 @@ describe("DurableOrchestrationContext", () => {
       whenAnySpy.mockRestore();
     }
   });
+
+  it("createTimer returns a cancelable TimerTask usable in Task.any (type + forwarding)", () => {
+    // Regression (#3/#293): createTimer's declared return type must be TimerTask so `.cancel()` and
+    // `.isCanceled` are visible to TS and a timer is assignable where a Task is expected (Task.any).
+    // The adapter forwards to core (which owns the runtime cancel semantics); this asserts the type
+    // is exposed and the call is forwarded.
+    const { ctx, raw } = createFakeCoreContext();
+    const timerStub = { cancel: jest.fn(), isCanceled: false } as unknown as TimerTask;
+    raw.createTimer.mockReturnValue(timerStub);
+    const df = new DurableOrchestrationContext(ctx, undefined);
+
+    const timer: TimerTask = df.createTimer(new Date("2030-01-01T00:00:00.000Z"));
+    const work = df.callActivity("fast", "x");
+
+    const whenAnySpy = jest.spyOn(durabletask, "whenAny").mockReturnValue("race" as never);
+    try {
+      // Compiles only if TimerTask extends Task (so it is accepted in the Task[] passed to Task.any).
+      const race = df.Task.any([timer, work]);
+      expect(race).toBe("race");
+      expect(whenAnySpy).toHaveBeenCalledWith([timer, work]);
+    } finally {
+      whenAnySpy.mockRestore();
+    }
+
+    // Classic durable-timeout pattern: cancel the timer once the work wins.
+    timer.cancel();
+    expect(timer.isCanceled).toBe(false);
+    expect(raw.createTimer).toHaveBeenCalledWith(new Date("2030-01-01T00:00:00.000Z"));
+    expect(timerStub.cancel).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("wrapOrchestrator", () => {
@@ -249,5 +291,88 @@ describe("wrapOrchestrator", () => {
     expect((ctx as unknown as { createReplaySafeLogger: jest.Mock }).createReplaySafeLogger).toHaveBeenCalledTimes(1);
     expect(replaySafeLogger.info).toHaveBeenCalledWith("hi");
     expect(replaySafeLogger.error).toHaveBeenCalledWith("boom");
+  });
+});
+
+describe("wrapOrchestrator end-to-end (real core executor)", () => {
+  // These tests drive wrapped orchestrators through the REAL core executor via the in-memory
+  // backend (not a hand-driven fake context), which is what andystaples' arity review asked for:
+  // proof that a native single-arg orchestrator's body actually executes and round-trips an
+  // activity, rather than being mis-detected as classic and silently returning a garbage value.
+  const echo = (_ctx: ActivityContext, input: unknown): string => `echo:${String(input)}`;
+
+  it("drives a native single-argument async-generator orchestrator through the executor", async () => {
+    const backend = new InMemoryOrchestrationBackend();
+    const worker = new TestOrchestrationWorker(backend);
+    worker.addNamedActivity("echo", echo);
+
+    // Native single-arg async generator: arity 1 but NOT classic. It must pass through wrapOrchestrator
+    // unchanged so the engine drives it; wrapping it would inject a classic { df, log } context.
+    const native = async function* (ctx: OrchestrationContext): AsyncGenerator<Task<unknown>, string, unknown> {
+      const result = (yield ctx.callActivity("echo", "IN")) as string;
+      return `native-done:${result}`;
+    };
+    worker.addNamedOrchestrator("nativeOrch", wrapOrchestrator(native as unknown as TOrchestrator));
+
+    await worker.start();
+    try {
+      const client = new TestOrchestrationClient(backend);
+      const id = await client.scheduleNewOrchestration("nativeOrch");
+      const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+      expect(state?.runtimeStatus).toBe(OrchestrationStatus.COMPLETED);
+      // The body ran and round-tripped the activity: output reflects the activity result.
+      expect(state?.serializedOutput).toBe(JSON.stringify("native-done:echo:IN"));
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it("drives a wrapped classic single-argument generator orchestrator through the executor", async () => {
+    const backend = new InMemoryOrchestrationBackend();
+    const worker = new TestOrchestrationWorker(backend);
+    worker.addNamedActivity("echo", echo);
+
+    // Classic v3 sync generator using context.df.*; wrapOrchestrator wraps it so the engine drives it.
+    const classic = function* (context: ClassicOrchestrationContext): Generator<Task<unknown>, string, unknown> {
+      const input = context.df.getInput<string>();
+      const result = (yield context.df.callActivity("echo", input)) as string;
+      return `classic-done:${result}`;
+    };
+    worker.addNamedOrchestrator("classicOrch", wrapOrchestrator(classic));
+
+    await worker.start();
+    try {
+      const client = new TestOrchestrationClient(backend);
+      const id = await client.scheduleNewOrchestration("classicOrch", "IN");
+      const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+      expect(state?.runtimeStatus).toBe(OrchestrationStatus.COMPLETED);
+      expect(state?.serializedOutput).toBe(JSON.stringify("classic-done:echo:IN"));
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it("drives a native plain async (non-generator) orchestrator through the executor", async () => {
+    // `async (ctx) => value` is core-native (the engine awaits it); a classic orchestrator is never a
+    // plain async function. Detection must send it through unchanged, not to the arity → classic path.
+    const backend = new InMemoryOrchestrationBackend();
+    const worker = new TestOrchestrationWorker(backend);
+
+    const nativeAsync = async (ctx: OrchestrationContext): Promise<string> => `async-done:${ctx.instanceId}`;
+    worker.addNamedOrchestrator("asyncOrch", wrapOrchestrator(nativeAsync as unknown as TOrchestrator));
+
+    await worker.start();
+    try {
+      const client = new TestOrchestrationClient(backend);
+      const id = await client.scheduleNewOrchestration("asyncOrch", undefined, "async-instance");
+      const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+      expect(state?.runtimeStatus).toBe(OrchestrationStatus.COMPLETED);
+      expect(state?.serializedOutput).toBe(JSON.stringify("async-done:async-instance"));
+    } finally {
+      await worker.stop();
+    }
   });
 });

@@ -56,11 +56,11 @@ describe("DurableFunctionsClient query methods", () => {
     }
   });
 
-  it("getStatus returns undefined when the instance does not exist", async () => {
+  it("getStatus throws when the instance does not exist (v3 not-found behavior)", async () => {
     const client = new DurableFunctionsClient(CLIENT_CONFIG);
     try {
       jest.spyOn(client, "getOrchestrationState").mockResolvedValue(undefined);
-      await expect(client.getStatus("missing")).resolves.toBeUndefined();
+      await expect(client.getStatus("missing")).rejects.toThrow(/No orchestration instance with ID 'missing'/);
     } finally {
       await client.stop();
     }
@@ -96,9 +96,7 @@ describe("DurableFunctionsClient query methods", () => {
   it("purgeInstanceHistory maps the core purge result", async () => {
     const client = new DurableFunctionsClient(CLIENT_CONFIG);
     try {
-      jest
-        .spyOn(client, "purgeOrchestration")
-        .mockResolvedValue({ deletedInstanceCount: 1 } as never);
+      jest.spyOn(client, "purgeOrchestration").mockResolvedValue({ deletedInstanceCount: 1 } as never);
 
       const result = await client.purgeInstanceHistory("abc");
       expect(result).toBeInstanceOf(PurgeHistoryResult);
@@ -193,9 +191,7 @@ describe("DurableFunctionsClient query methods", () => {
     const client = new DurableFunctionsClient(CLIENT_CONFIG);
     const request = new HttpRequest({ method: "GET", url: "http://localhost:7071/api/x" });
     try {
-      jest
-        .spyOn(client, "waitForOrchestrationCompletion")
-        .mockRejectedValue(new Error("Timed out"));
+      jest.spyOn(client, "waitForOrchestrationCompletion").mockRejectedValue(new Error("Timed out"));
 
       const response = await client.waitForCompletionOrCreateCheckStatusResponse(request, "abc", {
         timeoutInMilliseconds: 1000,

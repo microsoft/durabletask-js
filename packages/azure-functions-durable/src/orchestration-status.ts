@@ -107,8 +107,16 @@ export function fromOrchestrationRuntimeStatus(status: OrchestrationRuntimeStatu
  *
  * Payloads are deserialized with `JSON.parse`, matching the plain-JSON wire contract the core client
  * and worker use.
+ *
+ * @param state - The core orchestration state to map.
+ * @param history - Optional execution history to attach (see {@link DurableFunctionsClient.getStatus}
+ *   `showHistory`). The entries are core {@link OrchestrationState} history events; the consolidated
+ *   gRPC path surfaces core `HistoryEvent`s rather than the classic .NET extension's history shape.
  */
-export function toDurableOrchestrationStatus(state: OrchestrationState): DurableOrchestrationStatus {
+export function toDurableOrchestrationStatus(
+  state: OrchestrationState,
+  history?: unknown[],
+): DurableOrchestrationStatus {
   return new DurableOrchestrationStatus({
     name: state.name,
     instanceId: state.instanceId,
@@ -118,6 +126,7 @@ export function toDurableOrchestrationStatus(state: OrchestrationState): Durable
     output: parseJson(state.serializedOutput),
     runtimeStatus: toOrchestrationRuntimeStatus(state.runtimeStatus),
     customStatus: parseJson(state.serializedCustomStatus),
+    history,
   });
 }
 

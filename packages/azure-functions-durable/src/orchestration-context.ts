@@ -209,14 +209,17 @@ export type ClassicOrchestrator = (
  * orchestrators use `context.df.*` and are wrapped so the engine drives them while `context.df`
  * forwards to the core {@link OrchestrationContext}.
  *
- * Detection is by generator kind, mirroring the engine's own gate (it only drives values exposing
- * `Symbol.asyncIterator`), not by arity:
+ * Detection is by generator/async kind, mirroring the engine's own gate (it only drives values
+ * exposing `Symbol.asyncIterator`), not by arity:
  * - `async function*` (core-native, e.g. `async function*(ctx) { yield ctx.callActivity(...) }`) is
  *   passed through — wrapping it would swap in a classic `{ df, log }` context and silently break it.
+ * - `async function` (core-native non-generator, e.g. `async (ctx, input) => ...`) is passed through;
+ *   the engine awaits it. A classic v3 orchestrator is never a plain async function (it must be a
+ *   generator to `yield` durable tasks), so `async` unambiguously means core-native.
  * - `function*` (classic v3 sync generator) is wrapped; the engine cannot drive a sync generator, so
  *   the wrapper delegates to it via `yield*`.
- * - A plain (non-generator) function is ambiguous, so fall back to arity: a lone `context` parameter
- *   is treated as classic, `(ctx, input)` as core-native.
+ * - A plain SYNC (non-generator) function is ambiguous, so fall back to arity: a lone `context`
+ *   parameter is treated as classic, `(ctx, input)` as core-native.
  */
 export function wrapOrchestrator(handler: TOrchestrator | ClassicOrchestrator): TOrchestrator {
   if (typeof handler === "function" && isClassicOrchestrator(handler)) {
@@ -257,19 +260,22 @@ export function wrapOrchestrator(handler: TOrchestrator | ClassicOrchestrator): 
 /**
  * @hidden
  * Classifies a handler as a classic v3 orchestrator (must be wrapped) versus a core-native one
- * (must pass through). Prefers generator kind over arity so that single-parameter core-native
- * `async function*(ctx)` orchestrators are not mis-detected as classic.
+ * (must pass through). Prefers generator/async kind over arity so that single-parameter core-native
+ * `async function*(ctx)` / `async (ctx) => ...` orchestrators are not mis-detected as classic.
  */
 function isClassicOrchestrator(handler: TOrchestrator | ClassicOrchestrator): boolean {
   const kind = (handler as { constructor?: { name?: string } }).constructor?.name;
-  if (kind === "AsyncGeneratorFunction") {
-    return false; // core-native: the engine drives it directly.
+  if (kind === "AsyncGeneratorFunction" || kind === "AsyncFunction") {
+    // Core-native: the engine drives async generators directly and awaits plain async
+    // orchestrators. A classic v3 orchestrator is never a plain async function — it must be a
+    // (sync) generator to `yield` durable tasks — so `async` unambiguously means core-native.
+    return false;
   }
   if (kind === "GeneratorFunction") {
     return true; // classic v3: a sync generator the engine can't drive on its own.
   }
-  // Plain/async (non-generator) function: fall back to arity. A lone `context` parameter is the
-  // classic v3 shape; `(ctx, input)` is core-native.
+  // Plain SYNC (non-generator) function: kind is ambiguous, so fall back to arity. A lone
+  // `context` parameter is the classic v3 shape; `(ctx, input)` is core-native.
   return handler.length <= 1;
 }
 

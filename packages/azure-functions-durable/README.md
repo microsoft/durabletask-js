@@ -27,12 +27,17 @@ changed. See [`CHANGELOG.md`](./CHANGELOG.md) for the full list; the highlights:
 
 - **Node.js >= 22** is required (v3 supported Node 18/20).
 - **Classic contexts no longer extend `InvocationContext`** — only `df` plus replay-safe log helpers
-  are available (no `invocationId` / `functionName` / `extraInputs`).
+  are available (no `invocationId` / `functionName` / `extraInputs`; the classic entity context is
+  just `{ df }`). Reading those `InvocationContext` members inside an orchestrator is
+  replay-nondeterministic and was never recommended.
 - **Task result shape follows the core SDK** — use `isComplete` / `isFailed` / `getResult()` instead
   of v3's `isCompleted` / `isFaulted` / `result`. `context.df.createTimer(...)` still returns a
   cancelable `TimerTask` for the timeout-race pattern.
-- **`client.getStatus()` may return `undefined`** and honors only `showInput` (`showHistory` /
-  `showHistoryOutput` are ignored); **`client.startNew()` drops the `version` option**.
+- **`client.getStatus()` keeps the v3 shape** — it returns a non-optional `DurableOrchestrationStatus`
+  and throws when the instance is missing. `showInput` / `showHistory` / `showHistoryOutput` are
+  accepted, but `showInput` also gates output/custom status and `showHistory` returns core
+  `HistoryEvent`s (not the v3 extension history shape). **`client.startNew()` supports the `version`
+  option.**
 - **Some v3 top-level exports were removed** — `DummyOrchestrationContext` / `DummyEntityContext`,
   `DurableError` / `AggregatedError`, and `ManagedIdentityTokenSource` / `TokenSource`.
   `TaskFailedError` is re-exported from the core SDK; use the core `TestOrchestrationWorker` /

@@ -2,7 +2,12 @@
 // Licensed under the MIT License.
 
 import { HttpRequest } from "@azure/functions";
-import { PurgeInstanceCriteria, TaskHubGrpcClient } from "@microsoft/durabletask-js";
+import {
+  OrchestrationState,
+  OrchestrationStatus,
+  PurgeInstanceCriteria,
+  TaskHubGrpcClient,
+} from "@microsoft/durabletask-js";
 import { DurableFunctionsClient, getGrpcHostAddress } from "../../src/client";
 import { createAzureFunctionsMetadataGenerator } from "../../src/metadata";
 import { OrchestrationRuntimeStatus } from "../../src/orchestration-status";
@@ -269,5 +274,97 @@ describe("DurableFunctionsClient", () => {
     expect(metadata.get("taskhub")).toEqual(["functions-taskhub"]);
     expect(metadata.get("x-user-agent")[0]).toMatch(/^durable-functions\//);
     expect(metadata.get("requiredQueryStringParameters")).toEqual([]);
+  });
+
+  describe("getStatus / startNew (v3 parity)", () => {
+    const makeState = () =>
+      new OrchestrationState(
+        "inst-1",
+        "MyOrch",
+        OrchestrationStatus.COMPLETED,
+        new Date("2026-01-01T00:00:00.000Z"),
+        new Date("2026-01-01T00:00:05.000Z"),
+        JSON.stringify("the-input"),
+        JSON.stringify("the-output"),
+        undefined,
+        undefined,
+      );
+
+    it("getStatus returns a non-optional DurableOrchestrationStatus and honors showInput", async () => {
+      const client = new DurableFunctionsClient(CLIENT_CONFIG);
+      try {
+        const getState = jest.spyOn(client, "getOrchestrationState").mockResolvedValue(makeState());
+
+        const status = await client.getStatus("inst-1");
+        expect(getState).toHaveBeenCalledWith("inst-1", true);
+        expect(status.instanceId).toBe("inst-1");
+        expect(status.name).toBe("MyOrch");
+        expect(status.runtimeStatus).toBe(OrchestrationRuntimeStatus.Completed);
+        expect(status.input).toBe("the-input");
+        expect(status.output).toBe("the-output");
+        expect(status.history).toBeUndefined();
+
+        // showInput maps to the core fetchPayloads flag.
+        await client.getStatus("inst-1", { showInput: false });
+        expect(getState).toHaveBeenLastCalledWith("inst-1", false);
+      } finally {
+        await client.stop();
+      }
+    });
+
+    it("getStatus throws when the instance does not exist (v3 not-found behavior)", async () => {
+      // v3's DurableClient.getStatus returns a non-optional status and throws on the extension's HTTP
+      // 404; replicate that instead of returning undefined.
+      const client = new DurableFunctionsClient(CLIENT_CONFIG);
+      try {
+        jest.spyOn(client, "getOrchestrationState").mockResolvedValue(undefined);
+        await expect(client.getStatus("missing")).rejects.toThrow(/No orchestration instance with ID 'missing'/);
+      } finally {
+        await client.stop();
+      }
+    });
+
+    it("getStatus populates history from the core execution history when showHistory is set", async () => {
+      const client = new DurableFunctionsClient(CLIENT_CONFIG);
+      try {
+        jest.spyOn(client, "getOrchestrationState").mockResolvedValue(makeState());
+        const events = [{ eventId: 1 }, { eventId: 2 }];
+        const getHistory = jest.spyOn(client, "getOrchestrationHistory").mockResolvedValue(events as never);
+
+        const status = await client.getStatus("inst-1", { showHistory: true });
+        expect(getHistory).toHaveBeenCalledWith("inst-1");
+        expect(status.history).toEqual(events);
+
+        // Without showHistory the core history call is skipped and history stays undefined.
+        getHistory.mockClear();
+        const status2 = await client.getStatus("inst-1");
+        expect(getHistory).not.toHaveBeenCalled();
+        expect(status2.history).toBeUndefined();
+      } finally {
+        await client.stop();
+      }
+    });
+
+    it("startNew forwards the version option to the core scheduler", async () => {
+      const client = new DurableFunctionsClient(CLIENT_CONFIG);
+      try {
+        const schedule = jest.spyOn(client, "scheduleNewOrchestration").mockResolvedValue("inst-9");
+
+        await client.startNew("MyOrch", { input: { a: 1 }, instanceId: "inst-9", version: "2.0.0" });
+        expect(schedule).toHaveBeenCalledWith("MyOrch", { a: 1 }, { instanceId: "inst-9", version: "2.0.0" });
+
+        // version alone (no instanceId) is still forwarded.
+        schedule.mockClear();
+        await client.startNew("MyOrch", { version: "3.0.0" });
+        expect(schedule).toHaveBeenCalledWith("MyOrch", undefined, { instanceId: undefined, version: "3.0.0" });
+
+        // No instanceId/version → no options object (unchanged pre-existing behavior).
+        schedule.mockClear();
+        await client.startNew("MyOrch", { input: "x" });
+        expect(schedule).toHaveBeenCalledWith("MyOrch", "x", undefined);
+      } finally {
+        await client.stop();
+      }
+    });
   });
 });

@@ -35,6 +35,32 @@ export interface DurableFunctionsClientConfig {
 
 export type DurableFunctionsClientInput = string | DurableFunctionsClientConfig;
 
+/**
+ * Options for {@link DurableFunctionsClient.getStatus} (classic Durable Functions v3 shape).
+ */
+export interface GetStatusOptions {
+  /** Include the execution history in {@link DurableOrchestrationStatus.history}. */
+  showHistory?: boolean;
+  /**
+   * Include input/output payloads in the history entries. Accepted for v3 compatibility; on the
+   * consolidated gRPC path the core history events always carry their payloads (see
+   * {@link DurableFunctionsClient.getStatus}).
+   */
+  showHistoryOutput?: boolean;
+  /** Include the orchestration input/output/custom-status payloads (maps to core `fetchPayloads`). */
+  showInput?: boolean;
+}
+
+/** Options for {@link DurableFunctionsClient.startNew} (classic Durable Functions v3 shape). */
+export interface StartNewOptions {
+  /** JSON-serializable input for the orchestrator. */
+  input?: unknown;
+  /** Instance ID to use; a random GUID is generated when omitted. */
+  instanceId?: string;
+  /** Orchestration version to assign (forwarded to the core scheduler). */
+  version?: string;
+}
+
 export class DurableFunctionsClient extends TaskHubGrpcClient {
   public readonly taskHubName: string;
   public readonly connectionName: string;
@@ -153,18 +179,15 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    *
    * @deprecated Use {@link scheduleNewOrchestration} instead.
    * @param orchestratorName - The name of the orchestrator to start.
-   * @param options - Optional input and instance ID.
+   * @param options - Optional input, instance ID, and version.
    * @returns The instance ID of the started orchestration.
-   *
-   * @remarks
-   * Breaking change from v3: the v3 `version` option is not supported and is silently dropped.
    */
-  async startNew(orchestratorName: string, options?: { input?: unknown; instanceId?: string }): Promise<string> {
-    return this.scheduleNewOrchestration(
-      orchestratorName,
-      options?.input,
-      options?.instanceId !== undefined ? { instanceId: options.instanceId } : undefined,
-    );
+  async startNew(orchestratorName: string, options?: StartNewOptions): Promise<string> {
+    const scheduleOptions =
+      options?.instanceId !== undefined || options?.version !== undefined
+        ? { instanceId: options?.instanceId, version: options?.version }
+        : undefined;
+    return this.scheduleNewOrchestration(orchestratorName, options?.input, scheduleOptions);
   }
 
   /**
@@ -172,22 +195,31 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    *
    * @deprecated Use {@link getOrchestrationState} instead.
    * @param instanceId - The ID of the orchestration instance to query.
-   * @param options - When `showInput` is `false`, input/output payloads are not fetched.
-   * @returns The instance status, or `undefined` if the instance does not exist.
+   * @param options - v3 {@link GetStatusOptions}: `showInput`, `showHistory`, `showHistoryOutput`.
+   * @returns The instance status.
+   * @throws If no orchestration instance with the given ID exists (matches v3, which threw on the
+   *   extension's HTTP 404 response).
    *
    * @remarks
-   * Breaking changes from v3:
-   * - The return type is `DurableOrchestrationStatus | undefined` (v3 returned a non-optional value),
-   *   so `(await getStatus(id)).runtimeStatus` must guard against `undefined`.
-   * - Only `showInput` is honored. The v3 `showHistory` / `showHistoryOutput` options are not
-   *   supported and `history` is never populated.
+   * v3 parity and its boundaries on the consolidated gRPC path:
+   * - Returns a non-optional {@link DurableOrchestrationStatus} and throws when the instance is not
+   *   found, exactly like v3's `DurableClient.getStatus`.
+   * - `showHistory` populates {@link DurableOrchestrationStatus.history} from the core execution
+   *   history (`getOrchestrationHistory`). The entries are core `HistoryEvent`s, not the classic
+   *   .NET extension's history shape (the gRPC path bypasses the extension's HTTP history formatter).
+   * - `showHistoryOutput` is accepted for API compatibility but does not strip payloads from the
+   *   history events: core history events always carry their intrinsic input/output.
+   * - `showInput` maps to the core `fetchPayloads` flag. Because that call fetches input, output, and
+   *   custom status together, `showInput: false` also omits output/custom status (v3 omitted only the
+   *   input).
    */
-  async getStatus(
-    instanceId: string,
-    options?: { showInput?: boolean },
-  ): Promise<DurableOrchestrationStatus | undefined> {
+  async getStatus(instanceId: string, options?: GetStatusOptions): Promise<DurableOrchestrationStatus> {
     const state = await this.getOrchestrationState(instanceId, options?.showInput ?? true);
-    return state ? toDurableOrchestrationStatus(state) : undefined;
+    if (state === undefined) {
+      throw new Error(`No orchestration instance with ID '${instanceId}' was found.`);
+    }
+    const history = options?.showHistory ? await this.getOrchestrationHistory(instanceId) : undefined;
+    return toDurableOrchestrationStatus(state, history);
   }
 
   /**
