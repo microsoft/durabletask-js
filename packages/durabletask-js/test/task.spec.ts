@@ -313,7 +313,8 @@ describe("CompletableTask", () => {
 
       child.fail("child failed");
 
-      // WhenAllTask fails fast on first child failure
+      // WhenAll with a single child: once that child fails, all children are terminal,
+      // so the WhenAll completes (as failed) and notifies its parent.
       expect(parent.isComplete).toBe(true);
       expect(parent.isFailed).toBe(true);
     });

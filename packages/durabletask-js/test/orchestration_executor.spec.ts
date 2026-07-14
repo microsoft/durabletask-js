@@ -1035,7 +1035,7 @@ describe("Orchestration Executor", () => {
     expect(completeAction?.getResult()?.getValue()).toEqual("[0,1,2,3,4,5,6,7,8,9]");
   });
 
-  it("should test that a fan-in works correctly when one of the tasks fails", async () => {
+  it("should test that a fan-in completes as failed only after all tasks finish when one fails", async () => {
     const printInt = (_: any, value: number) => {
       return value.toString();
     };
@@ -1061,21 +1061,37 @@ describe("Orchestration Executor", () => {
       oldEvents.push(newTaskScheduledEvent(i + 1, activityName, i.toString()));
     }
 
-    // Chaos test with 5 tasks completing successfully, 1 failing and 4 still running
-    // we exect that the orchestration fails immediately now and does not wait for the 4 that are running
-    const newEvents: any[] = [];
-
+    // Wait-all (issue #301): 5 tasks complete successfully, 1 fails, and 4 are still running.
+    // The whenAll must NOT go terminal yet — it waits for the 4 outstanding tasks rather than
+    // failing immediately (which used to happen under fail-fast).
+    const ex = new Error("Kah-BOOOOM!!!");
+    const partialEvents: any[] = [];
     for (let i = 0; i < 5; i++) {
-      newEvents.push(newTaskCompletedEvent(i + 1, printInt(null, i)));
+      partialEvents.push(newTaskCompletedEvent(i + 1, printInt(null, i)));
+    }
+    partialEvents.push(newTaskFailedEvent(6, ex));
+
+    const waitingResult = await new OrchestrationExecutor(registry, testLogger).execute(
+      TEST_INSTANCE_ID,
+      oldEvents,
+      partialEvents,
+    );
+    // Still waiting on tasks 7-10 — no complete action is emitted.
+    expect(waitingResult.actions.some((a) => a.hasCompleteorchestration())).toBe(false);
+    expect(waitingResult.actions.length).toEqual(0);
+
+    // The remaining 4 tasks now finish (delivered in a later batch). Only now does the whenAll
+    // complete — as failed, surfacing the single failure.
+    const remainingEvents: any[] = [];
+    for (let i = 6; i < 10; i++) {
+      remainingEvents.push(newTaskCompletedEvent(i + 1, printInt(null, i)));
     }
 
-    const ex = new Error("Kah-BOOOOM!!!");
-    newEvents.push(newTaskFailedEvent(6, ex));
-
-    // Now test with the full set of new events
-    // We expect the orchestration to complete
-    const executor = new OrchestrationExecutor(registry, testLogger);
-    const result = await executor.execute(TEST_INSTANCE_ID, oldEvents, newEvents);
+    const result = await new OrchestrationExecutor(registry, testLogger).execute(
+      TEST_INSTANCE_ID,
+      [...oldEvents, ...partialEvents],
+      remainingEvents,
+    );
 
     const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
@@ -1776,7 +1792,7 @@ describe("Orchestration Executor", () => {
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain(ex.message);
   });
 
-  it("should not crash when additional tasks complete after whenAll fails fast", async () => {
+  it("should complete whenAll as failed after all tasks finish when one task fails", async () => {
     const printInt = (_: any, value: number) => {
       return value.toString();
     };
@@ -1802,7 +1818,8 @@ describe("Orchestration Executor", () => {
       oldEvents.push(newTaskScheduledEvent(i + 1, activityName, i.toString()));
     }
 
-    // First task fails, then remaining tasks complete in the same batch
+    // First task fails; the remaining tasks complete in the same batch. Under wait-all the
+    // whenAll completes as failed only once every task is terminal, surfacing the first failure.
     const ex = new Error("First task failed");
     const newEvents: any[] = [
       newTaskFailedEvent(1, ex),
@@ -1849,7 +1866,8 @@ describe("Orchestration Executor", () => {
       oldEvents.push(newTaskScheduledEvent(i + 1, activityName, i.toString()));
     }
 
-    // First task fails, then remaining tasks complete in the same batch
+    // First task fails; the remaining tasks complete in the same batch. The failure is caught
+    // by the orchestrator once the whenAll completes (as failed) after all tasks are terminal.
     const ex = new Error("One task failed");
     const newEvents: any[] = [
       newTaskFailedEvent(1, ex),
@@ -1863,6 +1881,60 @@ describe("Orchestration Executor", () => {
     const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify("handled"));
+  });
+
+  it("should keep waiting until all whenAll siblings fail across separate event batches (issue #301)", async () => {
+    // Regression for issue #301: when a whenAll fan-out has multiple failing siblings whose
+    // TaskFailed events arrive in separate batches, the whenAll must NOT go terminal on the
+    // first failure. If it did, the orchestration would go terminal early and the later
+    // sibling's TaskFailed would be dropped against a terminal instance, leaving a bare
+    // TaskScheduled with no completion — which is what deadlocks on rewind.
+    const printInt = (_: any, value: number) => value.toString();
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const a = ctx.callActivity(printInt, 0);
+      const b = ctx.callActivity(printInt, 1);
+      return yield whenAll([a, b]);
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const activityName = registry.addActivity(printInt);
+
+    const scheduledHistory = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID),
+      newTaskScheduledEvent(1, activityName, "0"),
+      newTaskScheduledEvent(2, activityName, "1"),
+    ];
+
+    const firstFailure = new Error("first activity failed");
+    const secondFailure = new Error("second activity failed");
+
+    // Batch 1: only the first sibling fails. The whenAll is still waiting on the second
+    // sibling, so the orchestration must NOT emit any complete action.
+    const batch1 = await new OrchestrationExecutor(registry, testLogger).execute(
+      TEST_INSTANCE_ID,
+      scheduledHistory,
+      [newTaskFailedEvent(1, firstFailure)],
+    );
+    expect(batch1.actions.some((a) => a.hasCompleteorchestration())).toBe(false);
+    expect(batch1.actions.length).toEqual(0);
+
+    // Batch 2: the second sibling fails too (delivered in a later batch, with batch 1 now part
+    // of the replayed history). Only now does the whenAll complete — as failed, surfacing the
+    // first failure without aggregating.
+    const batch2 = await new OrchestrationExecutor(registry, testLogger).execute(
+      TEST_INSTANCE_ID,
+      [...scheduledHistory, newTaskFailedEvent(1, firstFailure)],
+      [newTaskFailedEvent(2, secondFailure)],
+    );
+
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(batch2);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("TaskFailedError");
+    expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("first activity failed");
+    expect(completeAction?.getFailuredetails()?.getErrormessage()).not.toContain("second activity failed");
   });
 
   it("should complete nested whenAny(whenAll, whenAll) when first inner group finishes", async () => {
@@ -2036,14 +2108,15 @@ describe("Orchestration Executor", () => {
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("non-Task");
   });
 
-  it("should propagate inner whenAll failure to outer whenAny in nested composites", async () => {
+  it("should propagate inner whenAll failure to outer whenAny only after all whenAll children finish", async () => {
     const hello = (_: any, name: string) => {
       return `Hello ${name}!`;
     };
 
     // Orchestrator: yield whenAny([whenAll([a, b])])
-    // If an inner task fails, the whenAll should fail-fast and notify the outer whenAny.
-    // WhenAny completes with the failed task — the orchestrator inspects the winner.
+    // Under wait-all, the inner whenAll does NOT fail-fast: it completes (as failed) only once
+    // BOTH children are terminal, and only then notifies the outer whenAny. So the outer whenAny
+    // completes strictly later than it would have under fail-fast.
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
       const group = [ctx.callActivity(hello, "a"), ctx.callActivity(hello, "b")];
       const winner: Task<string[]> = yield whenAny([whenAll(group)]);
@@ -2061,12 +2134,24 @@ describe("Orchestration Executor", () => {
       newTaskScheduledEvent(2, activityName, JSON.stringify("b")),
     ];
 
-    // Task 1 fails — whenAll should fail-fast, and outer whenAny should complete
     const ex = new Error("task a failed");
-    const completionEvents = [newTaskFailedEvent(1, ex)];
 
-    const executor = new OrchestrationExecutor(registry, testLogger);
-    const result = await executor.execute(TEST_INSTANCE_ID, replayEvents, completionEvents);
+    // Task 1 fails but task 2 is still outstanding: the inner whenAll must keep waiting, so the
+    // outer whenAny — and therefore the orchestration — does NOT complete yet (no complete action).
+    const waitingResult = await new OrchestrationExecutor(registry, testLogger).execute(
+      TEST_INSTANCE_ID,
+      replayEvents,
+      [newTaskFailedEvent(1, ex)],
+    );
+    expect(waitingResult.actions.length).toEqual(0);
+
+    // Task 2 now completes: the inner whenAll completes as failed and notifies the outer whenAny,
+    // which resolves with the failed whenAll as its winner. The orchestrator inspects the winner.
+    const result = await new OrchestrationExecutor(registry, testLogger).execute(
+      TEST_INSTANCE_ID,
+      [...replayEvents, newTaskFailedEvent(1, ex)],
+      [newTaskCompletedEvent(2, JSON.stringify(hello(null, "b")))],
+    );
 
     const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
