@@ -230,9 +230,12 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
   async getStatus(instanceId: string, options?: GetStatusOptions): Promise<DurableOrchestrationStatus> {
     const state = await this.getOrchestrationState(instanceId, true);
     if (state === undefined) {
+      // Mirror v3's DurableClient.getStatus not-found behavior: it throws (its case-404 branch) with
+      // this message shape. The gRPC path has no HTTP 404, so only the extension-specific first
+      // sentence is replaced; the instanceId-bearing sentence is kept verbatim.
       throw new Error(
-        `DurableClient error: No orchestration instance with ID '${instanceId}' was found. ` +
-          `This usually means no data is associated with the provided instanceId.`,
+        `DurableClient error: No orchestration instance found. ` +
+          `This usually means we could not find any data associated with the instanceId provided: ${instanceId}.`,
       );
     }
     let history: unknown[] | undefined;

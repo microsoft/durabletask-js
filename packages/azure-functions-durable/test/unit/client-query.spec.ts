@@ -60,7 +60,9 @@ describe("DurableFunctionsClient query methods", () => {
     const client = new DurableFunctionsClient(CLIENT_CONFIG);
     try {
       jest.spyOn(client, "getOrchestrationState").mockResolvedValue(undefined);
-      await expect(client.getStatus("missing")).rejects.toThrow(/No orchestration instance with ID 'missing'/);
+      await expect(client.getStatus("missing")).rejects.toThrow(
+        /could not find any data associated with the instanceId provided: missing/,
+      );
     } finally {
       await client.stop();
     }
