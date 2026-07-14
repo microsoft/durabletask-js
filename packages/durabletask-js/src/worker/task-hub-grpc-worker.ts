@@ -333,6 +333,17 @@ export class TaskHubGrpcWorker {
     await this._executeOrchestratorInternal(req, "", stub as unknown as stubs.TaskHubSidecarServiceClient);
 
     if (!stub.orchestratorResponse) {
+      if (stub.abandoned) {
+        // Versioning resolved this work item to the abandon path. Abandon has no meaning on the
+        // single-work-item host path (there is no work-item queue to hand the item back to), so
+        // surface a distinct, actionable error instead of the generic "no response" one. Construct
+        // the worker without versioning when using processOrchestratorRequest.
+        throw new Error(
+          "Orchestrator work item was abandoned (a version mismatch resolved to the abandon path). " +
+            "Abandon is not supported on the single-work-item processOrchestratorRequest path; " +
+            "construct the worker without versioning for this host integration.",
+        );
+      }
       throw new Error("Orchestrator execution did not produce a response.");
     }
 
@@ -749,7 +760,11 @@ export class TaskHubGrpcWorker {
         try {
           const abandonRequest = new pb.AbandonOrchestrationTaskRequest();
           abandonRequest.setCompletiontoken(completionToken);
-          await callWithMetadata(stub.abandonTaskOrchestratorWorkItem.bind(stub), abandonRequest, this._metadataGenerator);
+          await callWithMetadata(
+            stub.abandonTaskOrchestratorWorkItem.bind(stub),
+            abandonRequest,
+            this._metadataGenerator,
+          );
         } catch (e: unknown) {
           const error = e instanceof Error ? e : new Error(String(e));
           WorkerLogs.completionError(this._logger, instanceId, error);
@@ -1226,6 +1241,8 @@ export class TaskHubGrpcWorker {
 class CapturingSidecarStub {
   orchestratorResponse?: pb.OrchestratorResponse;
   entityResult?: pb.EntityBatchResult;
+  /** Set when the execution path abandons the work item (e.g. a version mismatch) rather than completing it. */
+  abandoned = false;
 
   completeOrchestratorTask(
     request: pb.OrchestratorResponse,
@@ -1252,7 +1269,9 @@ class CapturingSidecarStub {
   ): void {
     // Abandon is a no-op for the single-work-item host path: the version-mismatch abandon branch
     // in _executeOrchestratorInternal calls this, but processOrchestratorRequest only surfaces a
-    // completion response. Matches the Python provider, whose null stub no-ops abandon.
+    // completion response. Record it so the caller can distinguish an abandoned work item from a
+    // genuine "no response produced" failure. Matches the Python provider, whose null stub no-ops.
+    this.abandoned = true;
     callback(null, new Empty());
   }
 }

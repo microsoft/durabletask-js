@@ -6,6 +6,7 @@ import {
   EntityInstanceId,
   OrchestrationContext,
   Task,
+  TimerTask,
   TOrchestrator,
   whenAll,
   whenAny,
@@ -79,23 +80,14 @@ export class DurableOrchestrationContext {
   }
 
   /** Schedules an activity for execution with a retry policy. */
-  callActivityWithRetry<T = unknown>(
-    name: string,
-    retryOptions: RetryOptions,
-    input?: unknown,
-  ): Task<T> {
+  callActivityWithRetry<T = unknown>(name: string, retryOptions: RetryOptions, input?: unknown): Task<T> {
     return this._ctx.callActivity<unknown, T>(name, input, {
       retry: retryOptions.toRetryPolicy(),
     });
   }
 
   /** Schedules a sub-orchestrator for execution. */
-  callSubOrchestrator<T = unknown>(
-    name: string,
-    input?: unknown,
-    instanceId?: string,
-    version?: string,
-  ): Task<T> {
+  callSubOrchestrator<T = unknown>(name: string, input?: unknown, instanceId?: string, version?: string): Task<T> {
     return this._ctx.callSubOrchestrator<unknown, T>(
       name,
       input,
@@ -118,8 +110,13 @@ export class DurableOrchestrationContext {
     });
   }
 
-  /** Creates a durable timer that fires at the specified time. */
-  createTimer(fireAt: Date | number): Task<unknown> {
+  /**
+   * Creates a durable timer that fires at the specified time.
+   *
+   * @returns A cancelable {@link TimerTask}. Call `.cancel()` (and check `.isCanceled`) to support
+   *   the classic durable-timeout pattern where a timer races activity work via `Task.any`.
+   */
+  createTimer(fireAt: Date | number): TimerTask {
     return this._ctx.createTimer(fireAt);
   }
 
@@ -157,31 +154,29 @@ export class DurableOrchestrationContext {
    * throws. This mirrors the Python provider, which raises for the same reason.
    */
   callHttp(_options: unknown): never {
-    throw new Error(
-      "callHttp is not supported: the durabletask engine has no durable-HTTP (callHttp) equivalent.",
-    );
+    throw new Error("callHttp is not supported: the durabletask engine has no durable-HTTP (callHttp) equivalent.");
   }
 
   /** Calls an entity operation and waits for its result. */
-  callEntity<T = unknown>(
-    entityId: EntityInstanceId,
-    operationName: string,
-    operationInput?: unknown,
-  ): Task<T> {
+  callEntity<T = unknown>(entityId: EntityInstanceId, operationName: string, operationInput?: unknown): Task<T> {
     return this._ctx.entities.callEntity<T>(entityId, operationName, operationInput);
   }
 
   /** Signals an entity operation (fire-and-forget). */
-  signalEntity(
-    entityId: EntityInstanceId,
-    operationName: string,
-    operationInput?: unknown,
-  ): void {
+  signalEntity(entityId: EntityInstanceId, operationName: string, operationInput?: unknown): void {
     this._ctx.entities.signalEntity(entityId, operationName, operationInput);
   }
 }
 
-/** The object passed to a classic (v3) orchestrator function; its `df` is the durable context. */
+/**
+ * The object passed to a classic (v3) orchestrator function; its `df` is the durable context.
+ *
+ * @remarks
+ * Breaking change from `durable-functions` v3: v3's `OrchestrationContext extends InvocationContext`,
+ * so orchestrators could read `context.invocationId`, `context.functionName`, `context.extraInputs`,
+ * etc. This context intentionally exposes only `df` plus replay-safe log helpers; orchestrator code
+ * that touched `InvocationContext` members must be updated. See the package README/CHANGELOG.
+ */
 export interface ClassicOrchestrationContext {
   df: DurableOrchestrationContext;
   /** Replay-safe log at info level (suppressed during replay). Alias of {@link info}. */
@@ -210,15 +205,21 @@ export type ClassicOrchestrator = (
  * Adapts an orchestrator handler for registration on the core worker.
  *
  * @remarks
- * Core-native orchestrators declare `(ctx, input)` and are returned unchanged. Classic v3
- * orchestrators declare a single `context` parameter and use `context.df.*`; those are wrapped so
- * the core engine drives them while `context.df` forwards to the core {@link OrchestrationContext}.
+ * Core-native orchestrators are driven directly by the engine and are returned unchanged. Classic v3
+ * orchestrators use `context.df.*` and are wrapped so the engine drives them while `context.df`
+ * forwards to the core {@link OrchestrationContext}.
  *
- * Detection is by arity: only single-parameter functions are treated as classic. Declare your
- * core-native orchestrator as `(ctx, input)` so it passes through.
+ * Detection is by generator kind, mirroring the engine's own gate (it only drives values exposing
+ * `Symbol.asyncIterator`), not by arity:
+ * - `async function*` (core-native, e.g. `async function*(ctx) { yield ctx.callActivity(...) }`) is
+ *   passed through — wrapping it would swap in a classic `{ df, log }` context and silently break it.
+ * - `function*` (classic v3 sync generator) is wrapped; the engine cannot drive a sync generator, so
+ *   the wrapper delegates to it via `yield*`.
+ * - A plain (non-generator) function is ambiguous, so fall back to arity: a lone `context` parameter
+ *   is treated as classic, `(ctx, input)` as core-native.
  */
 export function wrapOrchestrator(handler: TOrchestrator | ClassicOrchestrator): TOrchestrator {
-  if (typeof handler === "function" && handler.length === 1) {
+  if (typeof handler === "function" && isClassicOrchestrator(handler)) {
     const classic = handler as ClassicOrchestrator;
     // The core engine only drives orchestrators whose invocation returns an ASYNC generator
     // (it gates on Symbol.asyncIterator). Classic v3 orchestrators are SYNC generators, so the
@@ -243,7 +244,7 @@ export function wrapOrchestrator(handler: TOrchestrator | ClassicOrchestrator): 
         trace: (...a) => logger.debug(...toArgs(a)),
       };
       const result = classic(classicCtx);
-      if (isGenerator(result)) {
+      if (isDrivableGenerator(result)) {
         return yield* result;
       }
       return result;
@@ -253,11 +254,37 @@ export function wrapOrchestrator(handler: TOrchestrator | ClassicOrchestrator): 
   return handler as TOrchestrator;
 }
 
-/** @hidden */
-function isGenerator(value: unknown): value is Generator<Task<unknown>, unknown, unknown> {
+/**
+ * @hidden
+ * Classifies a handler as a classic v3 orchestrator (must be wrapped) versus a core-native one
+ * (must pass through). Prefers generator kind over arity so that single-parameter core-native
+ * `async function*(ctx)` orchestrators are not mis-detected as classic.
+ */
+function isClassicOrchestrator(handler: TOrchestrator | ClassicOrchestrator): boolean {
+  const kind = (handler as { constructor?: { name?: string } }).constructor?.name;
+  if (kind === "AsyncGeneratorFunction") {
+    return false; // core-native: the engine drives it directly.
+  }
+  if (kind === "GeneratorFunction") {
+    return true; // classic v3: a sync generator the engine can't drive on its own.
+  }
+  // Plain/async (non-generator) function: fall back to arity. A lone `context` parameter is the
+  // classic v3 shape; `(ctx, input)` is core-native.
+  return handler.length <= 1;
+}
+
+/**
+ * @hidden
+ * Accepts both sync and async generators so the wrapper can drive whichever the classic handler
+ * returns (`yield*` in an async generator delegates to either).
+ */
+function isDrivableGenerator(
+  value: unknown,
+): value is Generator<Task<unknown>, unknown, unknown> | AsyncGenerator<Task<unknown>, unknown, unknown> {
   return (
     value != null &&
     typeof (value as Iterator<unknown>).next === "function" &&
-    typeof (value as { [Symbol.iterator]?: unknown })[Symbol.iterator] === "function"
+    (typeof (value as { [Symbol.iterator]?: unknown })[Symbol.iterator] === "function" ||
+      typeof (value as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator] === "function")
   );
 }

@@ -1,7 +1,14 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { OrchestrationContext, TaskEntity, TaskHubGrpcWorker, TOrchestrator } from "../src";
+import {
+  OrchestrationContext,
+  TaskEntity,
+  TaskHubGrpcWorker,
+  TOrchestrator,
+  VersionFailureStrategy,
+  VersionMatchStrategy,
+} from "../src";
 import * as pb from "../src/proto/orchestrator_service_pb";
 import { newExecutionStartedEvent, newOrchestratorStartedEvent } from "../src/utils/pb-helper.util";
 import { NoOpLogger } from "../src/types/logger.type";
@@ -39,6 +46,34 @@ describe("Functions gRPC support surface", () => {
     const completed = response.getActionsList()[0].getCompleteorchestration();
     expect(completed?.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(completed?.getResult()?.getValue()).toBe('"done"');
+  });
+
+  it("throws a distinct abandon error when versioning rejects a mismatched orchestration work item", async () => {
+    // Configure the worker with Strict version matching and the Reject failure strategy. The work
+    // item below carries no orchestration version, which does not match the worker's "2.0.0", so
+    // _executeOrchestratorInternal takes the abandon branch. Abandon has no meaning on the
+    // single-work-item host path (there is no work-item queue to hand it back to), so
+    // processOrchestratorRequest must surface a distinct, actionable error rather than the generic
+    // "did not produce a response" one.
+    const worker = new TaskHubGrpcWorker({
+      logger: new NoOpLogger(),
+      versioning: {
+        version: "2.0.0",
+        matchStrategy: VersionMatchStrategy.Strict,
+        failureStrategy: VersionFailureStrategy.Reject,
+      },
+    });
+    const orchestrator: TOrchestrator = async (_ctx: OrchestrationContext) => "done";
+    const name = worker.addOrchestrator(orchestrator);
+
+    const request = new pb.OrchestratorRequest();
+    request.setInstanceid(TEST_INSTANCE_ID);
+    request.setNeweventsList([
+      newOrchestratorStartedEvent(new Date("2026-01-01T00:00:00.000Z")),
+      newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined),
+    ]);
+
+    await expect(worker.processOrchestratorRequest(request.serializeBinary())).rejects.toThrow(/abandoned/i);
   });
 
   it("processes a single serialized entity batch request without the gRPC worker loop", async () => {

@@ -121,7 +121,23 @@ export function toDurableOrchestrationStatus(state: OrchestrationState): Durable
   });
 }
 
-/** @hidden */
+/**
+ * @hidden
+ * Deserializes a serialized payload as JSON, tolerating non-JSON strings.
+ *
+ * @remarks
+ * `undefined`/`""` yield `undefined`. Successful orchestrations carry JSON payloads, but a FAILED
+ * instance's `serializedOutput` is a plain error string (e.g. `"TaskFailedError: Activity task #1
+ * failed"`). Parsing that with `JSON.parse` throws a `SyntaxError`, which previously broke enumerating
+ * all instances (`getStatusAll` → HTTP 400). When parsing fails, return the raw string unchanged.
+ */
 function parseJson(value: string | undefined): unknown {
-  return value === undefined || value === "" ? undefined : JSON.parse(value);
+  if (value === undefined || value === "") {
+    return undefined;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
 }

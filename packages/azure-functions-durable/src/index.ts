@@ -21,18 +21,18 @@ export { createAzureFunctionsMetadataGenerator } from "./metadata";
 export { DurableFunctionsWorker } from "./worker";
 export { DurableBindingMetadata, addDurableGrpcMetadata } from "./durable-grpc";
 export { RetryOptions } from "./retry-options";
+// Re-exported core error so callers can `instanceof`-guard caught orchestration failures, matching
+// the classic durable-functions v3 top-level `TaskFailedError` export. Note: v3's `DurableError` /
+// `AggregatedError` are intentionally not provided — the core engine surfaces `TaskFailedError` and
+// JS-native `AggregateError`. See the package README/CHANGELOG migration notes.
+export { TaskFailedError } from "@microsoft/durabletask-js";
 export {
   DurableOrchestrationContext,
   ClassicOrchestrationContext,
   ClassicOrchestrator,
   wrapOrchestrator,
 } from "./orchestration-context";
-export {
-  DurableEntityContext,
-  ClassicEntityContext,
-  ClassicEntity,
-  wrapEntity,
-} from "./entity-context";
+export { DurableEntityContext, ClassicEntityContext, ClassicEntity, wrapEntity } from "./entity-context";
 export {
   DurableOrchestrationStatus,
   DurableOrchestrationStatusInit,

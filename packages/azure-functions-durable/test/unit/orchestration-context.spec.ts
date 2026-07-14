@@ -2,13 +2,7 @@
 // Licensed under the MIT License.
 
 import * as durabletask from "@microsoft/durabletask-js";
-import {
-  EntityInstanceId,
-  OrchestrationContext,
-  RetryPolicy,
-  Task,
-  TOrchestrator,
-} from "@microsoft/durabletask-js";
+import { EntityInstanceId, OrchestrationContext, RetryPolicy, Task, TOrchestrator } from "@microsoft/durabletask-js";
 import {
   ClassicOrchestrationContext,
   DurableOrchestrationContext,
@@ -178,10 +172,38 @@ describe("wrapOrchestrator", () => {
     expect(wrapOrchestrator(native)).toBe(native);
   });
 
+  it("returns a single-parameter core-native async-generator orchestrator unchanged and drives its body", async () => {
+    // Regression (arity-vs-kind): a native orchestrator written as `async function*(ctx)` ignores
+    // `input`, so it has arity 1 — but it is NOT classic. Detection must be by generator kind, not
+    // arity: it has to pass through unchanged so the engine drives it directly. Wrapping it would
+    // inject a classic `{ df, log }` context (no `ctx.callActivity`) and, because async generators
+    // expose `Symbol.asyncIterator` (not `Symbol.iterator`), the old wrapper would have returned the
+    // un-iterated generator as the result — the body would never run and nothing would throw.
+    const native = async function* (ctx: OrchestrationContext): AsyncGenerator<Task<unknown>, string, unknown> {
+      const result = (yield ctx.callActivity("a", "INPUT")) as string;
+      return `native-done:${result}`;
+    };
+
+    const wrapped = wrapOrchestrator(native as unknown as TOrchestrator);
+    // Passthrough: the native async generator is returned unchanged (identity), not wrapped.
+    expect(wrapped).toBe(native as unknown as TOrchestrator);
+
+    const { ctx, raw } = createFakeCoreContext();
+    const gen = wrapped(ctx, "INPUT") as AsyncGenerator<unknown, unknown, unknown>;
+
+    const firstYield = await gen.next();
+    // Proves the body actually executed: it invoked the CORE ctx.callActivity and yielded its task.
+    expect(raw.callActivity).toHaveBeenCalledWith("a", "INPUT");
+    expect(firstYield.value).toBe("callActivity-task");
+    expect(firstYield.done).toBe(false);
+
+    const final = await gen.next("ACTIVITY_RESULT");
+    expect(final.done).toBe(true);
+    expect(final.value).toBe("native-done:ACTIVITY_RESULT");
+  });
+
   it("wraps a single-parameter classic orchestrator and drives it through context.df", async () => {
-    const classic = function* (
-      context: ClassicOrchestrationContext,
-    ): Generator<Task<unknown>, string, unknown> {
+    const classic = function* (context: ClassicOrchestrationContext): Generator<Task<unknown>, string, unknown> {
       const input = context.df.getInput<string>();
       const first = (yield context.df.callActivity("a", input)) as string;
       return `done:${first}`;
@@ -195,9 +217,7 @@ describe("wrapOrchestrator", () => {
     // The engine gates on Symbol.asyncIterator: the wrapper MUST return an async generator or the
     // core executor never drives it (it would complete immediately with the raw return value).
     const gen = wrapped(ctx, "INPUT") as AsyncGenerator<unknown, unknown, unknown>;
-    expect(typeof (gen as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator]).toBe(
-      "function",
-    );
+    expect(typeof (gen as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator]).toBe("function");
 
     const firstYield = await gen.next();
     expect(raw.callActivity).toHaveBeenCalledWith("a", "INPUT");
@@ -226,9 +246,7 @@ describe("wrapOrchestrator", () => {
     expect(done.done).toBe(true);
     expect(done.value).toBe("logged");
     // The wrapper builds the classic context's log methods from the CORE replay-safe logger.
-    expect(
-      (ctx as unknown as { createReplaySafeLogger: jest.Mock }).createReplaySafeLogger,
-    ).toHaveBeenCalledTimes(1);
+    expect((ctx as unknown as { createReplaySafeLogger: jest.Mock }).createReplaySafeLogger).toHaveBeenCalledTimes(1);
     expect(replaySafeLogger.info).toHaveBeenCalledWith("hi");
     expect(replaySafeLogger.error).toHaveBeenCalledWith("boom");
   });

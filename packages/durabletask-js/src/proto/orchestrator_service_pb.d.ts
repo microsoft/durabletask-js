@@ -1790,8 +1790,8 @@ export class OrchestratorRequest extends jspb.Message {
     static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
     static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
     static serializeBinaryToWriter(message: OrchestratorRequest, writer: jspb.BinaryWriter): void;
-    static deserializeBinaryFromReader(message: OrchestratorRequest, reader: jspb.BinaryReader): OrchestratorRequest;
     static deserializeBinary(bytes: Uint8Array): OrchestratorRequest;
+    static deserializeBinaryFromReader(message: OrchestratorRequest, reader: jspb.BinaryReader): OrchestratorRequest;
 }
 
 export namespace OrchestratorRequest {

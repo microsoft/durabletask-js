@@ -116,9 +116,7 @@ describe("DurableFunctionsClient", () => {
     const client = new DurableFunctionsClient(CLIENT_CONFIG);
 
     try {
-      const rewindInstance = jest
-        .spyOn(client, "rewindInstance")
-        .mockResolvedValue(undefined);
+      const rewindInstance = jest.spyOn(client, "rewindInstance").mockResolvedValue(undefined);
 
       // Regression: previously threw "rewind is not yet supported by durabletask."
       await expect(client.rewind("inst-1", "because")).resolves.toBeUndefined();
@@ -196,9 +194,7 @@ describe("DurableFunctionsClient", () => {
 
     try {
       expect(() =>
-        (client.createHttpManagementPayload as unknown as (request: HttpRequest) => unknown)(
-          request,
-        ),
+        (client.createHttpManagementPayload as unknown as (request: HttpRequest) => unknown)(request),
       ).toThrow(TypeError);
     } finally {
       await client.stop();
@@ -213,9 +209,7 @@ describe("DurableFunctionsClient", () => {
     });
 
     try {
-      expect(client.getClientResponseLinks(request, "abc")).toEqual(
-        client.createHttpManagementPayload(request, "abc"),
-      );
+      expect(client.getClientResponseLinks(request, "abc")).toEqual(client.createHttpManagementPayload(request, "abc"));
     } finally {
       await client.stop();
     }
@@ -239,6 +233,30 @@ describe("DurableFunctionsClient", () => {
       const body = JSON.parse(await response.text());
       expect(body.statusQueryGetUri).toBe(
         "http://localhost:7071/runtime/webhooks/durabletask/instances/abc?code=secret&taskHub=functions-taskhub",
+      );
+    } finally {
+      await client.stop();
+    }
+  });
+
+  it("creates a 202 check status response from baseUrl when request is undefined (classic v3)", async () => {
+    // Regression: v3's createCheckStatusResponse(request, instanceId) accepted an undefined request
+    // and fell back to the client binding's baseUrl. Passing undefined must not throw on request.url.
+    const client = new DurableFunctionsClient({
+      ...CLIENT_CONFIG,
+      baseUrl: "https://public.example/runtime/webhooks/durabletask/",
+    });
+
+    try {
+      const response = client.createCheckStatusResponse(undefined, "abc");
+
+      expect(response.status).toBe(202);
+      expect(response.headers.get("Location")).toBe(
+        "https://public.example/runtime/webhooks/durabletask/instances/abc?code=secret&taskHub=functions-taskhub",
+      );
+      const body = JSON.parse(await response.text());
+      expect(body.statusQueryGetUri).toBe(
+        "https://public.example/runtime/webhooks/durabletask/instances/abc?code=secret&taskHub=functions-taskhub",
       );
     } finally {
       await client.stop();

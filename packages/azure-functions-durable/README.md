@@ -6,7 +6,7 @@ Write [Azure Durable Functions](https://learn.microsoft.com/azure/azure-function
 
 `durable-functions` is the Azure Functions Durable provider for JavaScript, built on `@microsoft/durabletask-js`. You author Durable Functions apps with the familiar `app.orchestration` / `app.activity` / `app.entity` model, and the provider talks to the Durable Task backend over the Functions host's gRPC channel.
 
-This is a new major version that supersedes the legacy [`durable-functions`](https://github.com/Azure/azure-functions-durable-js) package. New and existing (classic v3) orchestration, activity, and entity code all run on the same gRPC engine.
+This package supersedes the legacy [`durable-functions`](https://github.com/Azure/azure-functions-durable-js) package. New and existing (classic v3) orchestration, activity, and entity code all run on the same gRPC engine.
 
 ## Why it is needed
 
@@ -19,6 +19,24 @@ This is a new major version that supersedes the legacy [`durable-functions`](htt
 - **Authoring** — `app.orchestration`, `app.activity`, and `app.entity` register durable functions (each trigger opts into the host's gRPC protocol automatically).
 - **Client** — `getClient(context)` returns a `DurableFunctionsClient` for scheduling, querying, signaling, and managing instances, plus HTTP management-payload helpers (`createCheckStatusResponse`, `createHttpManagementPayload`) for durable HTTP starters.
 - **Classic (v3) compatibility** — orchestrators and entities written in the legacy `context.df.*` style, `RetryOptions`, `EntityId`, and the deprecated client aliases are adapted onto the core engine.
+
+## Migrating from durable-functions v3
+
+This provider keeps classic `context.df.*` orchestrators and entities working, but a few surfaces
+changed. See [`CHANGELOG.md`](./CHANGELOG.md) for the full list; the highlights:
+
+- **Node.js >= 22** is required (v3 supported Node 18/20).
+- **Classic contexts no longer extend `InvocationContext`** — only `df` plus replay-safe log helpers
+  are available (no `invocationId` / `functionName` / `extraInputs`).
+- **Task result shape follows the core SDK** — use `isComplete` / `isFailed` / `getResult()` instead
+  of v3's `isCompleted` / `isFaulted` / `result`. `context.df.createTimer(...)` still returns a
+  cancelable `TimerTask` for the timeout-race pattern.
+- **`client.getStatus()` may return `undefined`** and honors only `showInput` (`showHistory` /
+  `showHistoryOutput` are ignored); **`client.startNew()` drops the `version` option**.
+- **Some v3 top-level exports were removed** — `DummyOrchestrationContext` / `DummyEntityContext`,
+  `DurableError` / `AggregatedError`, and `ManagedIdentityTokenSource` / `TokenSource`.
+  `TaskFailedError` is re-exported from the core SDK; use the core `TestOrchestrationWorker` /
+  `TestOrchestrationClient` for orchestration unit tests.
 
 ## Getting started
 
@@ -47,4 +65,4 @@ app.http("startHello", {
 
 ## Status
 
-This package is an early preview (`4.0.0-alpha.0`); APIs may change before the stable release.
+This package is an early preview (`0.4.0`); APIs may change before the stable release.

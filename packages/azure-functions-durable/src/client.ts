@@ -9,10 +9,7 @@ import {
   PurgeInstanceCriteria,
   TaskHubGrpcClient,
 } from "@microsoft/durabletask-js";
-import {
-  HttpManagementPayload,
-  createHttpManagementPayload as createPayload,
-} from "./http-management-payload";
+import { HttpManagementPayload, createHttpManagementPayload as createPayload } from "./http-management-payload";
 import { EntityStateResponse } from "./entity-state-response";
 import { createAzureFunctionsMetadataGenerator } from "./metadata";
 import {
@@ -84,8 +81,19 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
     this.grpcHttpClientTimeout = config.grpcHttpClientTimeout;
   }
 
-  createCheckStatusResponse(request: HttpRequest, instanceId: string): HttpResponse {
-    const payload = this.createHttpManagementPayload(request, instanceId);
+  /**
+   * Builds a 202 HTTP response whose body and `Location` header expose the orchestration's
+   * management URLs (classic Durable Functions v3 `createCheckStatusResponse`).
+   *
+   * @param request - The incoming HTTP request, or `undefined` to build the URLs from the client
+   *   binding's `baseUrl` (v3 accepted an undefined request and fell back to the binding).
+   * @param instanceId - The orchestration instance to build management URLs for.
+   */
+  createCheckStatusResponse(request: HttpRequest | undefined, instanceId: string): HttpResponse {
+    const payload =
+      request === undefined
+        ? this.createHttpManagementPayload(instanceId)
+        : this.createHttpManagementPayload(request, instanceId);
 
     return new HttpResponse({
       status: 202,
@@ -109,10 +117,7 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    */
   createHttpManagementPayload(instanceId: string): HttpManagementPayload;
   createHttpManagementPayload(request: HttpRequest, instanceId: string): HttpManagementPayload;
-  createHttpManagementPayload(
-    requestOrInstanceId: HttpRequest | string,
-    instanceId?: string,
-  ): HttpManagementPayload {
+  createHttpManagementPayload(requestOrInstanceId: HttpRequest | string, instanceId?: string): HttpManagementPayload {
     // Classic Durable Functions (v3) accepted a single positional `instanceId`. Detect that call
     // style (a lone string argument) and fall back to the client binding's `baseUrl` when building
     // the payload URLs.
@@ -137,10 +142,7 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    *   binding's `baseUrl`.
    * @param instanceId - The orchestration instance to build management URLs for.
    */
-  getClientResponseLinks(
-    request: HttpRequest | undefined,
-    instanceId: string,
-  ): HttpManagementPayload {
+  getClientResponseLinks(request: HttpRequest | undefined, instanceId: string): HttpManagementPayload {
     return request === undefined
       ? this.createHttpManagementPayload(instanceId)
       : this.createHttpManagementPayload(request, instanceId);
@@ -153,11 +155,11 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    * @param orchestratorName - The name of the orchestrator to start.
    * @param options - Optional input and instance ID.
    * @returns The instance ID of the started orchestration.
+   *
+   * @remarks
+   * Breaking change from v3: the v3 `version` option is not supported and is silently dropped.
    */
-  async startNew(
-    orchestratorName: string,
-    options?: { input?: unknown; instanceId?: string },
-  ): Promise<string> {
+  async startNew(orchestratorName: string, options?: { input?: unknown; instanceId?: string }): Promise<string> {
     return this.scheduleNewOrchestration(
       orchestratorName,
       options?.input,
@@ -172,6 +174,13 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    * @param instanceId - The ID of the orchestration instance to query.
    * @param options - When `showInput` is `false`, input/output payloads are not fetched.
    * @returns The instance status, or `undefined` if the instance does not exist.
+   *
+   * @remarks
+   * Breaking changes from v3:
+   * - The return type is `DurableOrchestrationStatus | undefined` (v3 returned a non-optional value),
+   *   so `(await getStatus(id)).runtimeStatus` must guard against `undefined`.
+   * - Only `showInput` is honored. The v3 `showHistory` / `showHistoryOutput` options are not
+   *   supported and `history` is never populated.
    */
   async getStatus(
     instanceId: string,
@@ -221,10 +230,7 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
     instanceId: string,
     waitOptions?: { timeoutInMilliseconds?: number },
   ): Promise<HttpResponse> {
-    const timeoutSeconds = Math.max(
-      1,
-      Math.ceil((waitOptions?.timeoutInMilliseconds ?? 10000) / 1000),
-    );
+    const timeoutSeconds = Math.max(1, Math.ceil((waitOptions?.timeoutInMilliseconds ?? 10000) / 1000));
     try {
       const state = await this.waitForOrchestrationCompletion(instanceId, true, timeoutSeconds);
       if (state) {
@@ -261,10 +267,7 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    * @param entityId - The target entity instance ID.
    * @param includeState - Whether to include the entity state in the response (default `true`).
    */
-  async readEntityState<T = unknown>(
-    entityId: EntityInstanceId,
-    includeState = true,
-  ): Promise<EntityStateResponse<T>> {
+  async readEntityState<T = unknown>(entityId: EntityInstanceId, includeState = true): Promise<EntityStateResponse<T>> {
     const metadata = await this.getEntity<T>(entityId, includeState);
     if (!metadata) {
       return new EntityStateResponse<T>(false);
@@ -399,11 +402,7 @@ export function getGrpcHostAddress(rpcBaseUrl: string): string {
   }
 }
 
-function getInstanceStatusUrl(
-  request: HttpRequest | undefined,
-  instanceId: string,
-  baseUrl: string,
-): string {
+function getInstanceStatusUrl(request: HttpRequest | undefined, instanceId: string, baseUrl: string): string {
   const encodedInstanceId = encodeURIComponent(instanceId);
   if (request !== undefined) {
     const requestUrl = new URL(request.url);
@@ -473,10 +472,7 @@ function optionalNumber(record: Record<string, unknown>, name: string): number |
   return value;
 }
 
-function optionalStringRecord(
-  record: Record<string, unknown>,
-  name: string,
-): Record<string, string> | undefined {
+function optionalStringRecord(record: Record<string, unknown>, name: string): Record<string, string> | undefined {
   const value = record[name];
   if (value === undefined || value === null) {
     return undefined;
@@ -486,9 +482,7 @@ function optionalStringRecord(
   const result: Record<string, string> = {};
   for (const [key, entry] of Object.entries(valueRecord)) {
     if (typeof entry !== "string") {
-      throw new TypeError(
-        `Durable Functions client configuration field ${name}.${key} must be a string.`,
-      );
+      throw new TypeError(`Durable Functions client configuration field ${name}.${key} must be a string.`);
     }
     result[key] = entry;
   }

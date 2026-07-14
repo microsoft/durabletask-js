@@ -9,6 +9,7 @@ import type {
   OrchestrationContext,
   OrchestrationHandler,
 } from "../../src";
+import { TaskFailedError } from "../../src";
 
 describe("v3 compatibility type aliases", () => {
   it("exposes ActivityHandler / OrchestrationHandler / OrchestrationContext", () => {
@@ -33,5 +34,12 @@ describe("v3 compatibility type aliases", () => {
     const client: DurableClient | undefined = undefined;
     expect(typeof handler).toBe("function");
     expect(client).toBeUndefined();
+  });
+
+  it("re-exports the core TaskFailedError as a top-level export for instanceof guards", () => {
+    // v3 exposed TaskFailedError so callers could `catch (e) { if (e instanceof TaskFailedError) }`.
+    // The core engine throws its own TaskFailedError; this package must re-export the same class.
+    expect(typeof TaskFailedError).toBe("function");
+    expect(TaskFailedError.prototype).toBeInstanceOf(Error);
   });
 });

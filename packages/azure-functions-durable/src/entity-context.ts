@@ -1,12 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import {
-  EntityFactory,
-  EntityInstanceId,
-  ITaskEntity,
-  TaskEntityOperation,
-} from "@microsoft/durabletask-js";
+import { EntityFactory, EntityInstanceId, ITaskEntity, TaskEntityOperation } from "@microsoft/durabletask-js";
 
 /**
  * Classic Durable Functions (v3) entity context, exposed to migrating entity functions as
@@ -94,11 +89,7 @@ export class DurableEntityContext {
    * @param operationName - The name of the operation to invoke.
    * @param operationInput - Optional input for the operation.
    */
-  signalEntity(
-    entityId: EntityInstanceId,
-    operationName: string,
-    operationInput?: unknown,
-  ): void {
+  signalEntity(entityId: EntityInstanceId, operationName: string, operationInput?: unknown): void {
     this._operation.context.signalEntity(entityId, operationName, operationInput);
   }
 
@@ -108,7 +99,13 @@ export class DurableEntityContext {
   }
 }
 
-/** The object passed to a classic (v3) entity function; its `df` is the durable entity context. */
+/**
+ * The object passed to a classic (v3) entity function; its `df` is the durable entity context.
+ *
+ * @remarks
+ * Breaking change from `durable-functions` v3, where the entity context extended `InvocationContext`.
+ * This context exposes only `df`; entity code that read `InvocationContext` members must be updated.
+ */
 export interface ClassicEntityContext {
   df: DurableEntityContext;
 }

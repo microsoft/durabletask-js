@@ -21,7 +21,12 @@ export { ActivityContext } from "./task/context/activity-context";
 // Orchestration types and utilities
 export { PurgeInstanceCriteria } from "./orchestration/orchestration-purge-criteria";
 export { PurgeInstanceOptions } from "./orchestration/orchestration-purge-options";
-export { TerminateInstanceOptions, terminateOptions, isTerminateInstanceOptions, TERMINATE_OPTIONS_SYMBOL } from "./orchestration/orchestration-terminate-options";
+export {
+  TerminateInstanceOptions,
+  terminateOptions,
+  isTerminateInstanceOptions,
+  TERMINATE_OPTIONS_SYMBOL,
+} from "./orchestration/orchestration-terminate-options";
 export { OrchestrationStatus } from "./orchestration/enum/orchestration-status.enum";
 export { OrchestrationState } from "./orchestration/orchestration-state";
 
@@ -72,6 +77,7 @@ export { OrchestrationStatus as ProtoOrchestrationStatus } from "./proto/orchest
 
 // Failure details
 export { FailureDetails, TaskFailureDetails } from "./task/failure-details";
+export { TaskFailedError } from "./task/exception/task-failed-error";
 
 // Task utilities
 export { getName, whenAll, whenAny } from "./task";
@@ -109,16 +115,8 @@ export { TOutput } from "./types/output.type";
 export { EntityInstanceId } from "./entities/entity-instance-id";
 
 // Entity types - Client-side types (Step 2)
-export {
-  EntityMetadata,
-  createEntityMetadata,
-  createEntityMetadataWithoutState,
-} from "./entities/entity-metadata";
-export {
-  EntityQuery,
-  normalizeInstanceIdPrefix,
-  createEntityQuery,
-} from "./entities/entity-query";
+export { EntityMetadata, createEntityMetadata, createEntityMetadataWithoutState } from "./entities/entity-metadata";
+export { EntityQuery, normalizeInstanceIdPrefix, createEntityQuery } from "./entities/entity-query";
 export {
   CleanEntityStorageRequest,
   CleanEntityStorageResult,
@@ -138,27 +136,25 @@ export { ITaskEntity, EntityFactory, TaskEntity } from "./entities/task-entity";
 export { TaskEntityShim, EntityAction } from "./worker/entity-executor";
 
 // Orchestration entity feature (Step 7)
-export {
-  OrchestrationEntityFeature,
-  LockHandle,
-  CriticalSectionInfo,
-} from "./entities/orchestration-entity-feature";
+export { OrchestrationEntityFeature, LockHandle, CriticalSectionInfo } from "./entities/orchestration-entity-feature";
 // Testing utilities
 export { InMemoryOrchestrationBackend, TestOrchestrationClient, TestOrchestrationWorker } from "./testing";
 export { ParentOrchestrationInstance } from "./types/parent-orchestration-instance.type";
 
 // Logger
-export { Logger, ConsoleLogger, NoOpLogger, StructuredLogger, LogEvent, isStructuredLogger, createLogEventHandler } from "./types/logger.type";
+export {
+  Logger,
+  ConsoleLogger,
+  NoOpLogger,
+  StructuredLogger,
+  LogEvent,
+  isStructuredLogger,
+  createLogEventHandler,
+} from "./types/logger.type";
 export { ReplaySafeLogger, ReplayContext } from "./types/replay-safe-logger";
 
 // Versioning utilities
 export { compareVersions } from "./utils/versioning.util";
 
 // Distributed Tracing (OpenTelemetry)
-export {
-  TRACER_NAME,
-  DurableTaskAttributes,
-  TaskType,
-  createSpanName,
-  createTimerSpanName,
-} from "./tracing";
+export { TRACER_NAME, DurableTaskAttributes, TaskType, createSpanName, createTimerSpanName } from "./tracing";
