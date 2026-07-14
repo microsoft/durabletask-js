@@ -44,7 +44,9 @@ describe("WhenAllTask", () => {
     child2.complete(2);
     expect(task.isComplete).toBe(true);
     expect(task.isFailed).toBe(true);
-    expect(task.getException()).toBeDefined();
+    // Failures are aggregated into a native AggregateError (always, even for one failure).
+    expect(task.getException()).toBeInstanceOf(AggregateError);
+    expect((task.getException() as AggregateError).errors).toHaveLength(1);
   });
 
   // Issue #131: WhenAllTask constructor resets _completedTasks counter
@@ -102,7 +104,8 @@ describe("WhenAllTask", () => {
     child2.complete(2);
     expect(task.isComplete).toBe(true);
     expect(task.isFailed).toBe(true);
-    expect(task.getException()).toBeDefined();
+    expect(task.getException()).toBeInstanceOf(AggregateError);
+    expect((task.getException() as AggregateError).errors).toHaveLength(1);
   });
 
   it("should complete as failed at construction when all pre-completed children include a failure", () => {
@@ -118,7 +121,8 @@ describe("WhenAllTask", () => {
 
     expect(task.isComplete).toBe(true);
     expect(task.isFailed).toBe(true);
-    expect(task.getException()).toBeDefined();
+    expect(task.getException()).toBeInstanceOf(AggregateError);
+    expect((task.getException() as AggregateError).errors).toHaveLength(1);
   });
 
   it("should notify the parent exactly once, only after all children complete", () => {
@@ -139,7 +143,7 @@ describe("WhenAllTask", () => {
     child2.complete(2);
     expect(task.isComplete).toBe(true);
     expect(task.isFailed).toBe(true);
-    expect(task.getException()).toBeDefined();
+    expect(task.getException()).toBeInstanceOf(AggregateError);
     expect(parent.onChildCompleted).toHaveBeenCalledTimes(1);
   });
 
@@ -164,7 +168,7 @@ describe("WhenAllTask", () => {
   // Issue #301: wait-all semantics — a WhenAll must not go terminal on the first child
   // failure. If it did, later failing siblings' completions would be dropped against an
   // already-terminal orchestration, which then deadlocks on rewind.
-  it("should complete as failed only after all children finish when the first child fails", () => {
+  it("should aggregate a single failure (always wrapped) only after all children finish", () => {
     const child1 = new CompletableTask<number>();
     const child2 = new CompletableTask<number>();
     const child3 = new CompletableTask<number>();
@@ -183,10 +187,18 @@ describe("WhenAllTask", () => {
     child3.complete(3);
     expect(task.isComplete).toBe(true);
     expect(task.isFailed).toBe(true);
-    expect(task.getException()).toBe(firstError);
+
+    // Even a single failure is wrapped in an AggregateError (matching .NET AggregateException
+    // and Java CompositeTaskFailedException, which always wrap). `.errors` carries the one
+    // failure with object identity preserved.
+    const err = task.getException();
+    expect(err).toBeInstanceOf(AggregateError);
+    expect((err as AggregateError).errors).toHaveLength(1);
+    expect((err as AggregateError).errors[0]).toBe(firstError);
+    expect(err.message).toContain("first child failed");
   });
 
-  it("should surface the first failure (not an aggregate) when multiple children fail", () => {
+  it("should aggregate ALL failures in task-array order when multiple children fail", () => {
     const child1 = new CompletableTask<number>();
     const child2 = new CompletableTask<number>();
     const child3 = new CompletableTask<number>();
@@ -204,7 +216,44 @@ describe("WhenAllTask", () => {
     child3.complete(3);
     expect(task.isComplete).toBe(true);
     expect(task.isFailed).toBe(true);
-    // The first failure is surfaced verbatim; failures are not aggregated.
-    expect(task.getException()).toBe(firstError);
+
+    // ALL failures are aggregated (not just the first), in task-array order, with object
+    // identity preserved. The top-level message inlines every child message.
+    const err = task.getException();
+    expect(err).toBeInstanceOf(AggregateError);
+    expect((err as AggregateError).errors).toHaveLength(2);
+    expect((err as AggregateError).errors[0]).toBe(firstError);
+    expect((err as AggregateError).errors[1]).toBe(secondError);
+    expect(err.message).toContain("first failure");
+    expect(err.message).toContain("second failure");
+  });
+
+  it("should order aggregated failures by task array, not by failure arrival order", () => {
+    const child1 = new CompletableTask<number>();
+    const child2 = new CompletableTask<number>();
+    const child3 = new CompletableTask<number>();
+    const task = new WhenAllTask([child1, child2, child3]);
+
+    const error0 = new Error("error from child[0]");
+    const error2 = new Error("error from child[2]");
+
+    // Fail children OUT of array order: child[2] fails first, then child[0].
+    child3.failWithError(error2);
+    expect(task.isComplete).toBe(false);
+
+    child1.failWithError(error0);
+    expect(task.isComplete).toBe(false);
+
+    child2.complete(2);
+    expect(task.isComplete).toBe(true);
+    expect(task.isFailed).toBe(true);
+
+    // `.errors` must follow TASK-ARRAY order (child[0] before child[2]), independent of the
+    // order in which the failures arrived — this keeps the aggregate deterministic across replay.
+    const err = task.getException() as AggregateError;
+    expect(err).toBeInstanceOf(AggregateError);
+    expect(err.errors).toHaveLength(2);
+    expect(err.errors[0]).toBe(error0);
+    expect(err.errors[1]).toBe(error2);
   });
 });

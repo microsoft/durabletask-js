@@ -1081,7 +1081,7 @@ describe("Orchestration Executor", () => {
     expect(waitingResult.actions.length).toEqual(0);
 
     // The remaining 4 tasks now finish (delivered in a later batch). Only now does the whenAll
-    // complete — as failed, surfacing the single failure.
+    // complete — as failed, aggregating the single failure into an AggregateError.
     const remainingEvents: any[] = [];
     for (let i = 6; i < 10; i++) {
       remainingEvents.push(newTaskCompletedEvent(i + 1, printInt(null, i)));
@@ -1095,7 +1095,8 @@ describe("Orchestration Executor", () => {
 
     const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
-    expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("TaskFailedError");
+    // whenAll failures are aggregated — even a single failure is wrapped in an AggregateError.
+    expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("AggregateError");
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain(ex.message);
   });
 
@@ -1788,7 +1789,8 @@ describe("Orchestration Executor", () => {
 
     const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
-    expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("TaskFailedError");
+    // whenAll aggregates failures into an AggregateError (always, even for one failure).
+    expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("AggregateError");
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain(ex.message);
   });
 
@@ -1819,7 +1821,7 @@ describe("Orchestration Executor", () => {
     }
 
     // First task fails; the remaining tasks complete in the same batch. Under wait-all the
-    // whenAll completes as failed only once every task is terminal, surfacing the first failure.
+    // whenAll completes as failed only once every task is terminal, aggregating the failure.
     const ex = new Error("First task failed");
     const newEvents: any[] = [
       newTaskFailedEvent(1, ex),
@@ -1832,7 +1834,7 @@ describe("Orchestration Executor", () => {
 
     const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
-    expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("TaskFailedError");
+    expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("AggregateError");
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain(ex.message);
   });
 
@@ -1922,8 +1924,8 @@ describe("Orchestration Executor", () => {
     expect(batch1.actions.length).toEqual(0);
 
     // Batch 2: the second sibling fails too (delivered in a later batch, with batch 1 now part
-    // of the replayed history). Only now does the whenAll complete — as failed, surfacing the
-    // first failure without aggregating.
+    // of the replayed history). Only now does the whenAll complete — as failed, aggregating BOTH
+    // sibling failures into an AggregateError whose message inlines every child message.
     const batch2 = await new OrchestrationExecutor(registry, testLogger).execute(
       TEST_INSTANCE_ID,
       [...scheduledHistory, newTaskFailedEvent(1, firstFailure)],
@@ -1932,9 +1934,11 @@ describe("Orchestration Executor", () => {
 
     const completeAction = getAndValidateSingleCompleteOrchestrationAction(batch2);
     expect(completeAction?.getOrchestrationstatus()).toEqual(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
-    expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("TaskFailedError");
+    expect(completeAction?.getFailuredetails()?.getErrortype()).toEqual("AggregateError");
+    // BOTH siblings' failures are captured (proving neither TaskFailed was dropped): the
+    // aggregate message inlines every child message.
     expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("first activity failed");
-    expect(completeAction?.getFailuredetails()?.getErrormessage()).not.toContain("second activity failed");
+    expect(completeAction?.getFailuredetails()?.getErrormessage()).toContain("second activity failed");
   });
 
   it("should complete nested whenAny(whenAll, whenAll) when first inner group finishes", async () => {
