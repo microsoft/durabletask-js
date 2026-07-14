@@ -290,12 +290,13 @@ describe("DurableFunctionsClient", () => {
         undefined,
       );
 
-    it("getStatus returns a non-optional DurableOrchestrationStatus and honors showInput", async () => {
+    it("getStatus returns a non-optional DurableOrchestrationStatus and gates only input via showInput", async () => {
       const client = new DurableFunctionsClient(CLIENT_CONFIG);
       try {
         const getState = jest.spyOn(client, "getOrchestrationState").mockResolvedValue(makeState());
 
         const status = await client.getStatus("inst-1");
+        // Payloads are always fetched; showInput only gates the top-level input (v3 keeps output).
         expect(getState).toHaveBeenCalledWith("inst-1", true);
         expect(status.instanceId).toBe("inst-1");
         expect(status.name).toBe("MyOrch");
@@ -304,9 +305,11 @@ describe("DurableFunctionsClient", () => {
         expect(status.output).toBe("the-output");
         expect(status.history).toBeUndefined();
 
-        // showInput maps to the core fetchPayloads flag.
-        await client.getStatus("inst-1", { showInput: false });
-        expect(getState).toHaveBeenLastCalledWith("inst-1", false);
+        // showInput: false suppresses only input; output/custom status still come back.
+        const suppressed = await client.getStatus("inst-1", { showInput: false });
+        expect(getState).toHaveBeenLastCalledWith("inst-1", true);
+        expect(suppressed.input).toBeUndefined();
+        expect(suppressed.output).toBe("the-output");
       } finally {
         await client.stop();
       }
@@ -324,16 +327,27 @@ describe("DurableFunctionsClient", () => {
       }
     });
 
-    it("getStatus populates history from the core execution history when showHistory is set", async () => {
+    it("getStatus populates history and honors showHistoryOutput", async () => {
       const client = new DurableFunctionsClient(CLIENT_CONFIG);
       try {
         jest.spyOn(client, "getOrchestrationState").mockResolvedValue(makeState());
-        const events = [{ eventId: 1 }, { eventId: 2 }];
+        const events = [
+          { eventId: 1, type: "TaskCompleted", input: "in", result: "out" },
+          { eventId: 2, type: "TimerFired" },
+        ];
         const getHistory = jest.spyOn(client, "getOrchestrationHistory").mockResolvedValue(events as never);
 
-        const status = await client.getStatus("inst-1", { showHistory: true });
+        // showHistoryOutput: true keeps the input/result payloads on each entry.
+        const withOutput = await client.getStatus("inst-1", { showHistory: true, showHistoryOutput: true });
         expect(getHistory).toHaveBeenCalledWith("inst-1");
-        expect(status.history).toEqual(events);
+        expect(withOutput.history).toEqual(events);
+
+        // showHistory without showHistoryOutput strips input/result from each entry.
+        const stripped = await client.getStatus("inst-1", { showHistory: true });
+        expect(stripped.history).toEqual([
+          { eventId: 1, type: "TaskCompleted" },
+          { eventId: 2, type: "TimerFired" },
+        ]);
 
         // Without showHistory the core history call is skipped and history stays undefined.
         getHistory.mockClear();

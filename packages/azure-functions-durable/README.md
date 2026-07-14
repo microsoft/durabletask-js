@@ -34,10 +34,10 @@ changed. See [`CHANGELOG.md`](./CHANGELOG.md) for the full list; the highlights:
   of v3's `isCompleted` / `isFaulted` / `result`. `context.df.createTimer(...)` still returns a
   cancelable `TimerTask` for the timeout-race pattern.
 - **`client.getStatus()` keeps the v3 shape** — it returns a non-optional `DurableOrchestrationStatus`
-  and throws when the instance is missing. `showInput` / `showHistory` / `showHistoryOutput` are
-  accepted, but `showInput` also gates output/custom status and `showHistory` returns core
-  `HistoryEvent`s (not the v3 extension history shape). **`client.startNew()` supports the `version`
-  option.**
+  and throws when the instance is missing. `showInput` suppresses only the top-level input,
+  `showHistory` populates `history`, and `showHistoryOutput` toggles the per-entry input/result
+  payloads; `history` entries are core `HistoryEvent`s (v3 types `history` as `Array<unknown>`).
+  **`client.startNew()` supports the `version` option.**
 - **Some v3 top-level exports were removed** — `DummyOrchestrationContext` / `DummyEntityContext`,
   `DurableError` / `AggregatedError`, and `ManagedIdentityTokenSource` / `TokenSource`.
   `TaskFailedError` is re-exported from the core SDK; use the core `TestOrchestrationWorker` /

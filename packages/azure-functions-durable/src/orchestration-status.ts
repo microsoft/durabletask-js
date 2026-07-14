@@ -110,19 +110,22 @@ export function fromOrchestrationRuntimeStatus(status: OrchestrationRuntimeStatu
  *
  * @param state - The core orchestration state to map.
  * @param history - Optional execution history to attach (see {@link DurableFunctionsClient.getStatus}
- *   `showHistory`). The entries are core {@link OrchestrationState} history events; the consolidated
- *   gRPC path surfaces core `HistoryEvent`s rather than the classic .NET extension's history shape.
+ *   `showHistory`). The entries are core `HistoryEvent`s; the consolidated gRPC path surfaces those
+ *   rather than the classic .NET extension's history shape (v3 types `history` as `Array<unknown>`).
+ * @param includeInput - When `false`, the top-level `input` is omitted (maps to v3's `showInput`,
+ *   which suppresses only the input while still returning output/custom status). Defaults to `true`.
  */
 export function toDurableOrchestrationStatus(
   state: OrchestrationState,
   history?: unknown[],
+  includeInput = true,
 ): DurableOrchestrationStatus {
   return new DurableOrchestrationStatus({
     name: state.name,
     instanceId: state.instanceId,
     createdTime: state.createdAt,
     lastUpdatedTime: state.lastUpdatedAt,
-    input: parseJson(state.serializedInput),
+    input: includeInput ? parseJson(state.serializedInput) : undefined,
     output: parseJson(state.serializedOutput),
     runtimeStatus: toOrchestrationRuntimeStatus(state.runtimeStatus),
     customStatus: parseJson(state.serializedCustomStatus),

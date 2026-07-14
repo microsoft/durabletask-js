@@ -42,9 +42,8 @@ export interface GetStatusOptions {
   /** Include the execution history in {@link DurableOrchestrationStatus.history}. */
   showHistory?: boolean;
   /**
-   * Include input/output payloads in the history entries. Accepted for v3 compatibility; on the
-   * consolidated gRPC path the core history events always carry their payloads (see
-   * {@link DurableFunctionsClient.getStatus}).
+   * Include the input/result payloads on the history entries. When omitted or `false`, those
+   * payloads are stripped from each entry (see {@link DurableFunctionsClient.getStatus}).
    */
   showHistoryOutput?: boolean;
   /** Include the orchestration input/output/custom-status payloads (maps to core `fetchPayloads`). */
@@ -59,6 +58,21 @@ export interface StartNewOptions {
   instanceId?: string;
   /** Orchestration version to assign (forwarded to the core scheduler). */
   version?: string;
+}
+
+/**
+ * @hidden
+ * Removes the input/result payload fields from a core history event, honoring v3's
+ * `showHistoryOutput: false`. Returns a shallow copy so the source event is left untouched.
+ */
+function stripHistoryEventOutput(event: unknown): unknown {
+  if (event !== null && typeof event === "object") {
+    const clone: Record<string, unknown> = { ...(event as Record<string, unknown>) };
+    delete clone.input;
+    delete clone.result;
+    return clone;
+  }
+  return event;
 }
 
 export class DurableFunctionsClient extends TaskHubGrpcClient {
@@ -197,29 +211,36 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    * @param instanceId - The ID of the orchestration instance to query.
    * @param options - v3 {@link GetStatusOptions}: `showInput`, `showHistory`, `showHistoryOutput`.
    * @returns The instance status.
-   * @throws If no orchestration instance with the given ID exists (matches v3, which threw on the
-   *   extension's HTTP 404 response).
+   * @throws If no orchestration instance with the given ID exists. This matches v3's
+   *   `DurableClient.getStatus`, which throws on the extension's HTTP 404 not-found response.
    *
    * @remarks
-   * v3 parity and its boundaries on the consolidated gRPC path:
+   * v3 parity, verified against `azure-functions-durable-js`'s `DurableClient.getStatus`:
    * - Returns a non-optional {@link DurableOrchestrationStatus} and throws when the instance is not
-   *   found, exactly like v3's `DurableClient.getStatus`.
+   *   found, exactly like v3 (its `case 404` branch throws).
+   * - `showInput` gates only the top-level `input`: v3 keeps output/custom status regardless, so the
+   *   payloads are always fetched and only `input` is suppressed when `showInput === false`.
    * - `showHistory` populates {@link DurableOrchestrationStatus.history} from the core execution
-   *   history (`getOrchestrationHistory`). The entries are core `HistoryEvent`s, not the classic
-   *   .NET extension's history shape (the gRPC path bypasses the extension's HTTP history formatter).
-   * - `showHistoryOutput` is accepted for API compatibility but does not strip payloads from the
-   *   history events: core history events always carry their intrinsic input/output.
-   * - `showInput` maps to the core `fetchPayloads` flag. Because that call fetches input, output, and
-   *   custom status together, `showInput: false` also omits output/custom status (v3 omitted only the
-   *   input).
+   *   history (`getOrchestrationHistory`). v3 types `history` as `Array<unknown>`, so the entries are
+   *   core `HistoryEvent`s. On the consolidated gRPC path these are the core event shape, not the
+   *   classic .NET extension's history serialization (the gRPC path bypasses that HTTP formatter).
+   * - `showHistoryOutput` controls whether the history entries carry their input/result payloads:
+   *   when falsy, those fields are stripped from each event; when `true`, they are kept.
    */
   async getStatus(instanceId: string, options?: GetStatusOptions): Promise<DurableOrchestrationStatus> {
-    const state = await this.getOrchestrationState(instanceId, options?.showInput ?? true);
+    const state = await this.getOrchestrationState(instanceId, true);
     if (state === undefined) {
-      throw new Error(`No orchestration instance with ID '${instanceId}' was found.`);
+      throw new Error(
+        `DurableClient error: No orchestration instance with ID '${instanceId}' was found. ` +
+          `This usually means no data is associated with the provided instanceId.`,
+      );
     }
-    const history = options?.showHistory ? await this.getOrchestrationHistory(instanceId) : undefined;
-    return toDurableOrchestrationStatus(state, history);
+    let history: unknown[] | undefined;
+    if (options?.showHistory) {
+      const events = await this.getOrchestrationHistory(instanceId);
+      history = options.showHistoryOutput ? events : events.map(stripHistoryEventOutput);
+    }
+    return toDurableOrchestrationStatus(state, history, options?.showInput ?? true);
   }
 
   /**

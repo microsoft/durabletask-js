@@ -19,11 +19,11 @@ Initial gRPC-consolidated Azure Functions Durable provider, built on `@microsoft
   `isCompleted` / `isFaulted` / `result`). `context.df.createTimer(...)` returns a cancelable
   `TimerTask`, so the timeout-race pattern (`Task.any` then `timer.cancel()`) keeps working.
 - `client.getStatus()` matches the v3 signature: it returns a non-optional `DurableOrchestrationStatus`
-  and throws when the instance does not exist. `showInput`, `showHistory`, and `showHistoryOutput` are
-  accepted, with two consolidated-path caveats: `showInput` maps to the core `fetchPayloads` flag (so
-  `showInput: false` also omits output/custom status, where v3 omitted only the input), and
-  `showHistory` surfaces core `HistoryEvent`s rather than the classic .NET extension's history shape
-  (`showHistoryOutput` is accepted but does not strip payloads on the gRPC path).
+  and throws when the instance does not exist. `showInput` suppresses only the top-level input (output
+  and custom status are always returned, as in v3); `showHistory` populates `history`, and
+  `showHistoryOutput` toggles whether those entries keep their input/result payloads. One
+  consolidated-path note: `history` entries are core `HistoryEvent`s (v3 types `history` as
+  `Array<unknown>`), not the classic .NET extension's history serialization.
 - `client.startNew()` supports the v3 `version` option (forwarded to the core scheduler).
 - Removed top-level exports: `DummyOrchestrationContext`, `DummyEntityContext`, `DurableError`,
   `AggregatedError`, `ManagedIdentityTokenSource`, `TokenSource`. `TaskFailedError` is re-exported
