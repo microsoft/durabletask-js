@@ -106,6 +106,24 @@ export class OrchestrationExecutor {
       ctx.setFailed(e instanceof Error ? e : new Error(String(e)));
     }
 
+    // Issue #299: On a server-side (Azure Storage / DurableTask.Core) rewind, the backend strips
+    // the terminal event (TaskFailed/TaskCompleted) of previously-failed activities. When a
+    // Task.all fan-out had more than one failed sibling, the child completes-failed after the
+    // FIRST failure (fail-fast), so a later sibling's TaskFailed is never committed and its
+    // TaskScheduled is left BARE. Ordinary replay deletes that activity's pending action
+    // (handleTaskScheduled) assuming a completion will arrive, but after a rewind none ever will
+    // -> the task is orphaned and the Task.all deadlocks. When this replay is a rewind revival,
+    // re-dispatch every such orphaned activity so ALL previously-failed siblings rerun.
+    if (!ctx._isComplete && this.isRewindRevival(newEvents)) {
+      for (const key of Object.keys(ctx._pendingTasks)) {
+        const taskId = Number(key);
+        const consumedAction = ctx._consumedActivityActions[taskId];
+        if (consumedAction && !ctx._pendingActions[taskId]) {
+          ctx._pendingActions[taskId] = consumedAction;
+        }
+      }
+    }
+
     if (!ctx._isComplete) {
       const taskCount = Object.keys(ctx._pendingTasks).length;
       const eventCount = Object.keys(ctx._pendingEvents).length;
@@ -130,6 +148,19 @@ export class OrchestrationExecutor {
       actions,
       customStatus: ctx.getCustomStatus(),
     };
+  }
+
+  /**
+   * Detects whether this replay is a rewind revival, i.e. the current work item was triggered by a
+   * rewind rather than ordinary progress. On the Azure Storage / DurableTask.Core backend the
+   * revived instance is woken with a `GenericEvent` message (see
+   * DurableTask.AzureStorage `RewindTaskOrchestrationAsync`, which sends `new GenericEvent(-1, ...)`);
+   * the DTS "jump-start" path instead delivers an `ExecutionRewound` event. Gating on the NEW
+   * events keeps reconciliation scoped to the revival work item, so ordinary post-rewind replays
+   * (whose new events are normal completions) never re-dispatch genuinely in-flight tasks.
+   */
+  private isRewindRevival(newEvents: pb.HistoryEvent[]): boolean {
+    return newEvents.some((e) => e.hasExecutionrewound() || e.hasGenericevent());
   }
 
   private async processEvent(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
@@ -355,6 +386,17 @@ export class OrchestrationExecutor {
   private async handleTaskScheduled(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
     // This history event confirms that the activity execution was successfully scheduled. Remove the taskscheduled event from the pending action list so we don't schedule it again.
     const taskId = event.getEventid();
+
+    // Issue #299: A rewind revival re-dispatches an activity whose terminal event was stripped.
+    // DurableTask.Core appends a fresh TaskScheduled per scheduleTask action with no dedup, so the
+    // re-dispatched activity yields a SECOND TaskScheduled with the same id as the retained bare
+    // one. Duplicate TaskScheduled ids cannot occur in normal deterministic replay, so treat a
+    // repeat as idempotent (the pending action was already consumed on the first occurrence)
+    // instead of raising a non-determinism error.
+    if (ctx._handledTaskScheduledIds.has(taskId)) {
+      return;
+    }
+
     const action = ctx._pendingActions[taskId];
     delete ctx._pendingActions[taskId];
 
@@ -373,6 +415,12 @@ export class OrchestrationExecutor {
         action.getScheduletask()?.getName(),
       );
     }
+
+    // Remember the consumed scheduleTask action keyed by its id. If this replay turns out to be a
+    // rewind revival and the activity's terminal event was stripped (leaving this bare
+    // TaskScheduled with no completion), end-of-replay reconciliation re-dispatches it.
+    ctx._handledTaskScheduledIds.add(taskId);
+    ctx._consumedActivityActions[taskId] = action;
   }
 
   private async handleTaskCompleted(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {

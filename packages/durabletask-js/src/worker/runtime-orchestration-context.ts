@@ -51,6 +51,13 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   _saveEvents: boolean;
   _customStatus?: string;
   _entityFeature: RuntimeOrchestrationEntityFeature;
+  // Issue #299: bookkeeping used to recover from a server-side rewind. `_consumedActivityActions`
+  // remembers the scheduleTask action behind every TaskScheduled event seen during replay so an
+  // orphaned activity (its terminal event stripped by the rewind) can be re-dispatched.
+  // `_handledTaskScheduledIds` makes a duplicate TaskScheduled for an already-handled id idempotent
+  // (a post-rewind re-dispatch appends a fresh TaskScheduled with the same id -- no backend dedup).
+  _consumedActivityActions: Record<number, pb.OrchestratorAction>;
+  _handledTaskScheduledIds: Set<number>;
 
   constructor(instanceId: string) {
     super();
@@ -74,6 +81,8 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     this._saveEvents = false;
     this._customStatus = undefined;
     this._entityFeature = new RuntimeOrchestrationEntityFeature(this);
+    this._consumedActivityActions = {};
+    this._handledTaskScheduledIds = new Set<number>();
   }
 
   get instanceId(): string {
