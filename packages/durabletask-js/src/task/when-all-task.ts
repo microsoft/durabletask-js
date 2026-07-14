@@ -36,34 +36,22 @@ export class WhenAllTask<T> extends CompositeTask<T[]> {
 
     this._completedTasks++;
 
-    // Wait-all semantics (matching .NET Task.WhenAll and Java CompletableFuture.allOf):
-    // a failing child does NOT complete the WhenAll early. We keep waiting until *every*
-    // child has reached a terminal state. Only once all children are done do we complete —
-    // as failed (aggregating the child failures) if any child failed, otherwise with the
-    // array of child results. Completing only when all siblings are terminal is what prevents
-    // later failing siblings' TaskFailed events from being dropped against an already-terminal
-    // instance (the root cause of the rewind deadlock in issue #301).
+    // Wait-all: a failing child does not complete the whenAll early; we wait until every child
+    // is terminal. This prevents a later failing sibling's TaskFailed from being dropped against
+    // an already-terminal instance (issue #301).
     //
-    // Note: we intentionally do NOT set `_exception` until the task is complete. Doing so
-    // early would make `isFailed` (which is `_exception != undefined`) report true while the
-    // task is still pending, and the orchestration context's `resume()` — which checks
-    // `isFailed` before `isComplete` — would throw the failure into the generator before the
-    // other siblings finish, re-introducing fail-fast at the executor level.
+    // Set _exception only at completion so isFailed and isComplete flip together — otherwise
+    // resume() (which checks isFailed before isComplete) would throw into the generator before
+    // the other siblings finish, re-introducing fail-fast.
     if (this._completedTasks == this._tasks.length) {
       this._isComplete = true;
 
-      // Collect ALL failed children in task-array order. Using the task array (rather than
-      // arrival/completion order) makes the aggregated exception order deterministic across
-      // replay.
       const failures = this._tasks.filter((child) => child.isFailed).map((child) => child.getException());
 
       if (failures.length > 0) {
-        // Aggregate ALL child failures — matching .NET AggregateException and Java
-        // CompositeTaskFailedException — even when only one child failed. `.errors` carries
-        // every child exception (each a TaskFailedError with `.details`). We inline every child
-        // message into the AggregateError message because newFailureDetails() only serializes
-        // `e.message` (not `.errors`), so an UNCAUGHT whenAll failure would otherwise lose the
-        // per-child detail.
+        // Aggregate all child failures into an AggregateError. The message inlines every child
+        // message because newFailureDetails() serializes only e.message (not .errors), so an
+        // uncaught whenAll failure would otherwise lose per-child detail.
         const inlined = failures.map((f) => (f instanceof Error ? f.message : String(f))).join("; ");
         this._exception = new AggregateError(
           failures,
