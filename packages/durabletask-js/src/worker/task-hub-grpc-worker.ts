@@ -1270,7 +1270,9 @@ class CapturingSidecarStub {
     // Abandon is a no-op for the single-work-item host path: the version-mismatch abandon branch
     // in _executeOrchestratorInternal calls this, but processOrchestratorRequest only surfaces a
     // completion response. Record it so the caller can distinguish an abandoned work item from a
-    // genuine "no response produced" failure. Matches the Python provider, whose null stub no-ops.
+    // genuine "no response produced" failure. This single-work-item helper is JS-specific for the
+    // Azure Functions host integration; durabletask-python has no equivalent helper, and its
+    // worker-loop abandon hands the item back over a real sidecar stub rather than no-opping here.
     this.abandoned = true;
     callback(null, new Empty());
   }
