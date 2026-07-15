@@ -49,6 +49,32 @@ export { OrchestrationFilter } from "./orchestration-filter";
 // Legacy durable-functions v3 API compatibility aliases (types only). These let orchestrator/
 // activity code written against the classic `durable-functions` v3 API type-check unchanged.
 export type { ActivityHandler } from "./app";
+// Durable-client starter option/handler types, surfaced at the top level like v3 so consumers can
+// annotate their `app.client.*` handlers. The registration functions live under `app.client.*`.
+export type {
+  DurableClientHandler,
+  DurableClientOptions,
+  HttpDurableClientHandler,
+  HttpDurableClientOptions,
+  TimerDurableClientHandler,
+  TimerDurableClientOptions,
+  StorageBlobDurableClientHandler,
+  StorageBlobDurableClientOptions,
+  StorageQueueDurableClientHandler,
+  StorageQueueDurableClientOptions,
+  ServiceBusQueueDurableClientHandler,
+  ServiceBusQueueDurableClientOptions,
+  ServiceBusTopicDurableClientHandler,
+  ServiceBusTopicDurableClientOptions,
+  EventHubDurableClientHandler,
+  EventHubDurableClientOptions,
+  EventGridDurableClientHandler,
+  EventGridDurableClientOptions,
+  CosmosDBDurableClientHandler,
+  CosmosDBDurableClientOptions,
+  CosmosDBv3DurableClientOptions,
+  CosmosDBv4DurableClientOptions,
+} from "./app-client";
 export type {
   ClassicOrchestrator as OrchestrationHandler,
   ClassicOrchestrationContext as OrchestrationContext,

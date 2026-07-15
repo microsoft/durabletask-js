@@ -14,6 +14,11 @@ import { ClassicEntity, wrapEntity } from "./entity-context";
 import { ClassicOrchestrator, wrapOrchestrator } from "./orchestration-context";
 import { DurableFunctionsWorker } from "./worker";
 
+// The `client` namespace groups the durable-client starter registration helpers so that
+// `df.app.client.http(...)` (and siblings) restore the v3 client-starter sugar. `index.ts`
+// re-exports this whole module as `app`, so `app.client.*` resolves for consumers.
+export * as client from "./app-client";
+
 // A single worker owns the orchestrator/entity registry for the whole function app. It is never
 // started (no gRPC channel, no work-item loop); it only replays one work item per invocation via
 // the byte-processor methods. Orchestrators and entities are pre-registered at decoration time so

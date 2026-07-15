@@ -17,7 +17,7 @@ This package supersedes the legacy [`durable-functions`](https://github.com/Azur
 ## What it supports
 
 - **Authoring** — `app.orchestration`, `app.activity`, and `app.entity` register durable functions (each trigger opts into the host's gRPC protocol automatically).
-- **Client** — `getClient(context)` returns a `DurableFunctionsClient` for scheduling, querying, signaling, and managing instances, plus HTTP management-payload helpers (`createCheckStatusResponse`, `createHttpManagementPayload`) for durable HTTP starters.
+- **Client** — `getClient(context)` returns a `DurableFunctionsClient` for scheduling, querying, signaling, and managing instances, plus HTTP management-payload helpers (`createCheckStatusResponse`, `createHttpManagementPayload`) for durable HTTP starters. The `app.client.*` starter helpers (`http`, `timer`, `storageBlob`, `storageQueue`, `serviceBusQueue`, `serviceBusTopic`, `eventHub`, `eventGrid`, `cosmosDB`, `generic`) register a normal trigger and inject the client as the handler's second argument, so `(trigger, client, context)` works without manually wiring `df.input.durableClient()` + `df.getClient(context)`.
 - **Classic (v3) compatibility** — orchestrators and entities written in the legacy `context.df.*` style, `RetryOptions`, `EntityId`, and the deprecated client aliases are adapted onto the core engine.
 
 ## Migrating from durable-functions v3
@@ -62,6 +62,23 @@ app.http("startHello", {
   extraInputs: [df.input.durableClient()],
   handler: async (request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> => {
     const client = df.getClient(context);
+    const instanceId = await client.scheduleNewOrchestration("helloOrchestrator", "Durable");
+    return client.createCheckStatusResponse(request, instanceId);
+  },
+});
+```
+
+### Client (starter) functions
+
+`app.client.*` is sugar for the client-starter above — it adds the `durableClient` input binding and
+injects a `DurableFunctionsClient` as the handler's second argument, so you don't wire
+`extraInputs: [df.input.durableClient()]` + `df.getClient(context)` yourself:
+
+```typescript
+// Sugar equivalent of app.http + df.input.durableClient() + df.getClient(context):
+df.app.client.http("startHello", {
+  route: "orchestrators/helloOrchestrator",
+  handler: async (request, client, context) => {
     const instanceId = await client.scheduleNewOrchestration("helloOrchestrator", "Durable");
     return client.createCheckStatusResponse(request, instanceId);
   },

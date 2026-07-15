@@ -4,6 +4,15 @@
 
 Initial gRPC-consolidated Azure Functions Durable provider, built on `@microsoft/durabletask-js`.
 
+### Added
+
+- `app.client.*` durable client function registration helpers (`http`, `timer`, `storageBlob`,
+  `storageQueue`, `serviceBusQueue`, `serviceBusTopic`, `eventHub`, `eventGrid`, `cosmosDB`,
+  `generic`), restoring v3 parity. Each registers a normal trigger and injects a
+  `DurableFunctionsClient` as the handler's second argument, so the client-starter signature
+  `(trigger, client, context)` works without manually wiring
+  `extraInputs: [df.input.durableClient()]` + `df.getClient(context)`.
+
 ### Requirements
 
 - Node.js >= 22 (drops the Node 18/20 that `durable-functions` v3 supported).
