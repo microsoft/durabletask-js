@@ -62,6 +62,8 @@ app.http("startHello", {
   extraInputs: [df.input.durableClient()],
   handler: async (request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> => {
     const client = df.getClient(context);
+    // scheduleNewOrchestration is the canonical (core) API. The classic v3 alias also works:
+    //   const instanceId = await client.startNew("helloOrchestrator", { input: "Durable" });
     const instanceId = await client.scheduleNewOrchestration("helloOrchestrator", "Durable");
     return client.createCheckStatusResponse(request, instanceId);
   },
@@ -79,11 +81,29 @@ injects a `DurableFunctionsClient` as the handler's second argument, so you don'
 df.app.client.http("startHello", {
   route: "orchestrators/helloOrchestrator",
   handler: async (request, client, context) => {
+    // Or the classic v3 alias: await client.startNew("helloOrchestrator", { input: "Durable" })
     const instanceId = await client.scheduleNewOrchestration("helloOrchestrator", "Durable");
     return client.createCheckStatusResponse(request, instanceId);
   },
 });
 ```
+
+### v3-compatible client methods
+
+`DurableFunctionsClient` keeps the classic Durable Functions v3 method names as thin aliases over the
+core API, so existing v3 starters compile unchanged. Prefer the core names in new code (most v3 aliases
+are `@deprecated`):
+
+| Classic v3 alias                                        | Canonical core method                                                   |
+| ------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `client.startNew(name, { input, instanceId, version })` | `client.scheduleNewOrchestration(name, input, { instanceId, version })` |
+| `client.getStatus(id, options)`                         | `client.getOrchestrationState(id)`                                      |
+| `client.raiseEvent(id, name, data)`                     | `client.raiseOrchestrationEvent(id, name, data)`                        |
+| `client.terminate(id, reason)`                          | `client.terminateOrchestration(id, reason)`                             |
+| `client.suspend(id)`                                    | `client.suspendOrchestration(id)`                                       |
+| `client.resume(id)`                                     | `client.resumeOrchestration(id)`                                        |
+| `client.rewind(id, reason)`                             | `client.rewindInstance(id, reason)`                                     |
+| `client.restart(id, restartWithNewInstanceId?)`         | `client.restartOrchestration(id, restartWithNewInstanceId?)`            |
 
 ## Status
 
