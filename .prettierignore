@@ -7,3 +7,7 @@ dist
 coverage
 # don't lint proto files and output
 proto
+
+# vendored Azure Functions sample app — kept byte-for-byte identical to
+# azure-functions-durable-js (its own 4-space toolchain; see PR #282)
+test/e2e-functions/test-app

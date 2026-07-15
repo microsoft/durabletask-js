@@ -1,0 +1,79 @@
+name: 🧪 Functions Host E2E Tests
+
+# Gated Azure Functions host E2E suite. It launches a real `func start` host for
+# test/e2e-functions/test-app (backed by Azurite / AzureStorage) and drives the
+# app over HTTP. It exercises the in-repo `durable-functions` package added by
+# PR #282 (packages/azure-functions-durable), which is NOT on `main` yet.
+#
+# Every job is gated behind the `RUN_FUNCTIONS_E2E` repository variable, so this
+# workflow is a no-op until that variable is set to 'true' (do so only after
+# PR #282 has merged). Until then, existing CI stays green and this suite never
+# runs — mirroring durabletask-python PR #155.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "test/e2e-functions/**"
+      - ".github/workflows/functions-e2e-tests.yaml"
+
+permissions:
+  contents: read
+
+jobs:
+  functions-e2e-tests:
+    # No-op until the repo variable is set after PR #282 merges.
+    if: ${{ vars.RUN_FUNCTIONS_E2E == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["22.x"]
+    name: "functions-e2e (node ${{ matrix.node-version }})"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: ⚙️ NodeJS - Install
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node-version }}
+          registry-url: "https://registry.npmjs.org"
+
+      - name: ⚙️ Install dependencies
+        run: npm ci
+
+      # Builds the workspace including packages/azure-functions-durable (PR #282).
+      # If that package is absent the test-app cannot install and the suite skips.
+      - name: 🏗️ Build workspace
+        run: npm run build
+
+      - name: 🔧 Install Azurite and Azure Functions Core Tools
+        run: npm install -g azurite azure-functions-core-tools@4
+
+      - name: 🗄️ Start Azurite
+        run: |
+          mkdir -p /tmp/azurite
+          azurite --silent --location /tmp/azurite \
+            --blobPort 10000 --queuePort 10001 --tablePort 10002 &
+          echo "Waiting for Azurite blob endpoint..."
+          for i in $(seq 1 30); do
+            if (echo > /dev/tcp/127.0.0.1/10000) >/dev/null 2>&1; then
+              echo "Azurite is up."
+              break
+            fi
+            sleep 1
+          done
+
+      - name: 📦 Install + build test-app
+        working-directory: test/e2e-functions/test-app
+        run: |
+          npm install
+          npm run build
+
+      - name: ✅ Run Functions host E2E tests
+        run: npm run test:e2e:functions:internal
+        timeout-minutes: 20

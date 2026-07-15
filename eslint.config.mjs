@@ -39,7 +39,11 @@ export default tseslint.config(
       "**/node_modules/**",
       "**/src/version.ts",
       "**/jest.config.js",
+      "jest.functions-e2e.config.js",
       "**/src/proto/**",
+      // Vendored Azure Functions sample app kept byte-for-byte identical to
+      // azure-functions-durable-js; it has its own toolchain (see PR #282).
+      "test/e2e-functions/test-app/**",
     ],
   }
 );
