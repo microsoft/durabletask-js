@@ -87,9 +87,11 @@ tests are `it.skip` with a comment citing the same reason.
 - Node swallows suspend/resume/terminate of a **terminal** instance and returns
   success (`200`); the specs assert that behavior.
 
-The test-app additions over `BasicNode` are a plain `/api/ping` readiness function
-(for host-readiness probing) and the published-dependency wiring. The Durable
-function code is otherwise kept close to the source app.
+The only test-app deviation from `BasicNode` is the published-dependency wiring
+(see `test-app/package.json`); the Durable function code is otherwise kept close
+to the source app. Host readiness is detected by polling `/admin/host/status`
+for `state == "Running"`, the same way the extension's C# `FunctionAppProcess`
+fixture does.
 
 ## Running locally
 

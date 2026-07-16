@@ -20,7 +20,7 @@
  *     ({ id, statusQueryGetUri, ... }); client-operation triggers (RaiseEvent,
  *     SuspendInstance, TerminateInstance, ...) return their own status/body.
  *   - GET  {statusQueryGetUri}                -> poll orchestration status.
- *   - GET  /api/ping                          -> plain readiness probe.
+ *   - GET  /admin/host/status                 -> host readiness probe.
  */
 
 import { ChildProcess, spawn, spawnSync } from "child_process";
@@ -268,7 +268,8 @@ const FATAL_LOG_MARKERS = [
 /**
  * Manages the lifecycle of a `func start` host for the sample app.
  *
- * `start()` launches the host and blocks until `/api/ping` responds; `stop()`
+ * `start()` launches the host and blocks until `/admin/host/status` reports
+ * `Running`; `stop()`
  * terminates the whole process tree and surfaces the captured host log if
  * startup failed.
  */
@@ -360,19 +361,24 @@ export class FunctionApp {
 
   private async _waitUntilReady(): Promise<void> {
     const deadline = Date.now() + HOST_STARTUP_TIMEOUT_MS;
-    const pingUrl = `${this.baseUrl}/api/ping`;
+    // Mirrors the extension's C# `FunctionAppProcess`: poll the host's admin
+    // status endpoint until it reports `state == "Running"`.
+    const statusUrl = `${this.baseUrl}/admin/host/status`;
     while (Date.now() < deadline) {
       if (this._exited) {
         throw new Error(`Functions host exited early.\n${this._readLog()}`);
       }
       this._checkLogForFatalErrors();
       try {
-        const result = await httpRequest("GET", pingUrl, undefined, 5000);
+        const result = await httpRequest("GET", statusUrl, undefined, 5000);
         if (result.status === 200) {
-          return;
+          const state = (JSON.parse(result.body) as { state?: string }).state;
+          if (state === "Running") {
+            return;
+          }
         }
       } catch {
-        // Host is not accepting connections yet.
+        // Host is not accepting connections / not fully started yet.
       }
       await sleep(1000);
     }
