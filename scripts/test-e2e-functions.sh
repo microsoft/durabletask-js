@@ -5,12 +5,13 @@
 # Azure Functions host ("func start") for test/e2e-functions/test-app, backed by
 # Azurite (the local Azure Storage emulator), and drives it over HTTP.
 #
+# The test-app depends on the PUBLISHED durable-functions / @azure/functions
+# packages, so it installs and builds without any in-repo package build.
+#
 # Prerequisites (the suite SKIPS cleanly if any are missing):
 #   - Azure Functions Core Tools ('func') v4 on PATH
 #   - Azurite reachable on 127.0.0.1:10000 (started here if the 'azurite' CLI is
 #     installed and the port is free)
-#   - packages/azure-functions-durable present (PR #282) so the test-app's local
-#     'durable-functions' dependency installs
 
 set -uo pipefail
 
@@ -42,17 +43,10 @@ if ! azurite_up; then
     fi
 fi
 
-# Build the workspace (incl. packages/azure-functions-durable from PR #282) so
-# the test-app's local 'durable-functions' dependency resolves.
-echo "Building workspace..."
-( cd "$ROOT_DIR" && npm run build )
-
-if [ -f "$ROOT_DIR/packages/azure-functions-durable/package.json" ]; then
-    echo "Installing + building test-app..."
-    ( cd "$TEST_APP_DIR" && npm install && npm run build )
-else
-    echo "packages/azure-functions-durable not found (PR #282 not merged); the suite will skip."
-fi
+# Install + build the ported BasicNode app against the published durable-functions
+# package so 'func start' has a dist/ to serve.
+echo "Installing + building test-app..."
+( cd "$TEST_APP_DIR" && npm install && npm run build )
 
 echo "Running Functions host E2E tests..."
 ( cd "$ROOT_DIR" && npm run test:e2e:functions:internal )

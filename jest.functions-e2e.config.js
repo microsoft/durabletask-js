@@ -21,6 +21,7 @@ module.exports = {
     ],
   },
   globalSetup: "<rootDir>/test/e2e-functions/global-setup.ts",
+  globalTeardown: "<rootDir>/test/e2e-functions/global-teardown.ts",
   // Host cold-start (extension-bundle download + worker spin-up) dominates.
   testTimeout: 300_000,
 };

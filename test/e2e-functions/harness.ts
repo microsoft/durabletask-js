@@ -13,13 +13,14 @@
  * Everything here is Node built-in only (`child_process`, `http`, `net`, `fs`,
  * `os`, `path`) so the harness adds no test dependencies of its own.
  *
- * This mirrors the Python harness in durabletask-python PR #155, adapted to the
- * routes exposed by the (identical) azure-functions-durable-js sample app:
- *   - POST /api/orchestrators/{name}  -> starts an orchestration, returns the
- *     durable `createCheckStatusResponse` payload ({ id, statusQueryGetUri, ... }).
- *   - GET  /api/counter1/{id}         -> reads the `counter1` entity state.
- *   - POST /api/counter1/{id}         -> signals the `counter1` entity ("add", 1).
- *   - GET  /api/ping                  -> plain readiness probe (added for tests).
+ * The harness mirrors the C# `DurableHelpers`/`HttpHelpers` used by the
+ * extension's own e2e suite (which drive the identical `BasicNode` app):
+ *   - POST /api/{functionName}{queryString}  -> invoke an HTTP trigger. Durable
+ *     starters return the `createCheckStatusResponse` payload
+ *     ({ id, statusQueryGetUri, ... }); client-operation triggers (RaiseEvent,
+ *     SuspendInstance, TerminateInstance, ...) return their own status/body.
+ *   - GET  {statusQueryGetUri}                -> poll orchestration status.
+ *   - GET  /api/ping                          -> plain readiness probe.
  */
 
 import { ChildProcess, spawn, spawnSync } from "child_process";
@@ -48,6 +49,8 @@ export const ORCHESTRATION_TIMEOUT_MS = 60_000;
 export interface PrerequisiteCheck {
   ok: boolean;
   reason?: string;
+  /** Base URL of the shared `func` host, set by globalSetup once it is ready. */
+  baseUrl?: string;
 }
 
 /** Loose shape of a durable orchestration status-query response. */
@@ -60,13 +63,6 @@ export interface OrchestrationStatus {
   customStatus?: unknown;
   createdTime?: string;
   lastUpdatedTime?: string;
-  [key: string]: unknown;
-}
-
-/** Payload returned by durable `createCheckStatusResponse`. */
-interface CheckStatusPayload {
-  id: string;
-  statusQueryGetUri: string;
   [key: string]: unknown;
 }
 
@@ -136,8 +132,9 @@ export function azuriteRunning(timeoutMs = 2000): Promise<boolean> {
 /**
  * `func start` for a Node app serves the compiled output in `dist/` and needs
  * the `durable-functions` dependency installed under `node_modules/`. Both are
- * produced by `npm install && npm run build` inside the test-app (which only
- * works once PR #282's `packages/azure-functions-durable` exists).
+ * produced by `npm install && npm run build` inside the test-app. The app is
+ * wired to the published `durable-functions` package, so this works out of the
+ * box with no in-repo package build required.
  */
 export function testAppBuilt(appDir: string = TEST_APP_DIR): boolean {
   return fs.existsSync(path.join(appDir, "dist")) && fs.existsSync(path.join(appDir, "node_modules"));
@@ -156,7 +153,7 @@ export async function checkPrerequisites(appDir: string = TEST_APP_DIR): Promise
       ok: false,
       reason:
         `test-app is not built/installed at ${appDir} (missing dist/ or node_modules/). ` +
-        "Build packages/azure-functions-durable (PR #282), then install + build the test-app.",
+        "Run `npm install && npm run build` inside the test-app.",
     };
   }
   return { ok: true };
@@ -168,23 +165,29 @@ export function preflightFilePath(): string {
 }
 
 /**
- * Read the preflight result written by globalSetup. When the file is absent
- * (e.g. a spec is run without the dedicated jest config) fall back to the
- * synchronous checks; the async Azurite probe is then skipped, so the suite
- * still fails safe by attempting to start the host.
+ * Read the preflight result written by globalSetup. Specs use this to decide
+ * `describe` vs `describe.skip` and to obtain the shared host `baseUrl`.
+ *
+ * When the file is absent (e.g. a spec is run without the dedicated jest config
+ * that provides globalSetup) the suite cannot reach a shared host, so this
+ * returns a skip result rather than attempting anything.
  */
-export function readPreflight(appDir: string = TEST_APP_DIR): PrerequisiteCheck {
+export function readPreflight(): PrerequisiteCheck {
+  let result: PrerequisiteCheck;
   try {
-    return JSON.parse(fs.readFileSync(preflightFilePath(), "utf-8")) as PrerequisiteCheck;
+    result = JSON.parse(fs.readFileSync(preflightFilePath(), "utf-8")) as PrerequisiteCheck;
   } catch {
-    if (!funcExecutable()) {
-      return { ok: false, reason: "Azure Functions Core Tools ('func') is not installed." };
-    }
-    if (!testAppBuilt(appDir)) {
-      return { ok: false, reason: `test-app is not built/installed at ${appDir}.` };
-    }
-    return { ok: true };
+    return {
+      ok: false,
+      reason:
+        "No preflight result found. Run the suite via `npm run test:e2e:functions:internal` " +
+        "(the dedicated jest config provides the globalSetup that starts the shared host).",
+    };
   }
+  if (result.ok && !result.baseUrl) {
+    return { ok: false, reason: "Preflight reported OK but no shared host baseUrl was recorded." };
+  }
+  return result;
 }
 
 /** Result of an HTTP request performed by the harness. */
@@ -198,7 +201,13 @@ export interface HttpResult {
  * Perform an HTTP request, returning status and body. HTTP error responses
  * (4xx/5xx) are returned rather than thrown, so callers can assert on status.
  */
-export function httpRequest(method: string, url: string, data?: unknown, timeoutMs = 30_000): Promise<HttpResult> {
+export function httpRequest(
+  method: string,
+  url: string,
+  data?: unknown,
+  timeoutMs = 30_000,
+  contentType?: string,
+): Promise<HttpResult> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
     let payload: string | undefined;
@@ -206,7 +215,7 @@ export function httpRequest(method: string, url: string, data?: unknown, timeout
     if (data !== undefined) {
       const isString = typeof data === "string";
       payload = isString ? (data as string) : JSON.stringify(data);
-      headers["Content-Type"] = isString ? "text/plain" : "application/json";
+      headers["Content-Type"] = contentType ?? (isString ? "text/plain" : "application/json");
       headers["Content-Length"] = Buffer.byteLength(payload).toString();
     }
     const req = http.request(
@@ -442,93 +451,194 @@ export class FunctionApp {
       setTimeout(finish, 20_000).unref();
     });
   }
+}
 
-  // -- orchestration helpers ---------------------------------------------
+// -- HTTP trigger + durable status helpers -------------------------------
+//
+// These mirror the C# `HttpHelpers`/`DurableHelpers` used by the extension's
+// own e2e suite so the ported specs read the same way. They are standalone
+// functions (not methods) because the suite drives a single shared `func` host
+// started once in globalSetup; specs receive its `baseUrl` from the preflight.
 
-  /**
-   * Start an orchestration via `POST /api/orchestrators/{name}`.
-   *
-   * Returns the new instance id and the durable status-query URI (which embeds
-   * the task hub, connection, and system key needed to poll status locally).
-   */
-  async startHelloOrchestration(
-    orchestratorName = "helloOrchestrator",
-    body?: string,
-  ): Promise<{ id: string; statusQueryGetUri: string }> {
-    const result = await httpRequest("POST", `${this.baseUrl}/api/orchestrators/${orchestratorName}`, body);
-    if (result.status !== 200 && result.status !== 202) {
-      throw new Error(`start failed: ${result.status} ${result.body}`);
-    }
-    const payload = result.json<CheckStatusPayload>();
-    return { id: payload.id, statusQueryGetUri: payload.statusQueryGetUri };
+/**
+ * Invoke an HTTP trigger via `POST {baseUrl}/api/{functionName}{queryString}`.
+ *
+ * Mirrors `HttpHelpers.InvokeHttpTrigger` (and, when `body` is supplied,
+ * `InvokeHttpTriggerWithBody`). HTTP error responses are returned rather than
+ * thrown so specs can assert on status/body. `queryString` must include its
+ * leading `?` when present.
+ */
+export async function invokeHttpTrigger(
+  baseUrl: string,
+  functionName: string,
+  queryString = "",
+  body?: string,
+  mediaType = "text/plain",
+): Promise<HttpResult> {
+  const url = `${baseUrl}/api/${functionName}${queryString}`;
+  return httpRequest("POST", url, body, 60_000, body !== undefined ? mediaType : undefined);
+}
+
+/** Fetch the raw orchestration status by following the durable status-query URI. */
+export async function getStatus(statusQueryGetUri: string): Promise<OrchestrationStatus> {
+  const result = await httpRequest("GET", statusQueryGetUri);
+  // Durable returns 202 while the instance is running and 200 once terminal;
+  // both carry the status body.
+  if (result.status !== 200 && result.status !== 202) {
+    throw new Error(`status failed: ${result.status} ${result.body}`);
   }
+  return result.json<OrchestrationStatus>();
+}
 
-  /** Fetch orchestration status by following the durable status-query URI. */
-  async getStatus(statusQueryGetUri: string): Promise<OrchestrationStatus> {
-    const result = await httpRequest("GET", statusQueryGetUri);
-    // Durable returns 202 while the instance is running and 200 once terminal;
-    // both carry the status body.
-    if (result.status !== 200 && result.status !== 202) {
-      throw new Error(`status failed: ${result.status} ${result.body}`);
+/**
+ * Read orchestration details from the durable status-query URI, mirroring C#
+ * `DurableHelpers.GetRunningOrchestrationDetailsAsync`.
+ *
+ * `output`/`input` are the raw parsed JSON values; `outputString`/`inputString`
+ * mirror C#'s `JsonNode.ToString()` semantics used throughout the suite: a JSON
+ * string value becomes the unquoted string, while an object/array/number
+ * becomes its JSON text.
+ */
+export async function getOrchestrationDetails(statusQueryGetUri: string): Promise<OrchestrationDetails> {
+  const status = await getStatus(statusQueryGetUri);
+  return {
+    instanceId: String(status.instanceId ?? ""),
+    runtimeStatus: String(status.runtimeStatus ?? ""),
+    input: status.input,
+    inputString: jsonNodeToString(status.input),
+    output: status.output,
+    outputString: jsonNodeToString(status.output),
+  };
+}
+
+/**
+ * Poll status until the orchestration reaches `desiredState`, mirroring C#
+ * `DurableHelpers.WaitForOrchestrationStateAsync` (200ms backoff doubling to
+ * 2s). Fails fast if the instance reaches an unexpected terminal state.
+ */
+export async function waitForOrchestrationState(
+  statusQueryGetUri: string,
+  desiredState: string,
+  maxTimeoutSeconds = ORCHESTRATION_TIMEOUT_MS / 1000,
+): Promise<OrchestrationDetails> {
+  const finalStates = new Set(["Completed", "Terminated", "Failed"]);
+  const deadline = Date.now() + maxTimeoutSeconds * 1000;
+  let delay = 200;
+  let current: OrchestrationDetails = {
+    instanceId: "",
+    runtimeStatus: "",
+    input: undefined,
+    inputString: "",
+    output: undefined,
+    outputString: "",
+  };
+  while (Date.now() < deadline) {
+    current = await getOrchestrationDetails(statusQueryGetUri);
+    if (current.runtimeStatus === desiredState) {
+      return current;
     }
-    return result.json<OrchestrationStatus>();
+    if (finalStates.has(current.runtimeStatus)) {
+      throw new Error(`Orchestration reached ${current.runtimeStatus} state when test was expecting ${desiredState}`);
+    }
+    await sleep(delay);
+    delay = Math.min(delay * 2, 2000);
   }
+  throw new Error(
+    `Orchestration did not reach ${desiredState} status within ${maxTimeoutSeconds} seconds; last status: ${current.runtimeStatus}`,
+  );
+}
 
-  /** Poll status until the orchestration reaches a terminal state. */
-  async waitForCompletion(
-    statusQueryGetUri: string,
-    timeoutMs = ORCHESTRATION_TIMEOUT_MS,
-  ): Promise<OrchestrationStatus> {
-    const terminal = new Set(["completed", "failed", "terminated", "canceled"]);
-    const deadline = Date.now() + timeoutMs;
-    let status: OrchestrationStatus = {};
-    while (Date.now() < deadline) {
-      status = await this.getStatus(statusQueryGetUri);
-      if (terminal.has(String(status.runtimeStatus ?? "").toLowerCase())) {
-        return status;
-      }
-      await sleep(500);
-    }
-    throw new Error(`Orchestration did not complete within ${timeoutMs}ms; last status: ${JSON.stringify(status)}`);
+/** Orchestration details parsed from a durable status-query response. */
+export interface OrchestrationDetails {
+  instanceId: string;
+  runtimeStatus: string;
+  input: unknown;
+  inputString: string;
+  output: unknown;
+  outputString: string;
+}
+
+/**
+ * Mirror C#'s `JsonNode.ToString()`: string values become the unquoted string,
+ * objects/arrays/numbers become their JSON text, null/undefined become "".
+ */
+export function jsonNodeToString(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "";
   }
-
-  // -- entity helpers ----------------------------------------------------
-
-  /** Signal the `counter1` entity to add 1 via `POST /api/counter1/{id}`. */
-  async signalCounter(id: string): Promise<void> {
-    const result = await httpRequest("POST", `${this.baseUrl}/api/counter1/${id}`);
-    if (result.status < 200 || result.status >= 300) {
-      throw new Error(`counter signal failed: ${result.status} ${result.body}`);
-    }
+  if (typeof value === "string") {
+    return value;
   }
+  return JSON.stringify(value);
+}
 
-  /** Read the `counter1` entity state via `GET /api/counter1/{id}`. */
-  async readCounter(id: string): Promise<number | null> {
-    const result = await httpRequest("GET", `${this.baseUrl}/api/counter1/${id}`);
-    if (result.status < 200 || result.status >= 300) {
-      throw new Error(`counter read failed: ${result.status} ${result.body}`);
-    }
-    if (!result.body) {
-      return null;
-    }
-    return result.json<number | null>();
-  }
+/**
+ * Parse the durable instance id from a check-status response body, mirroring
+ * C# `DurableHelpers.ParseInstanceIdAsync` (key `Id`, falling back to `id`).
+ */
+export function parseInstanceId(response: HttpResult): string {
+  return tokenizeAndGetValue(response.body, "Id");
+}
 
-  /** Poll the entity read route until `predicate(state)` is true. */
-  async waitForCounter(
-    id: string,
-    predicate: (value: number | null) => boolean,
-    timeoutMs = 30_000,
-  ): Promise<number | null> {
-    const deadline = Date.now() + timeoutMs;
-    let value: number | null = null;
-    while (Date.now() < deadline) {
-      value = await this.readCounter(id);
-      if (predicate(value)) {
-        return value;
-      }
-      await sleep(500);
-    }
-    throw new Error(`counter ${id} predicate not met within ${timeoutMs}ms; last value: ${JSON.stringify(value)}`);
+/**
+ * Parse `statusQueryGetUri` from a check-status response body, mirroring C#
+ * `DurableHelpers.ParseStatusQueryGetUriAsync` (key `StatusQueryGetUri`,
+ * falling back to `statusQueryGetUri`).
+ */
+export function parseStatusQueryGetUri(response: HttpResult): string {
+  return tokenizeAndGetValue(response.body, "StatusQueryGetUri");
+}
+
+function tokenizeAndGetValue(json: string, key: string): string {
+  if (!json) {
+    return "";
   }
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(json) as Record<string, unknown>;
+  } catch {
+    return "";
+  }
+  const lowerKey = key.charAt(0).toLowerCase() + key.slice(1);
+  const value = parsed[key] ?? parsed[lowerKey];
+  return value === undefined || value === null ? "" : String(value);
+}
+
+/**
+ * Node-specific expected strings and bug annotations, ported verbatim from the
+ * extension's `NodeTestLanguageLocalizer`. `{0}`-style placeholders are filled
+ * by `formatLocalized`. C# `{{`/`}}` escapes are already unescaped here.
+ */
+export const NODE_LOCALIZED_STRINGS: Record<string, string> = {
+  "CaughtActivityException.ErrorMessage": "Caught exception: Error: Activity function 'raise_exception' failed:",
+  "RethrownActivityException.ErrorMessage":
+    "Orchestrator function 'RethrowActivityException' failed: Activity function 'raise_exception' failed: ",
+  // Bug: https://github.com/Azure/azure-functions-durable-js/issues/642
+  "CaughtEntityException.ErrorMessage": "Error: [object Object]",
+  "RethrownEntityException.ErrorMessage": "Orchestrator function 'ThrowEntityOrchestration' failed:",
+  // Bug: https://github.com/Azure/azure-functions-durable-js/issues/645
+  "ExternalEvent.CompletedInstance.ErrorName": "N/A",
+  "ExternalEvent.CompletedInstance.ErrorMessage": "N/A",
+  "ExternalEvent.InvalidInstance.ErrorName": "Error",
+  "ExternalEvent.InvalidInstance.ErrorMessage": "No instance with ID '{0}' found",
+  // Empty: Node's unique behavior causes suspend/resume/terminate of terminal
+  // instances to succeed rather than fail.
+  "SuspendCompletedInstance.FailureMessage": "",
+  "ResumeCompletedInstance.FailureMessage": "",
+  "SuspendSuspendedInstance.FailureMessage":
+    'Error: The operation failed with an unexpected status code: 500. Details: {"Message":"Something went wrong while processing your request',
+  "ResumeRunningInstance.FailureMessage":
+    'Error: The operation failed with an unexpected status code: 500. Details: {"Message":"Something went wrong while processing your request',
+  "TerminateCompletedInstance.FailureMessage": "",
+  "TerminateTerminatedInstance.FailureMessage": "",
+  "TerminateInvalidInstance.FailureMessage": "No instance with ID '{0}' found.",
+};
+
+/** Look up a Node localized string and substitute `{0}`, `{1}`, ... args. */
+export function formatLocalized(key: string, ...args: unknown[]): string {
+  const template = NODE_LOCALIZED_STRINGS[key] ?? "";
+  return template.replace(/\{(\d+)\}/g, (match, index) => {
+    const arg = args[Number(index)];
+    return arg === undefined ? match : String(arg);
+  });
 }

@@ -2,13 +2,14 @@ name: 🧪 Functions Host E2E Tests
 
 # Gated Azure Functions host E2E suite. It launches a real `func start` host for
 # test/e2e-functions/test-app (backed by Azurite / AzureStorage) and drives the
-# app over HTTP. It exercises the in-repo `durable-functions` package added by
-# PR #282 (packages/azure-functions-durable), which is NOT on `main` yet.
+# app over HTTP, porting the extension repo's `BasicNode` app + xUnit tests.
 #
-# Every job is gated behind the `RUN_FUNCTIONS_E2E` repository variable, so this
-# workflow is a no-op until that variable is set to 'true' (do so only after
-# PR #282 has merged). Until then, existing CI stays green and this suite never
-# runs — mirroring durabletask-python PR #155.
+# The test-app depends on the PUBLISHED `durable-functions` + `@azure/functions`
+# packages, so it installs and runs without any in-repo package build. The suite
+# self-gates: each spec SKIPS cleanly when the Azure Functions Core Tools (`func`)
+# or the Azurite storage emulator are unavailable, and RUNS when both are present.
+# In CI below we install and start both, so the suite runs for real; the self-skip
+# is the safety net that keeps the job green if a prerequisite fails to come up.
 
 on:
   workflow_dispatch:
@@ -24,8 +25,6 @@ permissions:
 
 jobs:
   functions-e2e-tests:
-    # No-op until the repo variable is set after PR #282 merges.
-    if: ${{ vars.RUN_FUNCTIONS_E2E == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -43,13 +42,11 @@ jobs:
           node-version: ${{ matrix.node-version }}
           registry-url: "https://registry.npmjs.org"
 
+      # Root install provides jest + ts-jest used to run the spec files. The specs
+      # do not depend on the core durabletask-js packages, so no workspace build is
+      # required here.
       - name: ⚙️ Install dependencies
         run: npm ci
-
-      # Builds the workspace including packages/azure-functions-durable (PR #282).
-      # If that package is absent the test-app cannot install and the suite skips.
-      - name: 🏗️ Build workspace
-        run: npm run build
 
       - name: 🔧 Install Azurite and Azure Functions Core Tools
         run: npm install -g azurite azure-functions-core-tools@4
@@ -68,6 +65,8 @@ jobs:
             sleep 1
           done
 
+      # Installs the PUBLISHED durable-functions / @azure/functions packages and
+      # compiles the ported BasicNode app to dist/ (consumed by `func start`).
       - name: 📦 Install + build test-app
         working-directory: test/e2e-functions/test-app
         run: |

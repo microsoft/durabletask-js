@@ -2,20 +2,27 @@
     "name": "test-app",
     "version": "1.0.0",
     "description": "",
+    "comment_durable-functions": "This app is wired to the PUBLISHED durable-functions package so the suite is runnable without an in-repo build. To test against an in-repo build of the Azure Functions durable package instead, change the durable-functions dependency below to a file: reference (e.g. file:../../../packages/azure-functions-durable) once that package exists on your branch, then re-run npm install.",
     "scripts": {
         "build": "tsc",
         "watch": "tsc -w",
-        "prestart": "npm run build",
+        "clean": "rimraf dist",
+        "prestart": "npm run clean && npm run build",
         "start": "func start",
         "test": "echo \"No tests yet...\""
     },
     "dependencies": {
-        "@azure/functions": "^4.14.0",
-        "durable-functions": "file:../../../packages/azure-functions-durable"
+        "@azure/functions": "^4.11.2",
+        "durable-functions": "^3.1.0"
     },
     "devDependencies": {
-        "@types/node": "^18.x",
+        "@types/node": "^20.x",
+        "rimraf": "^5.0.0",
         "typescript": "^4.7.2"
     },
-    "main": "dist/src/functions/*.js"
+    "overrides": {
+        "validator": "13.15.22",
+        "undici-types": "6.23.0"
+    },
+    "main": "dist/src/{index.js,functions/*.js}"
 }
