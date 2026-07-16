@@ -7,3 +7,7 @@ dist
 coverage
 # don't lint proto files and output
 proto
+
+# ported Azure Functions sample app — kept close to
+# azure-functions-durable-js's BasicNode (its own 4-space toolchain)
+test/e2e-functions/test-app
