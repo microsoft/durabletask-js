@@ -44,9 +44,17 @@ if ! azurite_up; then
 fi
 
 # Install + build the ported BasicNode app against the published durable-functions
-# package so 'func start' has a dist/ to serve.
+# package so 'func start' has a dist/ to serve. If this fails there is no app to
+# run, so fail fast instead of letting the suite skip and masking the error.
 echo "Installing + building test-app..."
-( cd "$TEST_APP_DIR" && npm install && npm run build )
+if ! ( cd "$TEST_APP_DIR" && npm install && npm run build ); then
+    echo "test-app install/build failed." >&2
+    if [ -n "$started_azurite" ]; then
+        echo "Stopping Azurite..."
+        kill "$started_azurite" 2>/dev/null || true
+    fi
+    exit 1
+fi
 
 echo "Running Functions host E2E tests..."
 ( cd "$ROOT_DIR" && npm run test:e2e:functions:internal )
