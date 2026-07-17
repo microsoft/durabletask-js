@@ -31,7 +31,7 @@ import { mapToRecord } from "../utils/tags.util";
 import { populateTagsMap } from "../utils/pb-helper.util";
 import { EntityInstanceId } from "../entities/entity-instance-id";
 import { EntityMetadata, createEntityMetadata, createEntityMetadataWithoutState } from "../entities/entity-metadata";
-import { EntityQuery } from "../entities/entity-query";
+import { EntityQuery, normalizeInstanceIdPrefix } from "../entities/entity-query";
 import { SignalEntityOptions } from "../entities/signal-entity-options";
 import {
   CleanEntityStorageRequest,
@@ -569,19 +569,19 @@ export class TaskHubGrpcClient {
       );
     } catch (e) {
       // Handle gRPC errors and convert them to appropriate errors
-      if (e && typeof e === "object" && "code" in e) {
-        const grpcError = e as { code: number; details?: string };
+      if (e instanceof Error && "code" in e) {
+        const grpcError = e as grpc.ServiceError;
         if (grpcError.code === grpc.status.NOT_FOUND) {
-          throw new Error(`An orchestration with the instanceId '${instanceId}' was not found.`);
+          throw new Error(`An orchestration with the instanceId '${instanceId}' was not found.`, { cause: e });
         }
         if (grpcError.code === grpc.status.FAILED_PRECONDITION) {
-          throw new Error(grpcError.details || `Cannot rewind orchestration '${instanceId}': it is in a state that does not allow rewinding.`);
+          throw new Error(grpcError.details || `Cannot rewind orchestration '${instanceId}': it is in a state that does not allow rewinding.`, { cause: e });
         }
         if (grpcError.code === grpc.status.UNIMPLEMENTED) {
-          throw new Error(grpcError.details || `The rewind operation is not supported by the backend.`);
+          throw new Error(grpcError.details || `The rewind operation is not supported by the backend.`, { cause: e });
         }
         if (grpcError.code === grpc.status.CANCELLED) {
-          throw new Error(`The rewind operation for '${instanceId}' was cancelled.`);
+          throw new Error(`The rewind operation for '${instanceId}' was canceled.`, { cause: e });
         }
       }
       throw e;
@@ -629,13 +629,13 @@ export class TaskHubGrpcClient {
       if (e instanceof Error && "code" in e) {
         const grpcError = e as grpc.ServiceError;
         if (grpcError.code === grpc.status.NOT_FOUND) {
-          throw new Error(`An orchestration with the instanceId '${instanceId}' was not found.`);
+          throw new Error(`An orchestration with the instanceId '${instanceId}' was not found.`, { cause: e });
         }
         if (grpcError.code === grpc.status.FAILED_PRECONDITION) {
-          throw new Error(`An orchestration with the instanceId '${instanceId}' cannot be restarted.`);
+          throw new Error(`An orchestration with the instanceId '${instanceId}' cannot be restarted.`, { cause: e });
         }
         if (grpcError.code === grpc.status.CANCELLED) {
-          throw new Error(`The restartOrchestration operation was canceled.`);
+          throw new Error(`The restartOrchestration operation was canceled.`, { cause: e });
         }
       }
       throw e;
@@ -1103,9 +1103,10 @@ export class TaskHubGrpcClient {
       const req = new pb.QueryEntitiesRequest();
       const protoQuery = new pb.EntityQuery();
 
-      if (query?.instanceIdStartsWith) {
+      const normalizedPrefix = normalizeInstanceIdPrefix(query?.instanceIdStartsWith);
+      if (normalizedPrefix) {
         const prefix = new StringValue();
-        prefix.setValue(query.instanceIdStartsWith);
+        prefix.setValue(normalizedPrefix);
         protoQuery.setInstanceidstartswith(prefix);
       }
 
@@ -1205,7 +1206,7 @@ export class TaskHubGrpcClient {
     const instanceIdStr = protoMetadata.getInstanceid();
     const entityId = EntityInstanceId.fromString(instanceIdStr);
 
-    const lastModifiedTime = protoMetadata.getLastmodifiedtime()?.toDate() ?? new Date();
+    const lastModifiedTime = protoMetadata.getLastmodifiedtime()?.toDate() ?? new Date(0);
     const backlogQueueSize = protoMetadata.getBacklogqueuesize();
     const lockedBy = protoMetadata.getLockedby()?.getValue();
     const serializedState = protoMetadata.getSerializedstate()?.getValue();

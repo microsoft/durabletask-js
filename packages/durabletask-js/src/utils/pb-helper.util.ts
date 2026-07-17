@@ -236,6 +236,22 @@ export function newEventRaisedEvent(name: string, encodedInput?: string): pb.His
   return event;
 }
 
+export function newEventSentEvent(eventId: number, instanceId: string, name: string, encodedInput?: string): pb.HistoryEvent {
+  const ts = new Timestamp();
+
+  const eventSent = new pb.EventSentEvent();
+  eventSent.setInstanceid(instanceId);
+  eventSent.setName(name);
+  eventSent.setInput(getStringValue(encodedInput));
+
+  const event = new pb.HistoryEvent();
+  event.setEventid(eventId);
+  event.setTimestamp(ts);
+  event.setEventsent(eventSent);
+
+  return event;
+}
+
 export function newSuspendEvent(): pb.HistoryEvent {
   const ts = new Timestamp();
 
@@ -268,6 +284,42 @@ export function newTerminatedEvent(encodedOutput?: string): pb.HistoryEvent {
   event.setEventid(-1);
   event.setTimestamp(ts);
   event.setExecutionterminated(executionTerminatedEvent);
+
+  return event;
+}
+
+export function newExecutionCompletedEvent(
+  status: pb.OrchestrationStatus,
+  encodedResult?: string,
+  failureDetails?: pb.TaskFailureDetails,
+): pb.HistoryEvent {
+  const executionCompletedEvent = new pb.ExecutionCompletedEvent();
+  executionCompletedEvent.setOrchestrationstatus(status);
+  executionCompletedEvent.setResult(getStringValue(encodedResult));
+  if (failureDetails) {
+    executionCompletedEvent.setFailuredetails(failureDetails);
+  }
+
+  const ts = new Timestamp();
+
+  const event = new pb.HistoryEvent();
+  event.setEventid(-1);
+  event.setTimestamp(ts);
+  event.setExecutioncompleted(executionCompletedEvent);
+
+  return event;
+}
+
+export function newExecutionRewoundEvent(reason?: string): pb.HistoryEvent {
+  const executionRewoundEvent = new pb.ExecutionRewoundEvent();
+  executionRewoundEvent.setReason(getStringValue(reason));
+
+  const ts = new Timestamp();
+
+  const event = new pb.HistoryEvent();
+  event.setEventid(-1);
+  event.setTimestamp(ts);
+  event.setExecutionrewound(executionRewoundEvent);
 
   return event;
 }

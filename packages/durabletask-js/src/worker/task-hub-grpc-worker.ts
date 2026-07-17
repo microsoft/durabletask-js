@@ -606,6 +606,19 @@ export class TaskHubGrpcWorker {
     return undefined;
   }
 
+  private _trackPendingWorkItem(workPromise: Promise<void>, onError: (error: Error) => void): void {
+    const handledPromise = workPromise
+      .catch((e: unknown) => {
+        const error = e instanceof Error ? e : new Error(String(e));
+        onError(error);
+      })
+      .finally(() => {
+        this._pendingWorkItems.delete(handledPromise);
+      });
+
+    this._pendingWorkItems.add(handledPromise);
+  }
+
   /**
    * Executes an orchestrator request and tracks it as a pending work item.
    */
@@ -615,9 +628,8 @@ export class TaskHubGrpcWorker {
     stub: stubs.TaskHubSidecarServiceClient,
   ): void {
     const workPromise = this._executeOrchestratorInternal(req, completionToken, stub);
-    this._pendingWorkItems.add(workPromise);
-    workPromise.finally(() => {
-      this._pendingWorkItems.delete(workPromise);
+    this._trackPendingWorkItem(workPromise, (error) => {
+      WorkerLogs.executionError(this._logger, req.getInstanceid() || "(unknown)", error);
     });
   }
 
@@ -803,9 +815,8 @@ export class TaskHubGrpcWorker {
     stub: stubs.TaskHubSidecarServiceClient,
   ): void {
     const workPromise = this._executeActivityInternal(req, completionToken, stub);
-    this._pendingWorkItems.add(workPromise);
-    workPromise.finally(() => {
-      this._pendingWorkItems.delete(workPromise);
+    this._trackPendingWorkItem(workPromise, (error) => {
+      WorkerLogs.workerError(this._logger, error);
     });
   }
 
@@ -877,7 +888,22 @@ export class TaskHubGrpcWorker {
   }
 
   /**
-   * Executes an entity batch request.
+   * Executes an entity batch request and tracks it as a pending work item.
+   */
+  private _executeEntity(
+    req: pb.EntityBatchRequest,
+    completionToken: string,
+    stub: stubs.TaskHubSidecarServiceClient,
+    operationInfos?: pb.OperationInfo[],
+  ): void {
+    const workPromise = this._executeEntityInternal(req, completionToken, stub, operationInfos);
+    this._trackPendingWorkItem(workPromise, (error) => {
+      WorkerLogs.workerError(this._logger, error);
+    });
+  }
+
+  /**
+   * Internal implementation of entity batch execution.
    *
    * @param req - The entity batch request from the sidecar.
    * @param completionToken - The completion token for the work item.
@@ -888,7 +914,7 @@ export class TaskHubGrpcWorker {
    * This method looks up the entity by name, creates a TaskEntityShim, executes the batch,
    * and sends the result back to the sidecar.
    */
-  private async _executeEntity(
+  private async _executeEntityInternal(
     req: pb.EntityBatchRequest,
     completionToken: string,
     stub: stubs.TaskHubSidecarServiceClient,
@@ -951,9 +977,12 @@ export class TaskHubGrpcWorker {
 
     // Add V2 operationInfos if provided (used by DTS backend)
     if (operationInfos && operationInfos.length > 0) {
-      // Take only as many operationInfos as there are results
+      // Take only as many operationInfos as there are results.
+      // Use resultsCount directly (not `resultsCount || operationInfos.length`)
+      // because 0 is a valid count when a framework-level error produces zero
+      // individual results; the falsy-OR would incorrectly include all infos.
       const resultsCount = batchResult.getResultsList().length;
-      const infosToInclude = operationInfos.slice(0, resultsCount || operationInfos.length);
+      const infosToInclude = operationInfos.slice(0, resultsCount);
       batchResult.setOperationinfosList(infosToInclude);
     }
 
@@ -961,7 +990,21 @@ export class TaskHubGrpcWorker {
   }
 
   /**
-   * Executes an entity request (V2 format).
+   * Executes an entity request (V2 format) and tracks it as a pending work item.
+   */
+  private _executeEntityV2(
+    req: pb.EntityRequest,
+    completionToken: string,
+    stub: stubs.TaskHubSidecarServiceClient,
+  ): void {
+    const workPromise = this._executeEntityV2Internal(req, completionToken, stub);
+    this._trackPendingWorkItem(workPromise, (error) => {
+      WorkerLogs.workerError(this._logger, error);
+    });
+  }
+
+  /**
+   * Internal implementation of V2 entity execution.
    *
    * @param req - The entity request (V2) from the sidecar.
    * @param completionToken - The completion token for the work item.
@@ -972,7 +1015,7 @@ export class TaskHubGrpcWorker {
    * instead of OperationRequest. It converts the V2 format to V1 format
    * (EntityBatchRequest) and delegates to the existing execution logic.
    */
-  private async _executeEntityV2(
+  private async _executeEntityV2Internal(
     req: pb.EntityRequest,
     completionToken: string,
     stub: stubs.TaskHubSidecarServiceClient,
@@ -1056,7 +1099,7 @@ export class TaskHubGrpcWorker {
     batchRequest.setOperationsList(operations);
 
     // Delegate to the V1 execution logic with V2 operationInfos
-    await this._executeEntity(batchRequest, completionToken, stub, operationInfos);
+    await this._executeEntityInternal(batchRequest, completionToken, stub, operationInfos);
   }
 
   /**

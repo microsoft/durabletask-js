@@ -12,6 +12,7 @@ import { RetryTaskBase, RetryTaskType } from "../task/retry-task-base";
 import { RetryableTask } from "../task/retryable-task";
 import { RetryHandlerTask } from "../task/retry-handler-task";
 import { RetryTimerTask } from "../task/retry-timer-task";
+import { TimerTask } from "../task/timer-task";
 import { TaskOptions, SubOrchestrationOptions, isRetryPolicy, isRetryHandler } from "../task/options";
 import { toAsyncRetryHandler } from "../task/retry/retry-handler";
 import { TActivity } from "../types/activity.type";
@@ -48,7 +49,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   _pendingEvents: Record<string, CompletableTask<any>[]>;
   _newInput?: any;
   _saveEvents: boolean;
-  _customStatus?: any;
+  _customStatus?: string;
   _entityFeature: RuntimeOrchestrationEntityFeature;
 
   constructor(instanceId: string) {
@@ -109,8 +110,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   async run(generator: Generator<Task<any>, any, any>) {
     this._generator = generator;
 
-    // TODO: do something with this task
-    // start the generator
+    // Start the generator
     const { value, done } = await this._generator.next();
 
     // if the generator finished, complete the orchestration.
@@ -119,12 +119,15 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
       return;
     }
 
-    // TODO: check if the task is null?
+    if (!(value instanceof Task)) {
+      throw new Error("The orchestrator generator yielded a non-Task object");
+    }
+
     this._previousTask = value;
 
     // If the yielded task is already complete (e.g., whenAll with an empty array),
     // resume immediately so the generator can continue.
-    if (this._previousTask instanceof Task && this._previousTask.isComplete) {
+    if (this._previousTask.isComplete) {
       await this.resume();
     }
   }
@@ -222,6 +225,17 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   }
 
   setFailed(e: Error) {
+    // If already complete, remove the previous completion action to prevent
+    // duplicate completion actions in the response
+    if (this._isComplete) {
+      for (const [id, action] of Object.entries(this._pendingActions)) {
+        if (action.hasCompleteorchestration()) {
+          delete this._pendingActions[Number(id)];
+          break;
+        }
+      }
+    }
+
     this._isComplete = true;
     this._completionStatus = pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED;
     // Note: Do NOT clear pending actions here - fire-and-forget actions like sendEvent
@@ -293,19 +307,39 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
    * @param fireAt Date The date when the timer should fire
    * @returns
    */
-  createTimer(fireAt: number | Date): Task<any> {
+  createTimer(fireAt: number | Date): TimerTask {
     const id = this.nextSequenceNumber();
 
-    // If a number is passed, we use it as the number of seconds to wait
-    // we use instanceof Date as number is not a native Javascript type
-    if (!(fireAt instanceof Date)) {
-      fireAt = new Date(this._currentUtcDatetime.getTime() + fireAt * 1000);
+    let fireAtDate: Date;
+    if (typeof fireAt === "number") {
+      if (!Number.isFinite(fireAt)) {
+        throw new Error(
+          `createTimer requires a finite number (seconds) or a valid Date, but received ${String(fireAt)}`,
+        );
+      }
+      fireAtDate = new Date(this._currentUtcDatetime.getTime() + fireAt * 1000);
+    } else if (fireAt instanceof Date) {
+      fireAtDate = fireAt;
+    } else {
+      throw new Error(
+        `createTimer requires a finite number (seconds) or a valid Date, but received ${String(fireAt)}`,
+      );
     }
 
-    const action = ph.newCreateTimerAction(id, fireAt);
+    if (Number.isNaN(fireAtDate.getTime())) {
+      throw new Error(
+        "createTimer received or produced an invalid Date (NaN timestamp)",
+      );
+    }
+
+    const action = ph.newCreateTimerAction(id, fireAtDate);
     this._pendingActions[action.getId()] = action;
 
-    const timerTask = new CompletableTask();
+    const timerTask = new TimerTask();
+    timerTask.setCancelHandler(() => {
+      delete this._pendingActions[id];
+      delete this._pendingTasks[id];
+    });
     this._pendingTasks[id] = timerTask;
 
     return timerTask;
@@ -358,13 +392,17 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   }
 
   waitForExternalEvent<T>(name: string): Task<T> {
+    if (!name) {
+      throw new Error("waitForExternalEvent: 'name' is required and cannot be empty.");
+    }
+
     // Check to see if this event has already been received, in which case we
     // can return it immediately. Otherwise, record out intent to receive an
     // event with the given name so that we can resume the generator when it
     // arrives. If there are multiple events with the same name, we return
     // them in the order they were received.
     const externalEventTask = new CompletableTask<T>();
-    const eventName = name.toLocaleLowerCase();
+    const eventName = name.toLowerCase();
     const eventList = this._receivedEvents[eventName];
 
     if (eventList?.length) {
@@ -402,26 +440,49 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
 
   /**
    * Sets a custom status value for the current orchestration instance.
+   *
+   * The value is serialized eagerly via JSON.stringify so that serialization
+   * errors surface inside the orchestrator execution (where they are caught
+   * by the executor's try-catch) rather than after execution completes.
    */
   setCustomStatus(customStatus: any): void {
-    this._customStatus = customStatus;
+    if (customStatus === undefined || customStatus === null) {
+      this._customStatus = undefined;
+      return;
+    }
+
+    try {
+      this._customStatus = JSON.stringify(customStatus);
+    } catch (e) {
+      throw new Error(
+        `Custom status value is not JSON-serializable: ${e instanceof Error ? e.message : String(e)}`,
+        { cause: e },
+      );
+    }
   }
 
   /**
    * Gets the encoded custom status value for the current orchestration instance.
    * This is used internally when building the orchestrator response.
+   *
+   * Returns the pre-serialized JSON string set by setCustomStatus().
    */
   getCustomStatus(): string | undefined {
-    if (this._customStatus === undefined || this._customStatus === null) {
-      return undefined;
-    }
-    return JSON.stringify(this._customStatus);
+    return this._customStatus;
   }
 
   /**
    * Sends an event to another orchestration instance.
    */
   sendEvent(instanceId: string, eventName: string, eventData?: any): void {
+    if (!instanceId) {
+      throw new Error("sendEvent: 'instanceId' is required and cannot be empty.");
+    }
+
+    if (!eventName) {
+      throw new Error("sendEvent: 'eventName' is required and cannot be empty.");
+    }
+
     const id = this.nextSequenceNumber();
     const encodedData = eventData !== undefined ? JSON.stringify(eventData) : undefined;
     const action = ph.newSendEventAction(id, instanceId, eventName, encodedData);
@@ -846,9 +907,15 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
       throw new Error("Must not enter another critical section from within a critical section.");
     }
 
-    // Sort entities for deterministic ordering (prevents deadlocks)
-    // Use the string representation for consistent ordering
-    const sortedEntities = [...entityIds].sort((a, b) => a.toString().localeCompare(b.toString()));
+    // Sort entities for deterministic ordering (prevents deadlocks).
+    // Use ordinal (UTF-16 code unit) comparison for cross-platform consistency,
+    // matching .NET's StringComparer.Ordinal. localeCompare() is locale-dependent
+    // and can produce different orderings on different machines/locales.
+    const sortedEntities = [...entityIds].sort((a, b) => {
+      const aStr = a.toString();
+      const bStr = b.toString();
+      return aStr < bStr ? -1 : aStr > bStr ? 1 : 0;
+    });
 
     // Remove duplicates
     const uniqueEntities: EntityInstanceId[] = [];

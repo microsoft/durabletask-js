@@ -92,7 +92,9 @@ export class TestOrchestrationClient {
    * Raises an event to an orchestration.
    */
   async raiseOrchestrationEvent(instanceId: string, eventName: string, data: any = null): Promise<void> {
-    const encodedData = data !== null ? JSON.stringify(data) : undefined;
+    // Always serialize data — including null — to match TaskHubGrpcClient behavior.
+    // The real client unconditionally calls JSON.stringify(data), which turns null into "null".
+    const encodedData = JSON.stringify(data);
     this.backend.raiseEvent(instanceId, eventName, encodedData);
   }
 
@@ -100,7 +102,9 @@ export class TestOrchestrationClient {
    * Terminates an orchestration.
    */
   async terminateOrchestration(instanceId: string, output: any = null): Promise<void> {
-    const encodedOutput = output !== null ? JSON.stringify(output) : undefined;
+    // Always serialize output — including null — to match TaskHubGrpcClient behavior.
+    // The real client unconditionally calls JSON.stringify(output), which turns null into "null".
+    const encodedOutput = JSON.stringify(output);
     this.backend.terminate(instanceId, encodedOutput);
   }
 
@@ -124,6 +128,16 @@ export class TestOrchestrationClient {
   async purgeOrchestration(instanceId: string): Promise<{ deletedInstanceCount: number }> {
     const deleted = this.backend.purge(instanceId);
     return { deletedInstanceCount: deleted ? 1 : 0 };
+  }
+
+  /**
+   * Rewinds a failed orchestration so it re-runs from the point of failure.
+   *
+   * @param instanceId The instance to rewind.
+   * @param reason Optional human-readable reason for the rewind.
+   */
+  async rewindOrchestration(instanceId: string, reason?: string): Promise<void> {
+    this.backend.rewindInstance(instanceId, reason);
   }
 
   /**

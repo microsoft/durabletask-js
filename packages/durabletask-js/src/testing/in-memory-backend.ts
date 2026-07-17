@@ -4,6 +4,7 @@
 import * as pb from "../proto/orchestrator_service_pb";
 import * as pbh from "../utils/pb-helper.util";
 import { OrchestrationStatus as ClientOrchestrationStatus } from "../orchestration/enum/orchestration-status.enum";
+import { ParentOrchestrationInstance } from "../types/parent-orchestration-instance.type";
 
 /**
  * Internal orchestration instance state stored by the in-memory backend.
@@ -62,6 +63,7 @@ export class InMemoryOrchestrationBackend {
   private readonly activityQueue: ActivityWorkItem[] = [];
   private readonly stateWaiters: Map<string, StateWaiter[]> = new Map();
   private readonly pendingTimers: Set<ReturnType<typeof setTimeout>> = new Set();
+  private readonly instanceTimers: Map<string, Set<ReturnType<typeof setTimeout>>> = new Map();
   private nextCompletionToken: number = 1;
   private readonly maxHistorySize: number;
 
@@ -81,6 +83,7 @@ export class InMemoryOrchestrationBackend {
     name: string,
     input?: string,
     scheduledStartTime?: Date,
+    parentInstance?: ParentOrchestrationInstance,
   ): string {
     if (this.instances.has(instanceId)) {
       throw new Error(`Orchestration instance '${instanceId}' already exists`);
@@ -103,7 +106,7 @@ export class InMemoryOrchestrationBackend {
 
     // Add initial events to start the orchestration
     const orchestratorStarted = pbh.newOrchestratorStartedEvent(startTime);
-    const executionStarted = pbh.newExecutionStartedEvent(name, instanceId, input);
+    const executionStarted = pbh.newExecutionStartedEvent(name, instanceId, input, parentInstance);
 
     instance.pendingEvents.push(orchestratorStarted);
     instance.pendingEvents.push(executionStarted);
@@ -171,9 +174,17 @@ export class InMemoryOrchestrationBackend {
       throw new Error(`Orchestration instance '${instanceId}' not found`);
     }
 
+    if (this.isTerminalStatus(instance.status)) {
+      return; // Cannot suspend a completed/failed/terminated instance
+    }
+
     if (instance.status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_SUSPENDED) {
       return;
     }
+
+    // Update status immediately to match real sidecar behavior, where the
+    // suspend RPC transitions the orchestration to SUSPENDED right away.
+    instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_SUSPENDED;
 
     const event = pbh.newSuspendEvent();
     instance.pendingEvents.push(event);
@@ -182,6 +193,8 @@ export class InMemoryOrchestrationBackend {
     if (!this.orchestrationQueueSet.has(instanceId)) {
       this.enqueueOrchestration(instanceId);
     }
+
+    this.notifyWaiters(instanceId);
   }
 
   /**
@@ -193,6 +206,18 @@ export class InMemoryOrchestrationBackend {
       throw new Error(`Orchestration instance '${instanceId}' not found`);
     }
 
+    // No-op for terminal or non-suspended instances
+    if (this.isTerminalStatus(instance.status)) {
+      return;
+    }
+
+    if (instance.status !== pb.OrchestrationStatus.ORCHESTRATION_STATUS_SUSPENDED) {
+      return;
+    }
+
+    // Transition from SUSPENDED back to RUNNING to match real sidecar behavior.
+    instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING;
+
     const event = pbh.newResumeEvent();
     instance.pendingEvents.push(event);
     instance.lastUpdatedAt = new Date();
@@ -200,6 +225,8 @@ export class InMemoryOrchestrationBackend {
     if (!this.orchestrationQueueSet.has(instanceId)) {
       this.enqueueOrchestration(instanceId);
     }
+
+    this.notifyWaiters(instanceId);
   }
 
   /**
@@ -217,7 +244,36 @@ export class InMemoryOrchestrationBackend {
 
     this.instances.delete(instanceId);
     this.stateWaiters.delete(instanceId);
+    this.cancelInstanceTimers(instanceId);
     return true;
+  }
+
+  /**
+   * Rewinds a failed orchestration instance.
+   *
+   * Validates the instance is in a failed state, then appends an ExecutionRewoundEvent to the
+   * pending events, resets the status to RUNNING, and re-enqueues the orchestration so the
+   * worker can replay it and produce a RewindOrchestrationAction with the corrected history.
+   * The actual history rewrite is performed by the SDK worker (see buildRewindResult); this
+   * backend merely applies the result. Any change to that rewrite must be mirrored here.
+   *
+   * @param instanceId The instance to rewind.
+   * @param reason Optional human-readable reason for the rewind.
+   * @throws Error with a "not found" message if the instance does not exist.
+   * @throws Error with a "not in a failed state" message if the instance is not FAILED.
+   */
+  rewindInstance(instanceId: string, reason?: string): void {
+    const instance = this.instances.get(instanceId);
+    if (!instance) {
+      throw new Error(`Orchestration instance '${instanceId}' not found`);
+    }
+
+    if (instance.status !== pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED) {
+      throw new Error(`Orchestration instance '${instanceId}' is not in a failed state`);
+    }
+
+    this.prepareRewind(instance, reason);
+    this.notifyWaiters(instanceId);
   }
 
   /**
@@ -290,6 +346,23 @@ export class InMemoryOrchestrationBackend {
       this.processAction(instance, action);
     }
 
+    // Bookend a terminal orchestration with an executionCompleted event so the committed
+    // history records the terminal result.
+    //
+    // REQUIRED — do NOT remove this as an "optimization". It is also the precondition that lets
+    // the worker detect a rewind: the executor only short-circuits into buildRewindResult when an
+    // executionCompleted event is present in the committed (old) history
+    // (see OrchestrationExecutor.execute). Without this bookend, a rewind dispatch would silently
+    // fall through to plain replay and never produce a RewindOrchestrationAction.
+    //
+    // Continue-as-new resets status to PENDING and rewind resets it to RUNNING, so neither is
+    // terminal here and neither gets a bookend.
+    if (this.isTerminalStatus(instance.status)) {
+      instance.history.push(
+        pbh.newExecutionCompletedEvent(instance.status, instance.output, instance.failureDetails),
+      );
+    }
+
     // Update completion token for next execution
     instance.completionToken = this.nextCompletionToken++;
 
@@ -337,24 +410,29 @@ export class InMemoryOrchestrationBackend {
     }
 
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        const waiters = this.stateWaiters.get(instanceId);
-        if (waiters) {
-          const index = waiters.findIndex((w) => w.resolve === resolve);
-          if (index >= 0) {
-            waiters.splice(index, 1);
+      // When timeoutMs is 0, no timeout is applied — the waiter will only be
+      // resolved by a matching state change or rejected by reset().
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      if (timeoutMs > 0) {
+        timer = setTimeout(() => {
+          const waiters = this.stateWaiters.get(instanceId);
+          if (waiters) {
+            const index = waiters.findIndex((w) => w.resolve === resolve);
+            if (index >= 0) {
+              waiters.splice(index, 1);
+            }
           }
-        }
-        reject(new Error(`Timeout waiting for orchestration '${instanceId}'`));
-      }, timeoutMs);
+          reject(new Error(`Timeout waiting for orchestration '${instanceId}'`));
+        }, timeoutMs);
+      }
 
       const waiter: StateWaiter = {
         resolve: (result) => {
-          clearTimeout(timer);
+          if (timer !== undefined) clearTimeout(timer);
           resolve(result);
         },
         reject: (error) => {
-          clearTimeout(timer);
+          if (timer !== undefined) clearTimeout(timer);
           reject(error);
         },
         predicate,
@@ -394,6 +472,7 @@ export class InMemoryOrchestrationBackend {
       clearTimeout(timer);
     }
     this.pendingTimers.clear();
+    this.instanceTimers.clear();
   }
 
   /**
@@ -458,6 +537,9 @@ export class InMemoryOrchestrationBackend {
       case pb.OrchestratorAction.OrchestratoractiontypeCase.SENDEVENT:
         this.processSendEventAction(action.getSendevent()!);
         break;
+      case pb.OrchestratorAction.OrchestratoractiontypeCase.REWINDORCHESTRATION:
+        this.processRewindOrchestrationAction(instance, action.getRewindorchestration()!);
+        break;
       default:
         throw new Error(
           `Unknown orchestrator action type '${actionType}' for orchestration '${instance.instanceId}'. ` +
@@ -473,7 +555,10 @@ export class InMemoryOrchestrationBackend {
     const status = completeAction.getOrchestrationstatus();
     instance.status = status;
     instance.output = completeAction.getResult()?.getValue();
-    instance.failureDetails = completeAction.getFailuredetails();
+    // Use an explicit presence check: a protobuf singular message accessor may materialize an
+    // empty message, so only record failureDetails when the action actually carries them. This
+    // keeps the bookended executionCompleted event clean for successful completions.
+    instance.failureDetails = completeAction.hasFailuredetails() ? completeAction.getFailuredetails() : undefined;
 
     if (status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW) {
       // Handle continue-as-new
@@ -488,14 +573,15 @@ export class InMemoryOrchestrationBackend {
       instance.failureDetails = undefined;
       instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_PENDING;
 
-      // Add carryover events
-      instance.pendingEvents = [...carryoverEvents];
-
-      // Add new execution started events
+      // Add new execution started events first, then carryover events.
+      // This matches the real sidecar behavior where OrchestratorStarted and
+      // ExecutionStarted always precede any carryover events (buffered external
+      // events from the previous iteration). OrchestratorStarted must come first
+      // because it sets currentUtcDateTime, and ExecutionStarted must come before
+      // carryover events because it initializes the orchestrator generator.
       const orchestratorStarted = pbh.newOrchestratorStartedEvent(new Date());
       const executionStarted = pbh.newExecutionStartedEvent(instance.name, instance.instanceId, newInput);
-      instance.pendingEvents.push(orchestratorStarted);
-      instance.pendingEvents.push(executionStarted);
+      instance.pendingEvents = [orchestratorStarted, executionStarted, ...carryoverEvents];
 
       this.enqueueOrchestration(instance.instanceId);
     }
@@ -546,6 +632,7 @@ export class InMemoryOrchestrationBackend {
 
     const timerHandle = setTimeout(() => {
       this.pendingTimers.delete(timerHandle);
+      this.removeInstanceTimer(instance.instanceId, timerHandle);
       const currentInstance = this.instances.get(instance.instanceId);
       if (currentInstance && !this.isTerminalStatus(currentInstance.status)) {
         const timerFiredEvent = pbh.newTimerFiredEvent(timerId, fireAt);
@@ -555,6 +642,7 @@ export class InMemoryOrchestrationBackend {
       }
     }, delay);
     this.pendingTimers.add(timerHandle);
+    this.addInstanceTimer(instance.instanceId, timerHandle);
   }
 
   private processCreateSubOrchestrationAction(instance: OrchestrationInstance, action: pb.OrchestratorAction): void {
@@ -573,9 +661,13 @@ export class InMemoryOrchestrationBackend {
       instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING;
     }
 
-    // Create the sub-orchestration
+    // Create the sub-orchestration with parent instance info
     try {
-      this.createInstance(subInstanceId, name, input);
+      this.createInstance(subInstanceId, name, input, undefined, {
+        name: instance.name,
+        instanceId: instance.instanceId,
+        taskScheduledId: taskId,
+      });
 
       // Watch for sub-orchestration completion
       this.watchSubOrchestration(instance.instanceId, subInstanceId, taskId);
@@ -594,8 +686,7 @@ export class InMemoryOrchestrationBackend {
     this.waitForState(
       subInstanceId,
       (inst) => this.isTerminalStatus(inst.status),
-      // No timeout - sub-orchestration will eventually complete, fail, or be terminated
-      // If parent is terminated, we check that when delivering the event
+      0, // No timeout — sub-orchestration will eventually complete, fail, or be terminated
     )
       .then((subInstance) => {
         const parentInstance = this.instances.get(parentInstanceId);
@@ -623,8 +714,99 @@ export class InMemoryOrchestrationBackend {
         this.enqueueOrchestration(parentInstanceId);
       })
       .catch(() => {
-        // Timeout or reset - sub-orchestration watcher cancelled, nothing to do
+        // Reset — sub-orchestration watcher cancelled, nothing to do
       });
+  }
+
+  private prepareRewind(instance: OrchestrationInstance, reason?: string): void {
+    // Reset instance state so it can be re-processed.
+    instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING;
+    instance.output = undefined;
+    instance.failureDetails = undefined;
+    instance.lastUpdatedAt = new Date();
+
+    // Seed the pending events with exactly [orchestratorStarted, executionRewound]. The worker
+    // splits (history, pendingEvents) into (oldEvents, newEvents); buildRewindResult requires
+    // newEvents to be exactly those two events (orchestratorStarted followed by the
+    // executionRewound marker). Unlike the real sidecar, this backend does not auto-prepend an
+    // orchestratorStarted per dispatch, so it is supplied here.
+    instance.pendingEvents = [pbh.newOrchestratorStartedEvent(new Date()), pbh.newExecutionRewoundEvent(reason)];
+
+    // Refresh the completion token and enqueue.
+    instance.completionToken = this.nextCompletionToken++;
+    this.enqueueOrchestration(instance.instanceId);
+  }
+
+  private processRewindOrchestrationAction(
+    instance: OrchestrationInstance,
+    rewindAction: pb.RewindOrchestrationAction,
+  ): void {
+    const newHistory = rewindAction.getNewhistoryList();
+
+    // Replace the history with the SDK-computed clean version.
+    instance.history = newHistory;
+    instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING;
+    instance.output = undefined;
+    instance.failureDetails = undefined;
+    instance.lastUpdatedAt = new Date();
+
+    // Identify sub-orchestrations that were created but did not complete successfully — they
+    // need to be recursively rewound (buildRewindResult keeps subOrchestrationInstanceCreated
+    // and removes subOrchestrationInstanceFailed, so a "created but not completed" sub is a
+    // failed one).
+    const completedSubOrchTaskIds = new Set<number>();
+    const createdSubOrchEvents = new Map<number, pb.HistoryEvent>();
+    for (const event of newHistory) {
+      if (event.hasSuborchestrationinstancecreated()) {
+        createdSubOrchEvents.set(event.getEventid(), event);
+      } else if (event.hasSuborchestrationinstancecompleted()) {
+        completedSubOrchTaskIds.add(event.getSuborchestrationinstancecompleted()!.getTaskscheduledid());
+      }
+    }
+
+    // Extract the rewind reason from the last executionRewound event.
+    let reason: string | undefined;
+    for (let i = newHistory.length - 1; i >= 0; i--) {
+      const event = newHistory[i];
+      if (event.hasExecutionrewound()) {
+        const rewound = event.getExecutionrewound()!;
+        reason = rewound.hasReason() ? rewound.getReason()!.getValue() : undefined;
+        break;
+      }
+    }
+
+    // Recursively rewind failed sub-orchestrations. If the sub was purged (no longer tracked),
+    // re-create it from the subOrchestrationInstanceCreated event so it runs fresh.
+    for (const [taskId, event] of createdSubOrchEvents) {
+      if (completedSubOrchTaskIds.has(taskId)) {
+        continue;
+      }
+      const subInfo = event.getSuborchestrationinstancecreated()!;
+      const subInstanceId = subInfo.getInstanceid();
+      const subInstance = this.instances.get(subInstanceId);
+      if (!subInstance) {
+        // Sub-orchestration was purged — re-create it so it runs fresh. Pass the parent
+        // metadata (mirroring processCreateSubOrchestrationAction) so the re-created sub keeps
+        // its parentInstance link and can route its completion back to this orchestration.
+        this.createInstance(subInstanceId, subInfo.getName(), subInfo.getInput()?.getValue(), undefined, {
+          name: instance.name,
+          instanceId: instance.instanceId,
+          taskScheduledId: taskId,
+        });
+      } else if (subInstance.status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED) {
+        this.prepareRewind(subInstance, reason);
+      }
+      this.watchSubOrchestration(instance.instanceId, subInstanceId, taskId);
+    }
+
+    // Re-enqueue so the orchestration replays with the clean history. The executionRewound
+    // event is already present in the clean history (kept by buildRewindResult), so it must
+    // NOT be re-sent as a pending event — doing so would duplicate it. A lone orchestratorStarted
+    // is enough to make the instance dispatchable; the worker replays normally because
+    // executionCompleted is no longer in the history.
+    instance.pendingEvents = [pbh.newOrchestratorStartedEvent(new Date())];
+    instance.completionToken = this.nextCompletionToken++;
+    this.enqueueOrchestration(instance.instanceId);
   }
 
   private processSendEventAction(sendEvent: pb.SendEventAction): void {
@@ -638,6 +820,36 @@ export class InMemoryOrchestrationBackend {
       } catch {
         // Target instance may not exist - ignore
       }
+    }
+  }
+
+  private addInstanceTimer(instanceId: string, timerHandle: ReturnType<typeof setTimeout>): void {
+    let timers = this.instanceTimers.get(instanceId);
+    if (!timers) {
+      timers = new Set();
+      this.instanceTimers.set(instanceId, timers);
+    }
+    timers.add(timerHandle);
+  }
+
+  private removeInstanceTimer(instanceId: string, timerHandle: ReturnType<typeof setTimeout>): void {
+    const timers = this.instanceTimers.get(instanceId);
+    if (timers) {
+      timers.delete(timerHandle);
+      if (timers.size === 0) {
+        this.instanceTimers.delete(instanceId);
+      }
+    }
+  }
+
+  private cancelInstanceTimers(instanceId: string): void {
+    const timers = this.instanceTimers.get(instanceId);
+    if (timers) {
+      for (const timer of timers) {
+        clearTimeout(timer);
+        this.pendingTimers.delete(timer);
+      }
+      this.instanceTimers.delete(instanceId);
     }
   }
 

@@ -62,8 +62,12 @@ export function compareVersions(sourceVersion: string | undefined, otherVersion:
     return 0;
   }
 
-  // Fallback to lexicographic comparison (case-insensitive)
-  return sourceVersion!.toLowerCase().localeCompare(otherVersion!.toLowerCase());
+  // Fallback to ordinal comparison (case-insensitive).
+  // Use < / > operators instead of localeCompare() for locale-independent
+  // ordering, matching .NET's StringComparer.OrdinalIgnoreCase.
+  const sourceLower = sourceVersion!.toLowerCase();
+  const otherLower = otherVersion!.toLowerCase();
+  return sourceLower < otherLower ? -1 : sourceLower > otherLower ? 1 : 0;
 }
 
 /**

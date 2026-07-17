@@ -5,6 +5,9 @@ import { TaskHubGrpcWorker } from "../src/worker/task-hub-grpc-worker";
 import { TaskEntity } from "../src/entities/task-entity";
 import { ITaskEntity, EntityFactory } from "../src/entities/task-entity";
 import { TaskEntityOperation } from "../src/entities/task-entity-operation";
+import * as pb from "../src/proto/orchestrator_service_pb";
+import * as stubs from "../src/proto/orchestrator_service_grpc_pb";
+import { NoOpLogger } from "../src/types/logger.type";
 
 /**
  * Test entity for worker tests.
@@ -19,6 +22,70 @@ class CounterEntity extends TaskEntity<number> {
     return 0;
   }
 }
+
+const COMPLETION_TOKEN = "test-completion-token";
+
+/**
+ * Creates a mock gRPC stub that captures the EntityBatchResult passed to
+ * completeEntityTask.
+ */
+function createMockStub(): {
+  stub: stubs.TaskHubSidecarServiceClient;
+  capturedResult: pb.EntityBatchResult | null;
+} {
+  let capturedResult: pb.EntityBatchResult | null = null;
+
+  const stub = {
+    completeEntityTask: (
+      result: pb.EntityBatchResult,
+      metadata: any,
+      callback: (err: any, res: any) => void,
+    ) => {
+      capturedResult = result;
+      callback(null, {});
+    },
+  } as unknown as stubs.TaskHubSidecarServiceClient;
+
+  return {
+    stub,
+    get capturedResult() {
+      return capturedResult;
+    },
+  };
+}
+
+/**
+ * Creates a minimal EntityBatchRequest for testing.
+ */
+function createEntityBatchRequest(entityName: string, entityKey: string): pb.EntityBatchRequest {
+  const req = new pb.EntityBatchRequest();
+  req.setInstanceid(`@${entityName}@${entityKey}`);
+
+  const opRequest = new pb.OperationRequest();
+  opRequest.setOperation("increment");
+  opRequest.setRequestid("req-1");
+  req.setOperationsList([opRequest]);
+
+  return req;
+}
+
+/**
+ * Creates a minimal EntityRequest (V2) for testing.
+ */
+function createEntityRequestV2(entityName: string, entityKey: string): pb.EntityRequest {
+  const req = new pb.EntityRequest();
+  req.setInstanceid(`@${entityName}@${entityKey}`);
+
+  const historyEvent = new pb.HistoryEvent();
+  const signaled = new pb.EntityOperationSignaledEvent();
+  signaled.setOperation("increment");
+  signaled.setRequestid("req-1");
+  historyEvent.setEntityoperationsignaled(signaled);
+  req.setOperationrequestsList([historyEvent]);
+
+  return req;
+}
+
 
 describe("TaskHubGrpcWorker", () => {
   describe("Entity Registration", () => {
@@ -142,6 +209,257 @@ describe("TaskHubGrpcWorker", () => {
 
       // Assert - no exceptions thrown, registration successful
       expect(true).toBe(true);
+    });
+  });
+
+  describe("Entity Execution Tracking", () => {
+    it("should track V1 entity execution in _pendingWorkItems", async () => {
+      // Arrange
+      const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+      const factory: EntityFactory = () => new CounterEntity();
+      worker.addNamedEntity("counter", factory);
+
+      const mockStub = createMockStub();
+      const req = createEntityBatchRequest("counter", "key1");
+
+      // Act - call _executeEntity via the wrapper (which tracks the work item)
+      (worker as any)._executeEntity(req, COMPLETION_TOKEN, mockStub.stub);
+
+      // Assert - the promise should be tracked while executing
+      const pendingWorkItems: Set<Promise<void>> = (worker as any)._pendingWorkItems;
+      expect(pendingWorkItems.size).toBe(1);
+
+      // Wait for completion
+      await Promise.all(pendingWorkItems);
+
+      // After completion, it should be removed
+      expect(pendingWorkItems.size).toBe(0);
+    });
+
+    it("should remove V1 entity execution from _pendingWorkItems after completion", async () => {
+      // Arrange
+      const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+      const factory: EntityFactory = () => new CounterEntity();
+      worker.addNamedEntity("counter", factory);
+
+      const mockStub = createMockStub();
+      const req = createEntityBatchRequest("counter", "key1");
+
+      // Act
+      (worker as any)._executeEntity(req, COMPLETION_TOKEN, mockStub.stub);
+
+      const pendingWorkItems: Set<Promise<void>> = (worker as any)._pendingWorkItems;
+
+      // Wait for completion
+      await Promise.all(pendingWorkItems);
+
+      // Assert - should have been cleaned up
+      expect(pendingWorkItems.size).toBe(0);
+      expect(mockStub.capturedResult).not.toBeNull();
+      expect(mockStub.capturedResult!.getCompletiontoken()).toBe(COMPLETION_TOKEN);
+    });
+
+    it("should track V2 entity execution in _pendingWorkItems", async () => {
+      // Arrange
+      const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+      const factory: EntityFactory = () => new CounterEntity();
+      worker.addNamedEntity("counter", factory);
+
+      const mockStub = createMockStub();
+      const req = createEntityRequestV2("counter", "key1");
+
+      // Act - call _executeEntityV2 via the wrapper (which tracks the work item)
+      (worker as any)._executeEntityV2(req, COMPLETION_TOKEN, mockStub.stub);
+
+      // Assert - the promise should be tracked while executing
+      const pendingWorkItems: Set<Promise<void>> = (worker as any)._pendingWorkItems;
+      expect(pendingWorkItems.size).toBe(1);
+
+      // Wait for completion
+      await Promise.all(pendingWorkItems);
+
+      // After completion, it should be removed
+      expect(pendingWorkItems.size).toBe(0);
+    });
+
+    it("should remove V1 entity execution from _pendingWorkItems even when entity is not found", async () => {
+      // Arrange
+      const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+      // Do NOT register any entity — the entity lookup will fail
+
+      const mockStub = createMockStub();
+      const req = createEntityBatchRequest("nonexistent", "key1");
+
+      // Act
+      (worker as any)._executeEntity(req, COMPLETION_TOKEN, mockStub.stub);
+
+      const pendingWorkItems: Set<Promise<void>> = (worker as any)._pendingWorkItems;
+      expect(pendingWorkItems.size).toBe(1);
+
+      // Wait for completion
+      await Promise.all(pendingWorkItems);
+
+      // Assert - should be cleaned up even on error path
+      expect(pendingWorkItems.size).toBe(0);
+      expect(mockStub.capturedResult).not.toBeNull();
+    });
+
+    it("should track multiple concurrent entity executions in _pendingWorkItems", async () => {
+      // Arrange
+      const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+      const factory: EntityFactory = () => new CounterEntity();
+      worker.addNamedEntity("counter", factory);
+
+      const mockStub1 = createMockStub();
+      const mockStub2 = createMockStub();
+      const req1 = createEntityBatchRequest("counter", "key1");
+      const req2 = createEntityBatchRequest("counter", "key2");
+
+      // Act - fire two concurrent entity executions
+      (worker as any)._executeEntity(req1, "token-1", mockStub1.stub);
+      (worker as any)._executeEntity(req2, "token-2", mockStub2.stub);
+
+      // Assert - both should be tracked
+      const pendingWorkItems: Set<Promise<void>> = (worker as any)._pendingWorkItems;
+      expect(pendingWorkItems.size).toBe(2);
+
+      // Wait for all to complete
+      await Promise.all(pendingWorkItems);
+
+      // Both should be cleaned up
+      expect(pendingWorkItems.size).toBe(0);
+    });
+  });
+
+  describe("V2 Entity operationInfos handling", () => {
+    it("should include operationInfos matching result count on successful V2 execution", async () => {
+      // Arrange
+      const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+      const factory: EntityFactory = () => new CounterEntity();
+      worker.addNamedEntity("counter", factory);
+
+      const mockStub = createMockStub();
+      const req = createEntityRequestV2("counter", "key1");
+
+      // Act
+      (worker as any)._executeEntityV2(req, COMPLETION_TOKEN, mockStub.stub);
+      const pendingWorkItems: Set<Promise<void>> = (worker as any)._pendingWorkItems;
+      await Promise.all(pendingWorkItems);
+
+      // Assert - one result per operation, so one operationInfo should be included
+      const result = mockStub.capturedResult!;
+      expect(result.getResultsList().length).toBe(1);
+      expect(result.getOperationinfosList().length).toBe(1);
+      expect(result.getOperationinfosList()[0].getRequestid()).toBe("req-1");
+    });
+
+    it("should include zero operationInfos when framework error produces zero results", async () => {
+      // Arrange - register an entity whose factory throws a framework-level error
+      const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+      const throwingFactory: EntityFactory = () => {
+        throw new Error("factory explosion");
+      };
+      worker.addNamedEntity("broken", throwingFactory);
+
+      const mockStub = createMockStub();
+      const req = createEntityRequestV2("broken", "key1");
+
+      // Act
+      (worker as any)._executeEntityV2(req, COMPLETION_TOKEN, mockStub.stub);
+      const pendingWorkItems: Set<Promise<void>> = (worker as any)._pendingWorkItems;
+      await Promise.all(pendingWorkItems);
+
+      // Assert - framework error: zero results AND zero operationInfos
+      const result = mockStub.capturedResult!;
+      expect(result.getResultsList().length).toBe(0);
+      expect(result.getOperationinfosList().length).toBe(0);
+      expect(result.getFailuredetails()).toBeDefined();
+      expect(result.getFailuredetails()!.getErrormessage()).toBe("factory explosion");
+    });
+
+    it("should include operationInfos for all results when entity is not found via V2", async () => {
+      // Arrange - no entity registered for the name in the request
+      const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+
+      const mockStub = createMockStub();
+      const req = createEntityRequestV2("nonexistent", "key1");
+
+      // Act
+      (worker as any)._executeEntityV2(req, COMPLETION_TOKEN, mockStub.stub);
+      const pendingWorkItems: Set<Promise<void>> = (worker as any)._pendingWorkItems;
+      await Promise.all(pendingWorkItems);
+
+      // Assert - not-found path creates one error result per operation, so operationInfos should match
+      const result = mockStub.capturedResult!;
+      expect(result.getResultsList().length).toBe(1);
+      expect(result.getOperationinfosList().length).toBe(1);
+    });
+
+    it("should include operationInfos for multiple operations on successful V2 execution", async () => {
+      // Arrange
+      const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+      const factory: EntityFactory = () => new CounterEntity();
+      worker.addNamedEntity("counter", factory);
+
+      const mockStub = createMockStub();
+
+      // Create a V2 request with multiple operations
+      const req = new pb.EntityRequest();
+      req.setInstanceid("@counter@key1");
+
+      const event1 = new pb.HistoryEvent();
+      const signaled1 = new pb.EntityOperationSignaledEvent();
+      signaled1.setOperation("increment");
+      signaled1.setRequestid("req-1");
+      event1.setEntityoperationsignaled(signaled1);
+
+      const event2 = new pb.HistoryEvent();
+      const signaled2 = new pb.EntityOperationSignaledEvent();
+      signaled2.setOperation("increment");
+      signaled2.setRequestid("req-2");
+      event2.setEntityoperationsignaled(signaled2);
+
+      req.setOperationrequestsList([event1, event2]);
+
+      // Act
+      (worker as any)._executeEntityV2(req, COMPLETION_TOKEN, mockStub.stub);
+      const pendingWorkItems: Set<Promise<void>> = (worker as any)._pendingWorkItems;
+      await Promise.all(pendingWorkItems);
+
+      // Assert - two results, two operationInfos
+      const result = mockStub.capturedResult!;
+      expect(result.getResultsList().length).toBe(2);
+      expect(result.getOperationinfosList().length).toBe(2);
+      expect(result.getOperationinfosList()[0].getRequestid()).toBe("req-1");
+      expect(result.getOperationinfosList()[1].getRequestid()).toBe("req-2");
+    });
+
+    it("should include operationInfos matching result count when entity run() throws on V2 execution", async () => {
+      const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+
+      class ThrowingEntity implements ITaskEntity {
+        run(): never {
+          throw new Error("run explosion");
+        }
+      }
+      const factory: EntityFactory = () => new ThrowingEntity();
+      worker.addNamedEntity("thrower", factory);
+
+      const mockStub = createMockStub();
+      const req = createEntityRequestV2("thrower", "key1");
+
+      // Act
+      (worker as any)._executeEntityV2(req, COMPLETION_TOKEN, mockStub.stub);
+      const pendingWorkItems: Set<Promise<void>> = (worker as any)._pendingWorkItems;
+      await Promise.all(pendingWorkItems);
+
+      // Assert - the entity shim catches per-operation errors and creates per-operation
+      // failure results, so this should NOT be a framework-level error.
+      // The entity executor handles operation-level errors internally,
+      // so we expect one result (failure) and one operationInfo.
+      const result = mockStub.capturedResult!;
+      expect(result.getResultsList().length).toBe(1);
+      expect(result.getOperationinfosList().length).toBe(1);
     });
   });
 });

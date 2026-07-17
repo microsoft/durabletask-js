@@ -192,4 +192,93 @@ describe("Registry", () => {
       expect(registry.getEntity("myEntity")).toBe(entityFactory);
     });
   });
+
+  describe("_getFunctionName", () => {
+    let registry: Registry;
+
+    beforeEach(() => {
+      registry = new Registry();
+    });
+
+    it("should return the name of a named function", () => {
+      function myFunction() {}
+      expect(registry._getFunctionName(myFunction)).toBe("myFunction");
+    });
+
+    it("should return the name of a named generator function", () => {
+      function* myGenerator() {}
+      expect(registry._getFunctionName(myGenerator)).toBe("myGenerator");
+    });
+
+    it("should return the name of a named async generator function", () => {
+      async function* myAsyncGenerator() {
+        yield 1;
+      }
+      expect(registry._getFunctionName(myAsyncGenerator)).toBe("myAsyncGenerator");
+    });
+
+    it("should return empty string for anonymous generator function (not '*')", () => {
+      // This is the key bug fix: previously returned "*" for function*() {}
+      // which would silently register under the name "*"
+      const result = registry._getFunctionName(Function("return function*() {}")());
+      expect(result).toBe("");
+    });
+
+    it("should return empty string for anonymous async generator function (not '*')", () => {
+      // Previously returned "*" for async function*() {}
+      const result = registry._getFunctionName(Function("return async function*() {}")());
+      expect(result).toBe("");
+    });
+
+    it("should return empty string for anonymous arrow function (not garbage)", () => {
+      // Arrow functions don't contain "function" keyword, should return ""
+      // Previously could return garbage from string parsing
+      const result = registry._getFunctionName(Function("return (x) => x")());
+      expect(result).toBe("");
+    });
+
+    it("should return empty string for anonymous async arrow function (not garbage)", () => {
+      // Previously returned garbage like "x) =>" for async arrow functions
+      const result = registry._getFunctionName(Function("return async (x) => x")());
+      expect(result).toBe("");
+    });
+
+    it("should return empty string for arrow function with nested named function", () => {
+      const result = registry._getFunctionName(Function("return () => { function inner() {} }")());
+      expect(result).toBe("");
+    });
+
+    it("should return empty string for anonymous function expression", () => {
+      const result = registry._getFunctionName(Function("return function() {}")());
+      expect(result).toBe("");
+    });
+
+    it("should extract name from named function expression", () => {
+      const result = registry._getFunctionName(Function("return function namedExpr() {}")());
+      expect(result).toBe("namedExpr");
+    });
+
+    it("should extract name from named generator expression", () => {
+      const result = registry._getFunctionName(Function("return function* namedGen() {}")());
+      expect(result).toBe("namedGen");
+    });
+
+    it("should use fn.name when available (variable-assigned functions)", () => {
+      // When assigned to a variable, JS engines set fn.name automatically
+      const myOrchestrator = function* () {};
+      expect(registry._getFunctionName(myOrchestrator)).toBe("myOrchestrator");
+    });
+
+    it("addOrchestrator should throw for anonymous generator function", () => {
+      // With the fix, anonymous generators return "" which triggers the name validation
+      const anonGen = Function("return function*() {}")();
+      expect(() => registry.addOrchestrator(anonGen)).toThrow("A non-empty orchestrator name is required.");
+    });
+
+    it("addActivity should throw for anonymous arrow function", () => {
+      // With the fix, arrow functions return "" which triggers the name validation
+      const anonArrow = Function("return (x) => x")();
+      expect(() => registry.addActivity(anonArrow)).toThrow("A non-empty activity name is required.");
+    });
+  });
 });
