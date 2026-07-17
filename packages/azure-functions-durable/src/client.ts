@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 import { HttpRequest, HttpResponse } from "@azure/functions";
+import { status as grpcStatus } from "@grpc/grpc-js";
 import {
   EntityInstanceId,
   OrchestrationQuery,
@@ -14,6 +15,7 @@ import { EntityStateResponse } from "./entity-state-response";
 import { createAzureFunctionsMetadataGenerator } from "./metadata";
 import {
   DurableOrchestrationStatus,
+  OrchestrationRuntimeStatus,
   fromOrchestrationRuntimeStatus,
   toDurableOrchestrationStatus,
 } from "./orchestration-status";
@@ -370,7 +372,11 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    * @param eventData - Optional JSON-serializable event payload.
    */
   async raiseEvent(instanceId: string, eventName: string, eventData?: unknown): Promise<void> {
-    await this.raiseOrchestrationEvent(instanceId, eventName, eventData ?? null);
+    try {
+      await this.raiseOrchestrationEvent(instanceId, eventName, eventData ?? null);
+    } catch (error) {
+      await this._mapControlPlaneError(error, instanceId);
+    }
   }
 
   /**
@@ -381,7 +387,11 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    * @param reason - Optional reason recorded as the terminated instance's output.
    */
   async terminate(instanceId: string, reason?: unknown): Promise<void> {
-    await this.terminateOrchestration(instanceId, reason ?? null);
+    try {
+      await this.terminateOrchestration(instanceId, reason ?? null);
+    } catch (error) {
+      await this._mapControlPlaneError(error, instanceId, "terminate");
+    }
   }
 
   /**
@@ -393,7 +403,11 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    *   not record a suspend reason).
    */
   async suspend(instanceId: string, _reason?: string): Promise<void> {
-    await this.suspendOrchestration(instanceId);
+    try {
+      await this.suspendOrchestration(instanceId);
+    } catch (error) {
+      await this._mapControlPlaneError(error, instanceId, "suspend");
+    }
   }
 
   /**
@@ -404,7 +418,52 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    * @param _reason - Accepted for classic v3 signature compatibility; ignored.
    */
   async resume(instanceId: string, _reason?: string): Promise<void> {
-    await this.resumeOrchestration(instanceId);
+    try {
+      await this.resumeOrchestration(instanceId);
+    } catch (error) {
+      await this._mapControlPlaneError(error, instanceId, "resume");
+    }
+  }
+
+  /**
+   * @hidden
+   * Translates raw gRPC control-plane errors (from terminate/suspend/resume/raiseEvent) into the
+   * classic Durable Functions v3 error surface.
+   *
+   * The consolidated gRPC path collapses these failures into two opaque codes:
+   * - `NOT_FOUND` (5) — the target instance does not exist. v3 (the extension HTTP path) returned a
+   *   404 that `DurableClient` surfaced as `No instance with ID '<id>' found.`, so we rethrow that.
+   * - `UNKNOWN` (2) — the extension's gRPC endpoint maps a wrong-state `InvalidOperationException`
+   *   (e.g. suspending an already-suspended instance) to an opaque `UNKNOWN` carrying no client-side
+   *   detail. For a NON-terminal state we look up the runtime status and rethrow a friendly
+   *   `Cannot <op> orchestration instance in the <State> state.` matching the host-side wording. For
+   *   a TERMINAL state (Completed/Failed/Terminated/Canceled) the reason cannot be recovered from the
+   *   opaque error and the v4 status policy is still being decided (tracked separately), so the
+   *   original error is rethrown unchanged.
+   *
+   * Any other error is rethrown as-is.
+   */
+  private async _mapControlPlaneError(
+    error: unknown,
+    instanceId: string,
+    operationVerb?: "suspend" | "resume" | "terminate",
+  ): Promise<never> {
+    const code = typeof error === "object" && error !== null ? (error as { code?: number }).code : undefined;
+    if (code === grpcStatus.NOT_FOUND) {
+      throw new Error(`No instance with ID '${instanceId}' found.`);
+    }
+    if (code === grpcStatus.UNKNOWN && operationVerb !== undefined) {
+      let runtimeStatus: OrchestrationRuntimeStatus | undefined;
+      try {
+        runtimeStatus = (await this.getStatus(instanceId)).runtimeStatus;
+      } catch {
+        runtimeStatus = undefined;
+      }
+      if (runtimeStatus !== undefined && !isTerminalRuntimeStatus(runtimeStatus)) {
+        throw new Error(`Cannot ${operationVerb} orchestration instance in the ${runtimeStatus} state.`);
+      }
+    }
+    throw error;
   }
 
   /**
@@ -456,6 +515,16 @@ export function getGrpcHostAddress(rpcBaseUrl: string): string {
   } catch (e) {
     throw new Error(`Invalid Durable Functions rpcBaseUrl: ${rpcBaseUrl}`, { cause: e });
   }
+}
+
+/** @hidden A terminal runtime status can no longer transition, so control-plane ops on it are no-ops. */
+function isTerminalRuntimeStatus(runtimeStatus: OrchestrationRuntimeStatus): boolean {
+  return (
+    runtimeStatus === OrchestrationRuntimeStatus.Completed ||
+    runtimeStatus === OrchestrationRuntimeStatus.Failed ||
+    runtimeStatus === OrchestrationRuntimeStatus.Terminated ||
+    runtimeStatus === OrchestrationRuntimeStatus.Canceled
+  );
 }
 
 function getInstanceStatusUrl(request: HttpRequest | undefined, instanceId: string, baseUrl: string): string {

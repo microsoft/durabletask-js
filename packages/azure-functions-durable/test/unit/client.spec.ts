@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 import { HttpRequest } from "@azure/functions";
+import { status as grpcStatus } from "@grpc/grpc-js";
 import {
   OrchestrationState,
   OrchestrationStatus,
@@ -47,6 +48,7 @@ describe("DurableFunctionsClient", () => {
       expect(typeof client.restart).toBe("function");
       expect(typeof client.purgeInstanceHistoryBy).toBe("function");
       expect(Object.getOwnPropertyNames(DurableFunctionsClient.prototype).sort()).toEqual([
+        "_mapControlPlaneError",
         "collectStatuses",
         "constructor",
         "createCheckStatusResponse",
@@ -378,6 +380,95 @@ describe("DurableFunctionsClient", () => {
         schedule.mockClear();
         await client.startNew("MyOrch", { input: "x" });
         expect(schedule).toHaveBeenCalledWith("MyOrch", "x", undefined);
+      } finally {
+        await client.stop();
+      }
+    });
+  });
+
+  describe("control-plane error mapping (v3 parity)", () => {
+    const grpcError = (code: number, message: string): Error => Object.assign(new Error(message), { code });
+    const makeStateWith = (runtimeStatus: OrchestrationStatus) =>
+      new OrchestrationState(
+        "inst-1",
+        "MyOrch",
+        runtimeStatus,
+        new Date("2026-01-01T00:00:00.000Z"),
+        new Date("2026-01-01T00:00:05.000Z"),
+      );
+
+    it("terminate maps gRPC NOT_FOUND to the v3 not-found message", async () => {
+      const client = new DurableFunctionsClient(CLIENT_CONFIG);
+      try {
+        jest
+          .spyOn(client, "terminateOrchestration")
+          .mockRejectedValue(
+            grpcError(grpcStatus.NOT_FOUND, "5 NOT_FOUND: No instance with ID 'inst-1' was found. (Parameter 'instanceId')"),
+          );
+        await expect(client.terminate("inst-1")).rejects.toThrow("No instance with ID 'inst-1' found.");
+      } finally {
+        await client.stop();
+      }
+    });
+
+    it("raiseEvent maps gRPC NOT_FOUND to the v3 not-found message", async () => {
+      const client = new DurableFunctionsClient(CLIENT_CONFIG);
+      try {
+        jest
+          .spyOn(client, "raiseOrchestrationEvent")
+          .mockRejectedValue(grpcError(grpcStatus.NOT_FOUND, "5 NOT_FOUND: No instance with ID 'inst-1' was found."));
+        await expect(client.raiseEvent("inst-1", "evt")).rejects.toThrow("No instance with ID 'inst-1' found.");
+      } finally {
+        await client.stop();
+      }
+    });
+
+    it("suspend maps an opaque UNKNOWN on a non-terminal instance to a friendly state message", async () => {
+      const client = new DurableFunctionsClient(CLIENT_CONFIG);
+      try {
+        jest
+          .spyOn(client, "suspendOrchestration")
+          .mockRejectedValue(grpcError(grpcStatus.UNKNOWN, "2 UNKNOWN: Exception was thrown by handler"));
+        jest.spyOn(client, "getOrchestrationState").mockResolvedValue(makeStateWith(OrchestrationStatus.SUSPENDED));
+        await expect(client.suspend("inst-1")).rejects.toThrow(
+          "Cannot suspend orchestration instance in the Suspended state.",
+        );
+      } finally {
+        await client.stop();
+      }
+    });
+
+    it("resume maps an opaque UNKNOWN on a running instance to a friendly state message", async () => {
+      const client = new DurableFunctionsClient(CLIENT_CONFIG);
+      try {
+        jest
+          .spyOn(client, "resumeOrchestration")
+          .mockRejectedValue(grpcError(grpcStatus.UNKNOWN, "2 UNKNOWN: Exception was thrown by handler"));
+        jest.spyOn(client, "getOrchestrationState").mockResolvedValue(makeStateWith(OrchestrationStatus.RUNNING));
+        await expect(client.resume("inst-1")).rejects.toThrow("Cannot resume orchestration instance in the Running state.");
+      } finally {
+        await client.stop();
+      }
+    });
+
+    it("rethrows an opaque UNKNOWN unchanged on a terminal instance (status policy deferred, #315)", async () => {
+      const client = new DurableFunctionsClient(CLIENT_CONFIG);
+      try {
+        const original = grpcError(grpcStatus.UNKNOWN, "2 UNKNOWN: Exception was thrown by handler");
+        jest.spyOn(client, "terminateOrchestration").mockRejectedValue(original);
+        jest.spyOn(client, "getOrchestrationState").mockResolvedValue(makeStateWith(OrchestrationStatus.COMPLETED));
+        await expect(client.terminate("inst-1")).rejects.toBe(original);
+      } finally {
+        await client.stop();
+      }
+    });
+
+    it("rethrows non-gRPC control-plane errors unchanged", async () => {
+      const client = new DurableFunctionsClient(CLIENT_CONFIG);
+      try {
+        const original = new Error("boom");
+        jest.spyOn(client, "suspendOrchestration").mockRejectedValue(original);
+        await expect(client.suspend("inst-1")).rejects.toBe(original);
       } finally {
         await client.stop();
       }
