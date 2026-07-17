@@ -4,22 +4,29 @@ name: 🧪 Functions Host E2E Tests
 # test/e2e-functions/test-app (backed by Azurite / AzureStorage) and drives the
 # app over HTTP, porting the extension repo's `BasicNode` app + xUnit tests.
 #
-# The test-app depends on the PUBLISHED `durable-functions` + `@azure/functions`
-# packages, so it installs and runs without any in-repo package build. The suite
-# self-gates: each spec SKIPS cleanly when the Azure Functions Core Tools (`func`)
-# or the Azurite storage emulator are unavailable, and RUNS when both are present.
-# In CI below we install and start both, so the suite runs for real; the self-skip
-# is the safety net that keeps the job green if a prerequisite fails to come up.
+# The test-app consumes the IN-REPO `durable-functions` (compat) package and core
+# `@microsoft/durabletask-js` via `file:` links, so those packages must be BUILT
+# before the test-app install (see the build step below). The suite self-gates:
+# each spec SKIPS cleanly when the Azure Functions Core Tools (`func`) or the
+# Azurite storage emulator are unavailable, and RUNS when both are present. In CI
+# below we install and start both, so the suite runs for real; the self-skip is
+# the safety net that keeps the job green if a prerequisite fails to come up.
 #
-# Triggering: this suite is run ad hoc (manual dispatch) for now while it beds in,
-# so it does not gate day-to-day PRs. Start it from the Actions tab via "Run
-# workflow" (workflow_dispatch). To re-enable automatic runs on pull requests
-# later, add a `pull_request` trigger scoped to `test/e2e-functions/**` and this
-# workflow file. NOTE: workflow_dispatch only appears in the Actions UI once this
-# file exists on the repository's default branch.
+# Triggering: this suite runs automatically on pull requests that touch the
+# Functions surface (`test/e2e-functions/**`, `packages/azure-functions-durable/**`,
+# or this workflow file), and can also be started ad hoc from the Actions tab via
+# "Run workflow" (workflow_dispatch). It is intentionally scoped to the Functions
+# surface and does NOT gate core-only PRs, which have their own suites. NOTE:
+# workflow_dispatch only appears in the Actions UI once this file exists on the
+# repository's default branch.
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "test/e2e-functions/**"
+      - "packages/azure-functions-durable/**"
+      - ".github/workflows/functions-e2e-tests.yaml"
 
 permissions:
   contents: read
@@ -43,11 +50,17 @@ jobs:
           node-version: ${{ matrix.node-version }}
           registry-url: "https://registry.npmjs.org"
 
-      # Root install provides jest + ts-jest used to run the spec files. The specs
-      # do not depend on the core durabletask-js packages, so no workspace build is
-      # required here.
+      # Root install provides jest + ts-jest used to run the spec files, and lets
+      # the workspace build below resolve the in-repo packages the test-app links
+      # via `file:` refs.
       - name: ⚙️ Install dependencies
         run: npm ci
+
+      # Build the in-repo compat package (`durable-functions`); its build script
+      # runs `build:core` first, so this also builds `packages/durabletask-js` into
+      # dist/. Both must exist before the test-app's `file:`-linked install below.
+      - name: 🏗️ Build in-repo durable-functions (+ core) for file: linking
+        run: npm run build -w durable-functions
 
       - name: 🔧 Install Azurite and Azure Functions Core Tools
         run: npm install -g azurite azure-functions-core-tools@4
@@ -66,8 +79,9 @@ jobs:
             sleep 1
           done
 
-      # Installs the PUBLISHED durable-functions / @azure/functions packages and
-      # compiles the ported BasicNode app to dist/ (consumed by `func start`).
+      # Installs the in-repo `durable-functions` (+ core `@microsoft/durabletask-js`)
+      # packages via the test-app's `file:` refs and compiles the ported BasicNode
+      # app to dist/ (consumed by `func start`).
       - name: 📦 Install + build test-app
         working-directory: test/e2e-functions/test-app
         run: |
