@@ -39,8 +39,8 @@ so it is safe to leave wired into CI and to run locally without setup:
   **not** part of the default `npm test` / workspaces test run, nor of
   `test:e2e:internal` (which is scoped to `tests/e2e`).
 - **CI** — `.github/workflows/functions-e2e-tests.yaml` installs `func` + Azurite,
-  installs/builds the test-app, and runs the suite on PRs that touch
-  `test/e2e-functions/**`. The self-skip is the safety net if a prerequisite fails
+  installs/builds the test-app, and runs the suite on manual dispatch
+  (`workflow_dispatch`). The self-skip is the safety net if a prerequisite fails
   to come up.
 
 ## What it covers
