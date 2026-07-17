@@ -41,7 +41,7 @@ describe("OrchestrationState", () => {
 
       try {
         state.raiseIfFailed();
-        fail("Expected raiseIfFailed to throw");
+        throw new Error("Expected raiseIfFailed to throw");
       } catch (e: unknown) {
         expect(e).toBeInstanceOf(OrchestrationFailedError);
         const error = e as OrchestrationFailedError;
@@ -62,7 +62,7 @@ describe("OrchestrationState", () => {
 
       try {
         state.raiseIfFailed();
-        fail("Expected raiseIfFailed to throw");
+        throw new Error("Expected raiseIfFailed to throw");
       } catch (e: unknown) {
         expect(e).toBeInstanceOf(OrchestrationFailedError);
         const error = e as OrchestrationFailedError;
@@ -108,7 +108,7 @@ describe("OrchestrationState", () => {
 
       try {
         state.raiseIfFailed();
-        fail("Expected raiseIfFailed to throw");
+        throw new Error("Expected raiseIfFailed to throw");
       } catch (e: unknown) {
         const error = e as OrchestrationFailedError;
         // Should use the real failure details, not synthetic ones

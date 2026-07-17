@@ -59,7 +59,7 @@ export class OrchestrationState {
         "UnknownError",
       );
       throw new OrchestrationFailedError(
-        `Orchestration '${this.instanceId}' failed`,
+        `Orchestration '${this.instanceId}' failed: ${syntheticDetails.message}`,
         syntheticDetails,
       );
     }
