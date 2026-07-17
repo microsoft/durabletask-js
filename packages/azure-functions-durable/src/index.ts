@@ -83,10 +83,10 @@ export type {
 /** v3-compat: client returned by {@link getClient}. */
 export type DurableClient = DurableFunctionsClient;
 /**
- * v3-compat: entity context. `TState` is accepted for source compatibility with the legacy generic
- * API; the underlying `df.getState<T>()`/`getInput<T>()` are per-call generic, so the type param is
- * intentionally ignored here.
+ * v3-compat: entity context. When typed `EntityContext<TState>`, a bare `context.df.getState()`
+ * returns `TState | undefined` (matching the v3 generic entity context). The per-call generics on
+ * `df.getState<T>()`/`df.getInput<T>()` still allow overriding the type at the call site.
  */
-export type EntityContext<_TState = unknown> = ClassicEntityContext;
-/** v3-compat: entity handler. `TState` accepted for source compatibility (see {@link EntityContext}). */
-export type EntityHandler<_TState = unknown> = ClassicEntity;
+export type EntityContext<TState = unknown> = ClassicEntityContext<TState>;
+/** v3-compat: entity handler. `TState` threads through to `context.df` (see {@link EntityContext}). */
+export type EntityHandler<TState = unknown> = ClassicEntity<TState>;

@@ -23,7 +23,9 @@ Initial gRPC-consolidated Azure Functions Durable provider, built on `@microsoft
   `df` plus replay-safe log helpers (no `invocationId` / `functionName` / `extraInputs`), and the
   classic entity context exposes only `{ df }`. Rationale: reading `InvocationContext` members such as
   `invocationId` / `extraInputs` inside an orchestrator is replay-nondeterministic and was never
-  recommended, so they are intentionally not surfaced.
+  recommended, so they are intentionally not surfaced. The classic entity context stays generic over
+  its state type (`EntityContext<TState>`), so a bare `context.df.getState()` returns `TState | undefined`
+  as in v3; the per-call `getState<T>()` generic still overrides it.
 - Task result shape follows the core SDK: use `isComplete` / `isFailed` / `getResult()` (v3 used
   `isCompleted` / `isFaulted` / `result`). `context.df.createTimer(...)` returns a cancelable
   `TimerTask`, so the timeout-race pattern (`Task.any` then `timer.cancel()`) keeps working.

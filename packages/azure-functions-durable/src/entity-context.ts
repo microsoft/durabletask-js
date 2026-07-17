@@ -12,7 +12,7 @@ import { EntityFactory, EntityInstanceId, ITaskEntity, TaskEntityOperation } fro
  * written against the legacy `durable-functions` `context.df.*` API run unchanged on the
  * gRPC/durabletask engine.
  */
-export class DurableEntityContext {
+export class DurableEntityContext<TState = unknown> {
   private _result: unknown;
   private _resultSet = false;
   private readonly _isNewlyConstructed: boolean;
@@ -59,9 +59,13 @@ export class DurableEntityContext {
   /**
    * Gets the current entity state.
    *
+   * @remarks
+   * When the context is typed `EntityContext<TState>` (v3 style), a bare `getState()` returns
+   * `TState | undefined`. The per-call type parameter can still override this (e.g. `getState<X>()`).
+   *
    * @param initializer - Optional zero-argument callable providing the initial state when none exists.
    */
-  getState<T = unknown>(initializer?: () => T): T | undefined {
+  getState<T = TState>(initializer?: () => T): T | undefined {
     const defaultValue = typeof initializer === "function" ? initializer() : undefined;
     return this._operation.state.getState<T>(defaultValue);
   }
@@ -106,15 +110,17 @@ export class DurableEntityContext {
  * Breaking change from `durable-functions` v3, where the entity context extended `InvocationContext`.
  * This context exposes only `df`; entity code that read `InvocationContext` members must be updated.
  */
-export interface ClassicEntityContext {
-  df: DurableEntityContext;
+export interface ClassicEntityContext<TState = unknown> {
+  df: DurableEntityContext<TState>;
 }
 
 /**
  * A classic Durable Functions (v3) entity: a single-argument function that reads and mutates state
  * through `context.df.*`.
  */
-export type ClassicEntity = (context: ClassicEntityContext) => unknown | Promise<unknown>;
+export type ClassicEntity<TState = unknown> = (
+  context: ClassicEntityContext<TState>,
+) => unknown | Promise<unknown>;
 
 /**
  * Adapts an entity handler for registration on the core worker.
