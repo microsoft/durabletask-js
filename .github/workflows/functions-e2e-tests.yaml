@@ -1,0 +1,79 @@
+name: 🧪 Functions Host E2E Tests
+
+# Gated Azure Functions host E2E suite. It launches a real `func start` host for
+# test/e2e-functions/test-app (backed by Azurite / AzureStorage) and drives the
+# app over HTTP, porting the extension repo's `BasicNode` app + xUnit tests.
+#
+# The test-app depends on the PUBLISHED `durable-functions` + `@azure/functions`
+# packages, so it installs and runs without any in-repo package build. The suite
+# self-gates: each spec SKIPS cleanly when the Azure Functions Core Tools (`func`)
+# or the Azurite storage emulator are unavailable, and RUNS when both are present.
+# In CI below we install and start both, so the suite runs for real; the self-skip
+# is the safety net that keeps the job green if a prerequisite fails to come up.
+#
+# Triggering: this suite is run ad hoc (manual dispatch) for now while it beds in,
+# so it does not gate day-to-day PRs. Start it from the Actions tab via "Run
+# workflow" (workflow_dispatch). To re-enable automatic runs on pull requests
+# later, add a `pull_request` trigger scoped to `test/e2e-functions/**` and this
+# workflow file. NOTE: workflow_dispatch only appears in the Actions UI once this
+# file exists on the repository's default branch.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  functions-e2e-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["22.x"]
+    name: "functions-e2e (node ${{ matrix.node-version }})"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: ⚙️ NodeJS - Install
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node-version }}
+          registry-url: "https://registry.npmjs.org"
+
+      # Root install provides jest + ts-jest used to run the spec files. The specs
+      # do not depend on the core durabletask-js packages, so no workspace build is
+      # required here.
+      - name: ⚙️ Install dependencies
+        run: npm ci
+
+      - name: 🔧 Install Azurite and Azure Functions Core Tools
+        run: npm install -g azurite azure-functions-core-tools@4
+
+      - name: 🗄️ Start Azurite
+        run: |
+          mkdir -p /tmp/azurite
+          azurite --silent --location /tmp/azurite \
+            --blobPort 10000 --queuePort 10001 --tablePort 10002 &
+          echo "Waiting for Azurite blob endpoint..."
+          for i in $(seq 1 30); do
+            if (echo > /dev/tcp/127.0.0.1/10000) >/dev/null 2>&1; then
+              echo "Azurite is up."
+              break
+            fi
+            sleep 1
+          done
+
+      # Installs the PUBLISHED durable-functions / @azure/functions packages and
+      # compiles the ported BasicNode app to dist/ (consumed by `func start`).
+      - name: 📦 Install + build test-app
+        working-directory: test/e2e-functions/test-app
+        run: |
+          npm install
+          npm run build
+
+      - name: ✅ Run Functions host E2E tests
+        run: npm run test:e2e:functions:internal
+        timeout-minutes: 20
