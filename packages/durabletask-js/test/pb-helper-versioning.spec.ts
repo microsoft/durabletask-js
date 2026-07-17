@@ -128,8 +128,8 @@ describe("pb-helper.util - Version Mismatch Failure Details", () => {
       expect(failure.getInnerfailure()).toBeUndefined();
     });
 
-    it("should cap recursion depth to prevent stack overflow from circular causes", () => {
-      // Build a cause chain deeper than the limit (10)
+    it("should cap recursion depth for deep cause chains", () => {
+      // Build a linear cause chain deeper than the limit (10)
       let error: Error = new Error("root");
       for (let i = 0; i < 15; i++) {
         error = new Error(`level-${i}`, { cause: error });
