@@ -5,8 +5,9 @@
 # Azure Functions host ("func start") for test/e2e-functions/test-app, backed by
 # Azurite (the local Azure Storage emulator), and drives it over HTTP.
 #
-# The test-app depends on the PUBLISHED durable-functions / @azure/functions
-# packages, so it installs and builds without any in-repo package build.
+# The test-app consumes the IN-REPO durable-functions (compat) package and core
+# @microsoft/durabletask-js via file: links, so build those first
+# (npm run build -w durable-functions, from the repo root) before running this.
 #
 # Prerequisites (the suite SKIPS cleanly if any are missing):
 #   - Azure Functions Core Tools ('func') v4 on PATH
@@ -31,7 +32,9 @@ if ! azurite_up; then
     if command -v azurite >/dev/null 2>&1; then
         echo "Starting Azurite..."
         AZURITE_DATA="$(mktemp -d)"
-        azurite --silent --location "$AZURITE_DATA" \
+        # --skipApiVersionCheck: the preview extension bundle's Storage SDK uses a
+        # newer REST API version than current Azurite accepts without the flag.
+        azurite --silent --skipApiVersionCheck --location "$AZURITE_DATA" \
             --blobPort 10000 --queuePort 10001 --tablePort 10002 &
         started_azurite="$!"
         for _ in $(seq 1 30); do
@@ -43,7 +46,7 @@ if ! azurite_up; then
     fi
 fi
 
-# Install + build the ported BasicNode app against the published durable-functions
+# Install + build the ported BasicNode app against the in-repo durable-functions
 # package so 'func start' has a dist/ to serve. If this fails there is no app to
 # run, so fail fast instead of letting the suite skip and masking the error.
 echo "Installing + building test-app..."

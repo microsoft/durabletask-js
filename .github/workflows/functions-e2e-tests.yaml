@@ -65,10 +65,13 @@ jobs:
       - name: 🔧 Install Azurite and Azure Functions Core Tools
         run: npm install -g azurite azure-functions-core-tools@4
 
+      # --skipApiVersionCheck: the preview extension bundle's Azure Storage SDK
+      # targets a newer REST API version than current Azurite accepts; without the
+      # flag Azurite rejects the calls and every orchestration times out.
       - name: 🗄️ Start Azurite
         run: |
           mkdir -p /tmp/azurite
-          azurite --silent --location /tmp/azurite \
+          azurite --silent --skipApiVersionCheck --location /tmp/azurite \
             --blobPort 10000 --queuePort 10001 --tablePort 10002 &
           echo "Waiting for Azurite blob endpoint..."
           for i in $(seq 1 30); do
