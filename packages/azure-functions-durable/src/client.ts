@@ -52,6 +52,18 @@ export interface GetStatusOptions {
   showInput?: boolean;
 }
 
+/**
+ * Routing options accepted by {@link DurableFunctionsClient.readEntityState} for classic Durable
+ * Functions v3 signature compatibility. On the consolidated gRPC path the client is bound to a
+ * single task hub + storage connection, so these are validated-and-rejected rather than honored.
+ */
+export interface TaskHubOptions {
+  /** Task hub to route the read to (v3 cross-hub routing; unsupported on the gRPC path). */
+  taskHubName?: string;
+  /** Storage connection name to route the read to (v3 cross-hub routing; unsupported on the gRPC path). */
+  connectionName?: string;
+}
+
 /** Options for {@link DurableFunctionsClient.startNew} (classic Durable Functions v3 shape). */
 export interface StartNewOptions {
   /** JSON-serializable input for the orchestrator. */
@@ -232,11 +244,11 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
   async getStatus(instanceId: string, options?: GetStatusOptions): Promise<DurableOrchestrationStatus> {
     const state = await this.getOrchestrationState(instanceId, true);
     if (state === undefined) {
-      // Mirror v3's DurableClient.getStatus not-found behavior: it throws (its case-404 branch) with
-      // this message shape. The gRPC path has no HTTP 404, so only the extension-specific first
-      // sentence is replaced; the instanceId-bearing sentence is kept verbatim.
+      // Mirror v3's DurableClient.getStatus not-found message verbatim (DurableClient.ts:137-138),
+      // including the literal "HTTP 404" substring, so existing v3 string-matchers keep working even
+      // though the consolidated gRPC path has no real HTTP 404 response.
       throw new Error(
-        `DurableClient error: No orchestration instance found. ` +
+        `DurableClient error: Durable Functions extension replied with HTTP 404 response. ` +
           `This usually means we could not find any data associated with the instanceId provided: ${instanceId}.`,
       );
     }
@@ -323,10 +335,23 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    *
    * @deprecated Use {@link getEntity} instead.
    * @param entityId - The target entity instance ID.
-   * @param includeState - Whether to include the entity state in the response (default `true`).
+   * @param options - v3 {@link TaskHubOptions}. The `taskHubName`/`connectionName` cross-hub routing
+   *   options are not supported on the consolidated gRPC path and are rejected if supplied.
    */
-  async readEntityState<T = unknown>(entityId: EntityInstanceId, includeState = true): Promise<EntityStateResponse<T>> {
-    const metadata = await this.getEntity<T>(entityId, includeState);
+  async readEntityState<T = unknown>(
+    entityId: EntityInstanceId,
+    options: TaskHubOptions = {},
+  ): Promise<EntityStateResponse<T>> {
+    if (options.taskHubName !== undefined || options.connectionName !== undefined) {
+      // v3 could route the read to a different task hub / storage connection via query params. The
+      // consolidated gRPC client is bound to a single task hub + connection, so cross-hub routing is
+      // unsupported — fail loudly rather than silently read the wrong hub.
+      throw new Error(
+        "readEntityState: the 'taskHubName'/'connectionName' routing options are not supported on the " +
+          "consolidated gRPC path (the client is bound to a single task hub and connection).",
+      );
+    }
+    const metadata = await this.getEntity<T>(entityId, true);
     if (!metadata) {
       return new EntityStateResponse<T>(false);
     }
@@ -435,11 +460,11 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    *   404 that `DurableClient` surfaced as `No instance with ID '<id>' found.`, so we rethrow that.
    * - `UNKNOWN` (2) — the extension's gRPC endpoint maps a wrong-state `InvalidOperationException`
    *   (e.g. suspending an already-suspended instance) to an opaque `UNKNOWN` carrying no client-side
-   *   detail. For a NON-terminal state we look up the runtime status and rethrow a friendly
-   *   `Cannot <op> orchestration instance in the <State> state.` matching the host-side wording. For
-   *   a TERMINAL state (Completed/Failed/Terminated/Canceled) the reason cannot be recovered from the
-   *   opaque error and the v4 status policy is still being decided (tracked separately), so the
-   *   original error is rethrown unchanged.
+   *   detail. We look up the runtime status to disambiguate: on a TERMINAL state
+   *   (Completed/Failed/Terminated/Canceled) the operation is a no-op (v3 parity — the extension HTTP
+   *   path returned 410 Gone, which `DurableClient.{terminate,suspend,resume}` swallowed), so we
+   *   return without throwing; on a NON-terminal state we rethrow a friendly
+   *   `Cannot <op> orchestration instance in the <State> state.` matching the host-side wording.
    *
    * Any other error is rethrown as-is.
    */
@@ -447,7 +472,7 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
     error: unknown,
     instanceId: string,
     operationVerb?: "suspend" | "resume" | "terminate",
-  ): Promise<never> {
+  ): Promise<void> {
     const code = typeof error === "object" && error !== null ? (error as { code?: number }).code : undefined;
     if (code === grpcStatus.NOT_FOUND) {
       throw new Error(`No instance with ID '${instanceId}' found.`);
@@ -459,7 +484,16 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
       } catch {
         runtimeStatus = undefined;
       }
-      if (runtimeStatus !== undefined && !isTerminalRuntimeStatus(runtimeStatus)) {
+      if (runtimeStatus !== undefined) {
+        if (isTerminalRuntimeStatus(runtimeStatus)) {
+          // v3 parity: terminate/suspend/resume on a TERMINAL instance is a no-op. The extension HTTP
+          // path returned 410 Gone, which DurableClient.{terminate,suspend,resume} swallowed
+          // (`case 410: return;`). The consolidated gRPC path collapses that to an opaque UNKNOWN, so
+          // detect the terminal state and return without throwing.
+          return;
+        }
+        // Non-terminal wrong-state (e.g. suspend of an already-suspended instance): surface the
+        // host-side friendly wording instead of the opaque UNKNOWN.
         throw new Error(`Cannot ${operationVerb} orchestration instance in the ${runtimeStatus} state.`);
       }
     }

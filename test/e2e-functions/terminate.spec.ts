@@ -58,10 +58,10 @@ describeMaybe("Functions host E2E — terminate (AzureStorage)", () => {
     // Not applicable to the Node SDK.
   });
 
-  // Skipped pending #315: over the consolidated gRPC path, terminating a terminal instance surfaces
-  // an opaque `2 UNKNOWN` (HTTP 400) instead of v3's swallow -> 200. Re-enable once the terminal-op
-  // status policy in #315 is decided.
-  it.skip("swallows terminate of an already-terminated orchestration (Node behavior)", async () => {
+  // v3 410 parity (#282): terminating a TERMINAL instance is swallowed. Over the gRPC path the wrong-
+  // state failure surfaces as an opaque `2 UNKNOWN`; the compat client looks up the terminal runtime
+  // status and no-ops it (returns 200) instead of throwing.
+  it("swallows terminate of an already-terminated orchestration (Node behavior)", async () => {
     const response = await invokeHttpTrigger(
       baseUrl,
       "StartOrchestration",
@@ -82,9 +82,9 @@ describeMaybe("Functions host E2E — terminate (AzureStorage)", () => {
     expect(terminateAgain.body).toContain(formatLocalized("TerminateTerminatedInstance.FailureMessage", instanceId));
   }, 120_000);
 
-  // Skipped pending #315 (see above): terminal-instance terminate returns an opaque `2 UNKNOWN`
-  // (HTTP 400) on the gRPC path instead of v3's swallow -> 200.
-  it.skip("swallows terminate of a completed orchestration (Node behavior)", async () => {
+  // v3 410 parity (#282, see above): terminating a COMPLETED instance is swallowed. The opaque
+  // `2 UNKNOWN` is resolved to the terminal runtime status by the compat client and no-oped -> 200.
+  it("swallows terminate of a completed orchestration (Node behavior)", async () => {
     const response = await invokeHttpTrigger(baseUrl, "StartOrchestration", "?orchestrationName=HelloCities");
     expect(response.status).toBe(202); // HttpStatusCode.Accepted
     const instanceId = parseInstanceId(response);

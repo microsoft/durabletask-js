@@ -36,8 +36,23 @@ Initial gRPC-consolidated Azure Functions Durable provider, built on `@microsoft
   consolidated-path note: `history` entries are core `HistoryEvent`s (v3 types `history` as
   `Array<unknown>`), not the classic .NET extension's history serialization.
 - `client.startNew()` supports the v3 `version` option (forwarded to the core scheduler).
-- Removed top-level exports: `DummyOrchestrationContext`, `DummyEntityContext`, `DurableError`,
-  `AggregatedError`, `ManagedIdentityTokenSource`, `TokenSource`. `TaskFailedError` is re-exported
-  from the core SDK and aggregate failures surface as JS-native `AggregateError`. For orchestration
-  unit tests, use the core `TestOrchestrationWorker` / `TestOrchestrationClient` in place of the v3
-  dummy contexts.
+- Removed top-level exports (verified against the v3 `durable-functions` public surface):
+  `DummyOrchestrationContext`, `DummyEntityContext`, `ManagedIdentityTokenSource`, `DurableLock`,
+  `LockState`, `LockingRulesViolationError`. `TaskFailedError` is re-exported from the core SDK and
+  aggregate failures surface as JS-native `AggregateError`. For orchestration unit tests, use the
+  core `TestOrchestrationWorker` / `TestOrchestrationClient` in place of the v3 dummy contexts.
+  (`DurableError`, `AggregatedError`, and a bare `TokenSource` were never v3 top-level exports, so
+  they are not listed as removed.)
+- Entity locking / critical sections: the v3 `context.df.lock(...)` / `context.df.isLocked()` API and
+  its `DurableLock` / `LockState` / `LockingRulesViolationError` types are removed. The capability is
+  available natively on the core orchestration context: acquire locks with
+  `context.entities.lockEntities(...entityIds)` (returns a `LockHandle`; call `handle.release()`, ideally
+  in a `finally`), and query section state with `context.entities.isInCriticalSection()`. The core
+  enforces the same rules (globally-sorted lock order, no nested sections, no sub-orchestration calls
+  while holding locks). Reach it by writing the orchestrator against the core-native context signature
+  `(context) => { ... context.entities.lockEntities(...) ... }`.
+- `context.df.callHttp(...)` now throws instead of performing a durable HTTP call. v3's `callHttp` was
+  executed by the Functions host as a built-in HTTP activity (the WebJobs `TaskHttpActivityShim`,
+  including the 202 async-polling pattern and managed-identity token acquisition); the consolidated
+  durabletask/gRPC backend exposes no host-managed durable-HTTP primitive. To make durable HTTP calls,
+  implement an HTTP activity in your app and invoke it from the orchestrator.

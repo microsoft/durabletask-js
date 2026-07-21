@@ -451,13 +451,29 @@ describe("DurableFunctionsClient", () => {
       }
     });
 
-    it("rethrows an opaque UNKNOWN unchanged on a terminal instance (status policy deferred, #315)", async () => {
+    it("no-ops (resolves) an opaque UNKNOWN when terminating a terminal instance (v3 410 parity)", async () => {
       const client = new DurableFunctionsClient(CLIENT_CONFIG);
       try {
         const original = grpcError(grpcStatus.UNKNOWN, "2 UNKNOWN: Exception was thrown by handler");
         jest.spyOn(client, "terminateOrchestration").mockRejectedValue(original);
         jest.spyOn(client, "getOrchestrationState").mockResolvedValue(makeStateWith(OrchestrationStatus.COMPLETED));
-        await expect(client.terminate("inst-1")).rejects.toBe(original);
+        // v3 swallowed terminal-instance control-plane ops (HTTP 410 -> return); the gRPC path collapses
+        // that to an opaque UNKNOWN, so terminate() must resolve (no throw) once the state is terminal.
+        await expect(client.terminate("inst-1")).resolves.toBeUndefined();
+      } finally {
+        await client.stop();
+      }
+    });
+
+    it("no-ops (resolves) an opaque UNKNOWN when suspending/resuming a terminal instance (v3 410 parity)", async () => {
+      const client = new DurableFunctionsClient(CLIENT_CONFIG);
+      try {
+        const unknown = grpcError(grpcStatus.UNKNOWN, "2 UNKNOWN: Exception was thrown by handler");
+        jest.spyOn(client, "suspendOrchestration").mockRejectedValue(unknown);
+        jest.spyOn(client, "resumeOrchestration").mockRejectedValue(unknown);
+        jest.spyOn(client, "getOrchestrationState").mockResolvedValue(makeStateWith(OrchestrationStatus.TERMINATED));
+        await expect(client.suspend("inst-1")).resolves.toBeUndefined();
+        await expect(client.resume("inst-1")).resolves.toBeUndefined();
       } finally {
         await client.stop();
       }
