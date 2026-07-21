@@ -33,14 +33,45 @@ describe("getClient", () => {
   it("accepts an already-parsed binding object", async () => {
     const clientInput = input.durableClient();
     const context = new InvocationContext({ options: { extraInputs: [clientInput] } });
-    context.extraInputs.set(clientInput, CLIENT_CONFIG);
+    // Distinct taskHubName so this test's cache key does not collide with the string-shape test above
+    // (both would otherwise JSON-serialize to the same key and reuse that test's stopped client).
+    context.extraInputs.set(clientInput, { ...CLIENT_CONFIG, taskHubName: "functions-taskhub-object" });
 
     const client = getClient(context);
 
     try {
       expect(client).toBeInstanceOf(DurableFunctionsClient);
+      expect(client.taskHubName).toBe("functions-taskhub-object");
     } finally {
       await client.stop();
+    }
+  });
+
+  it("reuses one cached client per binding config and builds a new one for a different config", async () => {
+    const clientInput = input.durableClient();
+    const context = new InvocationContext({ options: { extraInputs: [clientInput] } });
+    context.extraInputs.set(clientInput, JSON.stringify({ ...CLIENT_CONFIG, taskHubName: "functions-taskhub-cache" }));
+
+    const first = getClient(context);
+    const second = getClient(context);
+    // Same binding config -> same cached client (its underlying gRPC channel is reused across invocations).
+    expect(second).toBe(first);
+
+    const otherInput = input.durableClient();
+    const otherContext = new InvocationContext({ options: { extraInputs: [otherInput] } });
+    otherContext.extraInputs.set(
+      otherInput,
+      JSON.stringify({ ...CLIENT_CONFIG, taskHubName: "functions-taskhub-cache-other" }),
+    );
+    const other = getClient(otherContext);
+    // Different binding config -> distinct client.
+    expect(other).not.toBe(first);
+
+    try {
+      expect(first).toBeInstanceOf(DurableFunctionsClient);
+    } finally {
+      await first.stop();
+      await other.stop();
     }
   });
 

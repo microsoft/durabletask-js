@@ -5,7 +5,7 @@
 
 This repo contains a JavaScript/TypeScript SDK for use with the [Azure Durable Task Scheduler](https://github.com/Azure/Durable-Task-Scheduler). With this SDK, you can define, schedule, and manage durable orchestrations using ordinary TypeScript/JavaScript code.
 
-> Note that this SDK does **not** provide the [Azure Durable Functions](https://learn.microsoft.com/azure/azure-functions/durable/durable-functions-overview) programming model, decorators, or worker-indexing metadata. If you are looking for a JavaScript SDK for Azure Durable Functions, please see [this repo](https://github.com/Azure/azure-functions-durable-js). This package exposes low-level TaskHubSidecarService gRPC/protobuf helpers that host integrations can reuse; those helpers follow this package's Node.js 22+ requirement.
+> Note that the core `@microsoft/durabletask-js` package does **not** provide the [Azure Durable Functions](https://learn.microsoft.com/azure/azure-functions/durable/durable-functions-overview) programming model, decorators, or worker-indexing metadata — it exposes low-level TaskHubSidecarService gRPC/protobuf helpers that host integrations can reuse (Node.js 22+). For the Azure Durable Functions programming model on the gRPC core, this repository also contains the **`durable-functions`** provider package under [`packages/azure-functions-durable`](./packages/azure-functions-durable). The classic v3 (extension-HTTP) predecessor lives at [azure-functions-durable-js](https://github.com/Azure/azure-functions-durable-js).
 
 ## Low-level host integration APIs
 

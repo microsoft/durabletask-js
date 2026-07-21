@@ -572,8 +572,9 @@ function getInstanceStatusUrl(request: HttpRequest | undefined, instanceId: stri
   if (!baseUrl) {
     throw new TypeError("baseUrl is required when building management URLs without an HttpRequest.");
   }
-  const trimmedBaseUrl = baseUrl.replace(/\/+$|\/$/, "");
+  const trimmedBaseUrl = baseUrl.replace(/\/+$/, "");
   return `${trimmedBaseUrl}/instances/${encodedInstanceId}`;
+}
 
 function parseClientConfig(clientConfig: DurableFunctionsClientInput): DurableFunctionsClientConfig {
   const value: unknown = typeof clientConfig === "string" ? JSON.parse(clientConfig) : clientConfig;

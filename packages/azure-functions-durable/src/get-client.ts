@@ -4,6 +4,11 @@
 import { FunctionInput, InvocationContext } from "@azure/functions";
 import { DurableFunctionsClient, DurableFunctionsClientInput } from "./client";
 
+// Reuse one DurableFunctionsClient (and its underlying @grpc/grpc-js channel) per distinct client
+// binding config. `getClient` runs on every client-starter invocation; without this a new gRPC
+// channel would be opened each call and never closed, accumulating channels in a long-lived worker.
+const clientCache = new Map<string, DurableFunctionsClient>();
+
 /**
  * Builds a {@link DurableFunctionsClient} from the `durableClient` input binding that the
  * Azure Functions host provides for the current invocation.
@@ -19,7 +24,7 @@ import { DurableFunctionsClient, DurableFunctionsClientInput } from "./client";
  *   is not a valid client configuration.
  */
 export function getClient(context: InvocationContext): DurableFunctionsClient {
-  const clientInput = context.options.extraInputs.find(isDurableClientInput);
+  const clientInput = context.options.extraInputs?.find(isDurableClientInput);
   if (!clientInput) {
     throw new Error(
       "Could not find a registered durable client input binding. Check your extraInputs " +
@@ -28,7 +33,13 @@ export function getClient(context: InvocationContext): DurableFunctionsClient {
   }
 
   const bindingData: unknown = context.extraInputs.get(clientInput);
-  return new DurableFunctionsClient(asClientInput(bindingData));
+  const cacheKey = typeof bindingData === "string" ? bindingData : JSON.stringify(bindingData);
+  let client = clientCache.get(cacheKey);
+  if (!client) {
+    client = new DurableFunctionsClient(asClientInput(bindingData));
+    clientCache.set(cacheKey, client);
+  }
+  return client;
 }
 
 /** @hidden */

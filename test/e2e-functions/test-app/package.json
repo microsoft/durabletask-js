@@ -2,7 +2,7 @@
     "name": "test-app",
     "version": "1.0.0",
     "description": "",
-    "comment_durable-functions": "This app is wired to the IN-REPO durable-functions (compat) package and core @microsoft/durabletask-js via file: references, so the E2E suite exercises the on-branch build. Build the in-repo packages first (npm run build -w durable-functions from the repo root), then run npm install here. The @microsoft/durabletask-js override is REQUIRED: the compat package pins core to a published version that predates the Functions worker helpers (processOrchestratorRequest/processEntityBatchRequest), so without the override npm would resolve stale published core and the worker path would fail at runtime.",
+    "comment_durable-functions": "This app is wired to the IN-REPO durable-functions (compat) package and core @microsoft/durabletask-js via file: references, so the E2E suite exercises the on-branch build. Build the in-repo packages first (npm run build -w durable-functions from the repo root), then run npm install here. The @microsoft/durabletask-js override is REQUIRED: the compat package depends on @microsoft/durabletask-js 0.4.0, which is not yet published on npm — it is the on-branch core version that introduces the Functions worker helpers (processOrchestratorRequest/processEntityBatchRequest). Without the override, npm could not resolve the unreleased 0.4.0 (or would fall back to a stale published core), and the worker path would fail at runtime.",
     "scripts": {
         "build": "tsc",
         "watch": "tsc -w",
