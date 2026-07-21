@@ -94,6 +94,14 @@ describe("DurableEntityContext", () => {
     expect(df.getState<number>(() => 0)).toBe(0);
   });
 
+  it("does not invoke the initializer when state already exists (v3 parity)", () => {
+    const { operation } = createFakeOperation({ name: "get", initialState: 7 });
+    const df = new DurableEntityContext(operation);
+    const initializer = jest.fn(() => 0);
+    expect(df.getState<number>(initializer)).toBe(7);
+    expect(initializer).not.toHaveBeenCalled();
+  });
+
   it("destructOnExit clears the state", () => {
     const { operation, getStoredState } = createFakeOperation({ name: "delete", initialState: 42 });
     const df = new DurableEntityContext(operation);

@@ -66,8 +66,13 @@ export class DurableEntityContext<TState = unknown> {
    * @param initializer - Optional zero-argument callable providing the initial state when none exists.
    */
   getState<T = TState>(initializer?: () => T): T | undefined {
-    const defaultValue = typeof initializer === "function" ? initializer() : undefined;
-    return this._operation.state.getState<T>(defaultValue);
+    // Match Durable Functions v3: only fall back to the initializer when the entity has no state.
+    // Calling it unconditionally would run an expensive/side-effecting initializer even when state
+    // already exists (see Azure/azure-functions-durable-js Entity.getState).
+    if (this._operation.state.hasState) {
+      return this._operation.state.getState<T>();
+    }
+    return typeof initializer === "function" ? initializer() : undefined;
   }
 
   /** Sets the entity state. Passing `null`/`undefined` deletes the entity. */
