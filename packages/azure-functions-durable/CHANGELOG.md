@@ -44,6 +44,6 @@ Initial gRPC-consolidated Azure Functions Durable provider, built on `@microsoft
 
 ### Release order
 
-- Publish `@microsoft/durabletask-js` (0.3.0) before this package.
+- Publish `@microsoft/durabletask-js` (0.4.0) before this package.
 - Confirm the target `@azure/functions` (^4.16.1) build includes the Durable extension changes
   (`DurableRequiresGrpc`) required by the consolidated gRPC path.
