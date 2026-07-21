@@ -6,6 +6,7 @@ import { status as grpcStatus } from "@grpc/grpc-js";
 import {
   EntityInstanceId,
   OrchestrationQuery,
+  OrchestrationState,
   OrchestrationStatus,
   PurgeInstanceCriteria,
   TaskHubGrpcClient,
@@ -465,7 +466,7 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    *
    * None of these codes alone distinguishes "terminal" (v3 swallowed it) from "non-terminal wrong
    * state" from "missing", so — like v3 — we key the outcome off the instance's ACTUAL runtime state
-   * via `getStatus`, for all four control-plane verbs:
+   * via `getOrchestrationState`, for all four control-plane verbs:
    * - TERMINAL (Completed/Failed/Terminated/Canceled) -> no-op (v3 410 parity — the extension HTTP
    *   path returned 410 Gone, which `DurableClient.{terminate,suspend,resume,raiseEvent}` swallowed),
    *   return silently.
@@ -473,7 +474,9 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    *   `Cannot <op> orchestration instance in the <State> state.` matching the host-side wording; for
    *   `raiseEvent`, resurface the ORIGINAL error — v3 `raiseEvent` had no friendly wrong-state message
    *   (its `switch` fell through to `default -> createGenericError`, i.e. the raw error).
-   * - no such instance (getStatus finds nothing) -> `No instance with ID '<id>' found.`
+   * - no such instance (getOrchestrationState resolves to `undefined`) -> `No instance with ID '<id>' found.`
+   * - the state lookup ITSELF fails transiently (getOrchestrationState rejects, e.g. an unavailable
+   *   channel) -> resurface the ORIGINAL control-plane error, so it is never masked as not-found.
    *
    * Any other error (e.g. a bare `NOT_FOUND` with no verb) maps to the not-found message; anything
    * else is rethrown unchanged. Mapped errors preserve the original gRPC error as their `cause`.
@@ -485,20 +488,25 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
   ): Promise<void> {
     const code = typeof error === "object" && error !== null ? (error as { code?: number }).code : undefined;
 
-    // suspend/resume -> UNKNOWN(2); terminate/raiseEvent -> FAILED_PRECONDITION(9) when terminal,
-    // NOT_FOUND(5) when missing. Look up the ACTUAL runtime state to disambiguate terminal-no-op vs
-    // non-terminal wrong-state vs truly-missing, matching v3 which keyed the outcome off the state.
+    // The in-guard codes differ by verb: suspend/resume -> UNKNOWN(2); terminate/raiseEvent ->
+    // FAILED_PRECONDITION(9) when terminal/non-running, NOT_FOUND(5) when genuinely missing.
     if (
       operationVerb !== undefined &&
       (code === grpcStatus.UNKNOWN || code === grpcStatus.NOT_FOUND || code === grpcStatus.FAILED_PRECONDITION)
     ) {
-      let runtimeStatus: OrchestrationRuntimeStatus | undefined;
+      // Look up the instance's ACTUAL state to disambiguate terminal-no-op vs non-terminal wrong-state
+      // vs truly-missing. Query getOrchestrationState directly (not getStatus) so a genuinely missing
+      // instance (resolves to `undefined`) is distinguishable from a status lookup that ITSELF failed
+      // transiently (rejects — e.g. an unavailable channel). Only the former is not-found; a failed
+      // lookup must NOT be masked as not-found, so we resurface the original control-plane error.
+      let state: OrchestrationState | undefined;
       try {
-        runtimeStatus = (await this.getStatus(instanceId)).runtimeStatus;
+        state = await this.getOrchestrationState(instanceId, true);
       } catch {
-        runtimeStatus = undefined;
+        throw error;
       }
-      if (runtimeStatus !== undefined) {
+      if (state !== undefined) {
+        const runtimeStatus = toDurableOrchestrationStatus(state).runtimeStatus;
         if (isTerminalRuntimeStatus(runtimeStatus)) {
           // v3 410 parity: terminate/suspend/resume/raiseEvent on a TERMINAL instance is a no-op.
           return;
@@ -513,7 +521,7 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
           cause: error,
         });
       }
-      // getStatus found no such instance -> it genuinely does not exist.
+      // getOrchestrationState resolved to undefined -> the instance genuinely does not exist.
       throw new Error(`No instance with ID '${instanceId}' found.`, { cause: error });
     }
 

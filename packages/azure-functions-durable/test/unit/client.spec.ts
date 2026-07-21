@@ -488,6 +488,39 @@ describe("DurableFunctionsClient", () => {
       }
     });
 
+    it("resurfaces the original control-plane error when the state lookup itself fails transiently (terminate)", async () => {
+      const client = new DurableFunctionsClient(CLIENT_CONFIG);
+      try {
+        // The state lookup can fail for reasons OTHER than a missing instance (e.g. an unavailable
+        // channel). A transient lookup failure must NOT be masked as "No instance with ID found." —
+        // the original control-plane error is resurfaced so the real failure is never lost.
+        const raw = grpcError(
+          grpcStatus.FAILED_PRECONDITION,
+          "9 FAILED_PRECONDITION: Cannot terminate the orchestration instance inst-1 because instance is in the Terminated state.",
+        );
+        jest.spyOn(client, "terminateOrchestration").mockRejectedValue(raw);
+        jest.spyOn(client, "getOrchestrationState").mockRejectedValue(new Error("14 UNAVAILABLE: channel closed"));
+        await expect(client.terminate("inst-1")).rejects.toBe(raw);
+      } finally {
+        await client.stop();
+      }
+    });
+
+    it("resurfaces the original control-plane error when the state lookup itself fails transiently (raiseEvent)", async () => {
+      const client = new DurableFunctionsClient(CLIENT_CONFIG);
+      try {
+        // Even a NOT_FOUND control-plane error is only "missing" if the state lookup CONFIRMS it. When
+        // the lookup itself rejects we cannot confirm, so the original error is resurfaced rather than
+        // being converted to the not-found message.
+        const raw = grpcError(grpcStatus.NOT_FOUND, "5 NOT_FOUND: No instance with ID 'inst-1' was found.");
+        jest.spyOn(client, "raiseOrchestrationEvent").mockRejectedValue(raw);
+        jest.spyOn(client, "getOrchestrationState").mockRejectedValue(new Error("14 UNAVAILABLE: channel closed"));
+        await expect(client.raiseEvent("inst-1", "evt")).rejects.toBe(raw);
+      } finally {
+        await client.stop();
+      }
+    });
+
     it("suspend maps an opaque UNKNOWN on a non-terminal instance to a friendly state message", async () => {
       const client = new DurableFunctionsClient(CLIENT_CONFIG);
       try {
