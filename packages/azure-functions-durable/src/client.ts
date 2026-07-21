@@ -455,18 +455,26 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    * Translates raw gRPC control-plane errors (from terminate/suspend/resume/raiseEvent) into the
    * classic Durable Functions v3 error surface.
    *
-   * The consolidated gRPC path collapses these failures into two opaque codes:
-   * - `NOT_FOUND` (5) — the target instance does not exist. v3 (the extension HTTP path) returned a
-   *   404 that `DurableClient` surfaced as `No instance with ID '<id>' found.`, so we rethrow that.
-   * - `UNKNOWN` (2) — the extension's gRPC endpoint maps a wrong-state `InvalidOperationException`
-   *   (e.g. suspending an already-suspended instance) to an opaque `UNKNOWN` carrying no client-side
-   *   detail. We look up the runtime status to disambiguate: on a TERMINAL state
-   *   (Completed/Failed/Terminated/Canceled) the operation is a no-op (v3 parity — the extension HTTP
-   *   path returned 410 Gone, which `DurableClient.{terminate,suspend,resume}` swallowed), so we
-   *   return without throwing; on a NON-terminal state we rethrow a friendly
-   *   `Cannot <op> orchestration instance in the <State> state.` matching the host-side wording.
+   * The consolidated gRPC path collapses these failures into opaque codes that DIFFER by operation
+   * (captured against the Preview extension bundle over the functions-e2e host):
+   * - suspend/resume of a wrong-state OR terminal instance -> `UNKNOWN` (2) ("Exception was thrown
+   *   by handler" — no server-side detail reaches the client).
+   * - terminate/raiseEvent of a terminal / non-running instance -> `FAILED_PRECONDITION` (9)
+   *   ("...because instance is in the <State> state." / "...is not running.").
+   * - terminate/raiseEvent of a genuinely missing instance -> `NOT_FOUND` (5).
    *
-   * Any other error is rethrown as-is.
+   * None of these codes alone distinguishes "terminal" (v3 swallowed it) from "non-terminal wrong
+   * state" (v3 threw) from "missing", so — like v3 — we key the outcome off the instance's ACTUAL
+   * runtime state via `getStatus`, for the three control-plane verbs:
+   * - TERMINAL (Completed/Failed/Terminated/Canceled) -> no-op (v3 parity — the extension HTTP path
+   *   returned 410 Gone, which `DurableClient.{terminate,suspend,resume}` swallowed), return silently.
+   * - NON-terminal wrong-state (e.g. suspend of an already-suspended instance) -> throw a friendly
+   *   `Cannot <op> orchestration instance in the <State> state.` matching the host-side wording.
+   * - no such instance (getStatus finds nothing) -> `No instance with ID '<id>' found.`
+   *
+   * `raiseEvent` (no verb) keeps the simple `NOT_FOUND` -> not-found mapping; its `FAILED_PRECONDITION`
+   * (raise-to-completed) is rethrown as-is (v3 surfaces it too — see #645). Any other error is
+   * rethrown unchanged. Mapped errors preserve the original gRPC error as their `cause`.
    */
   private async _mapControlPlaneError(
     error: unknown,
@@ -474,10 +482,14 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
     operationVerb?: "suspend" | "resume" | "terminate",
   ): Promise<void> {
     const code = typeof error === "object" && error !== null ? (error as { code?: number }).code : undefined;
-    if (code === grpcStatus.NOT_FOUND) {
-      throw new Error(`No instance with ID '${instanceId}' found.`);
-    }
-    if (code === grpcStatus.UNKNOWN && operationVerb !== undefined) {
+
+    // suspend/resume -> UNKNOWN(2); terminate -> FAILED_PRECONDITION(9) when terminal, NOT_FOUND(5)
+    // when missing. Look up the ACTUAL runtime state to disambiguate terminal-no-op vs non-terminal
+    // wrong-state vs truly-missing, matching v3 which keyed the outcome off the instance's state.
+    if (
+      operationVerb !== undefined &&
+      (code === grpcStatus.UNKNOWN || code === grpcStatus.NOT_FOUND || code === grpcStatus.FAILED_PRECONDITION)
+    ) {
       let runtimeStatus: OrchestrationRuntimeStatus | undefined;
       try {
         runtimeStatus = (await this.getStatus(instanceId)).runtimeStatus;
@@ -486,16 +498,21 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
       }
       if (runtimeStatus !== undefined) {
         if (isTerminalRuntimeStatus(runtimeStatus)) {
-          // v3 parity: terminate/suspend/resume on a TERMINAL instance is a no-op. The extension HTTP
-          // path returned 410 Gone, which DurableClient.{terminate,suspend,resume} swallowed
-          // (`case 410: return;`). The consolidated gRPC path collapses that to an opaque UNKNOWN, so
-          // detect the terminal state and return without throwing.
+          // v3 410 parity: terminate/suspend/resume on a TERMINAL instance is a no-op.
           return;
         }
-        // Non-terminal wrong-state (e.g. suspend of an already-suspended instance): surface the
-        // host-side friendly wording instead of the opaque UNKNOWN.
-        throw new Error(`Cannot ${operationVerb} orchestration instance in the ${runtimeStatus} state.`);
+        // Non-terminal wrong-state (e.g. suspend of an already-suspended instance).
+        throw new Error(`Cannot ${operationVerb} orchestration instance in the ${runtimeStatus} state.`, {
+          cause: error,
+        });
       }
+      // getStatus found no such instance -> it genuinely does not exist.
+      throw new Error(`No instance with ID '${instanceId}' found.`, { cause: error });
+    }
+
+    if (code === grpcStatus.NOT_FOUND) {
+      // raiseEvent (no verb) and any other NOT_FOUND: instance missing.
+      throw new Error(`No instance with ID '${instanceId}' found.`, { cause: error });
     }
     throw error;
   }

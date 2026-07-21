@@ -397,7 +397,7 @@ describe("DurableFunctionsClient", () => {
         new Date("2026-01-01T00:00:05.000Z"),
       );
 
-    it("terminate maps gRPC NOT_FOUND to the v3 not-found message", async () => {
+    it("terminate maps gRPC NOT_FOUND to the v3 not-found message when the instance is truly missing", async () => {
       const client = new DurableFunctionsClient(CLIENT_CONFIG);
       try {
         jest
@@ -405,7 +405,31 @@ describe("DurableFunctionsClient", () => {
           .mockRejectedValue(
             grpcError(grpcStatus.NOT_FOUND, "5 NOT_FOUND: No instance with ID 'inst-1' was found. (Parameter 'instanceId')"),
           );
+        // terminate surfaces NOT_FOUND(5) for a genuinely missing instance (terminal instances get
+        // FAILED_PRECONDITION instead), so the mapper consults getStatus: no state -> not-found message.
+        jest.spyOn(client, "getOrchestrationState").mockResolvedValue(undefined);
         await expect(client.terminate("inst-1")).rejects.toThrow("No instance with ID 'inst-1' found.");
+      } finally {
+        await client.stop();
+      }
+    });
+
+    it("terminate no-ops a gRPC FAILED_PRECONDITION when the instance is actually terminal (v3 410 parity)", async () => {
+      const client = new DurableFunctionsClient(CLIENT_CONFIG);
+      try {
+        // Regression for PR #282 functions-e2e: terminate of a TERMINAL instance surfaces
+        // FAILED_PRECONDITION(9) ("...because instance is in the Terminated state."), so the mapper
+        // must consult getStatus and no-op when the instance is really terminal instead of throwing.
+        jest
+          .spyOn(client, "terminateOrchestration")
+          .mockRejectedValue(
+            grpcError(
+              grpcStatus.FAILED_PRECONDITION,
+              "9 FAILED_PRECONDITION: Cannot terminate the orchestration instance inst-1 because instance is in the Terminated state.",
+            ),
+          );
+        jest.spyOn(client, "getOrchestrationState").mockResolvedValue(makeStateWith(OrchestrationStatus.TERMINATED));
+        await expect(client.terminate("inst-1")).resolves.toBeUndefined();
       } finally {
         await client.stop();
       }

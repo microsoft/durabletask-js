@@ -75,6 +75,24 @@ describe("getClient", () => {
     }
   });
 
+  it("evicts a stopped client from the cache so the next getClient builds a fresh instance", async () => {
+    const clientInput = input.durableClient();
+    const context = new InvocationContext({ options: { extraInputs: [clientInput] } });
+    context.extraInputs.set(clientInput, JSON.stringify({ ...CLIENT_CONFIG, taskHubName: "functions-taskhub-evict" }));
+
+    const first = getClient(context);
+    // Stopping a cached client closes its gRPC channel; it must not be handed out again.
+    await first.stop();
+
+    const second = getClient(context);
+    try {
+      expect(second).not.toBe(first);
+      expect(second).toBeInstanceOf(DurableFunctionsClient);
+    } finally {
+      await second.stop();
+    }
+  });
+
   it("throws when no durable client input binding is registered", () => {
     const context = new InvocationContext({ options: { extraInputs: [] } });
 

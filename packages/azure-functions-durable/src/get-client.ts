@@ -36,7 +36,15 @@ export function getClient(context: InvocationContext): DurableFunctionsClient {
   const cacheKey = typeof bindingData === "string" ? bindingData : JSON.stringify(bindingData);
   let client = clientCache.get(cacheKey);
   if (!client) {
-    client = new DurableFunctionsClient(asClientInput(bindingData));
+    const created = new DurableFunctionsClient(asClientInput(bindingData));
+    // Evict on stop() so a disposed client (closed gRPC channel) is never handed out again; a later
+    // getClient() with the same binding then builds a fresh client instead of reusing a dead channel.
+    const originalStop = created.stop.bind(created);
+    created.stop = async (): Promise<void> => {
+      clientCache.delete(cacheKey);
+      await originalStop();
+    };
+    client = created;
     clientCache.set(cacheKey, client);
   }
   return client;
