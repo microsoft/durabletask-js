@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0
+## 4.0.0
 
 Initial gRPC-consolidated Azure Functions Durable provider, built on `@microsoft/durabletask-js`.
 
@@ -41,9 +41,3 @@ Initial gRPC-consolidated Azure Functions Durable provider, built on `@microsoft
   from the core SDK and aggregate failures surface as JS-native `AggregateError`. For orchestration
   unit tests, use the core `TestOrchestrationWorker` / `TestOrchestrationClient` in place of the v3
   dummy contexts.
-
-### Release order
-
-- Publish `@microsoft/durabletask-js` (0.3.0) before this package.
-- Confirm the target `@azure/functions` (^4.16.1) build includes the Durable extension changes
-  (`DurableRequiresGrpc`) required by the consolidated gRPC path.

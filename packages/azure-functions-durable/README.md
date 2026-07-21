@@ -107,4 +107,4 @@ are `@deprecated`):
 
 ## Status
 
-This package is an early preview (`0.4.0`); APIs may change before the stable release.
+This package is an early preview (`4.0.0`); APIs may change before the stable release.
