@@ -435,13 +435,54 @@ describe("DurableFunctionsClient", () => {
       }
     });
 
-    it("raiseEvent maps gRPC NOT_FOUND to the v3 not-found message", async () => {
+    it("raiseEvent maps gRPC NOT_FOUND to the v3 not-found message when the instance is truly missing", async () => {
       const client = new DurableFunctionsClient(CLIENT_CONFIG);
       try {
         jest
           .spyOn(client, "raiseOrchestrationEvent")
           .mockRejectedValue(grpcError(grpcStatus.NOT_FOUND, "5 NOT_FOUND: No instance with ID 'inst-1' was found."));
+        // raiseEvent now keys off runtime state like v3; a missing instance -> no state -> not-found.
+        jest.spyOn(client, "getOrchestrationState").mockResolvedValue(undefined);
         await expect(client.raiseEvent("inst-1", "evt")).rejects.toThrow("No instance with ID 'inst-1' found.");
+      } finally {
+        await client.stop();
+      }
+    });
+
+    it("raiseEvent no-ops a gRPC FAILED_PRECONDITION when the instance is actually terminal (v3 410 swallow)", async () => {
+      const client = new DurableFunctionsClient(CLIENT_CONFIG);
+      try {
+        // v3 raiseEvent handled a terminal instance as `case 410: return` (swallow). Over gRPC that
+        // surfaces as FAILED_PRECONDITION(9) ("...is not running."), so the mapper must consult
+        // getStatus and no-op when the instance is really terminal.
+        jest
+          .spyOn(client, "raiseOrchestrationEvent")
+          .mockRejectedValue(
+            grpcError(
+              grpcStatus.FAILED_PRECONDITION,
+              "9 FAILED_PRECONDITION: The orchestration instance with the provided instance id is not running.",
+            ),
+          );
+        jest.spyOn(client, "getOrchestrationState").mockResolvedValue(makeStateWith(OrchestrationStatus.COMPLETED));
+        await expect(client.raiseEvent("inst-1", "evt")).resolves.toBeUndefined();
+      } finally {
+        await client.stop();
+      }
+    });
+
+    it("raiseEvent resurfaces the original error on a non-terminal wrong-state instance (v3 default branch)", async () => {
+      const client = new DurableFunctionsClient(CLIENT_CONFIG);
+      try {
+        // v3 raiseEvent had no friendly wrong-state message: a non-terminal instance that still
+        // rejected fell through to `default -> createGenericError`, i.e. the original error surfaced.
+        const raw = grpcError(
+          grpcStatus.FAILED_PRECONDITION,
+          "9 FAILED_PRECONDITION: The orchestration instance with the provided instance id is not running.",
+        );
+        jest.spyOn(client, "raiseOrchestrationEvent").mockRejectedValue(raw);
+        jest.spyOn(client, "getOrchestrationState").mockResolvedValue(makeStateWith(OrchestrationStatus.RUNNING));
+        // The ORIGINAL error object is rethrown (not a wrapped "Cannot raiseEvent..." message).
+        await expect(client.raiseEvent("inst-1", "evt")).rejects.toBe(raw);
       } finally {
         await client.stop();
       }

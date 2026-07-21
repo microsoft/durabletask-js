@@ -400,7 +400,7 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
     try {
       await this.raiseOrchestrationEvent(instanceId, eventName, eventData ?? null);
     } catch (error) {
-      await this._mapControlPlaneError(error, instanceId);
+      await this._mapControlPlaneError(error, instanceId, "raiseEvent");
     }
   }
 
@@ -464,28 +464,30 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    * - terminate/raiseEvent of a genuinely missing instance -> `NOT_FOUND` (5).
    *
    * None of these codes alone distinguishes "terminal" (v3 swallowed it) from "non-terminal wrong
-   * state" (v3 threw) from "missing", so — like v3 — we key the outcome off the instance's ACTUAL
-   * runtime state via `getStatus`, for the three control-plane verbs:
-   * - TERMINAL (Completed/Failed/Terminated/Canceled) -> no-op (v3 parity — the extension HTTP path
-   *   returned 410 Gone, which `DurableClient.{terminate,suspend,resume}` swallowed), return silently.
-   * - NON-terminal wrong-state (e.g. suspend of an already-suspended instance) -> throw a friendly
-   *   `Cannot <op> orchestration instance in the <State> state.` matching the host-side wording.
+   * state" from "missing", so — like v3 — we key the outcome off the instance's ACTUAL runtime state
+   * via `getStatus`, for all four control-plane verbs:
+   * - TERMINAL (Completed/Failed/Terminated/Canceled) -> no-op (v3 410 parity — the extension HTTP
+   *   path returned 410 Gone, which `DurableClient.{terminate,suspend,resume,raiseEvent}` swallowed),
+   *   return silently.
+   * - NON-terminal wrong-state -> for suspend/resume/terminate, throw the friendly
+   *   `Cannot <op> orchestration instance in the <State> state.` matching the host-side wording; for
+   *   `raiseEvent`, resurface the ORIGINAL error — v3 `raiseEvent` had no friendly wrong-state message
+   *   (its `switch` fell through to `default -> createGenericError`, i.e. the raw error).
    * - no such instance (getStatus finds nothing) -> `No instance with ID '<id>' found.`
    *
-   * `raiseEvent` (no verb) keeps the simple `NOT_FOUND` -> not-found mapping; its `FAILED_PRECONDITION`
-   * (raise-to-completed) is rethrown as-is (v3 surfaces it too — see #645). Any other error is
-   * rethrown unchanged. Mapped errors preserve the original gRPC error as their `cause`.
+   * Any other error (e.g. a bare `NOT_FOUND` with no verb) maps to the not-found message; anything
+   * else is rethrown unchanged. Mapped errors preserve the original gRPC error as their `cause`.
    */
   private async _mapControlPlaneError(
     error: unknown,
     instanceId: string,
-    operationVerb?: "suspend" | "resume" | "terminate",
+    operationVerb?: "suspend" | "resume" | "terminate" | "raiseEvent",
   ): Promise<void> {
     const code = typeof error === "object" && error !== null ? (error as { code?: number }).code : undefined;
 
-    // suspend/resume -> UNKNOWN(2); terminate -> FAILED_PRECONDITION(9) when terminal, NOT_FOUND(5)
-    // when missing. Look up the ACTUAL runtime state to disambiguate terminal-no-op vs non-terminal
-    // wrong-state vs truly-missing, matching v3 which keyed the outcome off the instance's state.
+    // suspend/resume -> UNKNOWN(2); terminate/raiseEvent -> FAILED_PRECONDITION(9) when terminal,
+    // NOT_FOUND(5) when missing. Look up the ACTUAL runtime state to disambiguate terminal-no-op vs
+    // non-terminal wrong-state vs truly-missing, matching v3 which keyed the outcome off the state.
     if (
       operationVerb !== undefined &&
       (code === grpcStatus.UNKNOWN || code === grpcStatus.NOT_FOUND || code === grpcStatus.FAILED_PRECONDITION)
@@ -498,8 +500,13 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
       }
       if (runtimeStatus !== undefined) {
         if (isTerminalRuntimeStatus(runtimeStatus)) {
-          // v3 410 parity: terminate/suspend/resume on a TERMINAL instance is a no-op.
+          // v3 410 parity: terminate/suspend/resume/raiseEvent on a TERMINAL instance is a no-op.
           return;
+        }
+        if (operationVerb === "raiseEvent") {
+          // v3 raiseEvent had no friendly wrong-state message: a non-terminal instance that still
+          // rejected fell through to `default -> createGenericError`, i.e. the original error surfaced.
+          throw error;
         }
         // Non-terminal wrong-state (e.g. suspend of an already-suspended instance).
         throw new Error(`Cannot ${operationVerb} orchestration instance in the ${runtimeStatus} state.`, {
@@ -511,7 +518,7 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
     }
 
     if (code === grpcStatus.NOT_FOUND) {
-      // raiseEvent (no verb) and any other NOT_FOUND: instance missing.
+      // Any bare NOT_FOUND (no verb): instance missing.
       throw new Error(`No instance with ID '${instanceId}' found.`, { cause: error });
     }
     throw error;
