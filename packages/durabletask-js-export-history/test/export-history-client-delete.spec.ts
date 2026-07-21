@@ -4,6 +4,7 @@
 import { ExportHistoryJobClient } from "../src/client/export-history-client";
 import { ExportHistoryStorageOptions } from "../src/models";
 import { ORCHESTRATOR_INSTANCE_ID_PREFIX } from "../src/constants";
+import { NoOpLogger, Logger } from "@microsoft/durabletask-js";
 
 /** gRPC status code constants for test readability. */
 const GRPC_STATUS = {
@@ -46,6 +47,19 @@ const TEST_STORAGE_OPTIONS: ExportHistoryStorageOptions = {
 
 const TEST_JOB_ID = "test-job-1";
 
+/** A logger that discards output, used to keep test output clean. */
+const silentLogger = new NoOpLogger();
+
+/** Creates a logger whose methods are jest mocks, for asserting log calls. */
+function createSpyLogger(): jest.Mocked<Logger> {
+  return {
+    error: jest.fn(),
+    warn: jest.fn(),
+    info: jest.fn(),
+    debug: jest.fn(),
+  };
+}
+
 describe("ExportHistoryJobClient.delete()", () => {
   it("should complete successfully when orchestration exists and all cleanup succeeds", async () => {
     const terminateMock = jest.fn().mockResolvedValue(undefined);
@@ -58,7 +72,7 @@ describe("ExportHistoryJobClient.delete()", () => {
       purgeOrchestration: purgeMock,
     });
 
-    const jobClient = new ExportHistoryJobClient(client, TEST_JOB_ID, TEST_STORAGE_OPTIONS);
+    const jobClient = new ExportHistoryJobClient(client, TEST_JOB_ID, TEST_STORAGE_OPTIONS, silentLogger);
     await expect(jobClient.delete()).resolves.toBeUndefined();
 
     const expectedOrchId = `${ORCHESTRATOR_INSTANCE_ID_PREFIX}${TEST_JOB_ID}`;
@@ -73,7 +87,7 @@ describe("ExportHistoryJobClient.delete()", () => {
     );
 
     const client = createMockClient({ terminateOrchestration: terminateMock });
-    const jobClient = new ExportHistoryJobClient(client, TEST_JOB_ID, TEST_STORAGE_OPTIONS);
+    const jobClient = new ExportHistoryJobClient(client, TEST_JOB_ID, TEST_STORAGE_OPTIONS, silentLogger);
 
     await expect(jobClient.delete()).resolves.toBeUndefined();
   });
@@ -84,7 +98,7 @@ describe("ExportHistoryJobClient.delete()", () => {
     );
 
     const client = createMockClient({ purgeOrchestration: purgeMock });
-    const jobClient = new ExportHistoryJobClient(client, TEST_JOB_ID, TEST_STORAGE_OPTIONS);
+    const jobClient = new ExportHistoryJobClient(client, TEST_JOB_ID, TEST_STORAGE_OPTIONS, silentLogger);
 
     await expect(jobClient.delete()).resolves.toBeUndefined();
   });
@@ -95,7 +109,7 @@ describe("ExportHistoryJobClient.delete()", () => {
     );
 
     const client = createMockClient({ terminateOrchestration: terminateMock });
-    const jobClient = new ExportHistoryJobClient(client, TEST_JOB_ID, TEST_STORAGE_OPTIONS);
+    const jobClient = new ExportHistoryJobClient(client, TEST_JOB_ID, TEST_STORAGE_OPTIONS, silentLogger);
 
     await expect(jobClient.delete()).rejects.toThrow("Connection refused");
   });
@@ -106,7 +120,7 @@ describe("ExportHistoryJobClient.delete()", () => {
     );
 
     const client = createMockClient({ terminateOrchestration: terminateMock });
-    const jobClient = new ExportHistoryJobClient(client, TEST_JOB_ID, TEST_STORAGE_OPTIONS);
+    const jobClient = new ExportHistoryJobClient(client, TEST_JOB_ID, TEST_STORAGE_OPTIONS, silentLogger);
 
     await expect(jobClient.delete()).rejects.toThrow("Token expired");
   });
@@ -117,7 +131,7 @@ describe("ExportHistoryJobClient.delete()", () => {
     );
 
     const client = createMockClient({ purgeOrchestration: purgeMock });
-    const jobClient = new ExportHistoryJobClient(client, TEST_JOB_ID, TEST_STORAGE_OPTIONS);
+    const jobClient = new ExportHistoryJobClient(client, TEST_JOB_ID, TEST_STORAGE_OPTIONS, silentLogger);
 
     await expect(jobClient.delete()).rejects.toThrow("Internal server error");
   });
@@ -126,7 +140,7 @@ describe("ExportHistoryJobClient.delete()", () => {
     const waitMock = jest.fn().mockRejectedValue(new Error("Timed out waiting for orchestration"));
 
     const client = createMockClient({ waitForOrchestrationCompletion: waitMock });
-    const jobClient = new ExportHistoryJobClient(client, TEST_JOB_ID, TEST_STORAGE_OPTIONS);
+    const jobClient = new ExportHistoryJobClient(client, TEST_JOB_ID, TEST_STORAGE_OPTIONS, silentLogger);
 
     await expect(jobClient.delete()).rejects.toThrow("Timed out waiting for orchestration");
   });
@@ -135,7 +149,7 @@ describe("ExportHistoryJobClient.delete()", () => {
     const terminateMock = jest.fn().mockRejectedValue(new Error("Unexpected error"));
 
     const client = createMockClient({ terminateOrchestration: terminateMock });
-    const jobClient = new ExportHistoryJobClient(client, TEST_JOB_ID, TEST_STORAGE_OPTIONS);
+    const jobClient = new ExportHistoryJobClient(client, TEST_JOB_ID, TEST_STORAGE_OPTIONS, silentLogger);
 
     await expect(jobClient.delete()).rejects.toThrow("Unexpected error");
   });
@@ -151,9 +165,49 @@ describe("ExportHistoryJobClient.delete()", () => {
       terminateOrchestration: terminateMock,
     });
 
-    const jobClient = new ExportHistoryJobClient(client, TEST_JOB_ID, TEST_STORAGE_OPTIONS);
+    const jobClient = new ExportHistoryJobClient(client, TEST_JOB_ID, TEST_STORAGE_OPTIONS, silentLogger);
     await jobClient.delete();
 
     expect(scheduleMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("should log at info level (without re-throwing) when the orchestration is not found", async () => {
+    const logger = createSpyLogger();
+    const terminateMock = jest.fn().mockRejectedValue(
+      createGrpcError(GRPC_STATUS.NOT_FOUND, "Orchestration not found"),
+    );
+
+    const client = createMockClient({ terminateOrchestration: terminateMock });
+    const jobClient = new ExportHistoryJobClient(client, TEST_JOB_ID, TEST_STORAGE_OPTIONS, logger);
+
+    await expect(jobClient.delete()).resolves.toBeUndefined();
+
+    const expectedOrchId = `${ORCHESTRATOR_INSTANCE_ID_PREFIX}${TEST_JOB_ID}`;
+    expect(logger.info).toHaveBeenCalledTimes(1);
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining(`Orchestration instance '${expectedOrchId}' is already purged or never existed`),
+      expect.anything(),
+    );
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it("should log at error level and re-throw when cleanup fails with a non-not-found error", async () => {
+    const logger = createSpyLogger();
+    const purgeMock = jest.fn().mockRejectedValue(
+      createGrpcError(GRPC_STATUS.INTERNAL, "Internal server error"),
+    );
+
+    const client = createMockClient({ purgeOrchestration: purgeMock });
+    const jobClient = new ExportHistoryJobClient(client, TEST_JOB_ID, TEST_STORAGE_OPTIONS, logger);
+
+    await expect(jobClient.delete()).rejects.toThrow("Internal server error");
+
+    const expectedOrchId = `${ORCHESTRATOR_INSTANCE_ID_PREFIX}${TEST_JOB_ID}`;
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining(`Failed to terminate or purge linked orchestration '${expectedOrchId}'`),
+      expect.anything(),
+    );
+    expect(logger.info).not.toHaveBeenCalled();
   });
 });

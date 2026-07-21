@@ -9,6 +9,8 @@ import {
   createAsyncPageable,
   Page,
   EntityQuery,
+  Logger,
+  ConsoleLogger,
 } from "@microsoft/durabletask-js";
 import {
   ExportJobCreationOptions,
@@ -36,13 +38,19 @@ import { ExportJobNotFoundError } from "../errors";
 export class ExportHistoryClient {
   private readonly client: TaskHubGrpcClient;
   private readonly storageOptions: ExportHistoryStorageOptions;
+  private readonly logger: Logger;
 
-  constructor(client: TaskHubGrpcClient, storageOptions: ExportHistoryStorageOptions) {
+  constructor(
+    client: TaskHubGrpcClient,
+    storageOptions: ExportHistoryStorageOptions,
+    logger?: Logger,
+  ) {
     if (!client) throw new Error("client is required");
     if (!storageOptions) throw new Error("storageOptions is required");
 
     this.client = client;
     this.storageOptions = storageOptions;
+    this.logger = logger ?? new ConsoleLogger();
   }
 
   /**
@@ -120,7 +128,7 @@ export class ExportHistoryClient {
    */
   getJobClient(jobId: string): ExportHistoryJobClient {
     if (!jobId) throw new Error("jobId is required");
-    return new ExportHistoryJobClient(this.client, jobId, this.storageOptions);
+    return new ExportHistoryJobClient(this.client, jobId, this.storageOptions, this.logger);
   }
 }
 
@@ -135,11 +143,13 @@ export class ExportHistoryJobClient {
   private readonly jobId: string;
   private readonly storageOptions: ExportHistoryStorageOptions;
   private readonly entityId: EntityInstanceId;
+  private readonly logger: Logger;
 
   constructor(
     client: TaskHubGrpcClient,
     jobId: string,
     storageOptions: ExportHistoryStorageOptions,
+    logger?: Logger,
   ) {
     if (!client) throw new Error("client is required");
     if (!jobId) throw new Error("jobId is required");
@@ -149,6 +159,7 @@ export class ExportHistoryJobClient {
     this.jobId = jobId;
     this.storageOptions = storageOptions;
     this.entityId = new EntityInstanceId(EXPORT_JOB_ENTITY_NAME, jobId);
+    this.logger = logger ?? new ConsoleLogger();
   }
 
   /**
@@ -233,7 +244,22 @@ export class ExportHistoryJobClient {
       await this.client.waitForOrchestrationCompletion(orchestrationInstanceId, false, 30);
       await this.client.purgeOrchestration(orchestrationInstanceId);
     } catch (e: unknown) {
-      if (!isNotFoundError(e)) {
+      if (isNotFoundError(e)) {
+        // Expected: the linked orchestration doesn't exist or was already purged.
+        // Log at info level (aligned with the .NET SDK) but do not re-throw.
+        this.logger.info(
+          `Orchestration instance '${orchestrationInstanceId}' is already purged or never existed.`,
+          e,
+        );
+      } else {
+        // Unexpected failure (network, auth, timeout, server error): log and re-throw
+        // so the caller is aware the cleanup did not complete.
+        this.logger.error(
+          `Failed to terminate or purge linked orchestration '${orchestrationInstanceId}': ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+          e,
+        );
         throw e;
       }
     }
