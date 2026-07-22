@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { TaskHubGrpcClient, TaskHubGrpcWorker } from "@microsoft/durabletask-js";
+import { TaskHubGrpcClient, TaskHubGrpcWorker, Logger } from "@microsoft/durabletask-js";
 import { ExportHistoryStorageOptions } from "../models";
 import { ExportHistoryClient } from "../client/export-history-client";
 import { ExportJob } from "../entity/export-job";
@@ -97,6 +97,7 @@ export function useExportHistoryWorker(
  *
  * @param client The TaskHubGrpcClient to use for orchestration interactions.
  * @param storageOptions Azure Blob Storage configuration for the export destination.
+ * @param logger Optional logger for client-side diagnostics. Defaults to ConsoleLogger.
  * @returns A configured ExportHistoryClient instance.
  *
  * @example
@@ -117,6 +118,7 @@ export function useExportHistoryWorker(
 export function createExportHistoryClient(
   client: TaskHubGrpcClient,
   storageOptions: ExportHistoryStorageOptions,
+  logger?: Logger,
 ): ExportHistoryClient {
   if (!storageOptions.connectionString) {
     throw new Error("ExportHistoryStorageOptions.connectionString is required");
@@ -126,5 +128,5 @@ export function createExportHistoryClient(
     throw new Error("ExportHistoryStorageOptions.containerName is required");
   }
 
-  return new ExportHistoryClient(client, storageOptions);
+  return new ExportHistoryClient(client, storageOptions, logger);
 }

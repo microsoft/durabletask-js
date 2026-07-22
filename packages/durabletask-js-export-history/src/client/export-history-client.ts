@@ -9,6 +9,8 @@ import {
   createAsyncPageable,
   Page,
   EntityQuery,
+  Logger,
+  ConsoleLogger,
 } from "@microsoft/durabletask-js";
 import {
   ExportJobCreationOptions,
@@ -36,13 +38,19 @@ import { ExportJobNotFoundError } from "../errors";
 export class ExportHistoryClient {
   private readonly client: TaskHubGrpcClient;
   private readonly storageOptions: ExportHistoryStorageOptions;
+  private readonly logger: Logger;
 
-  constructor(client: TaskHubGrpcClient, storageOptions: ExportHistoryStorageOptions) {
+  constructor(
+    client: TaskHubGrpcClient,
+    storageOptions: ExportHistoryStorageOptions,
+    logger?: Logger,
+  ) {
     if (!client) throw new Error("client is required");
     if (!storageOptions) throw new Error("storageOptions is required");
 
     this.client = client;
     this.storageOptions = storageOptions;
+    this.logger = logger ?? new ConsoleLogger();
   }
 
   /**
@@ -120,7 +128,7 @@ export class ExportHistoryClient {
    */
   getJobClient(jobId: string): ExportHistoryJobClient {
     if (!jobId) throw new Error("jobId is required");
-    return new ExportHistoryJobClient(this.client, jobId, this.storageOptions);
+    return new ExportHistoryJobClient(this.client, jobId, this.storageOptions, this.logger);
   }
 }
 
@@ -135,11 +143,13 @@ export class ExportHistoryJobClient {
   private readonly jobId: string;
   private readonly storageOptions: ExportHistoryStorageOptions;
   private readonly entityId: EntityInstanceId;
+  private readonly logger: Logger;
 
   constructor(
     client: TaskHubGrpcClient,
     jobId: string,
     storageOptions: ExportHistoryStorageOptions,
+    logger?: Logger,
   ) {
     if (!client) throw new Error("client is required");
     if (!jobId) throw new Error("jobId is required");
@@ -149,6 +159,7 @@ export class ExportHistoryJobClient {
     this.jobId = jobId;
     this.storageOptions = storageOptions;
     this.entityId = new EntityInstanceId(EXPORT_JOB_ENTITY_NAME, jobId);
+    this.logger = logger ?? new ConsoleLogger();
   }
 
   /**
@@ -225,13 +236,32 @@ export class ExportHistoryJobClient {
       request,
     );
 
-    // Then terminate the linked export orchestration if it exists
+    // Then terminate the linked export orchestration if it exists.
+    // Only swallow "not found" errors (orchestration doesn't exist or already purged).
+    // Re-throw all other errors (network failures, auth errors, timeouts, etc.).
     try {
       await this.client.terminateOrchestration(orchestrationInstanceId, "Export job deleted");
       await this.client.waitForOrchestrationCompletion(orchestrationInstanceId, false, 30);
       await this.client.purgeOrchestration(orchestrationInstanceId);
-    } catch {
-      // Orchestration instance doesn't exist or already purged - this is expected
+    } catch (e: unknown) {
+      if (isNotFoundError(e)) {
+        // Expected: the linked orchestration doesn't exist or was already purged.
+        // Log at info level (aligned with the .NET SDK) but do not re-throw.
+        this.logger.info(
+          `Orchestration instance '${orchestrationInstanceId}' is already purged or never existed.`,
+          e,
+        );
+      } else {
+        // Unexpected failure (network, auth, timeout, server error): log and re-throw
+        // so the caller is aware the cleanup did not complete.
+        this.logger.error(
+          `Failed to terminate or purge linked orchestration '${orchestrationInstanceId}': ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+          e,
+        );
+        throw e;
+      }
     }
   }
 }
@@ -267,4 +297,23 @@ function matchesFilter(state: ExportJobState, filter: ExportJobQuery): boolean {
     filter.createdTo === undefined ||
     (state.createdAt !== undefined && new Date(state.createdAt) <= filter.createdTo);
   return statusMatches && createdFromMatches && createdToMatches;
+}
+
+/** gRPC status code for NOT_FOUND (well-known constant from the gRPC spec). */
+const GRPC_STATUS_NOT_FOUND = 5;
+
+/**
+ * Checks whether an error is a gRPC NOT_FOUND error.
+ *
+ * Uses duck typing to inspect the error's `code` property without requiring
+ * a direct dependency on `@grpc/grpc-js`. gRPC `ServiceError` objects always
+ * carry a numeric `code` field matching the standard gRPC status codes.
+ */
+function isNotFoundError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code: unknown }).code === GRPC_STATUS_NOT_FOUND
+  );
 }
