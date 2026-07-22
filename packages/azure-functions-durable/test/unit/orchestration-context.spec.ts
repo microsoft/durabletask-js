@@ -272,9 +272,9 @@ describe("wrapOrchestrator", () => {
   });
 
   it("exposes a replay-safe logger as context.log/error on the classic context", async () => {
-    // A classic orchestrator may be a plain (non-generator) function that returns a value; the
-    // wrapper still invokes it with the full classic context, so log wiring is exercised here.
-    const classic = (context: ClassicOrchestrationContext): string => {
+    // A classic orchestrator is a sync generator; the wrapper invokes it with the full classic
+    // context, so log wiring is exercised here.
+    const classic = function* (context: ClassicOrchestrationContext): Generator<Task<unknown>, string, unknown> {
       context.log("hi");
       context.error("boom");
       return "logged";
@@ -293,41 +293,34 @@ describe("wrapOrchestrator", () => {
     expect(replaySafeLogger.error).toHaveBeenCalledWith("boom");
   });
 
-  it("wraps a plain sync single-arg core-native orchestrator so it reaches core context members (#321)", async () => {
-    // The ambiguous shape: `(ctx) => value`, plain sync, arity 1. It is the IDENTICAL shape for a
-    // classic `(context) => context.df.*` body and a core-native `(ctx) => ctx.newGuid()` body, so it
-    // is wrapped and handed a DUAL context. Before #321 it got the classic `{ df, log }` context only,
-    // so `ctx.newGuid()` threw `TypeError` and `ctx.instanceId` was `undefined`.
-    const native = (ctx: OrchestrationContext): string =>
-      `${ctx.instanceId}:${ctx.newGuid()}:${(ctx as unknown as { getInput(): unknown }).getInput()}`;
+  it("passes a plain sync single-arg core-native orchestrator through unchanged (#321)", () => {
+    // #321: a plain sync, single-argument, non-generator `(ctx) => value` is CORE-NATIVE and passes
+    // through wrapOrchestrator UNCHANGED (identity), receiving the core OrchestrationContext directly.
+    // Before the fix it was mis-routed to the classic `{ df, log }` context, so `ctx.newGuid()` threw
+    // and `ctx.instanceId` was `undefined`.
+    const native = (ctx: OrchestrationContext): string => `${ctx.instanceId}:${ctx.newGuid()}`;
 
     const wrapped = wrapOrchestrator(native as unknown as TOrchestrator);
-    const { ctx, raw } = createFakeCoreContext();
-    const gen = wrapped(ctx, "MY_INPUT") as AsyncGenerator<unknown, unknown, unknown>;
+    expect(wrapped).toBe(native as unknown as TOrchestrator); // passthrough (identity), not wrapped
 
-    const done = await gen.next();
-    expect(done.done).toBe(true);
-    // instanceId + newGuid forward to the core context; getInput returns the captured 1st-class input.
-    expect(done.value).toBe("instance-1:guid-1:MY_INPUT");
+    const { ctx, raw } = createFakeCoreContext();
+    expect((wrapped as unknown as (c: OrchestrationContext) => string)(ctx)).toBe("instance-1:guid-1");
     expect(raw.newGuid).toHaveBeenCalledTimes(1);
   });
 
-  it("exposes BOTH the classic df/log surface and forwarded core members on the dual context (#321)", async () => {
-    // Proves the dual context serves both intents at once: `context.df.*` + `context.log` (classic)
-    // and `context.instanceId` / `context.newGuid()` (core) resolve on the same object.
-    const both = (context: ClassicOrchestrationContext & OrchestrationContext): string => {
-      context.log("hello");
-      return `${context.df.instanceId}|${context.instanceId}|${context.newGuid()}`;
-    };
+  it("treats a non-generator classic-style single-arg orchestrator as core-native (breaking; #321)", () => {
+    // BREAKING: a classic v3 orchestrator written as a plain NON-generator `(context) => context.df.*`
+    // is now treated as core-native and passes through unchanged — it receives the core context, which
+    // has no `.df`. Standard classic orchestrators are sync GENERATORS (function*) and are unaffected.
+    const classicLike = ((context: ClassicOrchestrationContext): string =>
+      `v:${String((context as unknown as { df?: unknown }).df)}`) as unknown as TOrchestrator;
 
-    const { ctx, replaySafeLogger } = createFakeCoreContext();
-    const wrapped = wrapOrchestrator(both as unknown as TOrchestrator);
-    const gen = wrapped(ctx, undefined) as AsyncGenerator<unknown, unknown, unknown>;
+    const wrapped = wrapOrchestrator(classicLike);
+    expect(wrapped).toBe(classicLike); // passthrough, not wrapped
 
-    const done = await gen.next();
-    expect(done.done).toBe(true);
-    expect(done.value).toBe("instance-1|instance-1|guid-1");
-    expect(replaySafeLogger.info).toHaveBeenCalledWith("hello");
+    const { ctx } = createFakeCoreContext();
+    // The core context has no `df`, so a `.df`-using classic body degrades — the documented breaking change.
+    expect((wrapped as unknown as (c: OrchestrationContext) => string)(ctx)).toBe("v:undefined");
   });
 });
 
@@ -415,9 +408,10 @@ describe("wrapOrchestrator end-to-end (real core executor)", () => {
 
   it("drives a plain sync single-argument core-native orchestrator through the executor (#321)", async () => {
     // Regression (#321): a plain sync single-arg orchestrator `(ctx) => value` is the ambiguous shape.
-    // It must reach core context members through the dual context — here `ctx.instanceId`. Before the
-    // fix it received the classic `{ df, log }` context, so `ctx.instanceId` was `undefined` and the
-    // orchestration completed with the garbage output "sync-native:undefined".
+    // It is core-native and passes through unchanged, receiving the core context directly (so
+    // `ctx.instanceId` resolves). Before the fix it received the classic `{ df, log }` context, so
+    // `ctx.instanceId` was `undefined` and the orchestration completed with the garbage output
+    // "sync-native:undefined".
     const backend = new InMemoryOrchestrationBackend();
     const worker = new TestOrchestrationWorker(backend);
 
