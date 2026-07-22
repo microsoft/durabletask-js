@@ -66,6 +66,7 @@ tests are `it.skip` with a comment citing the same reason.
 | `orchestration-query.spec.ts` | `OrchestrationQueryTests`      | `GetAllInstances` / `GetRunningInstances`                                                                   |
 | `purge.spec.ts`               | `PurgeInstancesTests`          | purge by time / by entity id (purge-without-start-time #644 skipped)                                        |
 | `class-based-entity.spec.ts`  | `ClassBasedEntityTests`        | class-based entity state                                                                                    |
+| `orchestrator-shapes.spec.ts` | net-new (#321/#322)            | `wrapOrchestrator` shape routing: classic v3 generator, core-native generator, and the ambiguous plain sync/async single-arg non-generator (`(ctx) => value`) reaching the core context |
 
 ### Node bug annotations honored
 
