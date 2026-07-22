@@ -23,7 +23,7 @@ This package supersedes the legacy [`durable-functions`](https://github.com/Azur
 ## Migrating from durable-functions v3
 
 This provider keeps classic `context.df.*` orchestrators and entities working, but a few surfaces
-changed. See [`CHANGELOG.md`](./CHANGELOG.md) for the full list; the highlights:
+changed:
 
 - **Node.js >= 22** is required (v3 supported Node 18/20).
 - **Classic contexts no longer extend `InvocationContext`** — only `df` plus replay-safe log helpers
@@ -38,10 +38,20 @@ changed. See [`CHANGELOG.md`](./CHANGELOG.md) for the full list; the highlights:
   `showHistory` populates `history`, and `showHistoryOutput` toggles the per-entry input/result
   payloads; `history` entries are core `HistoryEvent`s (v3 types `history` as `Array<unknown>`).
   **`client.startNew()` supports the `version` option.**
-- **Some v3 top-level exports were removed** — `DummyOrchestrationContext` / `DummyEntityContext`,
-  `DurableError` / `AggregatedError`, and `ManagedIdentityTokenSource` / `TokenSource`.
-  `TaskFailedError` is re-exported from the core SDK; use the core `TestOrchestrationWorker` /
-  `TestOrchestrationClient` for orchestration unit tests.
+- **Entity locking / critical sections moved to the core context.** v3's `context.df.lock(...)` /
+  `context.df.isLocked()` and the `DurableLock` / `LockState` / `LockingRulesViolationError` exports
+  are removed. Acquire locks with the core `context.entities.lockEntities(...entityIds)` (returns a
+  `LockHandle` — call `release()`, ideally in a `finally`) and query with
+  `context.entities.isInCriticalSection()`. Restoring the v3 `df.lock` / `isLocked` surface is tracked
+  in [#317](https://github.com/microsoft/durabletask-js/issues/317).
+- **`context.df.callHttp(...)` now throws.** v3 ran durable HTTP as a host-managed activity; the
+  consolidated gRPC backend has no equivalent primitive. Implement an HTTP activity in your app and
+  call it from the orchestrator. Restoring `callHttp` as a worker-side durable activity is tracked in
+  [#318](https://github.com/microsoft/durabletask-js/issues/318).
+- **Some v3 top-level exports were removed** — `DummyOrchestrationContext` / `DummyEntityContext`
+  (testing utilities), `ManagedIdentityTokenSource`, and the entity-lock types above. `TaskFailedError`
+  is re-exported from the core SDK (aggregate failures surface as JS-native `AggregateError`); use the
+  core `TestOrchestrationWorker` / `TestOrchestrationClient` for orchestration unit tests.
 
 ## Getting started
 
