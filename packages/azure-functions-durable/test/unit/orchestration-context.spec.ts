@@ -292,6 +292,43 @@ describe("wrapOrchestrator", () => {
     expect(replaySafeLogger.info).toHaveBeenCalledWith("hi");
     expect(replaySafeLogger.error).toHaveBeenCalledWith("boom");
   });
+
+  it("wraps a plain sync single-arg core-native orchestrator so it reaches core context members (#321)", async () => {
+    // The ambiguous shape: `(ctx) => value`, plain sync, arity 1. It is the IDENTICAL shape for a
+    // classic `(context) => context.df.*` body and a core-native `(ctx) => ctx.newGuid()` body, so it
+    // is wrapped and handed a DUAL context. Before #321 it got the classic `{ df, log }` context only,
+    // so `ctx.newGuid()` threw `TypeError` and `ctx.instanceId` was `undefined`.
+    const native = (ctx: OrchestrationContext): string =>
+      `${ctx.instanceId}:${ctx.newGuid()}:${(ctx as unknown as { getInput(): unknown }).getInput()}`;
+
+    const wrapped = wrapOrchestrator(native as unknown as TOrchestrator);
+    const { ctx, raw } = createFakeCoreContext();
+    const gen = wrapped(ctx, "MY_INPUT") as AsyncGenerator<unknown, unknown, unknown>;
+
+    const done = await gen.next();
+    expect(done.done).toBe(true);
+    // instanceId + newGuid forward to the core context; getInput returns the captured 1st-class input.
+    expect(done.value).toBe("instance-1:guid-1:MY_INPUT");
+    expect(raw.newGuid).toHaveBeenCalledTimes(1);
+  });
+
+  it("exposes BOTH the classic df/log surface and forwarded core members on the dual context (#321)", async () => {
+    // Proves the dual context serves both intents at once: `context.df.*` + `context.log` (classic)
+    // and `context.instanceId` / `context.newGuid()` (core) resolve on the same object.
+    const both = (context: ClassicOrchestrationContext & OrchestrationContext): string => {
+      context.log("hello");
+      return `${context.df.instanceId}|${context.instanceId}|${context.newGuid()}`;
+    };
+
+    const { ctx, replaySafeLogger } = createFakeCoreContext();
+    const wrapped = wrapOrchestrator(both as unknown as TOrchestrator);
+    const gen = wrapped(ctx, undefined) as AsyncGenerator<unknown, unknown, unknown>;
+
+    const done = await gen.next();
+    expect(done.done).toBe(true);
+    expect(done.value).toBe("instance-1|instance-1|guid-1");
+    expect(replaySafeLogger.info).toHaveBeenCalledWith("hello");
+  });
 });
 
 describe("wrapOrchestrator end-to-end (real core executor)", () => {
@@ -371,6 +408,30 @@ describe("wrapOrchestrator end-to-end (real core executor)", () => {
 
       expect(state?.runtimeStatus).toBe(OrchestrationStatus.COMPLETED);
       expect(state?.serializedOutput).toBe(JSON.stringify("async-done:async-instance"));
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it("drives a plain sync single-argument core-native orchestrator through the executor (#321)", async () => {
+    // Regression (#321): a plain sync single-arg orchestrator `(ctx) => value` is the ambiguous shape.
+    // It must reach core context members through the dual context — here `ctx.instanceId`. Before the
+    // fix it received the classic `{ df, log }` context, so `ctx.instanceId` was `undefined` and the
+    // orchestration completed with the garbage output "sync-native:undefined".
+    const backend = new InMemoryOrchestrationBackend();
+    const worker = new TestOrchestrationWorker(backend);
+
+    const syncNative = (ctx: OrchestrationContext): string => `sync-native:${ctx.instanceId}`;
+    worker.addNamedOrchestrator("syncNativeOrch", wrapOrchestrator(syncNative as unknown as TOrchestrator));
+
+    await worker.start();
+    try {
+      const client = new TestOrchestrationClient(backend);
+      const id = await client.scheduleNewOrchestration("syncNativeOrch", undefined, "sync-instance");
+      const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+      expect(state?.runtimeStatus).toBe(OrchestrationStatus.COMPLETED);
+      expect(state?.serializedOutput).toBe(JSON.stringify("sync-native:sync-instance"));
     } finally {
       await worker.stop();
     }

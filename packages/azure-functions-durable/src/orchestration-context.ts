@@ -218,8 +218,12 @@ export type ClassicOrchestrator = (
  *   generator to `yield` durable tasks), so `async` unambiguously means core-native.
  * - `function*` (classic v3 sync generator) is wrapped; the engine cannot drive a sync generator, so
  *   the wrapper delegates to it via `yield*`.
- * - A plain SYNC (non-generator) function is ambiguous, so fall back to arity: a lone `context`
- *   parameter is treated as classic, `(ctx, input)` as core-native.
+ * - A plain SYNC (non-generator) single-argument function is ambiguous — the identical shape serves
+ *   both a classic `(context) => context.df.*` body and a core-native `(ctx) => ctx.newGuid()` body.
+ *   Rather than guess (see #321), it is wrapped with a DUAL context (see {@link createClassicContext})
+ *   that exposes the classic `df` + replay-safe log surface AND forwards core
+ *   {@link OrchestrationContext} members, so both intents work. `(ctx, input)` (arity 2) is
+ *   unambiguously core-native and passes through unchanged.
  */
 export function wrapOrchestrator(handler: TOrchestrator | ClassicOrchestrator): TOrchestrator {
   if (typeof handler === "function" && isClassicOrchestrator(handler)) {
@@ -232,21 +236,7 @@ export function wrapOrchestrator(handler: TOrchestrator | ClassicOrchestrator): 
       ctx: OrchestrationContext,
       input: unknown,
     ): AsyncGenerator<Task<unknown>, unknown, unknown> {
-      const df = new DurableOrchestrationContext(ctx, input);
-      // Replay-safe logger: output is suppressed while the engine replays history, matching the
-      // .NET/Python providers. Core Logger has no `trace`/plain `log`, so log→info and trace→debug.
-      const logger = ctx.createReplaySafeLogger(new ConsoleLogger());
-      const toArgs = (a: unknown[]) => a as [string, ...unknown[]];
-      const classicCtx: ClassicOrchestrationContext = {
-        df,
-        log: (...a) => logger.info(...toArgs(a)),
-        info: (...a) => logger.info(...toArgs(a)),
-        warn: (...a) => logger.warn(...toArgs(a)),
-        error: (...a) => logger.error(...toArgs(a)),
-        debug: (...a) => logger.debug(...toArgs(a)),
-        trace: (...a) => logger.debug(...toArgs(a)),
-      };
-      const result = classic(classicCtx);
+      const result = classic(createClassicContext(ctx, input));
       if (isDrivableGenerator(result)) {
         return yield* result;
       }
@@ -255,6 +245,56 @@ export function wrapOrchestrator(handler: TOrchestrator | ClassicOrchestrator): 
     return wrapped as unknown as TOrchestrator;
   }
   return handler as TOrchestrator;
+}
+
+/**
+ * @hidden
+ * Builds the context handed to a wrapped orchestrator body. It overlays the classic v3 surface
+ * (`df` + replay-safe log helpers) on top of the core {@link OrchestrationContext} so BOTH readings
+ * of the ambiguous "plain sync, single-arg" shape work without the wrapper having to guess (#321):
+ *
+ * - classic `(context) => context.df.callActivity(...)` / `context.log(...)` resolve via the overlay;
+ * - core-native `(ctx) => ctx.newGuid()` / `ctx.instanceId` / `ctx.getInput()` resolve by forwarding
+ *   to the core context — methods are bound to it, and getters read live replay state.
+ *
+ * The overlay always wins for its own keys; every other member is forwarded to the core context.
+ * This is replay-safe: all forwarded core members are themselves replay-safe, and logging goes
+ * through the core replay-safe logger, so a classic body reaching a core method introduces no hazard.
+ */
+function createClassicContext(ctx: OrchestrationContext, input: unknown): ClassicOrchestrationContext {
+  const df = new DurableOrchestrationContext(ctx, input);
+  // Replay-safe logger: output is suppressed while the engine replays history, matching the
+  // .NET/Python providers. Core Logger has no `trace`/plain `log`, so log→info and trace→debug.
+  const logger = ctx.createReplaySafeLogger(new ConsoleLogger());
+  const toArgs = (a: unknown[]) => a as [string, ...unknown[]];
+  const overlay: Record<string | symbol, unknown> = {
+    df,
+    // `getInput()` is not a core OrchestrationContext member — core orchestrators receive input as
+    // the 2nd argument — but a plain sync single-arg core-native body has no 2nd-arg binding, so we
+    // expose the captured input here for `(ctx) => ctx.getInput()` parity with classic `df.getInput()`.
+    getInput: <T = unknown>() => df.getInput<T>(),
+    log: (...a: unknown[]) => logger.info(...toArgs(a)),
+    info: (...a: unknown[]) => logger.info(...toArgs(a)),
+    warn: (...a: unknown[]) => logger.warn(...toArgs(a)),
+    error: (...a: unknown[]) => logger.error(...toArgs(a)),
+    debug: (...a: unknown[]) => logger.debug(...toArgs(a)),
+    trace: (...a: unknown[]) => logger.debug(...toArgs(a)),
+  };
+  const dual = new Proxy(ctx, {
+    get(target, prop): unknown {
+      if (prop in overlay) {
+        return overlay[prop];
+      }
+      // Read from the real core context (never the proxy) so getters and `this`-bound methods run
+      // against live replay state and cannot recurse back through this trap.
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+    has(target, prop): boolean {
+      return prop in overlay || prop in target;
+    },
+  });
+  return dual as unknown as ClassicOrchestrationContext;
 }
 
 /**
@@ -274,8 +314,9 @@ function isClassicOrchestrator(handler: TOrchestrator | ClassicOrchestrator): bo
   if (kind === "GeneratorFunction") {
     return true; // classic v3: a sync generator the engine can't drive on its own.
   }
-  // Plain SYNC (non-generator) function: kind is ambiguous, so fall back to arity. A lone
-  // `context` parameter is the classic v3 shape; `(ctx, input)` is core-native.
+  // Plain SYNC (non-generator) function: the single-arg shape is ambiguous (classic vs core-native).
+  // A lone `context` param is wrapped and handed a DUAL context (createClassicContext) satisfying
+  // BOTH surfaces, so classifying it as classic here is harmless; `(ctx, input)` is core-native.
   return handler.length <= 1;
 }
 
