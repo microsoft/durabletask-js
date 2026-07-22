@@ -33,21 +33,32 @@ export function getClient(context: InvocationContext): DurableFunctionsClient {
   }
 
   const bindingData: unknown = context.extraInputs.get(clientInput);
-  const cacheKey = typeof bindingData === "string" ? bindingData : JSON.stringify(bindingData);
-  let client = clientCache.get(cacheKey);
-  if (!client) {
-    const created = new DurableFunctionsClient(asClientInput(bindingData));
+  // Validate/coerce before deriving a cache key: asClientInput throws the friendly "not a valid
+  // durable client input" error for missing/invalid values (rather than a raw JSON.stringify
+  // TypeError), and we only cache once a reliable string key can be derived.
+  const clientInputValue = asClientInput(bindingData);
+
+  const cacheKey = deriveCacheKey(clientInputValue);
+  if (cacheKey !== undefined) {
+    const cached = clientCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
+
+  const created = new DurableFunctionsClient(clientInputValue);
+  if (cacheKey !== undefined) {
+    const key = cacheKey;
     // Evict on stop() so a disposed client (closed gRPC channel) is never handed out again; a later
     // getClient() with the same binding then builds a fresh client instead of reusing a dead channel.
     const originalStop = created.stop.bind(created);
     created.stop = async (): Promise<void> => {
-      clientCache.delete(cacheKey);
+      clientCache.delete(key);
       await originalStop();
     };
-    client = created;
-    clientCache.set(cacheKey, client);
+    clientCache.set(key, created);
   }
-  return client;
+  return created;
 }
 
 /** @hidden */
@@ -68,4 +79,20 @@ function asClientInput(bindingData: unknown): DurableFunctionsClientInput {
     "Received input is not a valid durable client input. Check your extraInputs definition " +
       "when registering your function.",
   );
+}
+
+/**
+ * Derives a stable cache key for a validated client input. String configs key directly; object
+ * configs are serialized. Returns `undefined` when a reliable key cannot be produced (e.g. a
+ * non-serializable object), signalling the caller to skip caching rather than throw.
+ */
+function deriveCacheKey(input: DurableFunctionsClientInput): string | undefined {
+  if (typeof input === "string") {
+    return input;
+  }
+  try {
+    return JSON.stringify(input);
+  } catch {
+    return undefined;
+  }
 }

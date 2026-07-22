@@ -334,14 +334,17 @@ export class TaskHubGrpcWorker {
 
     if (!stub.orchestratorResponse) {
       if (stub.abandoned) {
-        // Versioning resolved this work item to the abandon path. Abandon has no meaning on the
-        // single-work-item host path (there is no work-item queue to hand the item back to), so
-        // surface a distinct, actionable error instead of the generic "no response" one. Construct
-        // the worker without versioning when using processOrchestratorRequest.
+        // Versioning resolved this work item to the abandon (Reject) path. Abandon has no meaning on
+        // the single-work-item host path (there is no work-item queue to hand the item back to), so
+        // surface a distinct, actionable error instead of the generic "no response" one. Only the
+        // Reject failure strategy is unsupported here: VersionFailureStrategy.Fail (or no versioning)
+        // resolves in-process and returns a response.
         throw new Error(
-          "Orchestrator work item was abandoned (a version mismatch resolved to the abandon path). " +
-            "Abandon is not supported on the single-work-item processOrchestratorRequest path; " +
-            "construct the worker without versioning for this host integration.",
+          "Orchestrator work item was abandoned because a version mismatch resolved to the Reject " +
+            "(abandon) strategy, which the single-work-item processOrchestratorRequest path cannot " +
+            "honor (there is no work-item queue to hand the item back to). Set the versioning " +
+            "failureStrategy to VersionFailureStrategy.Fail (which fails the orchestration in-process " +
+            "and returns a response) or disable versioning for this host integration.",
         );
       }
       throw new Error("Orchestrator execution did not produce a response.");

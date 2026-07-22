@@ -106,4 +106,34 @@ describe("getClient", () => {
 
     expect(() => getClient(context)).toThrow(/not a valid durable client input/i);
   });
+
+  it("throws the friendly invalid-input error when the binding value is missing (undefined)", () => {
+    // The binding is registered but the host provided no value (get() -> undefined). Validation must
+    // run BEFORE any cache-key derivation so this surfaces the friendly error, not a JSON.stringify
+    // TypeError from serializing undefined.
+    const clientInput = input.durableClient();
+    const context = new InvocationContext({ options: { extraInputs: [clientInput] } });
+
+    expect(() => getClient(context)).toThrow(/not a valid durable client input/i);
+  });
+
+  it("does not cache when the config is non-serializable, returning a fresh client each call", async () => {
+    // A valid object config whose extra field cannot be JSON-serialized (BigInt). The constructor
+    // ignores the unknown field, but the cache key cannot be derived, so getClient must fall back to
+    // an uncached client rather than throwing at key derivation.
+    const clientInput = input.durableClient();
+    const context = new InvocationContext({ options: { extraInputs: [clientInput] } });
+    context.extraInputs.set(clientInput, { ...CLIENT_CONFIG, taskHubName: "functions-taskhub-uncacheable", weird: 1n });
+
+    const first = getClient(context);
+    const second = getClient(context);
+    try {
+      expect(first).toBeInstanceOf(DurableFunctionsClient);
+      // No reliable cache key -> each call builds a distinct client instead of reusing a cached one.
+      expect(second).not.toBe(first);
+    } finally {
+      await first.stop();
+      await second.stop();
+    }
+  });
 });
