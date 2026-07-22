@@ -580,6 +580,17 @@ describe("In-Memory Backend", () => {
     expect((backend as any).instanceTimers.has(id1)).toBe(false);
   });
 
+  it("should silently ignore completeOrchestration for purged instances", () => {
+    // Verifies that completeOrchestration returns silently when the instance
+    // has been deleted (e.g., via purge or reset), consistent with how
+    // completeActivity handles missing instances.
+
+    // Should not throw — instance simply doesn't exist
+    expect(() => {
+      backend.completeOrchestration("nonexistent-instance", 1, []);
+    }).not.toThrow();
+  });
+
   it("should allow reusing instance IDs after reset", async () => {
     const orchestrator: TOrchestrator = async (_: OrchestrationContext, input: number) => {
       return input * 2;
