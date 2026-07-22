@@ -53,6 +53,7 @@ function createHistoryChunk(): pb.HistoryChunk {
   const timestamp = new Timestamp();
   timestamp.fromDate(new Date());
   event.setTimestamp(timestamp);
+  const orchestratorStarted = new pb.OrchestratorStartedEvent();
   event.setOrchestratorstarted(orchestratorStarted);
   chunk.setEventsList([event]);
   return chunk;
