@@ -616,12 +616,21 @@ function tokenizeAndGetValue(json: string, key: string): string {
  * by `formatLocalized`. C# `{{`/`}}` escapes are already unescaped here.
  */
 export const NODE_LOCALIZED_STRINGS: Record<string, string> = {
-  "CaughtActivityException.ErrorMessage": "Caught exception: Error: Activity function 'raise_exception' failed:",
-  "RethrownActivityException.ErrorMessage":
-    "Orchestrator function 'RethrowActivityException' failed: Activity function 'raise_exception' failed: ",
-  // Bug: https://github.com/Azure/azure-functions-durable-js/issues/642
-  "CaughtEntityException.ErrorMessage": "Error: [object Object]",
-  "RethrownEntityException.ErrorMessage": "Orchestrator function 'ThrowEntityOrchestration' failed:",
+  // v4 gRPC-core surfaces its OWN error shape — `TaskFailedError` for activity failures and
+  // `EntityOperationFailedException` for entity failures — instead of v3's HTTP-path wrapping
+  // (`Orchestrator function '<name>' failed: Activity function '<name>' failed:`). The core
+  // error object does not carry the activity/orchestrator NAME (name-in-error is a possible
+  // future core enhancement, out of scope here), so these expected prefixes match the
+  // v4-natural output. Do NOT "restore" the v3 `... function '<name>' failed:` strings.
+  "CaughtActivityException.ErrorMessage": "Caught exception: TaskFailedError: Activity task #1 failed:",
+  "RethrownActivityException.ErrorMessage": "TaskFailedError: Activity task #1 failed:",
+  // Case previously encoded v3 bug https://github.com/Azure/azure-functions-durable-js/issues/642
+  // (`Error: [object Object]`); v4 surfaces the real EntityOperationFailedException, which we keep
+  // (the buggy string is intentionally NOT reproduced).
+  "CaughtEntityException.ErrorMessage":
+    "EntityOperationFailedException: Operation 'get' of entity '@counter@myCounter' failed:",
+  "RethrownEntityException.ErrorMessage":
+    "EntityOperationFailedException: Operation 'get' of entity '@counter@myCounter' failed:",
   // Bug: https://github.com/Azure/azure-functions-durable-js/issues/645
   "ExternalEvent.CompletedInstance.ErrorName": "N/A",
   "ExternalEvent.CompletedInstance.ErrorMessage": "N/A",
@@ -631,10 +640,11 @@ export const NODE_LOCALIZED_STRINGS: Record<string, string> = {
   // instances to succeed rather than fail.
   "SuspendCompletedInstance.FailureMessage": "",
   "ResumeCompletedInstance.FailureMessage": "",
-  "SuspendSuspendedInstance.FailureMessage":
-    'Error: The operation failed with an unexpected status code: 500. Details: {"Message":"Something went wrong while processing your request',
-  "ResumeRunningInstance.FailureMessage":
-    'Error: The operation failed with an unexpected status code: 500. Details: {"Message":"Something went wrong while processing your request',
+  // v4 gRPC path: the compat client looks up the runtime status on an opaque wrong-state error and
+  // rethrows this friendly message (mirrors the host-side "Cannot <op> ... in the <State> state."
+  // wording). v3's expected value here was an HTTP-500 transport artifact, not a real message.
+  "SuspendSuspendedInstance.FailureMessage": "Error: Cannot suspend orchestration instance in the Suspended state.",
+  "ResumeRunningInstance.FailureMessage": "Error: Cannot resume orchestration instance in the Running state.",
   "TerminateCompletedInstance.FailureMessage": "",
   "TerminateTerminatedInstance.FailureMessage": "",
   "TerminateInvalidInstance.FailureMessage": "No instance with ID '{0}' found.",

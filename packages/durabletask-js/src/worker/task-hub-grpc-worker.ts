@@ -314,6 +314,72 @@ export class TaskHubGrpcWorker {
   }
 
   /**
+   * Processes a single serialized TaskHubSidecarService OrchestratorRequest and
+   * returns the serialized OrchestratorResponse.
+   *
+   * @param request - The protobuf-encoded OrchestratorRequest bytes.
+   * @returns The protobuf-encoded OrchestratorResponse bytes.
+   *
+   * @remarks
+   * This is intended for host integrations, such as Azure Functions, that drive a
+   * single orchestration work item per invocation instead of running the
+   * long-lived gRPC worker loop. It reuses the same execution path as the worker
+   * loop, capturing the response in-process rather than completing it over gRPC.
+   * Host integrations own any transport-specific encoding (for example base64).
+   */
+  async processOrchestratorRequest(request: Uint8Array): Promise<Uint8Array> {
+    const req = pb.OrchestratorRequest.deserializeBinary(request);
+    const stub = new CapturingSidecarStub();
+    await this._executeOrchestratorInternal(req, "", stub as unknown as stubs.TaskHubSidecarServiceClient);
+
+    if (!stub.orchestratorResponse) {
+      if (stub.abandoned) {
+        // Versioning resolved this work item to the abandon (Reject) path. Abandon has no meaning on
+        // the single-work-item host path (there is no work-item queue to hand the item back to), so
+        // surface a distinct, actionable error instead of the generic "no response" one. Only the
+        // Reject failure strategy is unsupported here: VersionFailureStrategy.Fail (or no versioning)
+        // resolves in-process and returns a response.
+        throw new Error(
+          "Orchestrator work item was abandoned because a version mismatch resolved to the Reject " +
+            "(abandon) strategy, which the single-work-item processOrchestratorRequest path cannot " +
+            "honor (there is no work-item queue to hand the item back to). Set the versioning " +
+            "failureStrategy to VersionFailureStrategy.Fail (which fails the orchestration in-process " +
+            "and returns a response) or disable versioning for this host integration.",
+        );
+      }
+      throw new Error("Orchestrator execution did not produce a response.");
+    }
+
+    return stub.orchestratorResponse.serializeBinary();
+  }
+
+  /**
+   * Processes a single serialized TaskHubSidecarService EntityBatchRequest and
+   * returns the serialized EntityBatchResult.
+   *
+   * @param request - The protobuf-encoded EntityBatchRequest bytes.
+   * @returns The protobuf-encoded EntityBatchResult bytes.
+   *
+   * @remarks
+   * This is intended for host integrations, such as Azure Functions, that drive a
+   * single entity batch work item per invocation instead of running the
+   * long-lived gRPC worker loop. It reuses the same execution path as the worker
+   * loop, capturing the result in-process rather than completing it over gRPC.
+   * Host integrations own any transport-specific encoding (for example base64).
+   */
+  async processEntityBatchRequest(request: Uint8Array): Promise<Uint8Array> {
+    const req = pb.EntityBatchRequest.deserializeBinary(request);
+    const stub = new CapturingSidecarStub();
+    await this._executeEntityInternal(req, "", stub as unknown as stubs.TaskHubSidecarServiceClient);
+
+    if (!stub.entityResult) {
+      throw new Error("Entity batch execution did not produce a result.");
+    }
+
+    return stub.entityResult.serializeBinary();
+  }
+
+  /**
    * In node.js we don't require a new thread as we have a main event loop
    * Therefore, we open the stream and simply listen through the eventemitter behind the scenes
    */
@@ -697,7 +763,11 @@ export class TaskHubGrpcWorker {
         try {
           const abandonRequest = new pb.AbandonOrchestrationTaskRequest();
           abandonRequest.setCompletiontoken(completionToken);
-          await callWithMetadata(stub.abandonTaskOrchestratorWorkItem.bind(stub), abandonRequest, this._metadataGenerator);
+          await callWithMetadata(
+            stub.abandonTaskOrchestratorWorkItem.bind(stub),
+            abandonRequest,
+            this._metadataGenerator,
+          );
         } catch (e: unknown) {
           const error = e instanceof Error ? e : new Error(String(e));
           WorkerLogs.completionError(this._logger, instanceId, error);
@@ -1158,5 +1228,53 @@ export class TaskHubGrpcWorker {
     } catch (e: any) {
       WorkerLogs.entityResponseDeliveryFailed(this._logger, e);
     }
+  }
+}
+
+/**
+ * A minimal in-process stand-in for the TaskHubSidecarService client that captures the
+ * completion payload instead of sending it over gRPC.
+ *
+ * @remarks
+ * This lets host integrations reuse the worker's existing execution path for a single work
+ * item (see {@link TaskHubGrpcWorker.processOrchestratorRequest} and
+ * {@link TaskHubGrpcWorker.processEntityBatchRequest}) without opening a gRPC channel. Only the
+ * completion/abandon methods used by those execution paths are implemented.
+ */
+class CapturingSidecarStub {
+  orchestratorResponse?: pb.OrchestratorResponse;
+  entityResult?: pb.EntityBatchResult;
+  /** Set when the execution path abandons the work item (e.g. a version mismatch) rather than completing it. */
+  abandoned = false;
+
+  completeOrchestratorTask(
+    request: pb.OrchestratorResponse,
+    _metadata: grpc.Metadata,
+    callback: (error: grpc.ServiceError | null, response: Empty) => void,
+  ): void {
+    this.orchestratorResponse = request;
+    callback(null, new Empty());
+  }
+
+  completeEntityTask(
+    request: pb.EntityBatchResult,
+    _metadata: grpc.Metadata,
+    callback: (error: grpc.ServiceError | null, response: Empty) => void,
+  ): void {
+    this.entityResult = request;
+    callback(null, new Empty());
+  }
+
+  abandonTaskOrchestratorWorkItem(
+    _request: pb.AbandonOrchestrationTaskRequest,
+    _metadata: grpc.Metadata,
+    callback: (error: grpc.ServiceError | null, response: Empty) => void,
+  ): void {
+    // Abandon is a no-op for the single-work-item host path: the version-mismatch abandon branch
+    // in _executeOrchestratorInternal calls this, but processOrchestratorRequest only surfaces a
+    // completion response. Record it so the caller can distinguish an abandoned work item from a
+    // genuine "no response produced" failure.
+    this.abandoned = true;
+    callback(null, new Empty());
   }
 }

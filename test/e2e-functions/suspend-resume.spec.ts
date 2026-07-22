@@ -97,6 +97,9 @@ describeMaybe("Functions host E2E — suspend/resume (AzureStorage)", () => {
     }
   }, 120_000);
 
+  // v3 410 parity (#282): suspend/resume of a TERMINAL instance is swallowed. The opaque `2 UNKNOWN`
+  // from the gRPC path is resolved to the terminal runtime status by the compat client and no-oped
+  // (returns 200 empty) instead of throwing.
   it("swallows suspend/resume of a completed orchestration (Node behavior)", async () => {
     const response = await invokeHttpTrigger(baseUrl, "StartOrchestration", "?orchestrationName=HelloCities");
     expect(response.status).toBe(202); // HttpStatusCode.Accepted

@@ -44,6 +44,12 @@ jobs:
               npm pack
             displayName: "pack @microsoft/durabletask-js-azuremanaged"
           
+          # Pack durable-functions
+          - script: |
+              cd packages/azure-functions-durable
+              npm pack
+            displayName: "pack durable-functions"
+          
           # Copy each package to its own staging subfolder
           - task: CopyFiles@2
             displayName: "Copy durabletask-js to staging"
@@ -57,3 +63,9 @@ jobs:
                 SourceFolder: $(System.DefaultWorkingDirectory)/packages/durabletask-js-azuremanaged
                 Contents: "*.tgz"
                 TargetFolder: $(Build.ArtifactStagingDirectory)/buildoutputs/durabletask-js-azuremanaged
+          - task: CopyFiles@2
+            displayName: "Copy azure-functions-durable to staging"
+            inputs:
+                SourceFolder: $(System.DefaultWorkingDirectory)/packages/azure-functions-durable
+                Contents: "*.tgz"
+                TargetFolder: $(Build.ArtifactStagingDirectory)/buildoutputs/azure-functions-durable

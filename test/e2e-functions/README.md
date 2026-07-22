@@ -12,19 +12,14 @@ repo — the `BasicNode` app plus its xUnit test classes — adapted to Jest. Ex
 strings and Node-specific bug annotations come from that repo's
 `NodeTestLanguageLocalizer`.
 
-## Published `durable-functions` dependency
+## In-repo `durable-functions` dependency
 
-The [`test-app`](./test-app) is wired to the **published** npm packages
-`durable-functions` (`^3.1.0`) and `@azure/functions` (`^4.11.2`), so it installs
-and builds without any in-repo package build. This is what makes the suite
-genuinely runnable.
-
-To run the app against an **in-repo** build of the Azure Functions durable package
-instead, change the `durable-functions` dependency in
-[`test-app/package.json`](./test-app/package.json) to a `file:` reference (e.g.
-`file:../../../packages/azure-functions-durable`) once that package exists on your
-branch, then re-run `npm install`. A note to this effect lives in that
-`package.json` (`comment_durable-functions`).
+The [`test-app`](./test-app) is wired to the **in-repo** `durable-functions`
+(compat) package and core `@microsoft/durabletask-js` via `file:` references, so
+the suite exercises the on-branch build of the consolidated gRPC path. Build those
+packages first (`npm run build -w durable-functions`, from the repo root), then run
+`npm install` here. A note to this effect lives in
+[`test-app/package.json`](./test-app/package.json) (`comment_durable-functions`).
 
 ## Gating / skip model
 
@@ -44,9 +39,10 @@ so it is safe to leave wired into CI and to run locally without setup:
   **not** part of the default `npm test` / workspaces test run, nor of
   `test:e2e:internal` (which is scoped to `tests/e2e`).
 - **CI** — `.github/workflows/functions-e2e-tests.yaml` installs `func` + Azurite,
-  installs/builds the test-app, and runs the suite on PRs that touch
-  `test/e2e-functions/**`. The self-skip is the safety net if a prerequisite fails
-  to come up.
+  installs/builds the test-app, and runs the suite on pull requests that touch the
+  Functions surface (`test/e2e-functions/**`, `packages/azure-functions-durable/**`,
+  or the workflow file), and on manual dispatch (`workflow_dispatch`). The self-skip
+  is the safety net if a prerequisite fails to come up.
 
 ## What it covers
 
@@ -87,7 +83,7 @@ tests are `it.skip` with a comment citing the same reason.
 - Node swallows suspend/resume/terminate of a **terminal** instance and returns
   success (`200`); the specs assert that behavior.
 
-The only test-app deviation from `BasicNode` is the published-dependency wiring
+The only test-app deviation from `BasicNode` is the `file:` dependency wiring
 (see `test-app/package.json`); the Durable function code is otherwise kept close
 to the source app. Host readiness is detected by polling `/admin/host/status`
 for `state == "Running"`, the same way the extension's C# `FunctionAppProcess`
@@ -99,9 +95,11 @@ You need the [Azure Functions Core Tools v4](https://learn.microsoft.com/azure/a
 and [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite).
 
 ```bash
-# 1. Start Azurite (blob/queue/table on 10000/10001/10002)
+# 1. Start Azurite (blob/queue/table on 10000/10001/10002).
+# --skipApiVersionCheck is required: the preview extension bundle's Azure Storage
+# SDK uses a newer REST API version that current Azurite rejects without it.
 npm install -g azurite
-azurite --silent --location /tmp/azurite --blobPort 10000 --queuePort 10001 --tablePort 10002 &
+azurite --silent --skipApiVersionCheck --location /tmp/azurite --blobPort 10000 --queuePort 10001 --tablePort 10002 &
 
 # 2. Install the Core Tools (if needed)
 npm install -g azure-functions-core-tools@4
@@ -109,7 +107,7 @@ npm install -g azure-functions-core-tools@4
 # 3. Install root dev deps (jest + ts-jest)
 npm ci
 
-# 4. Install + build the test-app (against the published durable-functions)
+# 4. Install + build the test-app (against the in-repo durable-functions)
 cd test/e2e-functions/test-app
 npm install
 npm run build

@@ -58,6 +58,10 @@ describeMaybe("Functions host E2E — terminate (AzureStorage)", () => {
     // Not applicable to the Node SDK.
   });
 
+  // v3 410 parity (#282): terminating a TERMINAL instance is swallowed. Over the gRPC path the wrong-
+  // state failure surfaces as `9 FAILED_PRECONDITION` ("...because instance is in the Terminated
+  // state."); the compat client looks up the terminal runtime status and no-ops it (returns 200)
+  // instead of throwing.
   it("swallows terminate of an already-terminated orchestration (Node behavior)", async () => {
     const response = await invokeHttpTrigger(
       baseUrl,
@@ -79,6 +83,9 @@ describeMaybe("Functions host E2E — terminate (AzureStorage)", () => {
     expect(terminateAgain.body).toContain(formatLocalized("TerminateTerminatedInstance.FailureMessage", instanceId));
   }, 120_000);
 
+  // v3 410 parity (#282, see above): terminating a COMPLETED instance is swallowed. The `9
+  // FAILED_PRECONDITION` is resolved to the terminal runtime status by the compat client and no-oped
+  // -> 200.
   it("swallows terminate of a completed orchestration (Node behavior)", async () => {
     const response = await invokeHttpTrigger(baseUrl, "StartOrchestration", "?orchestrationName=HelloCities");
     expect(response.status).toBe(202); // HttpStatusCode.Accepted
