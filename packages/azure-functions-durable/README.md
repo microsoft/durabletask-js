@@ -42,8 +42,11 @@ changed:
   `context.df.isLocked()` and the `DurableLock` / `LockState` / `LockingRulesViolationError` exports
   are removed. Acquire locks with the core `context.entities.lockEntities(...entityIds)` (returns a
   `LockHandle` — call `release()`, ideally in a `finally`) and query with
-  `context.entities.isInCriticalSection()`. Restoring the v3 `df.lock` / `isLocked` surface is tracked
-  in [#317](https://github.com/microsoft/durabletask-js/issues/317).
+  `context.entities.isInCriticalSection()`. This is the permanent, supported API — the v3 `df.lock` /
+  `isLocked` surface (and the `DurableLock` / `LockState` / `LockingRulesViolationError` types) will
+  **not** be restored; use the core `context.entities.*` lock API instead. See
+  [#317](https://github.com/microsoft/durabletask-js/issues/317) for the cross-SDK rationale (the
+  Python SDK ships only this core-native lock API and never exposed a `df.lock` / `is_locked` surface).
 - **`context.df.callHttp(...)` now throws.** v3 ran durable HTTP as a host-managed activity; the
   consolidated gRPC backend has no equivalent primitive. Implement an HTTP activity in your app and
   call it from the orchestrator. Restoring `callHttp` as a worker-side durable activity is tracked in
