@@ -16,8 +16,18 @@ jobs:
                 versionSpec: 20.x
             displayName: "Install Node.js"
           
-          # Install all workspace dependencies
-          - script: npm ci
+          - script: node scripts/setupNpmrc.js
+            displayName: "Configure azfunc npm registry"
+          - task: npmAuthenticate@0
+            displayName: "Authenticate to azfunc npm registry"
+            inputs:
+                workingFile: .npmrc
+
+          # Install all workspace dependencies.
+          # --ignore-scripts skips dependency lifecycle scripts so grpc-tools
+          # (codegen-only, unused by the build) does not download a native
+          # binary from node-precompiled-binaries.grpc.io
+          - script: npm ci --ignore-scripts
             displayName: "npm ci"
           
           # Build all packages (each workspace's build script runs its own prebuild)
