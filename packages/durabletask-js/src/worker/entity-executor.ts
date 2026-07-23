@@ -11,6 +11,7 @@ import * as pb from "../proto/orchestrator_service_pb";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 import { Timestamp } from "google-protobuf/google/protobuf/timestamp_pb";
 import { randomUUID } from "crypto";
+import { parseJsonField } from "../utils/pb-helper.util";
 
 /**
  * Internal type representing actions collected during entity execution.
@@ -356,7 +357,11 @@ export class TaskEntityShim {
 
     try {
       const inputValue = opRequest.getInput();
-      const input = inputValue ? JSON.parse(inputValue.getValue()) : undefined;
+      // Use the shared parseJsonField helper so an empty StringValue is treated as
+      // "no input" (returns undefined) instead of crashing on JSON.parse(""). A
+      // StringValue object is always truthy, so the previous `inputValue ? ...`
+      // guard did not protect against an empty wrapped string.
+      const input = parseJsonField(inputValue);
 
       // Set operation details
       this.operationShim.setNameAndInput(opRequest.getOperation(), input);
