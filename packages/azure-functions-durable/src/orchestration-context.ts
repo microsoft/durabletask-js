@@ -218,12 +218,13 @@ export type ClassicOrchestrator = (
  *   generator to `yield` durable tasks), so `async` unambiguously means core-native.
  * - `function*` (classic v3 sync generator) is wrapped; the engine cannot drive a sync generator, so
  *   the wrapper delegates to it via `yield*`.
- * - A plain SYNC (non-generator) function is CORE-NATIVE regardless of arity and passes through
- *   unchanged, receiving the core {@link OrchestrationContext}. This fixes #321 (a native
+ * - A plain SYNC (non-generator) SINGLE-ARGUMENT function `(ctx) => value` is CORE-NATIVE and passes
+ *   through unchanged, receiving the core {@link OrchestrationContext}. This fixes #321 (a native
  *   `(ctx) => ctx.instanceId` previously mis-routed by arity to the classic context). BREAKING: a
- *   classic v3 orchestrator written as a plain non-generator using `context.df.*` is no longer
- *   supported — convert it to a `function*` generator (the standard classic shape, unaffected) or
- *   to the core-native `ctx.*` API.
+ *   classic v3 orchestrator written as a plain single-arg non-generator using `context.df.*` is no
+ *   longer supported — convert it to a `function*` generator (the standard classic shape,
+ *   unaffected) or to the core-native `ctx.*` API. A zero-arg sync function keeps its prior classic
+ *   classification, and `(ctx, input)` remains core-native as before.
  */
 export function wrapOrchestrator(handler: TOrchestrator | ClassicOrchestrator): TOrchestrator {
   if (typeof handler === "function" && isClassicOrchestrator(handler)) {
@@ -278,11 +279,13 @@ function isClassicOrchestrator(handler: TOrchestrator | ClassicOrchestrator): bo
   if (kind === "GeneratorFunction") {
     return true; // classic v3: a sync generator the engine can't drive on its own.
   }
-  // Plain SYNC (non-generator) function is CORE-NATIVE regardless of arity: it passes through
-  // unchanged and receives the core OrchestrationContext. Only a sync generator (`function*`) is
-  // classic (handled above). A classic v3 orchestrator written as a plain non-generator using
+  // Plain SYNC (non-generator) function: ONLY the single-argument shape `(ctx) => value` changes —
+  // it is now CORE-NATIVE (passes through unchanged, receiving the core OrchestrationContext),
+  // fixing #321. Every other arity keeps its prior classification: a zero-arg function stays classic,
+  // and `(ctx, input)` was already core-native. Only a sync generator (`function*`) is classic
+  // (handled above). A classic v3 orchestrator written as a plain single-arg non-generator using
   // `context.df.*` is no longer supported (breaking) — see #321 and the package README/CHANGELOG.
-  return false;
+  return handler.length === 0;
 }
 
 /**
