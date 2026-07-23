@@ -274,6 +274,7 @@ describe("wrapOrchestrator", () => {
   it("exposes a replay-safe logger as context.log/error on the classic context", async () => {
     // A classic orchestrator is a sync generator (`function*`); the wrapper invokes it with the full
     // classic context, so the replay-safe log wiring is exercised here.
+    // eslint-disable-next-line require-yield
     const classic = function* (context: ClassicOrchestrationContext): Generator<Task<unknown>, string, unknown> {
       context.log("hi");
       context.error("boom");
