@@ -272,9 +272,10 @@ describe("wrapOrchestrator", () => {
   });
 
   it("exposes a replay-safe logger as context.log/error on the classic context", async () => {
-    // A classic orchestrator may be a plain (non-generator) function that returns a value; the
-    // wrapper still invokes it with the full classic context, so log wiring is exercised here.
-    const classic = (context: ClassicOrchestrationContext): string => {
+    // A classic orchestrator is a sync generator (`function*`); the wrapper invokes it with the full
+    // classic context, so the replay-safe log wiring is exercised here.
+    // eslint-disable-next-line require-yield
+    const classic = function* (context: ClassicOrchestrationContext): Generator<Task<unknown>, string, unknown> {
       context.log("hi");
       context.error("boom");
       return "logged";
@@ -291,6 +292,22 @@ describe("wrapOrchestrator", () => {
     expect((ctx as unknown as { createReplaySafeLogger: jest.Mock }).createReplaySafeLogger).toHaveBeenCalledTimes(1);
     expect(replaySafeLogger.info).toHaveBeenCalledWith("hi");
     expect(replaySafeLogger.error).toHaveBeenCalledWith("boom");
+  });
+
+  it("returns a plain sync single-argument core-native orchestrator unchanged (#321)", () => {
+    // #321: a plain sync, single-argument, non-generator `(ctx) => value` is core-native. It must
+    // pass through wrapOrchestrator UNCHANGED (identity) and receive the core OrchestrationContext.
+    // Previously arity-based detection mis-routed it to the classic `{ df, log }` context, so
+    // `ctx.instanceId` was undefined and core members like `ctx.newGuid()` threw.
+    const native = (ctx: OrchestrationContext): string => `native:${ctx.instanceId}`;
+
+    const wrapped = wrapOrchestrator(native as unknown as TOrchestrator);
+    expect(wrapped).toBe(native as unknown as TOrchestrator); // identity passthrough, not wrapped
+
+    const { ctx } = createFakeCoreContext();
+    const out = (wrapped as unknown as (c: OrchestrationContext) => string)(ctx);
+    expect(out.startsWith("native:")).toBe(true);
+    expect(out).not.toContain("undefined");
   });
 });
 
