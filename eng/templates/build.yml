@@ -23,8 +23,11 @@ jobs:
             inputs:
                 workingFile: .npmrc
 
-          # Install all workspace dependencies
-          - script: npm ci
+          # Install all workspace dependencies.
+          # --ignore-scripts skips dependency lifecycle scripts so grpc-tools
+          # (codegen-only, unused by the build) does not download a native
+          # binary from node-precompiled-binaries.grpc.io
+          - script: npm ci --ignore-scripts
             displayName: "npm ci"
           
           # Build all packages (each workspace's build script runs its own prebuild)
