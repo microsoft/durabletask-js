@@ -915,11 +915,11 @@ export class TaskHubGrpcWorker {
         instanceId,
         req.getName(),
         req.getTaskid(),
-        req.getInput()?.toString() ?? "",
+        req.getInput()?.getValue() ?? "",
       );
 
       const s = new StringValue();
-      s.setValue(result?.toString() ?? "");
+      s.setValue(result ?? "");
 
       res = new pb.ActivityResponse();
       res.setInstanceid(instanceId);

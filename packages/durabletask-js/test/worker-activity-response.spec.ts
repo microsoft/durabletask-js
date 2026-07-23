@@ -97,6 +97,109 @@ describe("Worker Activity Response", () => {
     expect(mockStub.capturedResponse!.getFailuredetails()).toBeUndefined();
   });
 
+  it("should correctly extract and pass input from protobuf StringValue to activity", async () => {
+    // Arrange
+    const worker = new TaskHubGrpcWorker({
+      logger: new NoOpLogger(),
+    });
+
+    let receivedInput: unknown;
+    const inputCapturingActivity = (_ctx: ActivityContext, input: unknown) => {
+      receivedInput = input;
+      return "done";
+    };
+
+    worker.addActivity(inputCapturingActivity);
+
+    const mockStub = createMockStub();
+    const testInput = { key: "value", nested: { arr: [1, 2, 3] } };
+    const req = createActivityRequest("inputCapturingActivity", JSON.stringify(testInput));
+
+    // Act
+    await (worker as any)._executeActivityInternal(req, COMPLETION_TOKEN, mockStub.stub);
+
+    // Assert — the activity must receive the deserialized input object
+    expect(receivedInput).toEqual(testInput);
+    expect(mockStub.capturedResponse).not.toBeNull();
+    expect(mockStub.capturedResponse!.getResult()?.getValue()).toBe(JSON.stringify("done"));
+  });
+
+  it("should pass empty string as input when protobuf StringValue is not set", async () => {
+    // Arrange
+    const worker = new TaskHubGrpcWorker({
+      logger: new NoOpLogger(),
+    });
+
+    let receivedInput: unknown = "sentinel";
+    const inputCapturingActivity = (_ctx: ActivityContext, input: unknown) => {
+      receivedInput = input;
+      return "done";
+    };
+
+    worker.addActivity(inputCapturingActivity);
+
+    const mockStub = createMockStub();
+    // Create request WITHOUT setting input — simulates no input from sidecar
+    const req = createActivityRequest("inputCapturingActivity");
+
+    // Act
+    await (worker as any)._executeActivityInternal(req, COMPLETION_TOKEN, mockStub.stub);
+
+    // Assert — no input means the activity receives undefined (empty string is parsed as falsy by executor)
+    expect(receivedInput).toBeUndefined();
+  });
+
+  it("should correctly set result on ActivityResponse using getValue()", async () => {
+    // Arrange
+    const worker = new TaskHubGrpcWorker({
+      logger: new NoOpLogger(),
+    });
+
+    const outputObject = { result: "test", count: 42 };
+    const objectReturningActivity = (_ctx: ActivityContext) => {
+      return outputObject;
+    };
+
+    worker.addActivity(objectReturningActivity);
+
+    const mockStub = createMockStub();
+    const req = createActivityRequest("objectReturningActivity", JSON.stringify("input"));
+
+    // Act
+    await (worker as any)._executeActivityInternal(req, COMPLETION_TOKEN, mockStub.stub);
+
+    // Assert — the result StringValue should contain the JSON-serialized output
+    expect(mockStub.capturedResponse).not.toBeNull();
+    const resultValue = mockStub.capturedResponse!.getResult();
+    expect(resultValue).toBeDefined();
+    expect(resultValue!.getValue()).toBe(JSON.stringify(outputObject));
+  });
+
+  it("should set empty result on ActivityResponse when activity returns undefined", async () => {
+    // Arrange
+    const worker = new TaskHubGrpcWorker({
+      logger: new NoOpLogger(),
+    });
+
+    const voidActivity = (_ctx: ActivityContext) => {
+      // returns undefined implicitly
+    };
+
+    worker.addActivity(voidActivity);
+
+    const mockStub = createMockStub();
+    const req = createActivityRequest("voidActivity");
+
+    // Act
+    await (worker as any)._executeActivityInternal(req, COMPLETION_TOKEN, mockStub.stub);
+
+    // Assert — result should be an empty string for undefined return
+    expect(mockStub.capturedResponse).not.toBeNull();
+    const resultValue = mockStub.capturedResponse!.getResult();
+    expect(resultValue).toBeDefined();
+    expect(resultValue!.getValue()).toBe("");
+  });
+
   it("should set instanceId on ActivityResponse when activity fails", async () => {
     // Arrange
     const worker = new TaskHubGrpcWorker({
