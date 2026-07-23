@@ -127,8 +127,10 @@ export function getActionSummary(newActions: pb.OrchestratorAction[]): string {
  */
 export function isSuspendable(event: pb.HistoryEvent): boolean {
   return (
-    [pb.HistoryEvent.EventtypeCase.EXECUTIONRESUMED, pb.HistoryEvent.EventtypeCase.EXECUTIONTERMINATED].indexOf(
-      event.getEventtypeCase(),
-    ) == -1
+    [
+      pb.HistoryEvent.EventtypeCase.EXECUTIONRESUMED,
+      pb.HistoryEvent.EventtypeCase.EXECUTIONTERMINATED,
+      pb.HistoryEvent.EventtypeCase.EXECUTIONSUSPENDED,
+    ].indexOf(event.getEventtypeCase()) === -1
   );
 }
