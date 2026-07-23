@@ -52,6 +52,14 @@ changed:
   (testing utilities), `ManagedIdentityTokenSource`, and the entity-lock types above. `TaskFailedError`
   is re-exported from the core SDK (aggregate failures surface as JS-native `AggregateError`); use the
   core `TestOrchestrationWorker` / `TestOrchestrationClient` for orchestration unit tests.
+- **A plain non-generator classic orchestrator is no longer supported.** A classic v3 orchestrator
+  written as a *synchronous, single-argument, non-generator* function `(context) => context.df.*`
+  (one that never `yield`s) is now treated as a **core-native** orchestrator and receives the core
+  `OrchestrationContext`, which has no `.df`. This resolves
+  [#321](https://github.com/microsoft/durabletask-js/issues/321), where a core-native
+  `(ctx) => ctx.instanceId` was mis-routed to the classic context. Standard classic orchestrators —
+  sync **generators** (`function*`) using `context.df.*` — are unaffected; convert any non-generator
+  classic orchestrator to generator form, or to the core-native `ctx.*` API.
 
 ## Getting started
 
