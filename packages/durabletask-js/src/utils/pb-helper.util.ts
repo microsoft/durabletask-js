@@ -186,6 +186,16 @@ export function newSubOrchestrationFailedEvent(eventId: number, ex: Error): pb.H
 }
 
 export function newFailureDetails(e: unknown): pb.TaskFailureDetails {
+  return buildFailureDetails(e, 0);
+}
+
+/**
+ * Recursively builds TaskFailureDetails, populating innerFailure from error.cause.
+ * The depth parameter is internal to bound the cause-chain recursion and is not
+ * exposed on the public newFailureDetails() signature.
+ */
+function buildFailureDetails(e: unknown, depth: number): pb.TaskFailureDetails {
+  const MAX_CAUSE_DEPTH = 10;
   const failure = new pb.TaskFailureDetails();
   // Use e.name (which can be customized) over constructor.name (which is always the class name)
   // This allows users to set error.name = "CustomError" and have it preserved in failure details
@@ -200,6 +210,14 @@ export function newFailureDetails(e: unknown): pb.TaskFailureDetails {
     const sv = new StringValue();
     sv.setValue(stack);
     failure.setStacktrace(sv);
+  }
+
+  // Populate innerFailure from error.cause to preserve the full error chain.
+  // A depth limit guards against pathological circular cause chains.
+  // error.cause can be any value, so guard against null/undefined explicitly rather
+  // than truthiness — a falsy-but-present cause (e.g. "" or 0) is still a valid cause.
+  if (e instanceof Error && e.cause != null && depth < MAX_CAUSE_DEPTH) {
+    failure.setInnerfailure(buildFailureDetails(e.cause, depth + 1));
   }
 
   return failure;
