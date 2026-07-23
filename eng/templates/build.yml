@@ -16,6 +16,13 @@ jobs:
                 versionSpec: 20.x
             displayName: "Install Node.js"
           
+          - script: node scripts/setupNpmrc.js
+            displayName: "Configure azfunc npm registry"
+          - task: npmAuthenticate@0
+            displayName: "Authenticate to azfunc npm registry"
+            inputs:
+                workingFile: .npmrc
+
           # Install all workspace dependencies
           - script: npm ci
             displayName: "npm ci"
