@@ -243,6 +243,11 @@ export class InMemoryOrchestrationBackend {
     }
 
     this.instances.delete(instanceId);
+    this.orchestrationQueueSet.delete(instanceId);
+    const queueIndex = this.orchestrationQueue.indexOf(instanceId);
+    if (queueIndex >= 0) {
+      this.orchestrationQueue.splice(queueIndex, 1);
+    }
     this.stateWaiters.delete(instanceId);
     this.cancelInstanceTimers(instanceId);
     return true;
