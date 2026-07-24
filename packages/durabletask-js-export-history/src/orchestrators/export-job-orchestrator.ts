@@ -159,8 +159,8 @@ export const exportJobOrchestrator: TOrchestrator = async function* (
         }
       } else {
         yield* commitCheckpoint(ctx, jobEntityId, {
-          scannedInstances: 0,
-          exportedInstances: 0,
+          scannedInstances: scannedCount,
+          exportedInstances: batchResult.exportedCount,
           failures: batchResult.failures,
         } as CommitCheckpointRequest);
 
