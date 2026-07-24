@@ -12,6 +12,8 @@ import {
   whenAny,
 } from "@microsoft/durabletask-js";
 import { RetryOptions } from "./retry-options";
+import { BUILTIN_HTTP_POLL_ORCHESTRATOR_NAME } from "./http/builtin";
+import { CallHttpOptions, DurableHttpRequestPayload, DurableHttpResponse } from "./http/models";
 
 /**
  * Classic Durable Functions (v3) orchestration context, exposed to migrating orchestrators as
@@ -150,11 +152,40 @@ export class DurableOrchestrationContext {
    * Schedules a durable HTTP call (classic v3 API).
    *
    * @remarks
-   * Not supported: the durabletask engine has no durable-HTTP (`callHttp`) equivalent, so this
-   * throws. This mirrors the Python provider, which raises for the same reason.
+   * The durabletask gRPC engine has no native durable-HTTP action (unlike the v3 Durable Functions
+   * host extension, which executed the request itself), so this is reconstructed from core
+   * primitives: the request is handed to a built-in polling sub-orchestration
+   * ({@link BUILTIN_HTTP_POLL_ORCHESTRATOR_NAME}) that runs a built-in HTTP activity and, while the
+   * endpoint returns `202 Accepted`, waits on durable timers (honoring `Retry-After`) and re-polls
+   * until completion. The whole flow is a single `yield`, preserving the v3 ergonomics.
+   *
+   * Trust-boundary change vs v3: the HTTP request now runs as a durable **activity inside the app /
+   * worker process** (via `fetch`), not in the Functions host extension. Outbound network path,
+   * identity, and firewall/VNet behavior therefore follow the worker process. Managed-identity
+   * token acquisition (`tokenSource`) requires the optional `@azure/identity` package.
+   *
+   * @returns A {@link Task} resolving to the final {@link DurableHttpResponse}.
    */
-  callHttp(_options: unknown): never {
-    throw new Error("callHttp is not supported: the durabletask engine has no durable-HTTP (callHttp) equivalent.");
+  callHttp(options: CallHttpOptions): Task<DurableHttpResponse> {
+    const enablePolling = options.enablePolling ?? options.asynchronousPatternEnabled ?? true;
+    const request: DurableHttpRequestPayload = {
+      method: options.method,
+      uri: options.url,
+      enablePolling,
+    };
+    if (options.body !== undefined) {
+      request.content = typeof options.body === "string" ? options.body : JSON.stringify(options.body);
+    }
+    if (options.headers !== undefined) {
+      request.headers = options.headers;
+    }
+    if (options.tokenSource !== undefined) {
+      request.tokenSource = { kind: options.tokenSource.kind, resource: options.tokenSource.resource };
+    }
+    return this._ctx.callSubOrchestrator<DurableHttpRequestPayload, DurableHttpResponse>(
+      BUILTIN_HTTP_POLL_ORCHESTRATOR_NAME,
+      request,
+    );
   }
 
   /** Calls an entity operation and waits for its result. */

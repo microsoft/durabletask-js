@@ -44,12 +44,19 @@ changed:
   `LockHandle` — call `release()`, ideally in a `finally`) and query with
   `context.entities.isInCriticalSection()`. Restoring the v3 `df.lock` / `isLocked` surface is tracked
   in [#317](https://github.com/microsoft/durabletask-js/issues/317).
-- **`context.df.callHttp(...)` now throws.** v3 ran durable HTTP as a host-managed activity; the
-  consolidated gRPC backend has no equivalent primitive. Implement an HTTP activity in your app and
-  call it from the orchestrator. Restoring `callHttp` as a worker-side durable activity is tracked in
-  [#318](https://github.com/microsoft/durabletask-js/issues/318).
+- **`context.df.callHttp(...)` is restored** as a worker-side durable HTTP call
+  ([#318](https://github.com/microsoft/durabletask-js/issues/318)). It accepts the v3
+  `CallHttpOptions` (`method`, `url`, `body`, `headers`, `tokenSource`, `enablePolling`) and returns a
+  `Task<DurableHttpResponse>` (`{ statusCode, headers, content }`), including automatic `202 Accepted`
+  polling that honors `Retry-After` via durable timers. **Trust-boundary change:** in v3 the Functions
+  **host** extension executed the HTTP request; here it runs as a durable **activity inside your
+  app/worker process** (via `fetch`). Outbound network path, source identity, and firewall/VNet rules
+  therefore follow the worker process, not the host — re-verify egress and any IP allow-lists. A
+  managed-identity `tokenSource` requires the optional
+  [`@azure/identity`](https://www.npmjs.com/package/@azure/identity) package
+  (`npm install @azure/identity`); without it, a request that uses a `tokenSource` throws a clear error.
 - **Some v3 top-level exports were removed** — `DummyOrchestrationContext` / `DummyEntityContext`
-  (testing utilities), `ManagedIdentityTokenSource`, and the entity-lock types above. `TaskFailedError`
+  (testing utilities) and the entity-lock types above. `TaskFailedError`
   is re-exported from the core SDK (aggregate failures surface as JS-native `AggregateError`); use the
   core `TestOrchestrationWorker` / `TestOrchestrationClient` for orchestration unit tests.
 - **A plain non-generator classic orchestrator is no longer supported.** A classic v3 orchestrator

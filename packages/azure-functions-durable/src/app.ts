@@ -13,6 +13,12 @@ import * as trigger from "./trigger";
 import { ClassicEntity, wrapEntity } from "./entity-context";
 import { ClassicOrchestrator, wrapOrchestrator } from "./orchestration-context";
 import { DurableFunctionsWorker } from "./worker";
+import {
+  BUILTIN_HTTP_ACTIVITY_NAME,
+  BUILTIN_HTTP_POLL_ORCHESTRATOR_NAME,
+  builtinHttpActivity,
+  builtinHttpPollOrchestrator,
+} from "./http/builtin";
 
 // The `client` namespace groups the durable-client starter registration helpers so that
 // `df.app.client.http(...)` (and siblings) restore the v3 client-starter sugar. `index.ts`
@@ -157,3 +163,12 @@ function extractBase64Request(triggerInput: unknown): string {
   }
   throw new TypeError("Durable trigger did not provide a base64-encoded request body.");
 }
+
+// Auto-register the built-in durable-HTTP functions exactly once when this module is first imported,
+// so classic `context.df.callHttp` works with no user registration. The poll orchestrator is a
+// core-native `async function*` (passed through by `wrapOrchestrator`) and the activity is a plain
+// host-dispatched handler. Names are reserved (see `./http/builtin`); registering here — rather than
+// per app instance — means they are wired once for the whole function app. Ported from the
+// durabletask-python design (Andy Staples, durabletask-python#155).
+orchestration(BUILTIN_HTTP_POLL_ORCHESTRATOR_NAME, { handler: builtinHttpPollOrchestrator });
+activity(BUILTIN_HTTP_ACTIVITY_NAME, { handler: builtinHttpActivity });
