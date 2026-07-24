@@ -52,6 +52,9 @@
     "@grpc/grpc-js": "^1.14.4",
     "@microsoft/durabletask-js": "0.4.0"
   },
+  "optionalDependencies": {
+    "@azure/identity": "^4.0.0"
+  },
   "devDependencies": {
     "@types/jest": "^29.5.1",
     "@types/node": "^22.0.0",

@@ -21,6 +21,7 @@ import {
   wrapOrchestrator,
 } from "../../src/orchestration-context";
 import { RetryOptions } from "../../src/retry-options";
+import { BUILTIN_HTTP_POLL_ORCHESTRATOR_NAME } from "../../src/http/builtin";
 
 /** Builds a fake core OrchestrationContext whose methods return sentinel values via jest mocks. */
 function createFakeCoreContext() {
@@ -150,11 +151,57 @@ describe("DurableOrchestrationContext", () => {
     expect(entities.signalEntity).toHaveBeenCalledWith(entityId, "reset", undefined);
   });
 
-  it("throws for callHttp, which has no durabletask equivalent", () => {
-    const { ctx } = createFakeCoreContext();
+  it("schedules callHttp as the built-in poll sub-orchestration with the built request payload", () => {
+    const { ctx, raw } = createFakeCoreContext();
     const df = new DurableOrchestrationContext(ctx, undefined);
 
-    expect(() => df.callHttp({ method: "GET", uri: "https://example.test" })).toThrow(/callHttp/);
+    // A string body is sent as-is; polling defaults to enabled.
+    const task = df.callHttp({ method: "GET", url: "https://example.test/api", headers: { "x-a": "1" } });
+    expect(task).toBe("callSub-task");
+    expect(raw.callSubOrchestrator).toHaveBeenCalledWith(BUILTIN_HTTP_POLL_ORCHESTRATOR_NAME, {
+      method: "GET",
+      uri: "https://example.test/api",
+      enablePolling: true,
+      headers: { "x-a": "1" },
+    });
+  });
+
+  it("JSON-stringifies an object body and forwards the token source when scheduling callHttp", () => {
+    const { ctx, raw } = createFakeCoreContext();
+    const df = new DurableOrchestrationContext(ctx, undefined);
+
+    df.callHttp({
+      method: "POST",
+      url: "https://example.test/api",
+      body: { hello: "world" },
+      tokenSource: { kind: "AzureManagedIdentity", resource: "https://management.core.windows.net/" } as never,
+    });
+
+    expect(raw.callSubOrchestrator).toHaveBeenCalledWith(BUILTIN_HTTP_POLL_ORCHESTRATOR_NAME, {
+      method: "POST",
+      uri: "https://example.test/api",
+      enablePolling: true,
+      content: JSON.stringify({ hello: "world" }),
+      tokenSource: { kind: "AzureManagedIdentity", resource: "https://management.core.windows.net/" },
+    });
+  });
+
+  it("honors enablePolling=false (and the deprecated asynchronousPatternEnabled alias) for callHttp", () => {
+    const { ctx, raw } = createFakeCoreContext();
+    const df = new DurableOrchestrationContext(ctx, undefined);
+
+    df.callHttp({ method: "GET", url: "https://example.test/api", enablePolling: false });
+    expect(raw.callSubOrchestrator).toHaveBeenLastCalledWith(
+      BUILTIN_HTTP_POLL_ORCHESTRATOR_NAME,
+      expect.objectContaining({ enablePolling: false }),
+    );
+
+    // enablePolling takes precedence over the deprecated alias when both are present.
+    df.callHttp({ method: "GET", url: "https://example.test/api", asynchronousPatternEnabled: false });
+    expect(raw.callSubOrchestrator).toHaveBeenLastCalledWith(
+      BUILTIN_HTTP_POLL_ORCHESTRATOR_NAME,
+      expect.objectContaining({ enablePolling: false }),
+    );
   });
 
   it("exposes Task.all / Task.any that forward to the core combinators", () => {
