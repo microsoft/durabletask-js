@@ -186,6 +186,67 @@ describe("TaskEntityShim", () => {
       expect(failure.getFailuredetails()?.getErrormessage()).toBe("Intentional error");
     });
 
+    it("should preserve error stack trace in failure details", async () => {
+      const entity = new CounterEntity();
+      const shim = new TaskEntityShim(entity, entityId);
+      const request = createBatchRequest(
+        entityId.toString(),
+        [{ name: "throwError" }],
+        { count: 0 },
+      );
+
+      const result = await shim.executeAsync(request);
+
+      const opResult = result.getResultsList()[0];
+      expect(opResult.hasFailure()).toBe(true);
+
+      const failure = opResult.getFailure()!;
+      const failureDetails = failure.getFailuredetails()!;
+
+      // Verify error type and message
+      expect(failureDetails.getErrortype()).toBe("Error");
+      expect(failureDetails.getErrormessage()).toBe("Intentional error");
+
+      // Verify stack trace is properly set as a StringValue (not undefined)
+      const stackTrace = failureDetails.getStacktrace();
+      expect(stackTrace).toBeDefined();
+      expect(stackTrace).not.toBeNull();
+      expect(stackTrace!.getValue()).toContain("Intentional error");
+      expect(stackTrace!.getValue()).toContain("throwError");
+    });
+
+    it("should handle non-Error throws with error type and message", async () => {
+      // Entity that throws a non-Error value
+      class StringThrowEntity extends TaskEntity<{ count: number }> {
+        throwString(): void {
+          throw "string error";
+        }
+
+        protected initializeState(): { count: number } {
+          return { count: 0 };
+        }
+      }
+
+      const entity = new StringThrowEntity();
+      const shim = new TaskEntityShim(entity, entityId);
+      const request = createBatchRequest(
+        entityId.toString(),
+        [{ name: "throwString" }],
+        { count: 0 },
+      );
+
+      const result = await shim.executeAsync(request);
+
+      const opResult = result.getResultsList()[0];
+      expect(opResult.hasFailure()).toBe(true);
+
+      const failureDetails = opResult.getFailure()!.getFailuredetails()!;
+      expect(failureDetails.getErrortype()).toBe("Error");
+      expect(failureDetails.getErrormessage()).toBe("string error");
+      // Non-Error throws have no stack trace
+      expect(failureDetails.getStacktrace()).toBeUndefined();
+    });
+
     it("should continue executing after failed operation", async () => {
       const entity = new CounterEntity();
       const shim = new TaskEntityShim(entity, entityId);
