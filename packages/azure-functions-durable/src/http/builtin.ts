@@ -408,14 +408,21 @@ export async function* builtinHttpPollOrchestrator(
     // URI so the next poll targets an absolute http(s) URL (the activity rejects non-absolute URIs).
     //
     // `Location` is remote-controlled: an absent one already means "cannot poll, return the 202 as-is"
-    // (see the `if (!location) break` above), and an unparseable one is the same situation. `new URL`
-    // throws `TypeError [ERR_INVALID_URL]` on input like `http://` or `///`, which would otherwise fail
-    // the whole orchestration with an opaque error instead of surfacing the 202 the caller can inspect.
-    // Determinism holds: `new URL` is pure computation over history-derived values, so replay re-takes
-    // the identical branch.
+    // (see the `if (!location) break` above), and both an UNPARSEABLE and a parseable-but-non-http(s)
+    // one are the same situation. `new URL` throws `TypeError [ERR_INVALID_URL]` on input like `http://`
+    // or `///`; and it PARSES a `file://`/`ftp://` Location cleanly, yet the activity's scheme guard
+    // then rejects it — either way, continuing would fail the whole orchestration with an opaque error
+    // instead of surfacing the 202 the caller can inspect. So a non-http(s) scheme stops polling too.
+    // Determinism holds: `new URL` and the protocol check are pure computation over history-derived
+    // values, so replay re-takes the identical branch.
     let resolved: string;
     try {
-      resolved = new URL(location, currentUri).toString();
+      const url = new URL(location, currentUri);
+      // `URL.protocol` is WHATWG-normalized to lowercase, so `FILE://`/`Ftp://` are covered too.
+      if (url.protocol !== "http:" && url.protocol !== "https:") {
+        break;
+      }
+      resolved = url.toString();
     } catch {
       break;
     }

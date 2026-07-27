@@ -639,4 +639,26 @@ describe("builtinHttpPollOrchestrator", () => {
       expect(raw.callActivity).toHaveBeenCalledTimes(1);
     },
   );
+
+  // A parseable but non-http(s) `Location` (e.g. `file://`, `ftp://`) is just as unpollable as a
+  // missing or unparseable one: the activity's scheme guard rejects non-http(s) URIs, so continuing
+  // to poll would fail the orchestration with an opaque error instead of surfacing the 202. Since
+  // `Location` is callee-controlled, treat it the same way — stop polling, return the 202 as-is.
+  it.each(["file:///etc/passwd", "ftp://example.com/x"])(
+    "stops polling and returns the 202 as-is when the Location %j has a non-http(s) scheme",
+    async (badLocation) => {
+      const { ctx, raw } = createPollContext(now);
+      const gen = builtinHttpPollOrchestrator(ctx, { method: "GET", uri: "https://host/api", enablePolling: true });
+
+      await gen.next();
+      const response = { statusCode: 202, headers: { Location: badLocation }, content: "pending" };
+      const result = await gen.next(response);
+
+      // (a) does NOT throw, (b) returns the 202 unchanged, (c) schedules NO further timer/activity.
+      expect(result.done).toBe(true);
+      expect(result.value).toEqual({ statusCode: 202, headers: { Location: badLocation }, content: "pending" });
+      expect(raw.createTimer).not.toHaveBeenCalled();
+      expect(raw.callActivity).toHaveBeenCalledTimes(1);
+    },
+  );
 });
