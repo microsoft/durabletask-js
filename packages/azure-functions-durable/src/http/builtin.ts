@@ -160,7 +160,14 @@ async function acquireBearerToken(resource: string): Promise<string> {
   };
   try {
     identity = require("@azure/identity");
-  } catch {
+  } catch (e) {
+    // Only a genuinely missing module warrants the install hint. Any other failure — the package IS
+    // installed but throws while initializing, a broken transitive dependency, an ESM/CJS interop
+    // problem — must surface unchanged: telling the user to install a package they already have would
+    // destroy the real diagnostic on the hardest path to debug (Managed-Identity token acquisition).
+    if ((e as { code?: unknown }).code !== "MODULE_NOT_FOUND") {
+      throw e;
+    }
     throw new Error(
       "callHttp with a tokenSource requires the optional '@azure/identity' package. " +
         "Install it with `npm install @azure/identity`.",

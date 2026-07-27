@@ -15,13 +15,15 @@ import { DurableHttpRequestPayload, DurableHttpResponse } from "../../src/http/m
 // not installed in this workspace — a virtual mock stands in so the token-acquisition path can be
 // exercised and the REAL (mocked) token asserted on the outgoing request.
 const mockGetToken = jest.fn(async (_scope: string) => ({ token: "REAL_TOKEN_123" }));
-jest.mock(
-  "@azure/identity",
-  () => ({
-    DefaultAzureCredential: jest.fn().mockImplementation(() => ({ getToken: mockGetToken })),
-  }),
-  { virtual: true },
-);
+// The virtual mock delegates to a swappable factory so an individual test can make
+// `require("@azure/identity")` succeed (the default) OR fail with a specific error, reusing the same
+// virtual-mock mechanism rather than a bespoke harness. `mock`-prefixed so the hoisted `jest.mock`
+// factory may legally close over it.
+const mockIdentityModuleDefault = () => ({
+  DefaultAzureCredential: jest.fn().mockImplementation(() => ({ getToken: mockGetToken })),
+});
+let mockRequireIdentity: () => unknown = mockIdentityModuleDefault;
+jest.mock("@azure/identity", () => mockRequireIdentity(), { virtual: true });
 
 /** A minimal fetch Response stand-in (avoids depending on the global `Response` constructor). */
 function fakeResponse(status: number, headers: { [key: string]: string }, body: string, url = "") {
@@ -236,6 +238,49 @@ describe("builtinHttpActivity", () => {
     // cannot merge two Authorization headers into one malformed comma-joined value.
     expect(sentHeaders["Authorization"]).toBe("Bearer REAL_TOKEN_123");
     expect(sentHeaders["authorization"]).toBeUndefined();
+  });
+
+  describe("@azure/identity loading failures", () => {
+    afterEach(() => {
+      // Restore the default (successful) require so later suites are unaffected.
+      mockRequireIdentity = mockIdentityModuleDefault;
+    });
+
+    // Freshly load the activity so its lazy `require("@azure/identity")` re-invokes the swapped mock
+    // (Jest caches a module after the first successful require; resetModules busts that cache).
+    function loadActivityFresh(): typeof builtinHttpActivity {
+      jest.resetModules();
+      return require("../../src/http/builtin").builtinHttpActivity;
+    }
+
+    const tokenRequest: DurableHttpRequestPayload = {
+      method: "GET",
+      uri: "https://example.test/secure",
+      tokenSource: { resource: "https://graph.microsoft.com/" },
+    };
+
+    it("throws actionable install guidance when @azure/identity is not installed (MODULE_NOT_FOUND)", async () => {
+      mockRequireIdentity = () => {
+        const err = new Error("Cannot find module '@azure/identity'") as Error & { code?: string };
+        err.code = "MODULE_NOT_FOUND";
+        throw err;
+      };
+
+      await expect(loadActivityFresh()(tokenRequest)).rejects.toThrow(
+        "callHttp with a tokenSource requires the optional '@azure/identity' package.",
+      );
+    });
+
+    it("propagates a non-MODULE_NOT_FOUND require failure unchanged instead of mislabeling it as missing", async () => {
+      const initFailure = new Error("boom while initializing @azure/identity");
+      mockRequireIdentity = () => {
+        throw initFailure;
+      };
+
+      // The ORIGINAL error surfaces (same instance) — NOT the install-guidance message, which would
+      // wrongly tell the user to install a package they already have.
+      await expect(loadActivityFresh()(tokenRequest)).rejects.toBe(initFailure);
+    });
   });
 });
 

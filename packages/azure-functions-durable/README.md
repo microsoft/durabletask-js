@@ -63,6 +63,14 @@ changed:
     still forward headers and the `tokenSource`, so legitimate async patterns keep working. This
     mirrors the .NET extension's policy
     ([Azure/azure-functions-durable-extension#3443](https://github.com/Azure/azure-functions-durable-extension/pull/3443)).
+  - **The initial request follows redirects with `fetch`'s defaults, which do not strip _custom_
+    credential headers.** Distinct from the `202` poll loop above, the first HTTP hop uses `fetch`'s
+    default `redirect: "follow"`. Per the Fetch Standard the implementation drops `Authorization` and
+    `Cookie` when a redirect crosses origins, but it does **not** drop custom credential headers such as
+    `x-functions-key`. Switching to `redirect: "manual"` with a per-hop cross-origin policy would close
+    this residual gap but change observable single-request semantics (hop count, effective URL, cookie
+    handling), so it is deliberately deferred; until then, avoid sending custom credential headers (e.g.
+    `x-functions-key`) to endpoints that may redirect cross-origin.
   - **The built-in poll orchestrator cannot be started directly.** It is registered under a reserved
     name (`BuiltIn__HttpPollOrchestrator`) and refuses a top-level start (it is only ever a
     sub-orchestration of `callHttp`), so a dynamic `orchestrators/{name}` starter cannot be abused to
