@@ -8,7 +8,8 @@
  * Functions host: a durable callHttp against the app's own endpoints exercises the
  * synchronous 200 path, the 202 -> Location poll loop, the enablePolling=false
  * opt-out, and the cross-origin credential policy (Authorization forwarded on a
- * same-origin poll, stripped on a cross-origin one). Kept hermetic (loopback only)
+ * same-origin poll, stripped on a cross-origin one). It also asserts that a direct top-level start of
+ * the built-in poll orchestrator is refused (P0-2). Kept hermetic (loopback only)
  * so no external network is required.
  *
  * Gated: skips cleanly unless the shared host was started by globalSetup.
@@ -98,5 +99,25 @@ describeMaybe("Functions host E2E — callHttp (AzureStorage)", () => {
     const body = JSON.parse(output.content);
     expect(body.echoed).toBe("xorigin-done");
     expect(body.authorization).toBeNull();
+  }, 120_000);
+
+  it("rejects a direct top-level start of the built-in poll orchestrator", async () => {
+    // BuiltIn__HttpPollOrchestrator is auto-registered on every app and takes a caller-supplied URI +
+    // token source. Starting it directly (not as a callHttp sub-orchestration) must FAIL closed rather
+    // than perform the request; otherwise it is an SSRF / Managed-Identity token oracle (P0-2). The
+    // test-app's generic StartOrchestration starter lets an external caller name it directly.
+    const response = await invokeHttpTrigger(
+      baseUrl,
+      "StartOrchestration",
+      "?orchestrationName=BuiltIn__HttpPollOrchestrator",
+    );
+    expect(response.status).toBe(202);
+
+    const statusQueryGetUri = parseStatusQueryGetUri(response);
+    const details = await waitForOrchestrationState(statusQueryGetUri, "Failed", 60);
+    expect(details.runtimeStatus).toBe("Failed");
+    // Prove the top-level guard fired (not the activity's uri-required error): the failure carries the
+    // guard's message. This confirms `ctx.parent` is populated on the Functions host path.
+    expect(details.outputString).toContain("cannot be started as a top-level orchestration");
   }, 120_000);
 });

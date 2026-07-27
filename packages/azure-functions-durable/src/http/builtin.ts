@@ -231,6 +231,14 @@ export async function builtinHttpActivity(input: DurableHttpRequestPayload): Pro
   // `content` was already serialized to a string by `callHttp`, and GET/HEAD bodies were rejected
   // above, so a body is attached only when present.
   const includeBody = typeof request.content === "string";
+  // `redirect: "follow"` (the default): `fetch`/undici transparently follows 3xx redirects and, per the
+  // Fetch Standard, drops `Authorization` (and `Cookie`) when a redirect crosses origins — but it does
+  // NOT drop custom credential headers such as `x-functions-key`. Switching to `redirect: "manual"` and
+  // re-applying our cross-origin policy per hop would close that residual gap, but it would change
+  // observable single-request semantics (hop count, effective URL, cookie handling) in ways the
+  // hermetic loopback e2e cannot faithfully cover, so it is intentionally deferred. The higher-severity
+  // path — the 202 `Location` poll loop, which re-mints Managed-Identity tokens — is fully guarded in
+  // `buildPollRequest` regardless of this choice.
   const response = await fetch(uri, {
     method,
     headers,
@@ -351,5 +359,15 @@ export async function* builtinHttpPollOrchestrator(
 
   // Strip the internal `effectiveUri` so `callHttp` resolves to exactly the v3
   // `{ statusCode, headers, content }` shape.
+  //
+  // Known v3 gap: v3's `DurableHttpResponse` was a class exposing a case-insensitive `getHeader()`.
+  // The response here crosses this sub-orchestration's JSON boundary back to `callHttp`, so it can only
+  // be a plain object; and core `Task<T>` is a plain data holder whose `_result` the executor reads
+  // directly (bypassing any accessor), so neither subclassing `Task` nor reviving a class instance in
+  // the caller survives serialization. Restoring `getHeader()` would require replacing
+  // `wrapOrchestrator`'s `yield*` delegation with a manual drive loop that still preserves `.throw()`
+  // and `.return()` for every classic orchestrator — too broad a blast radius to justify here.
+  // Migrating consumers read headers by lower-cased key (`response.headers["location"]`), since `fetch`
+  // lower-cases response header names. Tracked for a follow-up issue.
   return { statusCode: response.statusCode, headers: response.headers, content: response.content };
 }
