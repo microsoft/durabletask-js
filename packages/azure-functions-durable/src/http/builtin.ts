@@ -407,25 +407,25 @@ export async function* builtinHttpPollOrchestrator(
     // A `Location` may be relative (e.g. `/operations/42`); resolve it against the effective request
     // URI so the next poll targets an absolute http(s) URL (the activity rejects non-absolute URIs).
     //
-    // `Location` is remote-controlled: an absent one already means "cannot poll, return the 202 as-is"
-    // (see the `if (!location) break` above), and both an UNPARSEABLE and a parseable-but-non-http(s)
-    // one are the same situation. `new URL` throws `TypeError [ERR_INVALID_URL]` on input like `http://`
-    // or `///`; and it PARSES a `file://`/`ftp://` Location cleanly, yet the activity's scheme guard
-    // then rejects it — either way, continuing would fail the whole orchestration with an opaque error
-    // instead of surfacing the 202 the caller can inspect. So a non-http(s) scheme stops polling too.
-    // Determinism holds: `new URL` and the protocol check are pure computation over history-derived
-    // values, so replay re-takes the identical branch.
-    let resolved: string;
+    // `Location` is remote-controlled, so an unusable one is treated exactly like a missing one
+    // (`if (!location) break` above): stop polling and return the 202 for the caller to inspect,
+    // never fail the orchestration with an opaque error. Two unusable cases:
+    //   1. UNPARSEABLE — `new URL` throws `TypeError [ERR_INVALID_URL]` on input like `http://` or `///`.
+    //   2. NON-http(s) — `new URL` parses a `file://`/`ftp://` Location cleanly, but the activity's
+    //                    scheme guard would then reject it, failing the whole orchestration.
+    // `URL.protocol` is WHATWG-normalized to lowercase (with a trailing `:`), so `FILE://`/`Ftp://`
+    // are covered without extra casing. Determinism holds: `new URL` and the protocol check are pure
+    // computation over history-derived values, so replay re-takes the identical branch.
+    let resolvedUrl: URL;
     try {
-      const url = new URL(location, currentUri);
-      // `URL.protocol` is WHATWG-normalized to lowercase, so `FILE://`/`Ftp://` are covered too.
-      if (url.protocol !== "http:" && url.protocol !== "https:") {
-        break;
-      }
-      resolved = url.toString();
+      resolvedUrl = new URL(location, currentUri);
     } catch {
       break;
     }
+    if (resolvedUrl.protocol !== "http:" && resolvedUrl.protocol !== "https:") {
+      break;
+    }
+    const resolved = resolvedUrl.toString();
 
     const now = ctx.currentUtcDateTime;
     const delaySeconds = retryAfterSeconds(headers, now);

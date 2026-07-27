@@ -644,6 +644,11 @@ describe("builtinHttpPollOrchestrator", () => {
   // missing or unparseable one: the activity's scheme guard rejects non-http(s) URIs, so continuing
   // to poll would fail the orchestration with an opaque error instead of surfacing the 202. Since
   // `Location` is callee-controlled, treat it the same way — stop polling, return the 202 as-is.
+  //
+  // NOTE: `ctx.callActivity` is MOCKED here, so this test does NOT reproduce that production
+  // orchestration failure (the real failure comes from the activity's scheme guard, which the mock
+  // bypasses). It asserts the unit-level CAUSE instead: the poll loop breaks — `createTimer` is never
+  // called and `callActivity` runs exactly once — rather than scheduling a doomed poll to `file://`.
   it.each(["file:///etc/passwd", "ftp://example.com/x"])(
     "stops polling and returns the 202 as-is when the Location %j has a non-http(s) scheme",
     async (badLocation) => {
