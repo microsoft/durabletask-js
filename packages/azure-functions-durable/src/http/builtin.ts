@@ -263,13 +263,21 @@ export async function builtinHttpActivity(input: DurableHttpRequestPayload): Pro
 /**
  * Build the next poll request for a `202` `Location`, applying the cross-origin credential policy.
  *
+ * @param trustAnchorUri The credential trust anchor: the **originally-requested** URI, never the
+ * previous hop's effective/post-redirect URI. Same-origin is judged against this, so a
+ * callee-controlled `Location` or a followed redirect cannot move the origin we send credentials to.
+ * @param resolved The absolute URI of the next poll (a `Location` already resolved against the
+ * effective request URI).
+ *
  * @remarks
  * `Location` is callee-controlled, so credentials are handled per
- * Azure/azure-functions-durable-extension#3443:
+ * Azure/azure-functions-durable-extension#3443 (`CreateLocationPollRequest`), whose poll loop passes
+ * the ORIGINAL request on every hop (its `req` is never reassigned):
  * - `x-functions-key` is **always** dropped (a function-level key won't open the master-key-protected
  *   status endpoint, and it must never leak to another origin);
  * - on a **cross-origin** `Location` the `Authorization`/`Cookie` headers and the `tokenSource` are
- *   dropped, so an attacker-controlled first hop cannot harvest credentials;
+ *   dropped, so an attacker-controlled hop cannot harvest credentials or force a fresh Managed-Identity
+ *   token to be minted for the original resource and exfiltrated;
  * - on a **same-origin** `Location` headers and the `tokenSource` are forwarded — the async polling
  *   pattern legitimately re-authenticates back to the same service.
  *
@@ -278,11 +286,11 @@ export async function builtinHttpActivity(input: DurableHttpRequestPayload): Pro
  */
 function buildPollRequest(
   request: DurableHttpRequestPayload,
-  base: string,
+  trustAnchorUri: string,
   resolved: string,
   enablePolling: boolean,
 ): DurableHttpRequestPayload {
-  const sameOrigin = isSameOrigin(base, resolved);
+  const sameOrigin = isSameOrigin(trustAnchorUri, resolved);
   const pollRequest: DurableHttpRequestPayload = { method: "GET", uri: resolved, enablePolling };
 
   if (request.headers !== undefined) {
@@ -332,8 +340,18 @@ export async function* builtinHttpPollOrchestrator(
   const enablePolling = request.enablePolling !== false;
 
   let response = (yield ctx.callActivity(BUILTIN_HTTP_ACTIVITY_NAME, request)) as BuiltinHttpActivityResult;
-  // Base URI for resolving a relative `Location`: the effective (post-redirect) URI when known.
-  let currentUri = response.effectiveUri ?? String(request.uri ?? "");
+  // Two DISTINCT URIs, deliberately NOT merged into one variable:
+  //   - `originalUri` is the credential TRUST ANCHOR: the URI the app author declared. It is captured
+  //     once and NEVER reassigned, so a callee-controlled `Location` (or a redirect `fetch` followed)
+  //     can never move the origin we are willing to send Authorization/Cookie/tokenSource to. Mirrors
+  //     .NET `DurableOrchestrationContext.CallHttpAsync`, whose `req` is never reassigned across hops.
+  //   - `currentUri` is ONLY the base for resolving a RELATIVE `Location` (RFC 9110 §10.2.2): the
+  //     effective (post-redirect) URI of the latest hop. It legitimately moves each hop.
+  // Merging them (using the moving effective URI as the trust anchor) is a token-exfiltration bypass:
+  // once one hop lands on an attacker origin, a second attacker->attacker 202 would be judged
+  // "same-origin" and re-mint the original credentials to the attacker.
+  const originalUri = String(request.uri ?? "");
+  let currentUri = response.effectiveUri ?? originalUri;
 
   while (enablePolling && response.statusCode === 202) {
     const headers = response.headers ?? {};
@@ -352,7 +370,8 @@ export async function* builtinHttpPollOrchestrator(
     const fireAt = new Date(now.getTime() + delaySeconds * 1000);
     yield ctx.createTimer(fireAt);
 
-    const pollRequest = buildPollRequest(request, currentUri, resolved, enablePolling);
+    // Trust anchor is the ORIGINAL request URI, never `currentUri` (see the note above).
+    const pollRequest = buildPollRequest(request, originalUri, resolved, enablePolling);
     response = (yield ctx.callActivity(BUILTIN_HTTP_ACTIVITY_NAME, pollRequest)) as BuiltinHttpActivityResult;
     currentUri = response.effectiveUri ?? resolved;
   }

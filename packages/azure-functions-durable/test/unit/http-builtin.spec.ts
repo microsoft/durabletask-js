@@ -446,6 +446,80 @@ describe("builtinHttpPollOrchestrator", () => {
     expect(request.headers).toEqual({ Authorization: "Bearer caller", "x-functions-key": "fkey" });
   });
 
+  it("does NOT restore credentials when a cross-origin hop later polls its own same-origin Location", async () => {
+    // Anchor-drift bypass: once a hop lands on an attacker origin, the same-origin trust anchor must
+    // NOT move to that origin. Otherwise the attacker returns a second 202 whose Location is on its own
+    // origin, that hop is judged "same-origin", and the pristine Authorization/Cookie/tokenSource are
+    // re-derived and sent to the attacker (a fresh Managed-Identity token is minted for the ORIGINAL
+    // resource and exfiltrated). The trust anchor must stay the originally-requested URI — mirrors .NET
+    // DurableOrchestrationContext.CallHttpAsync, whose `req` is never reassigned across hops.
+    const { ctx, raw } = createPollContext(now);
+    const request: DurableHttpRequestPayload = {
+      method: "GET",
+      uri: "https://victim.test/op",
+      enablePolling: true,
+      headers: { Authorization: "auth-original", Cookie: "sid=1", "x-functions-key": "fkey", "x-keep": "yes" },
+      tokenSource: { resource: "https://management.core.windows.net/" },
+    };
+    const gen = builtinHttpPollOrchestrator(ctx, request);
+
+    await gen.next(); // initial request (call 0)
+    // Hop 1 lands cross-origin: Location on the attacker origin -> creds stripped (already correct today).
+    await gen.next({
+      statusCode: 202,
+      headers: { Location: "https://attacker.test/a", "Retry-After": "1" },
+      effectiveUri: "https://victim.test/op",
+    });
+    await gen.next(); // second poll to attacker/a (call 1)
+    // The attacker now 202s to a Location on ITS OWN origin (attacker -> attacker == "same origin").
+    await gen.next({
+      statusCode: 202,
+      headers: { Location: "https://attacker.test/b", "Retry-After": "1" },
+      effectiveUri: "https://attacker.test/a",
+    });
+    await gen.next(); // third poll to attacker/b (call 2) -- must remain credential-free
+
+    const firstPoll = raw.callActivity.mock.calls[1][1] as DurableHttpRequestPayload;
+    expect(firstPoll.uri).toBe("https://attacker.test/a");
+    expect(firstPoll.headers).toEqual({ "x-keep": "yes" });
+    expect(firstPoll.tokenSource).toBeUndefined();
+
+    const secondPoll = raw.callActivity.mock.calls[2][1] as DurableHttpRequestPayload;
+    expect(secondPoll.uri).toBe("https://attacker.test/b");
+    // Cross-origin relative to the ORIGINAL victim URI, so credentials must stay stripped.
+    expect(secondPoll.headers).toEqual({ "x-keep": "yes" });
+    expect(secondPoll.tokenSource).toBeUndefined();
+  });
+
+  it("keeps credentials stripped when the first hop's effective URI is a cross-origin redirect target", async () => {
+    // A single cross-origin 3xx on the first hop is enough: `fetch` follows it, so `effectiveUri` is
+    // already the attacker origin. The poll must be judged against the originally-requested URI, not the
+    // redirected-to effective URI, or the very first poll leaks credentials.
+    const { ctx, raw } = createPollContext(now);
+    const request: DurableHttpRequestPayload = {
+      method: "GET",
+      uri: "https://victim.test/op",
+      enablePolling: true,
+      headers: { Authorization: "auth-original", Cookie: "sid=1", "x-keep": "yes" },
+      tokenSource: { resource: "https://management.core.windows.net/" },
+    };
+    const gen = builtinHttpPollOrchestrator(ctx, request);
+
+    await gen.next(); // initial request (call 0)
+    // fetch followed victim -> attacker (3xx); the 202 body's Location is on the attacker origin too.
+    await gen.next({
+      statusCode: 202,
+      headers: { Location: "https://attacker.test/poll", "Retry-After": "1" },
+      effectiveUri: "https://attacker.test/landing",
+    });
+    await gen.next(); // first poll (call 1) -- must be credential-free
+
+    const poll = raw.callActivity.mock.calls[1][1] as DurableHttpRequestPayload;
+    expect(poll.uri).toBe("https://attacker.test/poll");
+    expect(poll.headers).toEqual({ "x-keep": "yes" });
+    expect(poll.tokenSource).toBeUndefined();
+  });
+
   it("returns the first 202 without looping when polling is disabled", async () => {
     const { ctx, raw } = createPollContext(now);
     const gen = builtinHttpPollOrchestrator(ctx, { method: "GET", uri: "https://host/api", enablePolling: false });
