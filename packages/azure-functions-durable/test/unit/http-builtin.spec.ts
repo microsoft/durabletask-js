@@ -302,8 +302,9 @@ describe("builtinHttpActivity", () => {
       await activity(tokenRequest);
 
       // The credential is cached at module scope, so the environment-probing constructor runs once
-      // even though two hops acquired a token — a long 202 poll loop cannot re-probe (rate-limited)
-      // IMDS on every hop.
+      // and the underlying MSAL in-memory token cache is reused across invocations instead of being
+      // discarded and re-created per hop (the documented "reuse credential instances" best practice;
+      // reuse avoids Entra 429 throttling at aggregate scale). A single poll loop cannot itself throttle.
       expect(credentialCtor).toHaveBeenCalledTimes(1);
     });
   });
