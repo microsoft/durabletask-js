@@ -591,8 +591,8 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
   }, 31000);
 
   // Regression for the default-derived sub-orchestration instance ID colliding across
-  // continue-as-new generations (issue #318 / PR #333). A parent that schedules a DEFAULT-ID
-  // (no explicit instanceId) sub-orchestration, then continue-as-news, then schedules another
+  // continue-as-new generations (issue #318). A parent that schedules a DEFAULT-ID
+  // (no explicit instanceId) sub-orchestration, then continues-as-new, then schedules another
   // default-ID sub-orchestration must NOT collide. Pre-fix the derived child ID was
   // `${parentId}:${hex4}` — identical in every generation because continue-as-new truncates the
   // history and resets the per-work-item sequence counter — so generation 1 re-derived
@@ -679,7 +679,7 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     }
   }, 61000);
 
-  // Companion length check for the same fix (PR #333): default-derived sub-orchestration instance IDs
+  // Companion length check for the same fix: default-derived sub-orchestration instance IDs
   // must stay within the DTS 100-character instance-ID limit even when sub-orchestrations NEST. The
   // pre-fix `${parentId}:${executionId}:${hex4}` shape concatenated every ancestor, so a top-level
   // orchestrator -> sub-orchestrator -> callHttp (2 levels) produced a ~112-char ID that DTS rejects.

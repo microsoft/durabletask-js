@@ -142,10 +142,16 @@ const CallHttp_HttpStart: HttpHandler = async (request: HttpRequest, context: In
         // hop uses the `127.0.0.1` origin for `xorigin` (so the localhost Location is cross-origin and
         // the credential is stripped) and the `localhost` origin for `xorigin-same` (so the Location is
         // same-origin and the credential is forwarded). Both share the host's port.
-        const u = new URL(request.url);
-        const firstHost = mode === 'xorigin' ? '127.0.0.1' : 'localhost';
+        // Build the URL by construction, not string interpolation: a `${u.port}` template emits an
+        // invalid dangling `:` (e.g. `https://127.0.0.1:/api/...`) whenever the host used a protocol
+        // default port (80/443, where `URL.port` is ""). Setting `hostname` keeps the host's actual
+        // port, and `URL` omits it only when it is the scheme default. Mirrors `HttpCrossOriginStart` above.
+        const target = new URL(request.url);
+        target.hostname = mode === 'xorigin' ? '127.0.0.1' : 'localhost';
+        target.pathname = '/api/HttpCrossOriginStart';
+        target.search = '';
         input = {
-            url: `${u.protocol}//${firstHost}:${u.port}/api/HttpCrossOriginStart`,
+            url: target.toString(),
             headers: { Authorization: 'Bearer e2e-secret' },
         };
     } else {
