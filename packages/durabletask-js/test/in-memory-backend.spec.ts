@@ -931,4 +931,46 @@ describe("In-Memory Backend", () => {
     expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
     expect(state?.serializedOutput).toEqual(JSON.stringify(42));
   });
+
+  it("should fail with an explanatory error when an orchestration calls an entity", async () => {
+    // callEntity waits for a response that no entity worker will ever send here, so the
+    // backend must fail the orchestration rather than let it hang until the test times out.
+    const entityId = new EntityInstanceId("counter", "mykey");
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      return yield ctx.entities.callEntity(entityId, "get");
+    };
+
+    worker.addOrchestrator(orchestrator);
+    await worker.start();
+
+    const id = await client.scheduleNewOrchestration(orchestrator);
+    const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.FAILED);
+    expect(state?.failureDetails?.message).toContain("callEntity");
+    expect(state?.failureDetails?.message).toContain("does not support");
+  });
+
+  it("should fail with an explanatory error when an orchestration locks entities", async () => {
+    // lockEntities waits for an EntityLockGranted response, which this backend cannot produce.
+    const entityId = new EntityInstanceId("counter", "mykey");
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      yield ctx.entities.lockEntities(entityId);
+      return "locked";
+    };
+
+    worker.addOrchestrator(orchestrator);
+    await worker.start();
+
+    const id = await client.scheduleNewOrchestration(orchestrator);
+    const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.FAILED);
+    expect(state?.failureDetails?.message).toContain("lockEntities");
+    expect(state?.failureDetails?.message).toContain("does not support");
+  });
 });

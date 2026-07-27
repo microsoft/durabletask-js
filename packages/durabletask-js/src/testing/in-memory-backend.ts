@@ -540,13 +540,7 @@ export class InMemoryOrchestrationBackend {
         this.processSendEventAction(action.getSendevent()!);
         break;
       case pb.OrchestratorAction.OrchestratoractiontypeCase.SENDENTITYMESSAGE:
-        // Entity message actions (signal, call, lock, unlock) are produced by
-        // orchestrations that interact with entities. The in-memory backend does
-        // not currently include a full entity processing runtime, so these
-        // actions are acknowledged but not executed. Signal (fire-and-forget)
-        // operations silently succeed; call/lock operations will cause the
-        // orchestration to wait indefinitely for a response that never arrives,
-        // which matches the expected behavior when no entity worker is available.
+        this.processSendEntityMessageAction(instance, action.getSendentitymessage()!);
         break;
       case pb.OrchestratorAction.OrchestratoractiontypeCase.TERMINATEORCHESTRATION:
         // Terminate-orchestration actions are used for recursive termination of
@@ -732,6 +726,42 @@ export class InMemoryOrchestrationBackend {
       .catch(() => {
         // Reset — sub-orchestration watcher cancelled, nothing to do
       });
+  }
+
+  /**
+   * Handles an entity message emitted by an orchestration.
+   *
+   * This backend has no entity worker, so only fire-and-forget messages can be honoured:
+   * `signalEntity` and the unlock sent when a critical section ends expect no reply and are
+   * dropped. `callEntity` and `lockEntities` block on a response that would never arrive, so
+   * they fail fast with an explanatory error rather than hanging the orchestration forever.
+   */
+  private processSendEntityMessageAction(
+    instance: OrchestrationInstance,
+    entityMessage: pb.SendEntityMessageAction,
+  ): void {
+    const messageType = entityMessage.getEntitymessagetypeCase();
+    const messageTypeCase = pb.SendEntityMessageAction.EntitymessagetypeCase;
+
+    switch (messageType) {
+      case messageTypeCase.ENTITYOPERATIONSIGNALED:
+      case messageTypeCase.ENTITYUNLOCKSENT:
+        break;
+      case messageTypeCase.ENTITYOPERATIONCALLED:
+      case messageTypeCase.ENTITYLOCKREQUESTED:
+        throw new Error(
+          `Orchestration '${instance.instanceId}' used ` +
+            `${messageType === messageTypeCase.ENTITYOPERATIONCALLED ? "callEntity" : "lockEntities"}, which ` +
+            `the in-memory test backend does not support because it has no entity worker to produce a response. ` +
+            `Only fire-and-forget entity messages (signalEntity and the unlock that ends a critical section) ` +
+            `are supported here; use a real backend or the emulator to test entity calls and locks.`,
+        );
+      default:
+        throw new Error(
+          `Unknown entity message type '${messageType}' for orchestration '${instance.instanceId}'. ` +
+            `This likely means the in-memory backend needs to be updated to handle a newly introduced entity message type.`,
+        );
+    }
   }
 
   private processTerminateOrchestrationAction(action: pb.OrchestratorAction): void {
