@@ -63,6 +63,9 @@ export class ActivityRequest extends jspb.Message {
     getParenttracecontext(): TraceContext | undefined;
     setParenttracecontext(value?: TraceContext): ActivityRequest;
 
+    getTagsMap(): jspb.Map<string, string>;
+    clearTagsMap(): void;
+
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): ActivityRequest.AsObject;
     static toObject(includeInstance: boolean, msg: ActivityRequest): ActivityRequest.AsObject;
@@ -81,6 +84,8 @@ export namespace ActivityRequest {
         orchestrationinstance?: OrchestrationInstance.AsObject,
         taskid: number,
         parenttracecontext?: TraceContext.AsObject,
+
+        tagsMap: Array<[string, string]>,
     }
 }
 
@@ -1613,6 +1618,28 @@ export namespace SendEntityMessageAction {
 
 }
 
+export class RewindOrchestrationAction extends jspb.Message { 
+    clearNewhistoryList(): void;
+    getNewhistoryList(): Array<HistoryEvent>;
+    setNewhistoryList(value: Array<HistoryEvent>): RewindOrchestrationAction;
+    addNewhistory(value?: HistoryEvent, index?: number): HistoryEvent;
+
+    serializeBinary(): Uint8Array;
+    toObject(includeInstance?: boolean): RewindOrchestrationAction.AsObject;
+    static toObject(includeInstance: boolean, msg: RewindOrchestrationAction): RewindOrchestrationAction.AsObject;
+    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+    static serializeBinaryToWriter(message: RewindOrchestrationAction, writer: jspb.BinaryWriter): void;
+    static deserializeBinary(bytes: Uint8Array): RewindOrchestrationAction;
+    static deserializeBinaryFromReader(message: RewindOrchestrationAction, reader: jspb.BinaryReader): RewindOrchestrationAction;
+}
+
+export namespace RewindOrchestrationAction {
+    export type AsObject = {
+        newhistoryList: Array<HistoryEvent.AsObject>,
+    }
+}
+
 export class OrchestratorAction extends jspb.Message { 
     getId(): number;
     setId(value: number): OrchestratorAction;
@@ -1652,6 +1679,11 @@ export class OrchestratorAction extends jspb.Message {
     getSendentitymessage(): SendEntityMessageAction | undefined;
     setSendentitymessage(value?: SendEntityMessageAction): OrchestratorAction;
 
+    hasRewindorchestration(): boolean;
+    clearRewindorchestration(): void;
+    getRewindorchestration(): RewindOrchestrationAction | undefined;
+    setRewindorchestration(value?: RewindOrchestrationAction): OrchestratorAction;
+
     getOrchestratoractiontypeCase(): OrchestratorAction.OrchestratoractiontypeCase;
 
     serializeBinary(): Uint8Array;
@@ -1674,6 +1706,7 @@ export namespace OrchestratorAction {
         completeorchestration?: CompleteOrchestrationAction.AsObject,
         terminateorchestration?: TerminateOrchestrationAction.AsObject,
         sendentitymessage?: SendEntityMessageAction.AsObject,
+        rewindorchestration?: RewindOrchestrationAction.AsObject,
     }
 
     export enum OrchestratoractiontypeCase {
@@ -1685,6 +1718,7 @@ export namespace OrchestratorAction {
         COMPLETEORCHESTRATION = 6,
         TERMINATEORCHESTRATION = 7,
         SENDENTITYMESSAGE = 8,
+        REWINDORCHESTRATION = 9,
     }
 
 }
@@ -2557,6 +2591,11 @@ export class PurgeInstanceFilter extends jspb.Message {
     setRuntimestatusList(value: Array<OrchestrationStatus>): PurgeInstanceFilter;
     addRuntimestatus(value: OrchestrationStatus, index?: number): OrchestrationStatus;
 
+    hasTimeout(): boolean;
+    clearTimeout(): void;
+    getTimeout(): google_protobuf_duration_pb.Duration | undefined;
+    setTimeout(value?: google_protobuf_duration_pb.Duration): PurgeInstanceFilter;
+
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): PurgeInstanceFilter.AsObject;
     static toObject(includeInstance: boolean, msg: PurgeInstanceFilter): PurgeInstanceFilter.AsObject;
@@ -2572,6 +2611,7 @@ export namespace PurgeInstanceFilter {
         createdtimefrom?: google_protobuf_timestamp_pb.Timestamp.AsObject,
         createdtimeto?: google_protobuf_timestamp_pb.Timestamp.AsObject,
         runtimestatusList: Array<OrchestrationStatus>,
+        timeout?: google_protobuf_duration_pb.Duration.AsObject,
     }
 }
 

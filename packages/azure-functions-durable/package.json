@@ -1,0 +1,62 @@
+{
+  "name": "durable-functions",
+  "version": "4.0.0",
+  "description": "Azure Functions Durable provider for the Durable Task JavaScript SDK",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('dist', {recursive:true, force:true})\"",
+    "build:core": "npm run build -w @microsoft/durabletask-js",
+    "build": "npm run clean && npm run build:core && tsc -p tsconfig.build.json",
+    "test": "jest --runInBand --detectOpenHandles",
+    "test:unit": "jest test/unit --runInBand --detectOpenHandles",
+    "prepublishOnly": "npm run build && npm run test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/microsoft/durabletask-js.git",
+    "directory": "packages/azure-functions-durable"
+  },
+  "keywords": [
+    "azure-functions",
+    "durable-functions",
+    "durabletask",
+    "orchestration",
+    "workflow",
+    "grpc"
+  ],
+  "author": "Microsoft",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/microsoft/durabletask-js/issues"
+  },
+  "homepage": "https://github.com/microsoft/durabletask-js/tree/main/packages/azure-functions-durable#readme",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.16.1",
+    "@grpc/grpc-js": "^1.14.4",
+    "@microsoft/durabletask-js": "0.4.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.1",
+    "@types/node": "^22.0.0",
+    "jest": "^29.5.0",
+    "ts-jest": "^29.1.0",
+    "typescript": "^5.0.4"
+  }
+}

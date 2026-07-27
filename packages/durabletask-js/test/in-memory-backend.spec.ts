@@ -513,6 +513,37 @@ describe("In-Memory Backend", () => {
     expect(state).toBeUndefined();
   });
 
+  it("should clear stale queued work when purging completed orchestrations", async () => {
+    const orchestrator: TOrchestrator = async (_: OrchestrationContext, input: number) => {
+      return input * 2;
+    };
+    const instanceId = "purge-queue-cleanup-test-id";
+
+    worker.addOrchestrator(orchestrator);
+    await worker.start();
+
+    await client.scheduleNewOrchestration(orchestrator, 1, instanceId);
+    const initialState = await client.waitForOrchestrationCompletion(instanceId, true, 10);
+    expect(initialState?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+
+    await worker.stop();
+    await client.raiseOrchestrationEvent(instanceId, "late-event", "ignored");
+    expect((backend as any).orchestrationQueue).toContain(instanceId);
+    expect((backend as any).orchestrationQueueSet.has(instanceId)).toBe(true);
+
+    const result = await client.purgeOrchestration(instanceId);
+    expect(result.deletedInstanceCount).toEqual(1);
+    expect((backend as any).orchestrationQueue).not.toContain(instanceId);
+    expect((backend as any).orchestrationQueueSet.has(instanceId)).toBe(false);
+
+    await client.scheduleNewOrchestration(orchestrator, 21, instanceId);
+    await worker.start();
+
+    const recreatedState = await client.waitForOrchestrationCompletion(instanceId, true, 10);
+    expect(recreatedState?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(recreatedState?.serializedOutput).toEqual(JSON.stringify(42));
+  });
+
   it("should cancel pending timers when purging a terminated orchestration", async () => {
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
       // Create a timer far in the future — it will still be pending when we terminate
@@ -578,6 +609,17 @@ describe("In-Memory Backend", () => {
     expect((backend as any).pendingTimers.size).toBe(1);
     expect((backend as any).instanceTimers.has(id2)).toBe(true);
     expect((backend as any).instanceTimers.has(id1)).toBe(false);
+  });
+
+  it("should silently ignore completeOrchestration for purged instances", () => {
+    // Verifies that completeOrchestration returns silently when the instance
+    // has been deleted (e.g., via purge or reset), consistent with how
+    // completeActivity handles missing instances.
+
+    // Should not throw — instance simply doesn't exist
+    expect(() => {
+      backend.completeOrchestration("nonexistent-instance", 1, []);
+    }).not.toThrow();
   });
 
   it("should allow reusing instance IDs after reset", async () => {
