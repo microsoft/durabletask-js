@@ -172,35 +172,6 @@ export function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Creates a promise that resolves after the specified delay,
- * but can be cancelled via an AbortSignal.
- *
- * @param ms Delay in milliseconds.
- * @param signal Optional AbortSignal to cancel the sleep.
- * @returns Promise that resolves after the delay or rejects if aborted.
- */
-export function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new Error("Sleep aborted"));
-      return;
-    }
-
-    const onAbort = () => {
-      clearTimeout(timeoutId);
-      reject(new Error("Sleep aborted"));
-    };
-
-    const timeoutId = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
-/**
  * Waits for a promise to resolve with a timeout.
  *
  * @param promise The promise to wait for.
@@ -213,6 +184,10 @@ export async function withTimeout<T>(
   timeoutMs: number,
   timeoutMessage = "Operation timed out",
 ): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
+    throw new RangeError(`timeoutMs must be a finite number >= 0, got ${timeoutMs}`);
+  }
+
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
   const timeoutPromise = new Promise<never>((_, reject) => {

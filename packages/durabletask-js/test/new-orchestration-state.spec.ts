@@ -202,6 +202,45 @@ describe("newOrchestrationState", () => {
     );
   });
 
+  it("should default to epoch when timestamps are missing from proto response", () => {
+    const state = new pb.OrchestrationState();
+    state.setName("TestOrchestrator");
+    state.setOrchestrationstatus(pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING);
+    // Intentionally NOT setting createdtimestamp or lastupdatedtimestamp
+
+    const res = new pb.GetInstanceResponse();
+    res.setExists(true);
+    res.setOrchestrationstate(state);
+
+    const result = newOrchestrationState("test-id", res);
+
+    expect(result).toBeDefined();
+    expect(result!.createdAt).toEqual(new Date(0));
+    expect(result!.lastUpdatedAt).toEqual(new Date(0));
+  });
+
+  it("should preserve valid timestamps from proto response", () => {
+    const state = new pb.OrchestrationState();
+    state.setName("TestOrchestrator");
+    state.setOrchestrationstatus(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+
+    const specificDate = new Date("2025-06-15T12:00:00Z");
+    const ts = new Timestamp();
+    ts.fromDate(specificDate);
+    state.setCreatedtimestamp(ts);
+    state.setLastupdatedtimestamp(ts);
+
+    const res = new pb.GetInstanceResponse();
+    res.setExists(true);
+    res.setOrchestrationstate(state);
+
+    const result = newOrchestrationState("test-id", res);
+
+    expect(result).toBeDefined();
+    expect(result!.createdAt.getTime()).toBe(specificDate.getTime());
+    expect(result!.lastUpdatedAt.getTime()).toBe(specificDate.getTime());
+  });
+
   it("should handle failure details without stack trace", () => {
     const failureDetails = new pb.TaskFailureDetails();
     failureDetails.setErrormessage("error without stack");

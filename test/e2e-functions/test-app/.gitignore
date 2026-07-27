@@ -1,0 +1,22 @@
+# TypeScript build output
+dist
+out
+
+# Dependencies
+node_modules/
+
+# Azure Functions artifacts
+bin
+obj
+appsettings.json
+
+# Azurite artifacts
+__blobstorage__
+__queuestorage__
+__azurite_db*__.json
+
+# Host log captured by the e2e harness
+_func_host.log
+
+# Logs
+*.log

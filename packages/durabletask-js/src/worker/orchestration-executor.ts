@@ -13,6 +13,7 @@ import { Logger, ConsoleLogger } from "../types/logger.type";
 import { getName } from "../task";
 import * as WorkerLogs from "./logs";
 import { OrchestrationStateError } from "../task/exception/orchestration-state-error";
+import { NonDeterminismError } from "../task/exception/non-determinism-error";
 import { CompletableTask } from "../task/completable-task";
 import { RetryableTask } from "../task/retryable-task";
 import { RetryHandlerTask } from "../task/retry-handler-task";
@@ -24,6 +25,7 @@ import type { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 import { OrchestratorNotRegisteredError } from "./exception/orchestrator-not-registered-error";
 import { StopIterationError } from "./exception/stop-iteration-error";
 import { Registry } from "./registry";
+import { buildRewindResult } from "./rewind";
 import { RuntimeOrchestrationContext } from "./runtime-orchestration-context";
 import {
   EntityOperationFailedException,
@@ -62,6 +64,23 @@ export class OrchestrationExecutor {
   ): Promise<OrchestrationExecutionResult> {
     if (!newEvents?.length) {
       throw new OrchestrationStateError("The new history event list must have at least one event in it");
+    }
+
+    // Check for rewind BEFORE replay. A rewind is indicated by an executionRewound event in
+    // newEvents. We look for an executionCompleted event in the committed history (oldEvents)
+    // to decide whether to rewind or replay:
+    //   1. executionCompleted IS present -> the orchestration reached a terminal state (e.g.
+    //      failed). This is a *new* rewind that the worker must short-circuit by building
+    //      clean history.
+    //   2. executionCompleted is NOT present -> the backend already processed the
+    //      RewindOrchestrationAction and removed executionCompleted from the committed history.
+    //      Here the executionRewound event in newEvents acts as a "jump-start": it wakes the
+    //      orchestration so that normal replay re-emits scheduleTask actions for the removed
+    //      activities, causing the previously-failed work to rerun. No further rewrite is
+    //      needed, so we fall through to the normal replay path below.
+    const hasRewindInNew = newEvents.some((e) => e.hasExecutionrewound());
+    if (hasRewindInNew && oldEvents.some((e) => e.hasExecutioncompleted())) {
+      return buildRewindResult(oldEvents, newEvents);
     }
 
     const ctx = new RuntimeOrchestrationContext(instanceId);
@@ -162,6 +181,9 @@ export class OrchestrationExecutor {
         case pb.HistoryEvent.EventtypeCase.EVENTRAISED:
           await this.handleEventRaised(ctx, event);
           break;
+        case pb.HistoryEvent.EventtypeCase.EVENTSENT:
+          await this.handleEventSent(ctx, event);
+          break;
         case pb.HistoryEvent.EventtypeCase.EXECUTIONSUSPENDED:
           await this.handleExecutionSuspended(ctx, event);
           break;
@@ -170,6 +192,11 @@ export class OrchestrationExecutor {
           break;
         case pb.HistoryEvent.EventtypeCase.EXECUTIONTERMINATED:
           await this.handleExecutionTerminated(ctx, event);
+          break;
+        case pb.HistoryEvent.EventtypeCase.EXECUTIONREWOUND:
+          // Informational event added when an orchestration is rewound. No action needed.
+          // (The rewind history rewrite happens in buildRewindResult before replay; when a
+          // rewound instance is re-dispatched this event simply jump-starts the replay.)
           break;
         case pb.HistoryEvent.EventtypeCase.ENTITYOPERATIONCALLED:
           await this.handleEntityOperationCalled(ctx, event);
@@ -188,6 +215,9 @@ export class OrchestrationExecutor {
           break;
         case pb.HistoryEvent.EventtypeCase.ENTITYLOCKGRANTED:
           await this.handleEntityLockGranted(ctx, event);
+          break;
+        case pb.HistoryEvent.EventtypeCase.ENTITYUNLOCKSENT:
+          await this.handleEntityUnlockSent(ctx, event);
           break;
         default:
           WorkerLogs.orchestrationUnknownEvent(this._logger, eventTypeName, eventType);
@@ -406,6 +436,17 @@ export class OrchestrationExecutor {
     // Event names are case-insensitive
     const eventName = event.getEventraised()?.getName()?.toLowerCase();
 
+    // On the classic (Azure Storage / DurableTask.Core) backend, an entity call's response is
+    // delivered as an EVENTRAISED whose name equals the entity call's requestId (a lowercase GUID)
+    // and whose input is a DTFx ResponseMessage JSON, rather than as an ENTITYOPERATIONCOMPLETED.
+    // Route it back to the pending entity call so the callEntity task resolves/rejects. On DTS this
+    // branch never fires (responses arrive as ENTITYOPERATIONCOMPLETED and the pending call is
+    // removed by handleEntityOperationCompleted before any EVENTRAISED could match).
+    if (eventName && ctx._entityFeature.pendingEntityCalls.has(eventName)) {
+      await this.handleEntityResponseFromEventRaised(ctx, eventName, event);
+      return;
+    }
+
     if (!ctx._isReplaying) {
       WorkerLogs.orchestrationEventRaised(this._logger, ctx._instanceId, eventName!);
     }
@@ -453,6 +494,173 @@ export class OrchestrationExecutor {
         WorkerLogs.orchestrationEventBuffered(this._logger, ctx._instanceId, eventName!);
       }
     }
+  }
+
+  /**
+   * Handles an entity operation response that arrived as an EVENTRAISED event on the classic
+   * (Azure Storage / DurableTask.Core) backend. In that code path the Durable Functions gRPC shim
+   * wraps entity responses in a DTFx ResponseMessage JSON keyed by the call's requestId, rather than
+   * emitting an ENTITYOPERATIONCOMPLETED proto event. This decodes the wrapper and completes (or
+   * fails) the pending callEntity task. Mirrors the Java SDK's handleEntityResponseFromEventRaised.
+   */
+  private async handleEntityResponseFromEventRaised(
+    ctx: RuntimeOrchestrationContext,
+    requestId: string,
+    event: pb.HistoryEvent,
+  ): Promise<void> {
+    const pendingCall = ctx._entityFeature.pendingEntityCalls.get(requestId);
+    if (!pendingCall) {
+      return;
+    }
+
+    // Remove from pending calls and recover any critical-section lock before completing.
+    ctx._entityFeature.pendingEntityCalls.delete(requestId);
+    ctx._entityFeature.recoverLockAfterCall(pendingCall.entityId);
+
+    const decoded = this.decodeEntityResponseMessage(event.getEventraised()?.getInput()?.getValue());
+
+    if (decoded.isFailure) {
+      const exception = new EntityOperationFailedException(pendingCall.entityId, pendingCall.operationName, {
+        errorType: decoded.errorType,
+        errorMessage: decoded.errorMessage,
+        stackTrace: decoded.stackTrace,
+      });
+      pendingCall.task.failWithError(exception);
+    } else {
+      pendingCall.task.complete(decoded.result);
+    }
+
+    await ctx.resume();
+  }
+
+  /**
+   * Decodes a DTFx ResponseMessage JSON wrapper (as delivered via EVENTRAISED on the classic
+   * backend) into either a success result or a failure. Mirrors the Java SDK's decoding, with one
+   * deliberate enhancement (see below).
+   *
+   * The wrapper shape is:
+   *   - `result`         — the serialized operation result (double-encoded string; may be null/absent).
+   *   - `exceptionType`  — present ⇒ failure. Misleading name: it carries the error message string
+   *                        (the C# property is ErrorMessage but its [DataMember(Name = "exceptionType")]
+   *                        overrides the JSON key). Omitted when null.
+   *   - `failureDetails` — optional structured `{ ErrorType, ErrorMessage, StackTrace, ... }` (PascalCase).
+   *
+   * NOTE (intentionally beyond the Java SDK): the Java SDK builds `new FailureDetails(errorType,
+   * errorMessage, null, false)`, dropping the stack trace. Over gRPC the classic backend uses
+   * DurableTask.Core native entities, whose ResponseMessage.FailureDetails carries a real StackTrace,
+   * so we propagate it into `EntityOperationFailedException.failureDetails.stackTrace`. Do not "fix"
+   * this back to null for Java parity — the extra fidelity is the point.
+   */
+  private decodeEntityResponseMessage(
+    rawInput: string | undefined,
+  ):
+    | { isFailure: false; result: any }
+    | { isFailure: true; errorType: string; errorMessage: string; stackTrace?: string } {
+    if (rawInput === undefined || rawInput === "") {
+      return { isFailure: false, result: undefined };
+    }
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(rawInput);
+    } catch {
+      // Not JSON at all — treat the raw string as the result value.
+      return { isFailure: false, result: rawInput };
+    }
+
+    const isObject = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
+    if (!isObject || !Object.prototype.hasOwnProperty.call(parsed, "result")) {
+      // Not a recognized ResponseMessage wrapper — the parsed value itself is the result.
+      // (Mirrors Java's fallback to direct deserialization for a possible future raw-result format.)
+      return { isFailure: false, result: parsed };
+    }
+
+    const exceptionType = parsed.exceptionType;
+    const failureDetails = parsed.failureDetails;
+    const hasExceptionType = exceptionType !== undefined && exceptionType !== null;
+    const hasFailureDetails = failureDetails !== undefined && failureDetails !== null;
+
+    if (hasExceptionType || hasFailureDetails) {
+      // The "exceptionType" JSON field actually carries the error message (misleading name).
+      let errorMessage = hasExceptionType ? String(exceptionType) : "Entity operation failed";
+      let errorType = "unknown";
+      let stackTrace: string | undefined;
+
+      if (hasFailureDetails && typeof failureDetails === "object") {
+        if (failureDetails.ErrorType !== undefined && failureDetails.ErrorType !== null) {
+          errorType = String(failureDetails.ErrorType);
+        }
+        if (failureDetails.ErrorMessage !== undefined && failureDetails.ErrorMessage !== null) {
+          errorMessage = String(failureDetails.ErrorMessage);
+        }
+        if (failureDetails.StackTrace !== undefined && failureDetails.StackTrace !== null) {
+          stackTrace = String(failureDetails.StackTrace);
+        }
+      }
+
+      return { isFailure: true, errorType, errorMessage, stackTrace };
+    }
+
+    // Success — extract the inner (double-encoded) result value.
+    const resultNode = parsed.result;
+    if (resultNode === null || resultNode === undefined) {
+      return { isFailure: false, result: undefined };
+    }
+
+    const innerResult = typeof resultNode === "string" ? resultNode : JSON.stringify(resultNode);
+    try {
+      return { isFailure: false, result: JSON.parse(innerResult) };
+    } catch {
+      // Defensive: if the inner payload isn't valid JSON, use the raw string.
+      return { isFailure: false, result: innerResult };
+    }
+  }
+
+  private async handleEventSent(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+    // This history event confirms that a sendEvent action was successfully processed by the sidecar.
+    const eventId = event.getEventid();
+    const action = ctx._pendingActions[eventId];
+
+    if (!action) {
+      throw getNonDeterminismError(eventId, getName(ctx.sendEvent));
+    }
+
+    // On the classic (Azure Storage / DurableTask.Core) backend, entity operations do not use
+    // the DTS entity protocol. The Durable Functions gRPC shim translates a sendEntityMessage
+    // action (call / signal / lock / unlock) into a classic send-event, so its confirmation
+    // arrives here as an EVENTSENT rather than as ENTITYOPERATIONCALLED/SIGNALED. Treat that as
+    // a valid confirmation: remove the pending action so it isn't re-sent. The matching entity
+    // response (for a call) is delivered later as an EVENTRAISED and routed by handleEventRaised.
+    if (action.hasSendentitymessage()) {
+      delete ctx._pendingActions[eventId];
+      return;
+    }
+
+    if (!action.hasSendevent()) {
+      const expectedMethodName = getName(ctx.sendEvent);
+      throw new NonDeterminismError(
+        `A previous execution called ${expectedMethodName} with ID=${eventId}, but the current execution is instead trying to call a different method as part of rebuilding its history.`,
+      );
+    }
+
+    const eventSent = event.getEventsent();
+    const expectedEventName = eventSent?.getName();
+    const sendEventAction = action.getSendevent()!;
+    const actualEventName = sendEventAction.getName();
+    if (expectedEventName !== actualEventName) {
+      throw getWrongActionNameError(eventId, getName(ctx.sendEvent), expectedEventName, actualEventName);
+    }
+
+    const expectedInstanceId = eventSent?.getInstanceid();
+    const actualInstanceId = sendEventAction.getInstance()?.getInstanceid();
+    if (expectedInstanceId !== actualInstanceId) {
+      throw new NonDeterminismError(
+        `Failed to restore orchestration state due to a history mismatch: A previous execution called ${getName(ctx.sendEvent)} with target instance '${expectedInstanceId}' and sequence number ${eventId}, but the current execution is instead trying to target instance '${actualInstanceId}' as part of rebuilding its history.`,
+      );
+    }
+
+    // Remove the action from the pending action list only after replay validation succeeds.
+    delete ctx._pendingActions[eventId];
   }
 
   private async handleExecutionSuspended(ctx: RuntimeOrchestrationContext, _event: pb.HistoryEvent): Promise<void> {
@@ -598,20 +806,18 @@ export class OrchestrationExecutor {
     // If in a critical section, recover the lock for this entity
     ctx._entityFeature.recoverLockAfterCall(pendingCall.entityId);
 
-    // Convert failure details and throw EntityOperationFailedException
-    const failureDetails = createTaskFailureDetails(failedEvent?.getFailuredetails());
-    if (!failureDetails) {
-      pendingCall.task.fail(
-        `Entity operation '${pendingCall.operationName}' failed with unknown error`,
-      );
-    } else {
-      const exception = new EntityOperationFailedException(
-        pendingCall.entityId,
-        pendingCall.operationName,
-        failureDetails,
-      );
-      pendingCall.task.fail(exception.message, failedEvent?.getFailuredetails());
-    }
+    const failureDetails =
+      createTaskFailureDetails(failedEvent?.getFailuredetails()) ??
+      {
+        errorType: "UnknownError",
+        errorMessage: `Entity operation '${pendingCall.operationName}' failed with unknown error`,
+      };
+    const exception = new EntityOperationFailedException(
+      pendingCall.entityId,
+      pendingCall.operationName,
+      failureDetails,
+    );
+    pendingCall.task.failWithError(exception);
 
     await ctx.resume();
   }
@@ -648,6 +854,16 @@ export class OrchestrationExecutor {
     // Complete the lock acquisition
     ctx._entityFeature.completeLockAcquisition(criticalSectionId);
     await ctx.resume();
+  }
+
+  private async handleEntityUnlockSent(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+    this.validateEntityAction(
+      ctx,
+      event,
+      "lockRelease",
+      (msg) => msg.hasEntityunlocksent(),
+      "lockRelease (EntityUnlockSent)",
+    );
   }
 
   private validateEntityAction(

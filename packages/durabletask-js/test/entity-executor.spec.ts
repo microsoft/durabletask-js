@@ -69,6 +69,17 @@ class CounterEntity extends TaskEntity<{ count: number }> {
   }
 }
 
+// Entity used to assert how operation input is delivered to the dispatched method.
+class InputCaptureEntity extends TaskEntity<{ calls: number }> {
+  capture(input?: unknown): { hadInput: boolean; value: unknown } {
+    return { hadInput: input !== undefined, value: input ?? null };
+  }
+
+  protected initializeState(): { calls: number } {
+    return { calls: 0 };
+  }
+}
+
 describe("TaskEntityShim", () => {
   const entityId = new EntityInstanceId("counter", "test");
 
@@ -612,6 +623,81 @@ describe("TaskEntityShim", () => {
       // Second operation succeeds, state should be rolled back to 10
       expect(result.getResultsList()[1].hasSuccess()).toBe(true);
       expect(JSON.parse(result.getResultsList()[1].getSuccess()!.getResult()!.getValue())).toBe(10);
+    });
+  });
+
+  describe("empty operation input", () => {
+    it("should treat an empty StringValue input as no input instead of throwing SyntaxError", async () => {
+      const entity = new CounterEntity();
+      const shim = new TaskEntityShim(entity, entityId);
+
+      // Manually build a request whose operation input is an empty StringValue.
+      // A StringValue wrapping "" is a truthy object, so the previous inline
+      // `inputValue ? JSON.parse(inputValue.getValue()) : undefined` guard used to
+      // call JSON.parse("") and throw "Unexpected end of JSON input", failing the
+      // operation and rolling it back instead of treating it as no input.
+      const request = new pb.EntityBatchRequest();
+      request.setInstanceid(entityId.toString());
+
+      const stateValue = new StringValue();
+      stateValue.setValue(JSON.stringify({ count: 7 }));
+      request.setEntitystate(stateValue);
+
+      const opRequest = new pb.OperationRequest();
+      opRequest.setOperation("get");
+      opRequest.setInput(new StringValue()); // empty StringValue, getValue() === ""
+      request.addOperations(opRequest);
+
+      const result = await shim.executeAsync(request);
+
+      const opResult = result.getResultsList()[0];
+      expect(opResult.hasFailure()).toBe(false);
+      expect(opResult.hasSuccess()).toBe(true);
+      expect(JSON.parse(opResult.getSuccess()!.getResult()!.getValue())).toBe(7);
+    });
+
+    it("should dispatch the operation with no input when the StringValue is empty", async () => {
+      const entity = new InputCaptureEntity();
+      const shim = new TaskEntityShim(entity, entityId);
+
+      const request = new pb.EntityBatchRequest();
+      request.setInstanceid(entityId.toString());
+
+      const opRequest = new pb.OperationRequest();
+      opRequest.setOperation("capture");
+      opRequest.setInput(new StringValue()); // empty StringValue
+      request.addOperations(opRequest);
+
+      const result = await shim.executeAsync(request);
+
+      const opResult = result.getResultsList()[0];
+      expect(opResult.hasSuccess()).toBe(true);
+      const captured = JSON.parse(opResult.getSuccess()!.getResult()!.getValue());
+      expect(captured).toEqual({ hadInput: false, value: null });
+    });
+
+    it("should still deliver a genuine empty-string JSON value when explicitly provided", async () => {
+      // Sanity check: a StringValue holding the JSON text '""' is a real empty
+      // string input and must be delivered as "" (not dropped as "no input").
+      const entity = new InputCaptureEntity();
+      const shim = new TaskEntityShim(entity, entityId);
+
+      const request = new pb.EntityBatchRequest();
+      request.setInstanceid(entityId.toString());
+
+      const opRequest = new pb.OperationRequest();
+      opRequest.setOperation("capture");
+      const inputValue = new StringValue();
+      inputValue.setValue(JSON.stringify("")); // the two-character string: ""
+      opRequest.setInput(inputValue);
+      request.addOperations(opRequest);
+
+      const result = await shim.executeAsync(request);
+
+      const opResult = result.getResultsList()[0];
+      expect(opResult.hasSuccess()).toBe(true);
+      const captured = JSON.parse(opResult.getSuccess()!.getResult()!.getValue());
+      expect(captured).toEqual({ hadInput: true, value: "" });
     });
   });
 });

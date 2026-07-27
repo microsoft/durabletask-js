@@ -158,6 +158,23 @@ describe("Options", () => {
 
         expect(() => options.getHostAddress()).toThrow("Invalid endpoint URL:");
       });
+
+      it("should preserve the original error as cause when URL parsing fails", () => {
+        const options = new DurableTaskAzureManagedClientOptions().setEndpointAddress("invalid:url");
+
+        try {
+          options.getHostAddress();
+          fail("Expected getHostAddress to throw");
+        } catch (e: unknown) {
+          expect(e).toBeInstanceOf(Error);
+          const error = e as Error;
+          expect(error.message).toContain("Invalid endpoint URL:");
+          expect(error.cause).toBeDefined();
+          // The cause should be the original URL parsing error
+          expect((error.cause as Error).message).toBeDefined();
+          expect((error.cause as Error).message.length).toBeGreaterThan(0);
+        }
+      });
     });
 
     describe("createChannelCredentials", () => {
