@@ -55,6 +55,27 @@ changed:
   managed-identity `tokenSource` requires the optional
   [`@azure/identity`](https://www.npmjs.com/package/@azure/identity) package
   (`npm install @azure/identity`); without it, a request that uses a `tokenSource` throws a clear error.
+  A behavior note and several deliberate hardening/compat differences from v3:
+  - **Cross-origin `202` poll credentials are stripped.** The `Location` returned with a `202` is
+    callee-controlled, so when it points to a **different origin** (scheme/host/port) the poll drops
+    `Authorization`, `Cookie`, and the `tokenSource` (no token is re-minted for the attacker), and the
+    `x-functions-key` header is **always** dropped (both same- and cross-origin). Same-origin polls
+    still forward headers and the `tokenSource`, so legitimate async patterns keep working. This
+    mirrors the .NET extension's policy
+    ([Azure/azure-functions-durable-extension#3443](https://github.com/Azure/azure-functions-durable-extension/pull/3443)).
+  - **The built-in poll orchestrator cannot be started directly.** It is registered under a reserved
+    name (`BuiltIn__HttpPollOrchestrator`) and refuses a top-level start (it is only ever a
+    sub-orchestration of `callHttp`), so a dynamic `orchestrators/{name}` starter cannot be abused to
+    drive arbitrary SSRF or Managed-Identity token minting.
+  - **The default poll interval is 30 s** (matching the classic host) when a `202` carries no usable
+    `Retry-After`, rather than polling once per second.
+  - **A body on a `GET`/`HEAD` request throws.** The Fetch standard forbids it; v3 silently sent it, so
+    rather than change the request semantics the call fails loudly — remove `body` or use
+    `POST`/`PUT`/`PATCH`.
+  - **`DurableHttpResponse` is a plain object, not a class.** The response crosses the poll
+    sub-orchestration's JSON boundary, so the v3 `response.getHeader(name)` method is not available; read
+    headers directly via `response.headers["name"]` (response header names are lower-cased by `fetch`).
+    Restoring the case-insensitive accessor is tracked as a follow-up.
 - **Some v3 top-level exports were removed** — `DummyOrchestrationContext` / `DummyEntityContext`
   (testing utilities) and the entity-lock types above. `TaskFailedError`
   is re-exported from the core SDK (aggregate failures surface as JS-native `AggregateError`); use the

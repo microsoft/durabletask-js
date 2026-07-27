@@ -5,6 +5,11 @@
 // calls the app's OWN http endpoints (HttpEcho / HttpAsyncEcho) so the suite stays
 // hermetic — no external network is required. HttpAsyncEcho drives a stateless
 // 202 -> Location -> 200 poll loop keyed off an `attempt` query param.
+//
+// HttpCrossOriginStart / HttpAuthEcho additionally exercise the cross-origin credential
+// policy: the poll Location always targets the `localhost` origin, so a first hop made via
+// the `127.0.0.1` origin is cross-origin (Authorization stripped) while a first hop via
+// `localhost` is same-origin (Authorization forwarded). Both resolve to loopback.
 
 import { app, HttpHandler, HttpRequest, HttpResponse, HttpResponseInit, InvocationContext } from '@azure/functions';
 import * as df from 'durable-functions';
@@ -12,8 +17,15 @@ import { CallHttpOptions, OrchestrationContext, OrchestrationHandler } from 'dur
 
 // Orchestration: issue a single durable callHttp and return the final status + body.
 const CallHttpOrchestration: OrchestrationHandler = function* (context: OrchestrationContext) {
-    const input = context.df.getInput<{ url: string; enablePolling?: boolean }>();
+    const input = context.df.getInput<{
+        url: string;
+        enablePolling?: boolean;
+        headers?: { [key: string]: string };
+    }>();
     const options: CallHttpOptions = { method: 'GET', url: input.url };
+    if (input.headers !== undefined) {
+        options.headers = input.headers;
+    }
     if (input.enablePolling !== undefined) {
         options.enablePolling = input.enablePolling;
     }
@@ -64,6 +76,48 @@ app.http('HttpAsyncEcho', {
     handler: HttpAsyncEcho,
 });
 
+// Downstream endpoint (cross-origin poll start): returns 202 with a Location that ALWAYS
+// targets the `localhost` origin. When the first hop arrived via the `127.0.0.1` origin the
+// poll Location is therefore a *different* origin (credentials must be stripped); when it
+// arrived via `localhost` the Location is the *same* origin (credentials forwarded). Both host
+// strings resolve to loopback, so the suite stays hermetic.
+const HttpCrossOriginStart: HttpHandler = async (
+    request: HttpRequest,
+    _context: InvocationContext,
+): Promise<HttpResponseInit> => {
+    const u = new URL(request.url);
+    const location = `${u.protocol}//localhost:${u.port}/api/HttpAuthEcho`;
+    return {
+        status: 202,
+        headers: { Location: location, 'Retry-After': '1' },
+    };
+};
+app.http('HttpCrossOriginStart', {
+    route: 'HttpCrossOriginStart',
+    methods: ['GET'],
+    authLevel: 'anonymous',
+    handler: HttpCrossOriginStart,
+});
+
+// Downstream endpoint (poll target): echoes back the Authorization header it received so the
+// test can assert whether the poll forwarded (same-origin) or stripped (cross-origin) it.
+const HttpAuthEcho: HttpHandler = async (
+    request: HttpRequest,
+    _context: InvocationContext,
+): Promise<HttpResponseInit> => {
+    return {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ echoed: 'xorigin-done', authorization: request.headers.get('authorization') }),
+    };
+};
+app.http('HttpAuthEcho', {
+    route: 'HttpAuthEcho',
+    methods: ['GET'],
+    authLevel: 'anonymous',
+    handler: HttpAuthEcho,
+});
+
 // HTTP starter: schedule CallHttpOrchestration pointed at one of the app's own
 // endpoints. `mode` selects the sync (HttpEcho), polling, or no-poll variant.
 const CallHttp_HttpStart: HttpHandler = async (request: HttpRequest, context: InvocationContext): Promise<HttpResponse> => {
@@ -71,11 +125,22 @@ const CallHttp_HttpStart: HttpHandler = async (request: HttpRequest, context: In
     const origin = new URL(request.url).origin;
     const mode = request.query.get('mode') ?? 'sync';
 
-    let input: { url: string; enablePolling?: boolean };
+    let input: { url: string; enablePolling?: boolean; headers?: { [key: string]: string } };
     if (mode === 'sync') {
         input = { url: `${origin}/api/HttpEcho?value=hello` };
     } else if (mode === 'nopoll') {
         input = { url: `${origin}/api/HttpAsyncEcho`, enablePolling: false };
+    } else if (mode === 'xorigin' || mode === 'xorigin-same') {
+        // Carry an Authorization header the poll must handle per the cross-origin policy. The first
+        // hop uses the `127.0.0.1` origin for `xorigin` (so the localhost Location is cross-origin and
+        // the credential is stripped) and the `localhost` origin for `xorigin-same` (so the Location is
+        // same-origin and the credential is forwarded). Both share the host's port.
+        const u = new URL(request.url);
+        const firstHost = mode === 'xorigin' ? '127.0.0.1' : 'localhost';
+        input = {
+            url: `${u.protocol}//${firstHost}:${u.port}/api/HttpCrossOriginStart`,
+            headers: { Authorization: 'Bearer e2e-secret' },
+        };
     } else {
         input = { url: `${origin}/api/HttpAsyncEcho` };
     }

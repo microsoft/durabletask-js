@@ -21,6 +21,13 @@
  * preserving the single-`yield` v3 ergonomics while keeping the 202 polling loop durable
  * (checkpointed across restarts).
  *
+ * Security: the `Location` returned with a `202` is callee-controlled data. When it points to a
+ * different origin the poll drops the caller's credentials (`Authorization`/`Cookie`/`tokenSource`),
+ * and the `x-functions-key` is always dropped, so a malicious or compromised endpoint cannot harvest
+ * credentials by redirecting the poll to a host it controls. This mirrors the .NET extension's policy
+ * (Azure/azure-functions-durable-extension#3443). The poll orchestrator also rejects being started as
+ * a top-level orchestration (it is only ever a sub-orchestration of `callHttp`).
+ *
  * Both functions are auto-registered under reserved names when this package is imported (see
  * `../app.ts`) so existing apps that call `callHttp` work with no changes. Ported from the
  * durabletask-python design (Andy Staples, durabletask-python#155).
@@ -37,8 +44,25 @@ import { DurableHttpRequestPayload, DurableHttpResponse } from "./models";
 export const BUILTIN_HTTP_ACTIVITY_NAME = "BuiltIn__HttpActivity";
 export const BUILTIN_HTTP_POLL_ORCHESTRATOR_NAME = "BuiltIn__HttpPollOrchestrator";
 
-/** Fallback interval (seconds) between polls when a `202` response carries no usable `Retry-After`. */
-const DEFAULT_POLL_INTERVAL_SECONDS = 1;
+/**
+ * Fallback interval (seconds) between polls when a `202` response carries no usable `Retry-After`.
+ * Matches the classic Durable Functions host default (`HttpOptions.DefaultAsyncRequestSleepTime`,
+ * 30000 ms) rather than hammering the status endpoint once per second.
+ */
+const DEFAULT_POLL_INTERVAL_SECONDS = 30;
+
+/**
+ * @internal
+ * Result of the built-in HTTP activity: the public {@link DurableHttpResponse} plus the effective
+ * (post-redirect) request URI. `fetch` follows redirects by default, so a relative `Location` must be
+ * resolved against the URI that actually produced the response (RFC 9110 §7.1.2 / §10.2.2), not the
+ * URI originally requested. `effectiveUri` is kept off the public {@link DurableHttpResponse} shape;
+ * the poll orchestrator strips it before returning to `callHttp`, so v3 consumers see exactly
+ * `{ statusCode, headers, content }`.
+ */
+interface BuiltinHttpActivityResult extends DurableHttpResponse {
+  effectiveUri?: string;
+}
 
 /** Case-insensitively look up `name` in `headers`. */
 function getHeader(headers: { [key: string]: string }, name: string): string | undefined {
@@ -51,6 +75,35 @@ function getHeader(headers: { [key: string]: string }, name: string): string | u
   return undefined;
 }
 
+/** Case-insensitively delete every variant of `name` from `headers` (mutates in place). */
+function deleteHeader(headers: { [key: string]: string }, name: string): void {
+  const lowered = name.toLowerCase();
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === lowered) {
+      delete headers[key];
+    }
+  }
+}
+
+/**
+ * Whether `a` and `b` share an origin (scheme + host + port, case-insensitive, with default ports
+ * normalized). An unparseable or non-absolute URI is treated as **cross-origin** (conservative),
+ * matching the .NET `IsSameOrigin` policy (Azure/azure-functions-durable-extension#3443).
+ *
+ * @remarks
+ * `URL.origin` already lower-cases the scheme/host and drops default ports (`:80` for http, `:443`
+ * for https), so a plain string comparison of the two origins is exactly the scheme+host+port check.
+ *
+ * @internal Exported for unit testing.
+ */
+export function isSameOrigin(a: string, b: string): boolean {
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Parse the `Retry-After` header into a delay in seconds.
  *
@@ -58,7 +111,8 @@ function getHeader(headers: { [key: string]: string }, name: string): string | u
  * Supports both the delta-seconds and HTTP-date forms; falls back to
  * {@link DEFAULT_POLL_INTERVAL_SECONDS} when absent or unparseable. For the HTTP-date form the delay
  * is computed against `now` — which the caller supplies as the orchestration's replay-safe
- * `currentUtcDateTime` — so the resulting timer fire time is deterministic across replays.
+ * `currentUtcDateTime` — so the resulting timer fire time is deterministic across replays, and is
+ * rounded **up** so the poll never fires before the server-specified instant.
  *
  * @internal Exported for unit testing.
  */
@@ -75,7 +129,20 @@ export function retryAfterSeconds(headers: { [key: string]: string }, now: Date)
   if (Number.isNaN(retryAtMs)) {
     return DEFAULT_POLL_INTERVAL_SECONDS;
   }
-  return Math.max(Math.floor((retryAtMs - now.getTime()) / 1000), 0);
+  return Math.max(Math.ceil((retryAtMs - now.getTime()) / 1000), 0);
+}
+
+/**
+ * Build an AAD `.../.default` scope from a `resource` identifier.
+ *
+ * @remarks
+ * Idempotent: a resource already expressed as a scope (ending in `/.default`) is returned unchanged,
+ * so both the bare form (`https://management.core.windows.net/`) and the already-scoped form
+ * (`https://management.core.windows.net/.default`) work — matching the v3 host, which accepts either.
+ */
+function toDefaultScope(resource: string): string {
+  const trimmed = resource.replace(/\/+$/, "");
+  return /\/\.default$/i.test(trimmed) ? trimmed : `${trimmed}/.default`;
 }
 
 /**
@@ -100,8 +167,7 @@ async function acquireBearerToken(resource: string): Promise<string> {
     );
   }
   const credential = new identity.DefaultAzureCredential();
-  const scope = resource.replace(/\/+$/, "") + "/.default";
-  const result = await credential.getToken(scope);
+  const result = await credential.getToken(toDefaultScope(resource));
   const token = result?.token;
   if (!token) {
     throw new Error(`Failed to acquire a bearer token for resource '${resource}'.`);
@@ -118,8 +184,14 @@ async function acquireBearerToken(resource: string): Promise<string> {
  * `fetch` only rejects on network errors, not on HTTP status — so the poll orchestrator can inspect
  * the status code and headers. Only http/https URIs are permitted (an SSRF guard that closes off
  * `file://`, `ftp://`, ... schemes from orchestration-supplied URLs).
+ *
+ * When a `tokenSource` is present, the acquired bearer token **overwrites** any caller-supplied
+ * `Authorization` header (matching v3, which applies the caller's headers first and then the token),
+ * removing every case variant so `fetch` cannot merge a lowercase `authorization` and the bearer into
+ * one malformed comma-joined header. A body on a `GET`/`HEAD` request is rejected: the Fetch standard
+ * forbids it, and silently dropping it (as a naive port would) would change the request.
  */
-export async function builtinHttpActivity(input: DurableHttpRequestPayload): Promise<DurableHttpResponse> {
+export async function builtinHttpActivity(input: DurableHttpRequestPayload): Promise<BuiltinHttpActivityResult> {
   const request = input ?? ({} as DurableHttpRequestPayload);
   const method = String(request.method ?? "GET").toUpperCase();
   const uri = request.uri;
@@ -138,18 +210,27 @@ export async function builtinHttpActivity(input: DurableHttpRequestPayload): Pro
     throw new Error(`callHttp only supports http/https URLs; got ${JSON.stringify(uri)}.`);
   }
 
+  // The Fetch standard forbids a request body on GET/HEAD. v3 (the host extension) attached content
+  // regardless of method; rather than silently drop it and change the request, fail loudly.
+  if (request.content !== undefined && (method === "GET" || method === "HEAD")) {
+    throw new Error(
+      `callHttp: an HTTP ${method} request cannot carry a body; remove 'body' or use POST/PUT/PATCH.`,
+    );
+  }
+
   const headers: { [key: string]: string } = { ...(request.headers ?? {}) };
   const resource = request.tokenSource?.resource;
   if (resource) {
     const token = await acquireBearerToken(resource);
-    if (headers["Authorization"] === undefined) {
-      headers["Authorization"] = `Bearer ${token}`;
-    }
+    // The token source overwrites any caller-supplied Authorization (v3 semantics). Strip every case
+    // variant first so a lowercase `authorization` is not merged with ours into one bad header.
+    deleteHeader(headers, "Authorization");
+    headers["Authorization"] = `Bearer ${token}`;
   }
 
-  // `content` was already serialized to a string by `callHttp`, so it is sent as-is. GET/HEAD
-  // requests cannot carry a body under the fetch spec, so a body is only attached for other methods.
-  const includeBody = typeof request.content === "string" && method !== "GET" && method !== "HEAD";
+  // `content` was already serialized to a string by `callHttp`, and GET/HEAD bodies were rejected
+  // above, so a body is attached only when present.
+  const includeBody = typeof request.content === "string";
   const response = await fetch(uri, {
     method,
     headers,
@@ -162,7 +243,53 @@ export async function builtinHttpActivity(input: DurableHttpRequestPayload): Pro
   });
   const content = await response.text();
 
-  return { statusCode: response.status, headers: responseHeaders, content };
+  const result: BuiltinHttpActivityResult = { statusCode: response.status, headers: responseHeaders, content };
+  // Record the post-redirect URL so a relative `Location` is resolved against the URI that actually
+  // produced this response (fetch follows redirects by default).
+  if (response.url) {
+    result.effectiveUri = response.url;
+  }
+  return result;
+}
+
+/**
+ * Build the next poll request for a `202` `Location`, applying the cross-origin credential policy.
+ *
+ * @remarks
+ * `Location` is callee-controlled, so credentials are handled per
+ * Azure/azure-functions-durable-extension#3443:
+ * - `x-functions-key` is **always** dropped (a function-level key won't open the master-key-protected
+ *   status endpoint, and it must never leak to another origin);
+ * - on a **cross-origin** `Location` the `Authorization`/`Cookie` headers and the `tokenSource` are
+ *   dropped, so an attacker-controlled first hop cannot harvest credentials;
+ * - on a **same-origin** `Location` headers and the `tokenSource` are forwarded — the async polling
+ *   pattern legitimately re-authenticates back to the same service.
+ *
+ * The header object is copied fresh from the **original** request on every iteration, so stripping on
+ * one hop never corrupts a later (same-origin) hop.
+ */
+function buildPollRequest(
+  request: DurableHttpRequestPayload,
+  base: string,
+  resolved: string,
+  enablePolling: boolean,
+): DurableHttpRequestPayload {
+  const sameOrigin = isSameOrigin(base, resolved);
+  const pollRequest: DurableHttpRequestPayload = { method: "GET", uri: resolved, enablePolling };
+
+  if (request.headers !== undefined) {
+    const headers = { ...request.headers };
+    deleteHeader(headers, "x-functions-key");
+    if (!sameOrigin) {
+      deleteHeader(headers, "Authorization");
+      deleteHeader(headers, "Cookie");
+    }
+    pollRequest.headers = headers;
+  }
+  if (sameOrigin && request.tokenSource !== undefined) {
+    pollRequest.tokenSource = request.tokenSource;
+  }
+  return pollRequest;
 }
 
 /**
@@ -173,20 +300,32 @@ export async function builtinHttpActivity(input: DurableHttpRequestPayload): Pro
  * orchestration input arrives as the second argument). It calls the built-in HTTP activity and,
  * while the response is `202 Accepted` with a `Location` header (and polling is enabled), waits on a
  * durable timer (honoring `Retry-After`) before re-polling the `Location` URL, resolving a relative
- * `Location` against the current request URI. Returns the final response. All time math uses the
+ * `Location` against the effective request URI. Returns the final response. All time math uses the
  * replay-safe `currentUtcDateTime`, never `Date.now()`, so replays are deterministic.
+ *
+ * It rejects being started as a **top-level** orchestration: `callHttp` always schedules it as a
+ * sub-orchestration, so a legitimate invocation always has a parent. A top-level start (e.g. via a
+ * dynamic `orchestrators/{name}` starter) would let an attacker point the built-in at an arbitrary
+ * URI with a token source — SSRF plus Managed-Identity token minting — so it is refused.
  */
 export async function* builtinHttpPollOrchestrator(
   ctx: OrchestrationContext,
   input: DurableHttpRequestPayload,
 ): AsyncGenerator<Task<unknown>, DurableHttpResponse, unknown> {
+  if (!ctx.parent) {
+    throw new Error(
+      `${BUILTIN_HTTP_POLL_ORCHESTRATOR_NAME} is an internal built-in and cannot be started as a ` +
+        `top-level orchestration; use context.df.callHttp instead.`,
+    );
+  }
+
   const request = input ?? ({} as DurableHttpRequestPayload);
   // v3 opt-out: when polling is disabled the first response is returned as-is (no 202 loop).
   const enablePolling = request.enablePolling !== false;
 
-  let response = (yield ctx.callActivity(BUILTIN_HTTP_ACTIVITY_NAME, request)) as DurableHttpResponse;
-  // Track the URI of the most recent request so a relative `Location` can be resolved against it.
-  let currentUri = String(request.uri ?? "");
+  let response = (yield ctx.callActivity(BUILTIN_HTTP_ACTIVITY_NAME, request)) as BuiltinHttpActivityResult;
+  // Base URI for resolving a relative `Location`: the effective (post-redirect) URI when known.
+  let currentUri = response.effectiveUri ?? String(request.uri ?? "");
 
   while (enablePolling && response.statusCode === 202) {
     const headers = response.headers ?? {};
@@ -196,7 +335,7 @@ export async function* builtinHttpPollOrchestrator(
       break;
     }
 
-    // A `Location` may be relative (e.g. `/operations/42`); resolve it against the current request
+    // A `Location` may be relative (e.g. `/operations/42`); resolve it against the effective request
     // URI so the next poll targets an absolute http(s) URL (the activity rejects non-absolute URIs).
     const resolved = new URL(location, currentUri).toString();
 
@@ -205,18 +344,12 @@ export async function* builtinHttpPollOrchestrator(
     const fireAt = new Date(now.getTime() + delaySeconds * 1000);
     yield ctx.createTimer(fireAt);
 
-    const pollRequest: DurableHttpRequestPayload = { method: "GET", uri: resolved, enablePolling };
-    // Preserve auth for the polling requests.
-    if (request.headers !== undefined) {
-      pollRequest.headers = request.headers;
-    }
-    if (request.tokenSource !== undefined) {
-      pollRequest.tokenSource = request.tokenSource;
-    }
-
-    currentUri = resolved;
-    response = (yield ctx.callActivity(BUILTIN_HTTP_ACTIVITY_NAME, pollRequest)) as DurableHttpResponse;
+    const pollRequest = buildPollRequest(request, currentUri, resolved, enablePolling);
+    response = (yield ctx.callActivity(BUILTIN_HTTP_ACTIVITY_NAME, pollRequest)) as BuiltinHttpActivityResult;
+    currentUri = response.effectiveUri ?? resolved;
   }
 
-  return response;
+  // Strip the internal `effectiveUri` so `callHttp` resolves to exactly the v3
+  // `{ statusCode, headers, content }` shape.
+  return { statusCode: response.statusCode, headers: response.headers, content: response.content };
 }

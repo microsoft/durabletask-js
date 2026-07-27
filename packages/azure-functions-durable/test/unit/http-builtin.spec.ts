@@ -6,6 +6,7 @@ import {
   BUILTIN_HTTP_ACTIVITY_NAME,
   builtinHttpActivity,
   builtinHttpPollOrchestrator,
+  isSameOrigin,
   retryAfterSeconds,
 } from "../../src/http/builtin";
 import { DurableHttpRequestPayload, DurableHttpResponse } from "../../src/http/models";
@@ -23,9 +24,10 @@ jest.mock(
 );
 
 /** A minimal fetch Response stand-in (avoids depending on the global `Response` constructor). */
-function fakeResponse(status: number, headers: { [key: string]: string }, body: string) {
+function fakeResponse(status: number, headers: { [key: string]: string }, body: string, url = "") {
   return {
     status,
+    url,
     headers: {
       forEach: (cb: (value: string, key: string) => void) =>
         Object.entries(headers).forEach(([key, value]) => cb(value, key)),
@@ -57,15 +59,52 @@ describe("retryAfterSeconds", () => {
     expect(retryAfterSeconds({ "retry-after": "7" }, now)).toBe(7);
   });
 
-  it("falls back to 1s when the header is missing or unparseable", () => {
-    expect(retryAfterSeconds({}, now)).toBe(1);
-    expect(retryAfterSeconds({ "Retry-After": "not-a-date" }, now)).toBe(1);
+  it("falls back to the 30s host default when the header is missing or unparseable", () => {
+    // v3's host default is 30s (HttpOptions.DefaultAsyncRequestSleepTime); polling once per second
+    // would be up to 30x more activity + timer executions.
+    expect(retryAfterSeconds({}, now)).toBe(30);
+    expect(retryAfterSeconds({ "Retry-After": "not-a-date" }, now)).toBe(30);
+  });
+
+  it("rounds an HTTP-date delay UP so the poll never fires early", () => {
+    // now = 08.800, retry-at = 10.000 -> 1.2s remaining. Math.ceil => 2; Math.floor/round would
+    // give 1 and poll up to ~1.2s early.
+    expect(
+      retryAfterSeconds(
+        { "Retry-After": "Thu, 01 Jan 2026 00:00:10 GMT" },
+        new Date("2026-01-01T00:00:08.800Z"),
+      ),
+    ).toBe(2);
   });
 
   it("never returns a negative delay for a past HTTP-date", () => {
-    expect(retryAfterSeconds({ "Retry-After": "Thu, 01 Jan 2026 00:00:00 GMT" }, new Date("2026-01-01T00:01:00.000Z"))).toBe(
-      0,
-    );
+    expect(
+      retryAfterSeconds({ "Retry-After": "Thu, 01 Jan 2026 00:00:00 GMT" }, new Date("2026-01-01T00:01:00.000Z")),
+    ).toBe(0);
+  });
+});
+
+describe("isSameOrigin", () => {
+  it("treats identical scheme/host/port (differing path) as same-origin", () => {
+    expect(isSameOrigin("https://svc.test/api/start", "https://svc.test/api/status/1")).toBe(true);
+  });
+
+  it("normalizes default ports and is case-insensitive on scheme/host", () => {
+    expect(isSameOrigin("https://svc.test:443/a", "https://SVC.TEST/b")).toBe(true);
+    expect(isSameOrigin("http://svc.test:80/a", "http://svc.test/b")).toBe(true);
+  });
+
+  it("treats a differing scheme, host, or explicit port as cross-origin", () => {
+    expect(isSameOrigin("http://svc.test/a", "https://svc.test/a")).toBe(false);
+    expect(isSameOrigin("https://svc.test/a", "https://attacker.test/a")).toBe(false);
+    expect(isSameOrigin("http://svc.test:8080/a", "http://svc.test/a")).toBe(false);
+    // 127.0.0.1 and localhost are different origin strings even though both are loopback.
+    expect(isSameOrigin("http://127.0.0.1:7071/a", "http://localhost:7071/a")).toBe(false);
+  });
+
+  it("treats a non-absolute or unparseable URI as cross-origin (conservative)", () => {
+    expect(isSameOrigin("/relative/path", "https://svc.test/a")).toBe(false);
+    expect(isSameOrigin("https://svc.test/a", "not a url")).toBe(false);
   });
 });
 
@@ -88,6 +127,7 @@ describe("builtinHttpActivity", () => {
     expect(calledUri).toBe("https://example.test/data");
     expect(calledInit.method).toBe("GET");
     expect(calledInit.body).toBeUndefined();
+    // No redirect (response.url === "") -> no internal effectiveUri leaks into the v3 shape.
     expect(response).toEqual({
       statusCode: 200,
       headers: { "content-type": "text/plain" },
@@ -95,15 +135,22 @@ describe("builtinHttpActivity", () => {
     });
   });
 
-  it("sends a body for non-GET/HEAD methods but omits it for GET", async () => {
+  it("sends a body for non-GET/HEAD methods", async () => {
     const fetchMock = makeFetchMock(fakeResponse(200, {}, ""));
     global.fetch = fetchMock as unknown as typeof fetch;
 
     await builtinHttpActivity({ method: "POST", uri: "https://example.test/", content: '{"a":1}' });
     expect((fetchMock.mock.calls[0][1] as RequestInit).body).toBe('{"a":1}');
+  });
 
-    await builtinHttpActivity({ method: "GET", uri: "https://example.test/", content: '{"a":1}' });
-    expect((fetchMock.mock.calls[1][1] as RequestInit).body).toBeUndefined();
+  it("throws when a GET or HEAD request carries a body (fetch forbids it; v3 silently sent it)", async () => {
+    global.fetch = jest.fn() as unknown as typeof fetch;
+    await expect(
+      builtinHttpActivity({ method: "GET", uri: "https://example.test/", content: "x" }),
+    ).rejects.toThrow(/cannot carry a body/i);
+    await expect(
+      builtinHttpActivity({ method: "HEAD", uri: "https://example.test/", content: "x" }),
+    ).rejects.toThrow(/cannot carry a body/i);
   });
 
   it("throws when the uri is missing", async () => {
@@ -113,9 +160,7 @@ describe("builtinHttpActivity", () => {
 
   it("rejects non-http/https schemes (SSRF guard)", async () => {
     global.fetch = jest.fn() as unknown as typeof fetch;
-    await expect(
-      builtinHttpActivity({ method: "GET", uri: "file:///etc/passwd" }),
-    ).rejects.toThrow(/http\/https/);
+    await expect(builtinHttpActivity({ method: "GET", uri: "file:///etc/passwd" })).rejects.toThrow(/http\/https/);
     await expect(builtinHttpActivity({ method: "GET", uri: "ftp://host/f" })).rejects.toThrow(/http\/https/);
   });
 
@@ -127,6 +172,15 @@ describe("builtinHttpActivity", () => {
 
     expect(response.statusCode).toBe(202);
     expect(response.headers.location).toBe("https://example.test/op/1");
+  });
+
+  it("returns the post-redirect effective URI when fetch followed a redirect", async () => {
+    const fetchMock = makeFetchMock(fakeResponse(200, {}, "ok", "https://example.test/v2/final"));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const response = await builtinHttpActivity({ method: "GET", uri: "https://example.test/v1/start" });
+
+    expect((response as { effectiveUri?: string }).effectiveUri).toBe("https://example.test/v2/final");
   });
 
   it("acquires a real bearer token via @azure/identity when a tokenSource is present", async () => {
@@ -146,25 +200,52 @@ describe("builtinHttpActivity", () => {
     expect(sentHeaders["Authorization"]).toBe("Bearer REAL_TOKEN_123");
   });
 
-  it("does not overwrite an explicit Authorization header", async () => {
+  it("builds the .default scope idempotently for bare and already-scoped resources", async () => {
+    const fetchMock = makeFetchMock(fakeResponse(200, {}, "ok"));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await builtinHttpActivity({
+      method: "GET",
+      uri: "https://x.test/",
+      tokenSource: { resource: "https://graph.microsoft.com/" },
+    });
+    expect(mockGetToken).toHaveBeenLastCalledWith("https://graph.microsoft.com/.default");
+
+    // Already-scoped resource must NOT become `.../.default/.default`.
+    await builtinHttpActivity({
+      method: "GET",
+      uri: "https://x.test/",
+      tokenSource: { resource: "https://graph.microsoft.com/.default" },
+    });
+    expect(mockGetToken).toHaveBeenLastCalledWith("https://graph.microsoft.com/.default");
+  });
+
+  it("overwrites any caller-supplied Authorization with the token (case-insensitive)", async () => {
     const fetchMock = makeFetchMock(fakeResponse(200, {}, "ok"));
     global.fetch = fetchMock as unknown as typeof fetch;
 
     await builtinHttpActivity({
       method: "GET",
       uri: "https://example.test/secure",
-      headers: { Authorization: "Bearer caller-supplied" },
+      headers: { authorization: "Bearer caller-supplied" }, // lowercase variant
       tokenSource: { resource: "https://graph.microsoft.com/" },
     });
 
     const sentHeaders = (fetchMock.mock.calls[0][1] as RequestInit).headers as { [key: string]: string };
-    expect(sentHeaders["Authorization"]).toBe("Bearer caller-supplied");
+    // Token wins over the caller value (v3 semantics), and the lowercase variant is removed so fetch
+    // cannot merge two Authorization headers into one malformed comma-joined value.
+    expect(sentHeaders["Authorization"]).toBe("Bearer REAL_TOKEN_123");
+    expect(sentHeaders["authorization"]).toBeUndefined();
   });
 });
 
 /** Drives the poll orchestrator generator with a fake core context, feeding activity/timer results. */
-function createPollContext(now: Date) {
+function createPollContext(
+  now: Date,
+  parent: unknown = { name: "root", instanceId: "root-id", taskScheduledId: 0 },
+) {
   const ctx = {
+    parent,
     currentUtcDateTime: now,
     callActivity: jest.fn((name: string, input: unknown) => ({ kind: "activity", name, input }) as unknown as Task<unknown>),
     createTimer: jest.fn((fireAt: Date | number) => ({ kind: "timer", fireAt }) as unknown as Task<unknown>),
@@ -174,6 +255,15 @@ function createPollContext(now: Date) {
 
 describe("builtinHttpPollOrchestrator", () => {
   const now = new Date("2026-01-01T00:00:00.000Z");
+
+  it("throws when started as a top-level orchestration (no parent)", async () => {
+    // Refuses direct top-level invocation: callHttp always schedules it as a sub-orchestration, so a
+    // parentless start is an attacker pointing the built-in at an arbitrary URI + token source. `null`
+    // stands in for the core's top-level `parent: undefined` (both are falsy).
+    const { ctx } = createPollContext(now, null);
+    const gen = builtinHttpPollOrchestrator(ctx, { method: "GET", uri: "https://host/api" });
+    await expect(gen.next()).rejects.toThrow(/top-level/i);
+  });
 
   it("returns the first response immediately when it is not a 202 (no timer)", async () => {
     const { ctx, raw } = createPollContext(now);
@@ -217,7 +307,7 @@ describe("builtinHttpPollOrchestrator", () => {
     expect(raw.createTimer).toHaveBeenCalledTimes(1);
     expect(raw.createTimer).toHaveBeenCalledWith(new Date("2026-01-01T00:00:05.000Z"));
 
-    // 3) after the timer, re-poll the Location with GET, carrying headers + tokenSource
+    // 3) after the timer, re-poll the Location with GET, carrying same-origin headers + tokenSource
     const afterTimer = await gen.next();
     expect(afterTimer.done).toBe(false);
     expect(raw.callActivity).toHaveBeenNthCalledWith(2, BUILTIN_HTTP_ACTIVITY_NAME, {
@@ -259,6 +349,101 @@ describe("builtinHttpPollOrchestrator", () => {
       BUILTIN_HTTP_ACTIVITY_NAME,
       expect.objectContaining({ method: "GET", uri: "https://host/status/42" }),
     );
+  });
+
+  it("resolves a relative Location against the effective (post-redirect) URI, not the requested URI", async () => {
+    const { ctx, raw } = createPollContext(now);
+    const gen = builtinHttpPollOrchestrator(ctx, { method: "GET", uri: "https://host/v1/start", enablePolling: true });
+
+    await gen.next();
+    // The activity followed a redirect to /v2/start; the relative Location must resolve against it.
+    await gen.next({
+      statusCode: 202,
+      headers: { Location: "status/1", "Retry-After": "1" },
+      effectiveUri: "https://host/v2/start",
+    });
+    await gen.next();
+
+    const pollReq = raw.callActivity.mock.calls[1][1] as DurableHttpRequestPayload;
+    expect(pollReq.uri).toBe("https://host/v2/status/1");
+  });
+
+  it("drops Authorization/Cookie/tokenSource and x-functions-key when the Location is cross-origin", async () => {
+    const { ctx, raw } = createPollContext(now);
+    const request: DurableHttpRequestPayload = {
+      method: "GET",
+      uri: "https://original.test/api/start",
+      enablePolling: true,
+      headers: { Authorization: "Bearer caller", Cookie: "sid=1", "x-functions-key": "fkey", "x-keep": "yes" },
+      tokenSource: { resource: "https://management.core.windows.net/" },
+    };
+    const gen = builtinHttpPollOrchestrator(ctx, request);
+
+    await gen.next();
+    await gen.next({ statusCode: 202, headers: { Location: "https://attacker.test/harvest", "Retry-After": "1" } });
+    await gen.next(); // past timer -> second poll to the cross-origin Location
+
+    const pollReq = raw.callActivity.mock.calls[1][1] as DurableHttpRequestPayload;
+    expect(pollReq.uri).toBe("https://attacker.test/harvest");
+    // Only the neutral header survives; credentials are stripped.
+    expect(pollReq.headers).toEqual({ "x-keep": "yes" });
+    expect(pollReq.tokenSource).toBeUndefined();
+    // The ORIGINAL request object must be untouched (defensive per-iteration copy).
+    expect(request.headers).toEqual({
+      Authorization: "Bearer caller",
+      Cookie: "sid=1",
+      "x-functions-key": "fkey",
+      "x-keep": "yes",
+    });
+  });
+
+  it("forwards headers + tokenSource on a same-origin Location but always drops x-functions-key", async () => {
+    const { ctx, raw } = createPollContext(now);
+    const request: DurableHttpRequestPayload = {
+      method: "GET",
+      uri: "https://svc.test/api/start",
+      enablePolling: true,
+      headers: { Authorization: "Bearer caller", "x-functions-key": "fkey", "x-keep": "yes" },
+      tokenSource: { resource: "https://management.core.windows.net/" },
+    };
+    const gen = builtinHttpPollOrchestrator(ctx, request);
+
+    await gen.next();
+    await gen.next({ statusCode: 202, headers: { Location: "https://svc.test/api/status/1", "Retry-After": "1" } });
+    await gen.next();
+
+    const pollReq = raw.callActivity.mock.calls[1][1] as DurableHttpRequestPayload;
+    // x-functions-key is dropped even same-origin; Authorization + tokenSource are forwarded.
+    expect(pollReq.headers).toEqual({ Authorization: "Bearer caller", "x-keep": "yes" });
+    expect(pollReq.tokenSource).toEqual({ resource: "https://management.core.windows.net/" });
+  });
+
+  it("re-forwards same-origin credentials across multiple hops without corrupting later iterations", async () => {
+    const { ctx, raw } = createPollContext(now);
+    const request: DurableHttpRequestPayload = {
+      method: "GET",
+      uri: "https://svc.test/api/start",
+      enablePolling: true,
+      headers: { Authorization: "Bearer caller", "x-functions-key": "fkey" },
+      tokenSource: { resource: "https://management.core.windows.net/" },
+    };
+    const gen = builtinHttpPollOrchestrator(ctx, request);
+
+    await gen.next();
+    await gen.next({ statusCode: 202, headers: { Location: "https://svc.test/api/status/1", "Retry-After": "1" } });
+    await gen.next(); // second poll (call index 1)
+    await gen.next({ statusCode: 202, headers: { Location: "https://svc.test/api/status/2", "Retry-After": "1" } });
+    await gen.next(); // third poll (call index 2)
+
+    const poll1 = raw.callActivity.mock.calls[1][1] as DurableHttpRequestPayload;
+    const poll2 = raw.callActivity.mock.calls[2][1] as DurableHttpRequestPayload;
+    // Iteration 2 must still carry the (same-origin) credentials — proof the header stripping on each
+    // hop copies from the original request and never mutates it in place.
+    expect(poll1.headers).toEqual({ Authorization: "Bearer caller" });
+    expect(poll1.tokenSource).toEqual({ resource: "https://management.core.windows.net/" });
+    expect(poll2.headers).toEqual({ Authorization: "Bearer caller" });
+    expect(poll2.tokenSource).toEqual({ resource: "https://management.core.windows.net/" });
+    expect(request.headers).toEqual({ Authorization: "Bearer caller", "x-functions-key": "fkey" });
   });
 
   it("returns the first 202 without looping when polling is disabled", async () => {

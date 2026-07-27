@@ -6,8 +6,10 @@
  *
  * Drives the `CallHttpOrchestration` app function (see test-app) through the real
  * Functions host: a durable callHttp against the app's own endpoints exercises the
- * synchronous 200 path, the 202 -> Location poll loop, and the enablePolling=false
- * opt-out. Kept hermetic (loopback only) so no external network is required.
+ * synchronous 200 path, the 202 -> Location poll loop, the enablePolling=false
+ * opt-out, and the cross-origin credential policy (Authorization forwarded on a
+ * same-origin poll, stripped on a cross-origin one). Kept hermetic (loopback only)
+ * so no external network is required.
  *
  * Gated: skips cleanly unless the shared host was started by globalSetup.
  */
@@ -63,5 +65,38 @@ describeMaybe("Functions host E2E — callHttp (AzureStorage)", () => {
     // only the status code is asserted (do not JSON.parse the empty content).
     const output = details.output as { statusCode: number; content: string };
     expect(output.statusCode).toBe(202);
+  }, 120_000);
+
+  it("callHttp forwards the Authorization header on a same-origin 202 poll", async () => {
+    // Baseline for the cross-origin case: first hop and poll Location share the `localhost`
+    // origin, so the caller's Authorization header must reach the poll target. This rules out a
+    // false positive where the host simply drops Authorization on the wire.
+    const response = await invokeHttpTrigger(baseUrl, "CallHttp_HttpStart", "?mode=xorigin-same");
+    expect(response.status).toBe(202);
+
+    const statusQueryGetUri = parseStatusQueryGetUri(response);
+    const details = await waitForOrchestrationState(statusQueryGetUri, "Completed", 60);
+
+    const output = details.output as { statusCode: number; content: string };
+    expect(output.statusCode).toBe(200);
+    const body = JSON.parse(output.content);
+    expect(body.echoed).toBe("xorigin-done");
+    expect(body.authorization).toBe("Bearer e2e-secret");
+  }, 120_000);
+
+  it("callHttp strips the Authorization header on a cross-origin 202 poll", async () => {
+    // First hop via the 127.0.0.1 origin, poll Location on the localhost origin -> cross-origin,
+    // so the Authorization header carried on the first hop must NOT reach the poll target.
+    const response = await invokeHttpTrigger(baseUrl, "CallHttp_HttpStart", "?mode=xorigin");
+    expect(response.status).toBe(202);
+
+    const statusQueryGetUri = parseStatusQueryGetUri(response);
+    const details = await waitForOrchestrationState(statusQueryGetUri, "Completed", 60);
+
+    const output = details.output as { statusCode: number; content: string };
+    expect(output.statusCode).toBe(200);
+    const body = JSON.parse(output.content);
+    expect(body.echoed).toBe("xorigin-done");
+    expect(body.authorization).toBeNull();
   }, 120_000);
 });
