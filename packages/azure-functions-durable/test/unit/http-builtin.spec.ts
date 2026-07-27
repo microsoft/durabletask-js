@@ -8,6 +8,7 @@ import {
   builtinHttpPollOrchestrator,
   isSameOrigin,
   retryAfterSeconds,
+  __resetCredentialCacheForTests,
 } from "../../src/http/builtin";
 import { DurableHttpRequestPayload, DurableHttpResponse } from "../../src/http/models";
 
@@ -118,6 +119,12 @@ describe("builtinHttpActivity", () => {
   afterEach(() => {
     global.fetch = originalFetch;
     jest.clearAllMocks();
+  });
+
+  // The credential is cached at module scope; clear it between tests so a swapped virtual mock (or a
+  // construction-count assertion) is never served a prior test's cached instance.
+  beforeEach(() => {
+    __resetCredentialCacheForTests();
   });
 
   it("performs the request and passes the 200 response through", async () => {
@@ -242,7 +249,7 @@ describe("builtinHttpActivity", () => {
     expect(sentHeaders["authorization"]).toBeUndefined();
   });
 
-  describe("@azure/identity loading failures", () => {
+  describe("@azure/identity lazy loading and caching", () => {
     afterEach(() => {
       // Restore the default (successful) require so later suites are unaffected.
       mockRequireIdentity = mockIdentityModuleDefault;
@@ -282,6 +289,22 @@ describe("builtinHttpActivity", () => {
       // The ORIGINAL error surfaces (same instance) — NOT the install-guidance message, which would
       // wrongly tell the user to install a package they already have.
       await expect(loadActivityFresh()(tokenRequest)).rejects.toBe(initFailure);
+    });
+
+    it("constructs DefaultAzureCredential once and reuses it across token acquisitions", async () => {
+      const credentialCtor = jest.fn().mockImplementation(() => ({ getToken: mockGetToken }));
+      mockRequireIdentity = () => ({ DefaultAzureCredential: credentialCtor });
+      const fetchMock = makeFetchMock(fakeResponse(200, {}, "ok"));
+      global.fetch = fetchMock as unknown as typeof fetch;
+
+      const activity = loadActivityFresh();
+      await activity(tokenRequest);
+      await activity(tokenRequest);
+
+      // The credential is cached at module scope, so the environment-probing constructor runs once
+      // even though two hops acquired a token — a long 202 poll loop cannot re-probe (rate-limited)
+      // IMDS on every hop.
+      expect(credentialCtor).toHaveBeenCalledTimes(1);
     });
   });
 });

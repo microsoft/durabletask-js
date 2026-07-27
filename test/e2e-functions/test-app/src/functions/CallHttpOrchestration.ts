@@ -85,8 +85,15 @@ const HttpCrossOriginStart: HttpHandler = async (
     request: HttpRequest,
     _context: InvocationContext,
 ): Promise<HttpResponseInit> => {
-    const u = new URL(request.url);
-    const location = `${u.protocol}//localhost:${u.port}/api/HttpAuthEcho`;
+    // Build the poll target by construction rather than string interpolation: a template literal on
+    // `${u.port}` emits an invalid empty `localhost:` whenever the incoming request used a protocol
+    // default port (80/443, where `URL.port` is ""). `URL` omits the port when it is the scheme default
+    // and preserves it otherwise, so the hazard disappears while the origin still flips to `localhost`.
+    const target = new URL(request.url);
+    target.hostname = 'localhost';
+    target.pathname = '/api/HttpAuthEcho';
+    target.search = '';
+    const location = target.toString();
     return {
         status: 202,
         headers: { Location: location, 'Retry-After': '1' },

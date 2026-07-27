@@ -145,19 +145,32 @@ function toDefaultScope(resource: string): string {
   return /\/\.default$/i.test(trimmed) ? trimmed : `${trimmed}/.default`;
 }
 
+/** A credential able to mint bearer tokens — the subset of `@azure/identity`'s `TokenCredential` used here. */
+type BearerCredential = { getToken(scope: string): Promise<{ token: string } | null> };
+
+/** Lazily constructed credential, cached at module scope and shared across every token acquisition. */
+let cachedCredential: BearerCredential | undefined;
+
 /**
- * Acquire an AAD bearer token for `resource` via the optional `@azure/identity` package.
+ * Resolve the shared bearer credential, loading `@azure/identity` and constructing it on first use.
  *
  * @remarks
  * Loaded lazily with `require` (mirroring the core SDK's optional-peer-dependency pattern) so the
- * dependency is only touched when a token source is actually used; `require` also keeps the module
- * out of the compiled type graph, so an app that never uses a token source needs no `@azure/identity`
- * install. Throws a clear, actionable error when the package is missing but a token source was used.
+ * dependency is only touched when a token source is actually used; `require` also keeps the module out
+ * of the compiled type graph, so an app that never uses a token source needs no `@azure/identity`
+ * install. The credential is cached because `DefaultAzureCredential` probes the environment on
+ * construction and keeps its own in-memory token cache: constructing a fresh one per activity
+ * invocation would defeat that cache — under Managed Identity every 202 poll hop would then force a
+ * fresh, **rate-limited** IMDS token call. `resource` is passed per call to `getToken`, not to the
+ * constructor, so a single instance correctly serves every resource. Only a *successful* construction
+ * is cached: if `require` or the constructor throws, nothing is cached, so the next call retries and
+ * still produces the correct actionable error when the package is missing but a token source was used.
  */
-async function acquireBearerToken(resource: string): Promise<string> {
-  let identity: {
-    DefaultAzureCredential: new () => { getToken(scope: string): Promise<{ token: string } | null> };
-  };
+function getCredential(): BearerCredential {
+  if (cachedCredential) {
+    return cachedCredential;
+  }
+  let identity: { DefaultAzureCredential: new () => BearerCredential };
   try {
     identity = require("@azure/identity");
   } catch (e) {
@@ -173,7 +186,24 @@ async function acquireBearerToken(resource: string): Promise<string> {
         "Install it with `npm install @azure/identity`.",
     );
   }
-  const credential = new identity.DefaultAzureCredential();
+  // Assigned only after a successful construction (a throwing constructor never reaches this
+  // assignment), so a failed attempt leaves the cache empty for the next call to retry.
+  cachedCredential = new identity.DefaultAzureCredential();
+  return cachedCredential;
+}
+
+/**
+ * Test-only hook: drop the cached credential so a re-swapped virtual `@azure/identity` mock (or a
+ * fresh-construction assertion) is honored rather than served from a prior test's cache.
+ * @internal
+ */
+export function __resetCredentialCacheForTests(): void {
+  cachedCredential = undefined;
+}
+
+/** Acquire an AAD bearer token for `resource` from the shared, lazily constructed credential. */
+async function acquireBearerToken(resource: string): Promise<string> {
+  const credential = getCredential();
   const result = await credential.getToken(toDefaultScope(resource));
   const token = result?.token;
   if (!token) {
