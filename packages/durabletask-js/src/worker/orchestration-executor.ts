@@ -61,6 +61,7 @@ export class OrchestrationExecutor {
     instanceId: string,
     oldEvents: pb.HistoryEvent[],
     newEvents: pb.HistoryEvent[],
+    executionId?: string,
   ): Promise<OrchestrationExecutionResult> {
     if (!newEvents?.length) {
       throw new OrchestrationStateError("The new history event list must have at least one event in it");
@@ -84,6 +85,12 @@ export class OrchestrationExecutor {
     }
 
     const ctx = new RuntimeOrchestrationContext(instanceId);
+    // Seed the execution ID from the authoritative source (the OrchestratorRequest on the gRPC path,
+    // or the backend record on the in-memory path). The ExecutionStarted event replayed below may
+    // also carry it; handleExecutionStarted reconciles the two.
+    if (executionId) {
+      ctx._executionId = executionId;
+    }
 
     try {
       // Rebuild the local state by replaying the history events into the orchestrator function
@@ -251,10 +258,19 @@ export class OrchestrationExecutor {
       throw new OrchestratorNotRegisteredError(executionStartedEvent?.getName());
     }
 
-    // Set the execution ID from the orchestration instance
-    const executionId = executionStartedEvent?.getOrchestrationinstance()?.getExecutionid()?.getValue();
-    if (executionId) {
-      ctx._executionId = executionId;
+    // Set the execution ID from the orchestration instance. If the executor was already seeded with
+    // an authoritative executionId (from the OrchestratorRequest / backend record), the two should
+    // agree. If both are present and differ, that is a real anomaly worth surfacing — log it, but do
+    // not throw, and let the history (ExecutionStarted) value win since it is what replays.
+    const eventExecutionId = executionStartedEvent?.getOrchestrationinstance()?.getExecutionid()?.getValue();
+    if (eventExecutionId) {
+      if (ctx._executionId && ctx._executionId !== eventExecutionId) {
+        this._logger.warn(
+          `executionId mismatch for instance '${ctx._instanceId}': seeded='${ctx._executionId}' ` +
+            `history='${eventExecutionId}'; using the history value`,
+        );
+      }
+      ctx._executionId = eventExecutionId;
     }
 
     // Track the orchestrator name for lifecycle logs

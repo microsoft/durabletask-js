@@ -142,7 +142,7 @@ export class TestOrchestrationWorker {
 
     try {
       const executor = new OrchestrationExecutor(this.registry);
-      const result = await executor.execute(instanceId, instance.history, instance.pendingEvents);
+      const result = await executor.execute(instanceId, instance.history, instance.pendingEvents, instance.executionId);
 
       this.backend.completeOrchestration(instanceId, completionToken, result.actions, result.customStatus);
     } catch (error: unknown) {
