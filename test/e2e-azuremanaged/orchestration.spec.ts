@@ -665,20 +665,17 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     expect(output.gen1ChildId).toBeTruthy();
     expect(output.gen0ChildId).not.toEqual(output.gen1ChildId);
 
-    // Premise check: each child ID is `${executionId}:${hex4}` — keyed on the per-generation
-    // executionId that the REAL DTS backend minted, NOT the legacy `${parentId}:${hex4}` fallback we
-    // emit only when executionId is empty. So each ID:
-    //   - is <= 100 chars (the DTS instance-ID limit; the executionId-keyed form is constant-length),
-    //   - has exactly TWO colon-separated segments (executionId + suffix), and
-    //   - does NOT start with the parent instance ID (the legacy fallback would start with `${id}:`;
-    //     the correct form starts with the 32-hex executionId instead).
-    // If DTS had NOT populated executionId we would fall back to `${id}:${hex4}` and these assertions
-    // would fail — surfacing a silent production no-op instead of hiding it behind green in-memory
-    // tests. (gen0 != gen1 is asserted above: the executionId is minted fresh per generation.)
+    // Premise check: each child ID is the two-segment `${executionId}:${hex4}` shape — a 32-hex
+    // executionId that the REAL DTS backend minted (Guid.ToString("N")) plus the 4-hex sequence
+    // suffix — NOT the legacy `${parentId}:${hex4}` fallback we emit only when executionId is empty
+    // (that would start with the 36-char parent GUID and fail this regex). Each is far within the DTS
+    // 100-char instance-ID limit. If DTS had NOT populated executionId these assertions would fail,
+    // surfacing a silent production no-op instead of hiding it behind green in-memory tests.
+    // (gen0 != gen1 is asserted above: the executionId is minted fresh per generation.)
+    const executionKeyedId = /^[0-9a-f]{32}:[0-9a-f]{4}$/;
     for (const childId of [output.gen0ChildId, output.gen1ChildId]) {
+      expect(childId).toMatch(executionKeyedId);
       expect(childId.length).toBeLessThanOrEqual(100);
-      expect(childId.split(":").length).toEqual(2);
-      expect(childId.startsWith(`${id}:`)).toBe(false);
     }
   }, 61000);
 
@@ -720,17 +717,19 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
         `grandchildIdLen=${output.grandchildId.length}`,
     );
 
-    // Two levels of default-ID nesting (the depth that broke pre-fix). Every derived ID stays within
-    // the DTS limit and is the constant-length two-segment `${executionId}:${hex4}` shape — not the
-    // parent-prefixed shape, so it never grows with depth.
+    // Two levels of default-ID nesting (the depth that broke pre-fix). Every derived ID is the
+    // two-segment `${executionId}:${hex4}` shape (32-hex executionId + 4-hex suffix = 37 chars) and
+    // far within the DTS 100-char limit — not the parent-prefixed shape, so it never grows with depth.
+    const executionKeyedId = /^[0-9a-f]{32}:[0-9a-f]{4}$/;
     for (const childId of [output.childId, output.grandchildId]) {
       expect(childId).toBeTruthy();
+      expect(childId).toMatch(executionKeyedId);
       expect(childId.length).toBeLessThanOrEqual(100);
-      expect(childId.split(":").length).toEqual(2);
-      expect(childId.startsWith(`${id}:`)).toBe(false);
     }
-    // Each level is keyed on its own fresh executionId, so the two levels' IDs differ.
+    // Each level is keyed on its own fresh executionId, so the two levels' IDs differ — and, the whole
+    // point of the fix, are the SAME length (the pre-fix parent-prefixed shape grew ~38 chars/level).
     expect(output.childId).not.toEqual(output.grandchildId);
+    expect(output.childId.length).toEqual(output.grandchildId.length);
   }, 61000);
 
   it("should be able to run a single orchestration without activity", async () => {

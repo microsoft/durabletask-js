@@ -80,6 +80,7 @@ describe("default sub-orchestration instance ID derivation", () => {
     }
 
     for (const childId of derived) {
+      expect(childId).toMatch(/^[0-9a-f]{32}:[0-9a-f]{4}$/);
       expect(childId.length).toBeLessThanOrEqual(100);
     }
     // Constant length at every depth: each level is executionId(32) + ":" + suffix(4) = 37 chars,
