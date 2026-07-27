@@ -370,7 +370,19 @@ export async function* builtinHttpPollOrchestrator(
 
     // A `Location` may be relative (e.g. `/operations/42`); resolve it against the effective request
     // URI so the next poll targets an absolute http(s) URL (the activity rejects non-absolute URIs).
-    const resolved = new URL(location, currentUri).toString();
+    //
+    // `Location` is remote-controlled: an absent one already means "cannot poll, return the 202 as-is"
+    // (see the `if (!location) break` above), and an unparseable one is the same situation. `new URL`
+    // throws `TypeError [ERR_INVALID_URL]` on input like `http://` or `///`, which would otherwise fail
+    // the whole orchestration with an opaque error instead of surfacing the 202 the caller can inspect.
+    // Determinism holds: `new URL` is pure computation over history-derived values, so replay re-takes
+    // the identical branch.
+    let resolved: string;
+    try {
+      resolved = new URL(location, currentUri).toString();
+    } catch {
+      break;
+    }
 
     const now = ctx.currentUtcDateTime;
     const delaySeconds = retryAfterSeconds(headers, now);

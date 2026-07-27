@@ -11,9 +11,11 @@ import {
 } from "../../src/http/builtin";
 import { DurableHttpRequestPayload, DurableHttpResponse } from "../../src/http/models";
 
-// `@azure/identity` is an OPTIONAL dependency loaded lazily via `require` inside the activity, and is
-// not installed in this workspace — a virtual mock stands in so the token-acquisition path can be
-// exercised and the REAL (mocked) token asserted on the outgoing request.
+// `@azure/identity` is an OPTIONAL peer dependency loaded lazily via `require` inside the activity.
+// A `{ virtual: true }` mock stands in so the token-acquisition path can be exercised and the REAL
+// (mocked) token asserted on the outgoing request — independent of whether the real package happens
+// to be resolvable in the workspace (it is today, only because the sibling azuremanaged package
+// depends on it; a standalone consumer of this compat package would not have it installed).
 const mockGetToken = jest.fn(async (_scope: string) => ({ token: "REAL_TOKEN_123" }));
 // The virtual mock delegates to a swappable factory so an individual test can make
 // `require("@azure/identity")` succeed (the default) OR fail with a specific error, reusing the same
@@ -592,4 +594,25 @@ describe("builtinHttpPollOrchestrator", () => {
     expect((result.value as DurableHttpResponse).statusCode).toBe(202);
     expect(raw.createTimer).not.toHaveBeenCalled();
   });
+
+  // A malformed, remote-controlled `Location` (e.g. `http://` or `///`) makes `new URL` throw
+  // `TypeError [ERR_INVALID_URL]`. That must be treated exactly like a missing `Location`: return the
+  // 202 for the caller to inspect, never fail the orchestration with an opaque error.
+  it.each(["http://", "///"])(
+    "stops polling and returns the 202 as-is when the Location %j is unparseable",
+    async (badLocation) => {
+      const { ctx, raw } = createPollContext(now);
+      const gen = builtinHttpPollOrchestrator(ctx, { method: "GET", uri: "https://host/api", enablePolling: true });
+
+      await gen.next();
+      const response = { statusCode: 202, headers: { Location: badLocation }, content: "pending" };
+      const result = await gen.next(response);
+
+      // (a) does NOT throw, (b) returns the 202 unchanged, (c) schedules NO further timer/activity.
+      expect(result.done).toBe(true);
+      expect(result.value).toEqual({ statusCode: 202, headers: { Location: badLocation }, content: "pending" });
+      expect(raw.createTimer).not.toHaveBeenCalled();
+      expect(raw.callActivity).toHaveBeenCalledTimes(1);
+    },
+  );
 });
