@@ -192,4 +192,25 @@ describe("withTimeout", () => {
     const failingPromise = Promise.reject(new Error("Promise failed"));
     await expect(withTimeout(failingPromise, 1000)).rejects.toThrow("Promise failed");
   });
+
+  it("should reject NaN timeoutMs with RangeError", async () => {
+    await expect(withTimeout(Promise.resolve("ok"), NaN)).rejects.toThrow(RangeError);
+  });
+
+  it("should reject Infinity timeoutMs with RangeError", async () => {
+    await expect(withTimeout(Promise.resolve("ok"), Infinity)).rejects.toThrow(RangeError);
+  });
+
+  it("should reject -Infinity timeoutMs with RangeError", async () => {
+    await expect(withTimeout(Promise.resolve("ok"), -Infinity)).rejects.toThrow(RangeError);
+  });
+
+  it("should reject negative timeoutMs with RangeError", async () => {
+    await expect(withTimeout(Promise.resolve("ok"), -1)).rejects.toThrow(RangeError);
+  });
+
+  it("should accept zero timeoutMs", async () => {
+    // Zero timeout means the timeout fires immediately, but a resolved promise wins the race
+    await expect(withTimeout(Promise.resolve("ok"), 0)).resolves.toBe("ok");
+  });
 });

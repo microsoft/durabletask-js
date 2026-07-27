@@ -7,6 +7,8 @@
     "packages/*"
   ],
   "scripts": {
+    "preinstall": "node scripts/preinstallNpmrc.js",
+    "setup:npmrc": "node scripts/setupNpmrc.js",
     "prepare": "husky install",
     "build": "npm run build --workspaces",
     "build:core": "npm run build -w @microsoft/durabletask-js",
@@ -18,6 +20,8 @@
     "test:e2e:one": "jest tests/e2e --runInBand --detectOpenHandles --testNamePattern",
     "test:e2e:azuremanaged:internal": "jest test/e2e-azuremanaged --detectOpenHandles",
     "test:e2e:azuremanaged": "./scripts/test-e2e-azuremanaged.sh",
+    "test:e2e:functions:internal": "jest -c jest.functions-e2e.config.js --runInBand --detectOpenHandles",
+    "test:e2e:functions": "./scripts/test-e2e-functions.sh",
     "lint": "eslint .",
     "pretty": "prettier --list-different \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "pretty-fix": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
@@ -62,5 +66,8 @@
   },
   "lint-staged": {
     "*.{js,jsx,ts,tsx}": "eslint"
+  },
+  "overrides": {
+    "handlebars": "^4.7.9"
   }
 }

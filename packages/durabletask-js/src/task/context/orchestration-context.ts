@@ -8,6 +8,7 @@ import { Logger } from "../../types/logger.type";
 import { ReplaySafeLogger } from "../../types/replay-safe-logger";
 import { TaskOptions, SubOrchestrationOptions } from "../options";
 import { Task } from "../task";
+import { TimerTask } from "../timer-task";
 import { OrchestrationEntityFeature } from "../../entities/orchestration-entity-feature";
 import { compareVersions } from "../../utils/versioning.util";
 
@@ -107,10 +108,17 @@ export abstract class OrchestrationContext {
   /**
    * Create a timer task that will fire at a specified time.
    *
+   * @remarks
+   * This abstract method is implemented only by the SDK's own orchestration
+   * context (`RuntimeOrchestrationContext`); orchestrator code consumes a context
+   * instance and does not subclass it. The return type is the concrete
+   * {@link TimerTask} (which is a `Task`) so callers can cancel the timer — this
+   * narrowing is safe for all callers.
+   *
    * @param {Date | number} fireAt The time at which the timer should fire.
-   * @returns {Task} A Durable Timer task that schedules the timer to wake up the orchestrator
+   * @returns {TimerTask} A cancellable Durable Timer task that schedules the timer to wake up the orchestrator
    */
-  abstract createTimer(fireAt: Date | number): Task<any>;
+  abstract createTimer(fireAt: Date | number): TimerTask;
 
   /**
    * Schedule an activity for execution.

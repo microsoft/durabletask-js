@@ -5,7 +5,23 @@
 
 This repo contains a JavaScript/TypeScript SDK for use with the [Azure Durable Task Scheduler](https://github.com/Azure/Durable-Task-Scheduler). With this SDK, you can define, schedule, and manage durable orchestrations using ordinary TypeScript/JavaScript code.
 
-> Note that this SDK is **not** currently compatible with [Azure Durable Functions](https://learn.microsoft.com/azure/azure-functions/durable/durable-functions-overview). If you are looking for a JavaScript SDK for Azure Durable Functions, please see [this repo](https://github.com/Azure/azure-functions-durable-js).
+> Note that the core `@microsoft/durabletask-js` package does **not** provide the [Azure Durable Functions](https://learn.microsoft.com/azure/azure-functions/durable/durable-functions-overview) programming model, decorators, or worker-indexing metadata — it exposes low-level TaskHubSidecarService gRPC/protobuf helpers that host integrations can reuse (Node.js 22+). For the Azure Durable Functions programming model on the gRPC core, this repository also contains the **`durable-functions`** provider package under [`packages/azure-functions-durable`](./packages/azure-functions-durable). The classic v3 (extension-HTTP) predecessor lives at [azure-functions-durable-js](https://github.com/Azure/azure-functions-durable-js).
+
+## Low-level host integration APIs
+
+Host integrations that already own trigger metadata and transport encoding can depend on the `@microsoft/durabletask-js` package directly. `TaskHubGrpcWorker` registers orchestrators, activities, and entities, and can process raw TaskHubSidecarService protobuf payloads without starting the long-running gRPC worker loop:
+
+```typescript
+const worker = new TaskHubGrpcWorker();
+worker.addOrchestrator(myOrchestrator);
+worker.addActivity(myActivity);
+worker.addEntity(myEntity);
+
+const orchestrationResponseBytes = await worker.processOrchestratorRequest(orchestrationRequestBytes);
+const entityResponseBytes = await worker.processEntityBatchRequest(entityBatchRequestBytes);
+```
+
+`TaskHubGrpcClient` already exposes orchestration start/query/event/terminate/suspend/resume/purge APIs and entity signal/read/query/clean APIs through its existing `hostAddress` and `metadataGenerator` options. Host integrations that need task-hub routing metadata should provide it through `metadataGenerator`, keeping host-specific metadata policy outside the core client. Azure-managed scheduler connection strings remain in `@microsoft/durabletask-js-azuremanaged`.
 
 ## npm packages
 

@@ -28,24 +28,39 @@ export class WhenAllTask<T> extends CompositeTask<T[]> {
     return this._tasks.length - this._completedTasks;
   }
 
-  onChildCompleted(task: Task<any>): void {
+  onChildCompleted(_task: Task<any>): void {
     if (this._isComplete) {
-      // Already completed (fail-fast or all children done). Ignore subsequent child completions.
+      // Already completed (all children done). Ignore subsequent child completions.
       return;
     }
 
     this._completedTasks++;
 
-    if (task.isFailed && !this._exception) {
-      this._exception = task.getException();
-      this._isComplete = true;
-      this._parent?.onChildCompleted(this);
-      return;
-    }
-
+    // Wait-all: a failing child does not complete the whenAll early; we wait until every child
+    // is terminal. This prevents a later failing sibling's TaskFailed from being dropped against
+    // an already-terminal instance (issue #301).
+    //
+    // Set _exception only at completion so isFailed and isComplete flip together — otherwise
+    // resume() (which checks isFailed before isComplete) would throw into the generator before
+    // the other siblings finish, re-introducing fail-fast.
     if (this._completedTasks == this._tasks.length) {
-      this._result = this._tasks.map((task) => task.getResult());
       this._isComplete = true;
+
+      const failures = this._tasks.filter((child) => child.isFailed).map((child) => child.getException());
+
+      if (failures.length > 0) {
+        // Aggregate all child failures into an AggregateError. The message inlines every child
+        // message because newFailureDetails() serializes only e.message (not .errors), so an
+        // uncaught whenAll failure would otherwise lose per-child detail.
+        const inlined = failures.map((f) => (f instanceof Error ? f.message : String(f))).join("; ");
+        this._exception = new AggregateError(
+          failures,
+          `${failures.length} of ${this._tasks.length} tasks in the whenAll failed: ${inlined}`,
+        );
+      } else {
+        this._result = this._tasks.map((child) => child.getResult());
+      }
+
       this._parent?.onChildCompleted(this);
     }
   }

@@ -101,8 +101,8 @@ abstract class DurableTaskAzureManagedOptionsBase {
         authority = `${authority}:${url.port}`;
       }
       return authority;
-    } catch {
-      throw new Error(`Invalid endpoint URL: ${endpoint}`);
+    } catch (e) {
+      throw new Error(`Invalid endpoint URL: ${endpoint}`, { cause: e });
     }
   }
 

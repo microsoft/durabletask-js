@@ -31,7 +31,7 @@ import { mapToRecord } from "../utils/tags.util";
 import { populateTagsMap } from "../utils/pb-helper.util";
 import { EntityInstanceId } from "../entities/entity-instance-id";
 import { EntityMetadata, createEntityMetadata, createEntityMetadataWithoutState } from "../entities/entity-metadata";
-import { EntityQuery } from "../entities/entity-query";
+import { EntityQuery, normalizeInstanceIdPrefix } from "../entities/entity-query";
 import { SignalEntityOptions } from "../entities/signal-entity-options";
 import {
   CleanEntityStorageRequest,
@@ -954,11 +954,15 @@ export class TaskHubGrpcClient {
 
       stream.on("end", () => {
         stream.removeAllListeners();
+        stream.on("error", () => {}); // Prevent unhandled "error" after cleanup
+        stream.destroy();
         resolve(historyEvents);
       });
 
       stream.on("error", (err: grpc.ServiceError) => {
         stream.removeAllListeners();
+        stream.on("error", () => {}); // Prevent unhandled "error" after cleanup
+        stream.destroy();
         // Return empty array for NOT_FOUND to be consistent with DTS behavior
         // (DTS returns empty stream for non-existent instances) and user-friendly
         if (err.code === grpc.status.NOT_FOUND) {
@@ -1103,9 +1107,10 @@ export class TaskHubGrpcClient {
       const req = new pb.QueryEntitiesRequest();
       const protoQuery = new pb.EntityQuery();
 
-      if (query?.instanceIdStartsWith) {
+      const normalizedPrefix = normalizeInstanceIdPrefix(query?.instanceIdStartsWith);
+      if (normalizedPrefix) {
         const prefix = new StringValue();
-        prefix.setValue(query.instanceIdStartsWith);
+        prefix.setValue(normalizedPrefix);
         protoQuery.setInstanceidstartswith(prefix);
       }
 
@@ -1205,7 +1210,7 @@ export class TaskHubGrpcClient {
     const instanceIdStr = protoMetadata.getInstanceid();
     const entityId = EntityInstanceId.fromString(instanceIdStr);
 
-    const lastModifiedTime = protoMetadata.getLastmodifiedtime()?.toDate() ?? new Date();
+    const lastModifiedTime = protoMetadata.getLastmodifiedtime()?.toDate() ?? new Date(0);
     const backlogQueueSize = protoMetadata.getBacklogqueuesize();
     const lockedBy = protoMetadata.getLockedby()?.getValue();
     const serializedState = protoMetadata.getSerializedstate()?.getValue();

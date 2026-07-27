@@ -7,6 +7,7 @@ import {
   TaskFailureDetails,
   createTaskFailureDetails,
 } from "../src/entities/entity-operation-failed-exception";
+import { TaskFailedError } from "../src/task/exception/task-failed-error";
 import * as pb from "../src/proto/orchestrator_service_pb";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 
@@ -63,6 +64,21 @@ describe("EntityOperationFailedException", () => {
       // Assert
       expect(exception instanceof Error).toBe(true);
       expect(exception instanceof EntityOperationFailedException).toBe(true);
+    });
+
+    it("should not be instanceof TaskFailedError", () => {
+      // Arrange
+      const entityId = new EntityInstanceId("counter", "my-counter");
+      const failureDetails: TaskFailureDetails = {
+        errorType: "Error",
+        errorMessage: "Something went wrong",
+      };
+
+      // Act
+      const exception = new EntityOperationFailedException(entityId, "op", failureDetails);
+
+      // Assert
+      expect(exception instanceof TaskFailedError).toBe(false);
     });
 
     it("should include stack trace", () => {
