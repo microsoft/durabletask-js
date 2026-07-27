@@ -59,13 +59,15 @@ describe("default sub-orchestration instance ID derivation", () => {
   });
 
   it("keeps default-derived IDs within the DTS 100-char instance-ID limit at every nesting depth", () => {
-    // The Durable Task Scheduler caps instance IDs at 100 characters (enforced server-side). Because
-    // the derived ID is `${executionId}:${suffix}` — keyed on the child's OWN fresh executionId and
-    // NOT prefixed with the parent instance ID — it must stay constant-length no matter how deeply
-    // sub-orchestrations nest. (The pre-fix `${parentId}:${executionId}:${suffix}` shape concatenated
-    // every ancestor and blew past 100 chars at ~2 levels deep.) Simulate a realistic top-level
-    // 36-char auto-GUID and a fresh 32-hex executionId per level, deriving each level's child from the
-    // previous level's derived ID.
+    // The Durable Task Scheduler caps instance IDs at 100 characters (enforced server-side). The
+    // derived ID is `${executionId}:${suffix}`, keyed on the SCHEDULING (parent) orchestration's
+    // per-generation executionId — it must be the scheduler's, since the ID is derived
+    // deterministically before the child exists — and NOT prefixed with the parent instance ID.
+    // Each nesting level therefore contributes only its own fixed-length executionId, so the ID
+    // stays constant-length no matter how deeply sub-orchestrations nest. (The pre-fix
+    // `${parentId}:${executionId}:${suffix}` shape concatenated every ancestor and blew past 100
+    // chars at ~2 levels deep.) Simulate a realistic top-level 36-char auto-GUID and a fresh 32-hex
+    // executionId per level, deriving each level's child from the previous level's derived ID.
     const executionIds = ["0", "1", "2", "3"].map((c) => c.repeat(32)); // 32-hex-length, distinct per level
     let parentInstanceId = "4cb1b016-ec71-4608-bdeb-328306cc0215"; // 36 chars, like an auto-generated GUID
     const derived: string[] = [];
