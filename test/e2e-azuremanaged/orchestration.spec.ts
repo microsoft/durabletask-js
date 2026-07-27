@@ -665,19 +665,72 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     expect(output.gen1ChildId).toBeTruthy();
     expect(output.gen0ChildId).not.toEqual(output.gen1ChildId);
 
-    // Premise check: both child IDs are prefixed by the (top-level, colon-free) parent ID, and the
-    // remainder after that prefix contains an executionId segment — i.e. the 3-segment
-    // `${parentId}:${executionId}:${hex4}` shape, NOT the legacy 2-segment `${parentId}:${hex4}`
-    // fallback. The remainders differ because the executionId is minted fresh per generation, which
-    // is exactly what stops the collision.
+    // Premise check: each child ID is `${executionId}:${hex4}` — keyed on the per-generation
+    // executionId that the REAL DTS backend minted, NOT the legacy `${parentId}:${hex4}` fallback we
+    // emit only when executionId is empty. So each ID:
+    //   - is <= 100 chars (the DTS instance-ID limit; the executionId-keyed form is constant-length),
+    //   - has exactly TWO colon-separated segments (executionId + suffix), and
+    //   - does NOT start with the parent instance ID (the legacy fallback would start with `${id}:`;
+    //     the correct form starts with the 32-hex executionId instead).
+    // If DTS had NOT populated executionId we would fall back to `${id}:${hex4}` and these assertions
+    // would fail — surfacing a silent production no-op instead of hiding it behind green in-memory
+    // tests. (gen0 != gen1 is asserted above: the executionId is minted fresh per generation.)
     for (const childId of [output.gen0ChildId, output.gen1ChildId]) {
-      expect(childId.startsWith(`${id}:`)).toBe(true);
+      expect(childId.length).toBeLessThanOrEqual(100);
+      expect(childId.split(":").length).toEqual(2);
+      expect(childId.startsWith(`${id}:`)).toBe(false);
     }
-    const gen0Rest = output.gen0ChildId.slice(id.length + 1);
-    const gen1Rest = output.gen1ChildId.slice(id.length + 1);
-    expect(gen0Rest.includes(":")).toBe(true);
-    expect(gen1Rest.includes(":")).toBe(true);
-    expect(gen0Rest).not.toEqual(gen1Rest);
+  }, 61000);
+
+  // Companion length check for the same fix (PR #333): default-derived sub-orchestration instance IDs
+  // must stay within the DTS 100-character instance-ID limit even when sub-orchestrations NEST. The
+  // pre-fix `${parentId}:${executionId}:${hex4}` shape concatenated every ancestor, so a top-level
+  // orchestrator -> sub-orchestrator -> callHttp (2 levels) produced a ~112-char ID that DTS rejects.
+  // The `${executionId}:${hex4}` shape is constant-length (~37 chars) at every depth. Runs on the REAL
+  // DTS backend so the length is measured against the real server-side limit.
+  it("keeps default-derived sub-orchestration instance IDs within the DTS length limit when nested", async () => {
+    const grandchild: TOrchestrator = async (ctx: OrchestrationContext): Promise<string> => {
+      return ctx.instanceId;
+    };
+    const child: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const grandchildId: string = yield ctx.callSubOrchestrator(grandchild);
+      return { childId: ctx.instanceId, grandchildId };
+    };
+    const top: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const nested: { childId: string; grandchildId: string } = yield ctx.callSubOrchestrator(child);
+      return nested;
+    };
+
+    taskHubWorker.addOrchestrator(grandchild);
+    taskHubWorker.addOrchestrator(child);
+    taskHubWorker.addOrchestrator(top);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(top, null);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 60);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+
+    const output = JSON.parse(state!.serializedOutput!) as { childId: string; grandchildId: string };
+    // Surface the real DTS-derived nested instance IDs and their measured lengths in the CI log.
+    console.log(
+      `[suborch-id-nesting-e2e] parentId=${id} childId=${output.childId} ` +
+        `grandchildId=${output.grandchildId} childIdLen=${output.childId.length} ` +
+        `grandchildIdLen=${output.grandchildId.length}`,
+    );
+
+    // Two levels of default-ID nesting (the depth that broke pre-fix). Every derived ID stays within
+    // the DTS limit and is the constant-length two-segment `${executionId}:${hex4}` shape — not the
+    // parent-prefixed shape, so it never grows with depth.
+    for (const childId of [output.childId, output.grandchildId]) {
+      expect(childId).toBeTruthy();
+      expect(childId.length).toBeLessThanOrEqual(100);
+      expect(childId.split(":").length).toEqual(2);
+      expect(childId.startsWith(`${id}:`)).toBe(false);
+    }
+    // Each level is keyed on its own fresh executionId, so the two levels' IDs differ.
+    expect(output.childId).not.toEqual(output.grandchildId);
   }, 61000);
 
   it("should be able to run a single orchestration without activity", async () => {
