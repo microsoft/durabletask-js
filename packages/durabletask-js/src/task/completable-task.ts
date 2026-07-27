@@ -37,4 +37,22 @@ export class CompletableTask<T> extends Task<T> {
       this._parent.onChildCompleted(this);
     }
   }
+
+  /**
+   * Fails the task with a pre-constructed error.
+   * Use this when a more specific error type (e.g., EntityOperationFailedException)
+   * should be preserved as the task's exception rather than wrapping in a generic TaskFailedError.
+   */
+  failWithError(error: Error): void {
+    if (this._isComplete) {
+      throw new Error("Task is already completed");
+    }
+
+    this._exception = error;
+    this._isComplete = true;
+
+    if (this._parent) {
+      this._parent.onChildCompleted(this);
+    }
+  }
 }

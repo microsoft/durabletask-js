@@ -12,6 +12,7 @@ export class AccessTokenCache {
   private readonly scopes: string | string[];
   private readonly margin: number;
   private cachedToken: AccessToken | null = null;
+  private pendingTokenFetch: Promise<AccessToken> | null = null;
 
   /**
    * Creates a new instance of the AccessTokenCache.
@@ -27,26 +28,45 @@ export class AccessTokenCache {
   }
 
   /**
+   * Checks whether the cached token needs to be refreshed.
+   */
+  private needsRefresh(): boolean {
+    const nowWithMargin = Date.now() + this.margin;
+    return (
+      this.cachedToken === null ||
+      this.cachedToken.expiresOnTimestamp < nowWithMargin ||
+      (this.cachedToken.refreshAfterTimestamp !== undefined && this.cachedToken.refreshAfterTimestamp < nowWithMargin)
+    );
+  }
+
+  /**
    * Gets a valid access token, refreshing it if necessary.
+   *
+   * When multiple concurrent callers need a new token, only one credential
+   * request is made. All callers share the same in-flight promise.
    *
    * @param options Optional token request options.
    * @returns A promise that resolves to a valid access token.
    */
   async getToken(options?: GetTokenOptions): Promise<AccessToken> {
-    const nowWithMargin = Date.now() + this.margin;
-
-    if (
-      this.cachedToken === null ||
-      this.cachedToken.expiresOnTimestamp < nowWithMargin ||
-      (this.cachedToken.refreshAfterTimestamp !== undefined && this.cachedToken.refreshAfterTimestamp < nowWithMargin)
-    ) {
-      const token = await this.credential.getToken(this.scopes, options);
-      if (!token) {
-        throw new Error("Failed to obtain access token from credential");
+    if (this.needsRefresh()) {
+      if (!this.pendingTokenFetch) {
+        this.pendingTokenFetch = this.credential
+          .getToken(this.scopes, options)
+          .then((token) => {
+            if (!token) {
+              throw new Error("Failed to obtain access token from credential");
+            }
+            this.cachedToken = token;
+            return token;
+          })
+          .finally(() => {
+            this.pendingTokenFetch = null;
+          });
       }
-      this.cachedToken = token;
+      return this.pendingTokenFetch;
     }
 
-    return this.cachedToken;
+    return this.cachedToken!;
   }
 }

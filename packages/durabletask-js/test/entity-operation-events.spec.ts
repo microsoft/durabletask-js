@@ -5,6 +5,7 @@ import { OrchestrationExecutor } from "../src/worker/orchestration-executor";
 import { Registry } from "../src/worker/registry";
 import { OrchestrationContext } from "../src/task/context/orchestration-context";
 import { EntityInstanceId } from "../src/entities/entity-instance-id";
+import { EntityOperationFailedException } from "../src/entities/entity-operation-failed-exception";
 import * as pb from "../src/proto/orchestrator_service_pb";
 import * as ph from "../src/utils/pb-helper.util";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
@@ -190,7 +191,7 @@ describe("OrchestrationExecutor Entity Operation Events", () => {
   });
 
   describe("ENTITYOPERATIONFAILED", () => {
-    it("should fail entity call task with error details", async () => {
+    it("should fail entity call task with EntityOperationFailedException", async () => {
       // Arrange
       let caughtError: Error | undefined;
       const orchestrator = async function* (ctx: OrchestrationContext): AsyncGenerator<Task<number>, string, number> {
@@ -225,10 +226,19 @@ describe("OrchestrationExecutor Entity Operation Events", () => {
 
       await executor.execute("test-instance", oldEvents2, newEvents2);
 
-      // Assert
+      // Assert - error should be EntityOperationFailedException
       expect(caughtError).toBeDefined();
+      expect(caughtError).toBeInstanceOf(EntityOperationFailedException);
       expect(caughtError!.message).toContain("badOperation");
       expect(caughtError!.message).toContain("Operation not supported");
+
+      // Verify entity-specific context is preserved
+      const entityError = caughtError as EntityOperationFailedException;
+      expect(entityError.entityId.name).toBe("counter");
+      expect(entityError.entityId.key).toBe("my-counter");
+      expect(entityError.operationName).toBe("badOperation");
+      expect(entityError.failureDetails.errorType).toBe("InvalidOperationError");
+      expect(entityError.failureDetails.errorMessage).toBe("Operation not supported");
     });
 
     it("should propagate failure to orchestration if not caught", async () => {
@@ -267,6 +277,49 @@ describe("OrchestrationExecutor Entity Operation Events", () => {
       expect(completeActionWrapper).toBeDefined();
       const completeAction = completeActionWrapper!.getCompleteorchestration()!;
       expect(completeAction.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    });
+
+    it("should throw EntityOperationFailedException details when uncaught", async () => {
+      // Arrange — verify the uncaught path produces an EntityOperationFailedException in the
+      // orchestration failure details message, matching the documented API contract
+      const orchestrator = async function* (ctx: OrchestrationContext): AsyncGenerator<Task<number>, string, number> {
+        const entityId = new EntityInstanceId("counter", "my-counter");
+        yield ctx.entities.callEntity<number>(entityId, "badOperation");
+        return "should not reach here";
+      };
+
+      registry.addNamedOrchestrator("TestOrchestrator", orchestrator);
+
+      const executor = new OrchestrationExecutor(registry);
+
+      const oldEvents: pb.HistoryEvent[] = [];
+      const newEvents: pb.HistoryEvent[] = [
+        ph.newOrchestratorStartedEvent(new Date()),
+        ph.newExecutionStartedEvent("TestOrchestrator", "test-instance", undefined),
+      ];
+
+      const result1 = await executor.execute("test-instance", oldEvents, newEvents);
+      const requestId = result1.actions[0].getSendentitymessage()!.getEntityoperationcalled()!.getRequestid();
+
+      // Fail the operation
+      const oldEvents2 = [...newEvents];
+      const newEvents2 = [
+        ph.newOrchestratorStartedEvent(new Date()),
+        newEntityOperationFailedEvent(100, requestId, "ValidationError", "Invalid input"),
+      ];
+
+      const result2 = await executor.execute("test-instance", oldEvents2, newEvents2);
+
+      // Assert - orchestration should fail with the EntityOperationFailedException message
+      const completeActionWrapper = result2.actions.find((a) => a.hasCompleteorchestration());
+      expect(completeActionWrapper).toBeDefined();
+      const completeAction = completeActionWrapper!.getCompleteorchestration()!;
+      expect(completeAction.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+      const failureDetails = completeAction.getFailuredetails();
+      expect(failureDetails).toBeDefined();
+      expect(failureDetails!.getErrortype()).toBe("EntityOperationFailedException");
+      expect(failureDetails!.getErrormessage()).toContain("badOperation");
+      expect(failureDetails!.getErrormessage()).toContain("Invalid input");
     });
   });
 

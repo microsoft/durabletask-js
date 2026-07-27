@@ -3,7 +3,7 @@
 
 import { ActivityContext } from "../src/task/context/activity-context";
 import { TActivity } from "../src/types/activity.type";
-import { NoOpLogger } from "../src/types/logger.type";
+import { Logger, NoOpLogger, StructuredLogger } from "../src/types/logger.type";
 import { ActivityExecutor } from "../src/worker/activity-executor";
 import { ActivityNotRegisteredError } from "../src/worker/exception/activity-not-registered-error";
 import { Registry } from "../src/worker/registry";
@@ -53,12 +53,67 @@ describe("Activity Executor", () => {
     expect(caughtException).not.toBeNull();
     expect(caughtException?.message).toMatch(/Bogus/);
   });
+
+  it("should throw and log activityFailed (EventId 605) when input is malformed JSON", async () => {
+    const testActivity = (_: ActivityContext, input: any) => {
+      return input;
+    };
+
+    const loggerSpy = createSpyLogger();
+    const [executor, name] = getActivityExecutor(testActivity, loggerSpy);
+
+    const malformedJson = "{not valid json";
+
+    await expect(executor.execute(TEST_INSTANCE_ID, name, TEST_TASK_ID, malformedJson))
+      .rejects.toThrow(SyntaxError);
+
+    // Verify the activityFailed structured log (EventId 605) was emitted with
+    // the correct event ID and activity context properties.
+    expect(loggerSpy.logEvent).toHaveBeenCalledWith(
+      "error",
+      expect.objectContaining({
+        eventId: 605,
+        properties: expect.objectContaining({ instanceId: TEST_INSTANCE_ID, name }),
+      }),
+      expect.stringContaining(name),
+    );
+  });
+
+  it("should handle undefined input without error", async () => {
+    const testActivity = (_: ActivityContext, input: any) => {
+      return input;
+    };
+
+    const [executor, name] = getActivityExecutor(testActivity);
+    const result = await executor.execute(TEST_INSTANCE_ID, name, TEST_TASK_ID, undefined);
+    expect(result).toBeUndefined();
+  });
+
+  it("should handle empty string input without error", async () => {
+    const testActivity = (_: ActivityContext, input: any) => {
+      return input;
+    };
+
+    const [executor, name] = getActivityExecutor(testActivity);
+    const result = await executor.execute(TEST_INSTANCE_ID, name, TEST_TASK_ID, "");
+    expect(result).toBeUndefined();
+  });
 });
 
 // Activity = Callable[[ActivityContext, TInput], TOutput]
-function getActivityExecutor(fn: TActivity<any, any>): [ActivityExecutor, string] {
+function getActivityExecutor(fn: TActivity<any, any>, logger?: Logger): [ActivityExecutor, string] {
   const registry = new Registry();
   const name = registry.addActivity(fn);
-  const executor = new ActivityExecutor(registry, testLogger);
+  const executor = new ActivityExecutor(registry, logger ?? testLogger);
   return [executor, name];
+}
+
+function createSpyLogger(): jest.Mocked<StructuredLogger> {
+  return {
+    error: jest.fn(),
+    warn: jest.fn(),
+    info: jest.fn(),
+    debug: jest.fn(),
+    logEvent: jest.fn(),
+  };
 }

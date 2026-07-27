@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { TaskFailedError } from "./exception/task-failed-error";
 import { CompositeTask } from "./composite-task";
 
 /**
@@ -9,7 +8,7 @@ import { CompositeTask } from "./composite-task";
  */
 export class Task<T> {
   _result: T | undefined;
-  _exception: TaskFailedError | undefined;
+  _exception: Error | undefined;
   _parent: CompositeTask<T> | undefined;
   _isComplete: boolean = false;
 
@@ -34,6 +33,32 @@ export class Task<T> {
   }
 
   /**
+   * Alias of {@link isComplete} that matches the v3 Durable Functions `Task` shape.
+   * Note that completion is not equivalent to success.
+   */
+  get isCompleted(): boolean {
+    return this._isComplete;
+  }
+
+  /**
+   * Alias of {@link isFailed} that matches the v3 Durable Functions `Task` shape.
+   */
+  get isFaulted(): boolean {
+    return this.isFailed;
+  }
+
+  /**
+   * The result of the task if it has completed successfully, otherwise `undefined`.
+   *
+   * Unlike {@link getResult}, this getter never throws: it returns `undefined`
+   * while the task is still pending and for a failed task. This matches the v3
+   * Durable Functions `Task.result` shape.
+   */
+  get result(): T | undefined {
+    return this._isComplete && !this._exception ? this._result : undefined;
+  }
+
+  /**
    * Get the result of the task
    */
   getResult(): T {
@@ -51,7 +76,7 @@ export class Task<T> {
   /**
    * Get the exception that caused the task to fail
    */
-  getException(): TaskFailedError {
+  getException(): Error {
     if (!this._exception) {
       throw new Error("Task did not fail");
     }
