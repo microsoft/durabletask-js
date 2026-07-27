@@ -158,13 +158,19 @@ let cachedCredential: BearerCredential | undefined;
  * Loaded lazily with `require` (mirroring the core SDK's optional-peer-dependency pattern) so the
  * dependency is only touched when a token source is actually used; `require` also keeps the module out
  * of the compiled type graph, so an app that never uses a token source needs no `@azure/identity`
- * install. The credential is cached because `DefaultAzureCredential` probes the environment on
- * construction and keeps its own in-memory token cache: constructing a fresh one per activity
- * invocation would defeat that cache — under Managed Identity every 202 poll hop would then force a
- * fresh, **rate-limited** IMDS token call. `resource` is passed per call to `getToken`, not to the
- * constructor, so a single instance correctly serves every resource. Only a *successful* construction
- * is cached: if `require` or the constructor throws, nothing is cached, so the next call retries and
- * still produces the correct actionable error when the package is missing but a token source was used.
+ * install. The credential is cached to reuse a single instance across invocations — the documented
+ * Azure Identity best practice ("Reuse credential instances"): reuse lets the underlying MSAL
+ * dependency serve tokens from its in-memory cache, whereas constructing a fresh
+ * `DefaultAzureCredential` per activity invocation discards that per-instance cache and issues a new
+ * token request on every 202 poll hop. Aggregated across the many concurrent orchestrations one worker
+ * serves, that token traffic risks HTTP 429 throttling from Microsoft Entra ID (and, secondarily, the
+ * per-VM IMDS limits of 20 req/s and 5 concurrent under Managed Identity); a single 30s-interval poll
+ * loop cannot itself throttle. `resource` is passed per call to `getToken`, not to the constructor, so
+ * one instance correctly serves every resource; `DefaultAzureCredential` is kept deliberately (not
+ * narrowed to `ManagedIdentityCredential`) to preserve the local-development fallback chain. Only a
+ * *successful* construction is cached: if `require` or the constructor throws, nothing is cached, so
+ * the next call retries and still produces the correct actionable error when the package is missing
+ * but a token source was used.
  */
 function getCredential(): BearerCredential {
   if (cachedCredential) {
