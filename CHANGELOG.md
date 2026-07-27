@@ -4,8 +4,6 @@
 
 ### Fixes
 
-- Fix default sub-orchestration instance ID colliding across `continueAsNew` generations. The auto-derived child instance ID now includes the per-execution ID, changing its format from `${parentId}:${hex4}` to `${parentId}:${executionId}:${hex4}`. This unblocks `callHttp` after a `continueAsNew` (the built-in HTTP poll orchestrator is scheduled as a default-ID sub-orchestration and previously collided with the prior generation's child). Orchestrations that hard-coded or parsed the old `${parentId}:${hex4}` shape are affected; an explicitly supplied `options.instanceId` is unchanged. ([#333](https://github.com/microsoft/durabletask-js/pull/333))
-
 
 ## v0.3.0 (2026-03-06)
 
