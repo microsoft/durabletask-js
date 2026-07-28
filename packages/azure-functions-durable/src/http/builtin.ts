@@ -51,6 +51,9 @@ export const BUILTIN_HTTP_POLL_ORCHESTRATOR_NAME = "BuiltIn__HttpPollOrchestrato
  */
 const DEFAULT_POLL_INTERVAL_SECONDS = 30;
 
+/** Maximum ECMAScript time value (ECMA-262); a `Date` beyond this has a NaN timestamp. */
+const MAX_TIME_VALUE_MS = 8_640_000_000_000_000;
+
 /**
  * @internal
  * Result of the built-in HTTP activity: the public {@link DurableHttpResponse} plus the effective
@@ -109,10 +112,12 @@ export function isSameOrigin(a: string, b: string): boolean {
  *
  * @remarks
  * Supports both the delta-seconds and HTTP-date forms; falls back to
- * {@link DEFAULT_POLL_INTERVAL_SECONDS} when absent or unparseable. For the HTTP-date form the delay
- * is computed against `now` — which the caller supplies as the orchestration's replay-safe
- * `currentUtcDateTime` — so the resulting timer fire time is deterministic across replays, and is
- * rounded **up** so the poll never fires before the server-specified instant.
+ * {@link DEFAULT_POLL_INTERVAL_SECONDS} when the header is absent, unparseable, or specifies a delay
+ * so large that `now + seconds` would exceed the maximum representable {@link Date} (see the guard
+ * below). For the HTTP-date form the delay is computed against `now` — which the caller supplies as
+ * the orchestration's replay-safe `currentUtcDateTime` — so the resulting timer fire time is
+ * deterministic across replays, and is rounded **up** so the poll never fires before the
+ * server-specified instant.
  *
  * @internal Exported for unit testing.
  */
@@ -122,14 +127,29 @@ export function retryAfterSeconds(headers: { [key: string]: string }, now: Date)
     return DEFAULT_POLL_INTERVAL_SECONDS;
   }
   const trimmed = raw.trim();
+  let seconds: number;
   if (/^\d+$/.test(trimmed)) {
-    return Math.max(parseInt(trimmed, 10), 0);
+    seconds = parseInt(trimmed, 10);
+  } else {
+    const retryAtMs = Date.parse(trimmed);
+    if (Number.isNaN(retryAtMs)) {
+      return DEFAULT_POLL_INTERVAL_SECONDS;
+    }
+    seconds = Math.ceil((retryAtMs - now.getTime()) / 1000);
   }
-  const retryAtMs = Date.parse(trimmed);
-  if (Number.isNaN(retryAtMs)) {
+  // `Retry-After` is remote-controlled: the caller feeds this into `new Date(now + seconds * 1000)`
+  // and hands the result to `createTimer`, which throws on a NaN timestamp. A delay that pushes past
+  // the maximum ECMAScript time value would therefore let a callee fail the whole orchestration, so
+  // clamp to the default instead. The bound is DERIVED from the Date range — `seconds <=
+  // floor((MAX - now) / 1000)` guarantees `now + seconds * 1000 <= MAX` exactly — rather than an
+  // arbitrary "sane poll interval" cap, so it rejects the minimum necessary and also subsumes
+  // non-finite / non-safe-integer values. It covers BOTH forms: a huge delta-seconds string (parseInt
+  // can even reach Infinity) AND an HTTP-date whose `Math.ceil` rounds one step past the boundary.
+  const maxSeconds = Math.floor((MAX_TIME_VALUE_MS - now.getTime()) / 1000);
+  if (!Number.isFinite(seconds) || seconds > maxSeconds) {
     return DEFAULT_POLL_INTERVAL_SECONDS;
   }
-  return Math.max(Math.ceil((retryAtMs - now.getTime()) / 1000), 0);
+  return Math.max(seconds, 0);
 }
 
 /**

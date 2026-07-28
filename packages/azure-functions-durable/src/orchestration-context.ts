@@ -164,6 +164,10 @@ export class DurableOrchestrationContext {
    * identity, and firewall/VNet behavior therefore follow the worker process. Managed-identity
    * token acquisition (`tokenSource`) requires the optional `@azure/identity` package.
    *
+   * This is **not** a fully v3-equivalent drop-in; see the package README for the documented
+   * differences from v3 — notably the `GET`/`HEAD` body restriction, the absence of
+   * `response.getHeader()`, and cross-origin `202` poll credential stripping.
+   *
    * @returns A {@link Task} resolving to the final {@link DurableHttpResponse}.
    */
   callHttp(options: CallHttpOptions): Task<DurableHttpResponse> {

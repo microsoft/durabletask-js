@@ -2,7 +2,8 @@
 // Licensed under the MIT License.
 
 /**
- * Durable HTTP request/response models (durable-functions v3 compatible).
+ * Durable HTTP request/response models that **mirror** the durable-functions v3 shapes (they are not
+ * the v3 classes themselves).
  *
  * @remarks
  * In v3 the Durable Functions host extension executed `context.df.callHttp` natively (including
@@ -69,11 +70,15 @@ export interface CallHttpOptions {
 }
 
 /**
- * The response returned by `context.df.callHttp` (classic durable-functions v3 shape).
+ * The response returned by `context.df.callHttp` (**shape-compatible** with the classic
+ * durable-functions v3 `DurableHttpResponse`, not the v3 type itself).
  *
  * @remarks
- * The value crosses the sub-orchestration boundary as JSON, so `callHttp` resolves to a plain object
- * of this shape. Consumers read `response.statusCode` / `response.content` / `response.headers`.
+ * v3's `DurableHttpResponse` was a **class** exposing a case-insensitive `getHeader(name)` accessor.
+ * Here the value crosses the sub-orchestration boundary as JSON, so `callHttp` resolves to a plain
+ * **object** with no methods — `getHeader()` is unavailable; read headers directly via
+ * `response.headers[...]` by lower-cased key. Consumers read `response.statusCode` /
+ * `response.content` / `response.headers`.
  */
 export interface DurableHttpResponse {
   /** The HTTP response status code. */

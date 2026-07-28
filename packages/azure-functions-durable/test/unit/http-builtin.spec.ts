@@ -85,6 +85,34 @@ describe("retryAfterSeconds", () => {
       retryAfterSeconds({ "Retry-After": "Thu, 01 Jan 2026 00:00:00 GMT" }, new Date("2026-01-01T00:01:00.000Z")),
     ).toBe(0);
   });
+
+  it("clamps a delta-seconds value that overflows to Infinity to the 30s default", () => {
+    // Andy's literal case: an arbitrarily long digit string. parseInt("9".repeat(400)) === Infinity;
+    // new Date(now + Infinity) is Invalid and createTimer() would then fail the orchestration.
+    expect(retryAfterSeconds({ "Retry-After": "9".repeat(400) }, now)).toBe(30);
+  });
+
+  it("clamps a FINITE delta-seconds value that exceeds the Date range to the 30s default", () => {
+    // The bug bites long before Infinity: at 13 digits parseInt is still finite, but now + seconds
+    // overflows the max ECMAScript time value (8.64e15 ms), so new Date(...) is Invalid. An
+    // isFinite()-only check would miss this — the range bound is what catches it.
+    expect(retryAfterSeconds({ "Retry-After": "8640000000000" }, now)).toBe(30);
+  });
+
+  it("clamps an HTTP-date whose ceil rounds past the max time value to the 30s default", () => {
+    // The HTTP-date branch has the same overflow via Math.ceil, which the delta-seconds guard alone
+    // would not cover. This date parses to exactly the max time value; one ms past the boundary,
+    // Math.ceil rounds the delay one step beyond it, so new Date(now + seconds) is Invalid.
+    expect(
+      retryAfterSeconds({ "Retry-After": "Sat, 13 Sep 275760 00:00:00 GMT" }, new Date(1785268800001)),
+    ).toBe(30);
+  });
+
+  it("passes a large but in-range delta-seconds value through unchanged", () => {
+    // Regression guard: the overflow clamp must reject the minimum necessary and NOT over-reject a
+    // large-but-valid delay (no arbitrary "sane maximum" policy is applied).
+    expect(retryAfterSeconds({ "Retry-After": "86400" }, now)).toBe(86400);
+  });
 });
 
 describe("isSameOrigin", () => {

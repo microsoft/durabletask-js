@@ -45,7 +45,9 @@ changed:
   `context.entities.isInCriticalSection()`. Restoring the v3 `df.lock` / `isLocked` surface is tracked
   in [#317](https://github.com/microsoft/durabletask-js/issues/317).
 - **`context.df.callHttp(...)` is restored** as a worker-side durable HTTP call
-  ([#318](https://github.com/microsoft/durabletask-js/issues/318)). It accepts the v3
+  ([#318](https://github.com/microsoft/durabletask-js/issues/318)) — though **not** as a drop-in, fully
+  v3-equivalent replacement: the known incompatibilities and behavior differences listed below are
+  load-bearing for migration, so review them before relying on it. It accepts the v3
   `CallHttpOptions` (`method`, `url`, `body`, `headers`, `tokenSource`, `enablePolling`) and returns a
   `Task<DurableHttpResponse>` (`{ statusCode, headers, content }`), including automatic `202 Accepted`
   polling that honors `Retry-After` via durable timers. **Trust-boundary change:** in v3 the Functions
@@ -77,13 +79,20 @@ changed:
     drive arbitrary SSRF or Managed-Identity token minting.
   - **The default poll interval is 30 s** (matching the classic host) when a `202` carries no usable
     `Retry-After`, rather than polling once per second.
-  - **A body on a `GET`/`HEAD` request throws.** The Fetch standard forbids it; v3 silently sent it, so
-    rather than change the request semantics the call fails loudly — remove `body` or use
-    `POST`/`PUT`/`PATCH`.
-  - **`DurableHttpResponse` is a plain object, not a class.** The response crosses the poll
-    sub-orchestration's JSON boundary, so the v3 `response.getHeader(name)` method is not available; read
-    headers directly via `response.headers["name"]` (response header names are lower-cased by `fetch`).
-    Restoring the case-insensitive accessor is tracked as a follow-up.
+  - **Known incompatibility — a body on a `GET`/`HEAD` request throws.** v3 attached request content
+    regardless of method, and both the .NET extension (`TaskHttpActivityShim` builds the message with
+    no method check) and the durabletask-python SDK still pass the body to the request unconditionally.
+    The [Fetch Standard](https://fetch.spec.whatwg.org/) forbids a body on `GET`/`HEAD` and the
+    underlying `fetch` implementation rejects it, so this cannot be matched while `callHttp` is built on
+    `fetch`. Failing loudly was chosen over silently dropping the body (which would change the request
+    the app asked for): a migrated v3 workflow that relied on it must drop the `body` or switch to
+    `POST`/`PUT`/`PATCH`. Restoring the v3 behavior would require replacing `fetch` with a lower-level
+    HTTP transport, which is not planned.
+  - **Known incompatibility — `DurableHttpResponse` is a plain object, not a class.** The response
+    crosses the poll sub-orchestration's JSON boundary, so the v3 `response.getHeader(name)` method is
+    **not** available — existing `response.getHeader(...)` calls **fail at runtime** and must be
+    rewritten to index `response.headers[...]` by lower-cased key (response header names are lower-cased
+    by `fetch`).
 - **Some v3 top-level exports were removed** — `DummyOrchestrationContext` / `DummyEntityContext`
   (testing utilities) and the entity-lock types above. `TaskFailedError`
   is re-exported from the core SDK (aggregate failures surface as JS-native `AggregateError`); use the
