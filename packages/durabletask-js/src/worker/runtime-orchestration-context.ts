@@ -384,11 +384,34 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     // Get instance ID from options or generate a deterministic one
     let instanceId = options?.instanceId;
 
-    // Create a deterministic instance ID based on the parent instance ID
-    // use the instanceId and append the id to it in hexadecimal with 4 digits (e.g. 0001)
+    // Derive a deterministic instance ID for the child: `${executionId}:${suffix}`. The inputs must
+    // be replay-stable (re-derived identically on every work item) yet unique across continue-as-new
+    // generations. The sequence number resets to 0 on every work item and the parent instance ID is
+    // unchanged by continue-as-new, so those two alone repeat every generation — which caused
+    // generation N+1 to re-derive generation N's child IDs and collide ("instance already exists")
+    // the moment an orchestration did continue-as-new and then scheduled a default-ID
+    // sub-orchestration (e.g. callHttp). The per-execution executionId is minted fresh on every
+    // generation, so keying the ID on it makes it unique per generation.
+    //
+    // We deliberately DO NOT prepend the parent instance ID. Mirrors DurableTask.Core
+    // TaskOrchestrationContext.cs:197 (`OrchestrationInstance.ExecutionId + ":" + id`), which omits
+    // it for two reasons: (1) executionId is a globally-unique GUID, so the parent instance ID adds
+    // no uniqueness — it is pure redundancy; (2) because each nesting level gets its own fresh
+    // executionId, the ID stays constant-length at every depth (~37 chars). Prepending the parent
+    // instance ID instead would concatenate every ancestor's ID, growing ~1+len(instanceId) chars per
+    // level and exceeding the Durable Task Scheduler 100-character instance-ID limit at only ~2 levels
+    // of nesting (e.g. a top-level orchestrator -> sub-orchestrator -> callHttp), silently breaking a
+    // mainstream pattern on the server side (the limit is not enforced client-side).
+    //
+    // FALLBACK: if executionId is empty (a backend that does not populate it), fall back to the
+    // legacy `${instanceId}:${suffix}` format. This re-exposes the cross-generation collision for
+    // such backends, but that leaves them exactly as they are today (no regression), whereas
+    // throwing would newly break working orchestrations.
     if (!instanceId) {
       const instanceIdSuffix = id.toString(16).padStart(4, "0");
-      instanceId = `${this._instanceId}:${instanceIdSuffix}`;
+      instanceId = this._executionId
+        ? `${this._executionId}:${instanceIdSuffix}`
+        : `${this._instanceId}:${instanceIdSuffix}`;
     }
 
     const encodedInput = input !== undefined ? JSON.stringify(input) : undefined;

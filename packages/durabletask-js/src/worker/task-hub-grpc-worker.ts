@@ -810,7 +810,12 @@ export class TaskHubGrpcWorker {
 
     try {
       const executor = new OrchestrationExecutor(this._registry, this._logger);
-      const result = await executor.execute(req.getInstanceid(), req.getPasteventsList(), req.getNeweventsList());
+      const result = await executor.execute(
+        req.getInstanceid(),
+        req.getPasteventsList(),
+        req.getNeweventsList(),
+        req.getExecutionid()?.getValue(),
+      );
 
       // Process actions to inject trace context into scheduled tasks, sub-orchestrations, etc.
       if (tracingResult) {
