@@ -1,18 +1,20 @@
 #!/usr/bin/env node
-// This script updates CHANGELOG.md with a new release section
-// Usage: node update-changelog.js <version> <date> <changelog-file>
+// This script updates a changelog file with a new release section.
+// Usage: node update-changelog.js <version> <date> <changelog-file> [target-changelog]
+//   <changelog-file>    file containing the generated changelog entries to insert
+//   [target-changelog]  changelog to update in place (default: CHANGELOG.md)
 
 const fs = require('fs');
 
-const [,, version, releaseDate, changelogFile] = process.argv;
+const [,, version, releaseDate, changelogFile, targetChangelog = 'CHANGELOG.md'] = process.argv;
 
 if (!version || !releaseDate || !changelogFile) {
-  console.error('Usage: node update-changelog.js <version> <date> <changelog-file>');
+  console.error('Usage: node update-changelog.js <version> <date> <changelog-file> [target-changelog]');
   process.exit(1);
 }
 
 const changelogContent = fs.readFileSync(changelogFile, 'utf8').trim();
-let content = fs.readFileSync('CHANGELOG.md', 'utf8');
+let content = fs.readFileSync(targetChangelog, 'utf8');
 
 const newSection = `## v${version} (${releaseDate})
 
@@ -33,5 +35,5 @@ if (upcomingMatch) {
 // Reset the Upcoming section to empty
 content = content.replace(/## Upcoming[\s\S]*?(?=\n## v)/, '## Upcoming\n\n### New\n\n### Fixes\n\n');
 
-fs.writeFileSync('CHANGELOG.md', content);
-console.log('Updated CHANGELOG.md');
+fs.writeFileSync(targetChangelog, content);
+console.log(`Updated ${targetChangelog}`);
