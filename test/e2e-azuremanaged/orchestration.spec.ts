@@ -590,6 +590,148 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     expect(state?.serializedOutput).toEqual(JSON.stringify(10));
   }, 31000);
 
+  // Regression for the default-derived sub-orchestration instance ID colliding across
+  // continue-as-new generations (issue #318). A parent that schedules a DEFAULT-ID
+  // (no explicit instanceId) sub-orchestration, then continues-as-new, then schedules another
+  // default-ID sub-orchestration must NOT collide. Pre-fix the derived child ID was
+  // `${parentId}:${hex4}` — identical in every generation because continue-as-new truncates the
+  // history and resets the per-work-item sequence counter — so generation 1 re-derived
+  // generation 0's child ID.
+  //
+  // Crucially, this runs against the REAL DTS backend (not the in-memory harness), so it is the
+  // only test that verifies the fix's load-bearing premise: that the backend actually supplies a
+  // per-execution executionId (via OrchestratorRequest.executionId and/or
+  // ExecutionStarted.orchestrationInstance.executionId). If it does not, the fix silently falls
+  // back to the legacy colliding `${parentId}:${hex4}` format and this test fails — surfacing the
+  // regression instead of letting the in-memory tests pass for the wrong reason.
+  it("should not collide default-derived sub-orchestration instance IDs across continue-as-new", async () => {
+    let childActivityRuns = 0;
+    const bumpChild = (_: ActivityContext, gen: number): number => {
+      childActivityRuns++;
+      return gen;
+    };
+
+    // The child returns its OWN instance ID so the test can inspect the real DTS-derived shape.
+    const child: TOrchestrator = async function* (ctx: OrchestrationContext, gen: number): any {
+      yield ctx.callActivity(bumpChild, gen);
+      return ctx.instanceId;
+    };
+
+    // Parent: generation 0 schedules a default-ID child and carries its ID forward via the
+    // continue-as-new input; generation 1 schedules another default-ID child, then returns BOTH
+    // children's instance IDs so the test can compare them.
+    const parent: TOrchestrator = async function* (
+      ctx: OrchestrationContext,
+      input: { gen: number; gen0ChildId?: string },
+    ): any {
+      const childId: string = yield ctx.callSubOrchestrator(child, input.gen);
+      if (input.gen < 1) {
+        ctx.continueAsNew({ gen: input.gen + 1, gen0ChildId: childId }, true);
+        return;
+      }
+      return { gen0ChildId: input.gen0ChildId, gen1ChildId: childId };
+    };
+
+    taskHubWorker.addActivity(bumpChild);
+    taskHubWorker.addOrchestrator(child);
+    taskHubWorker.addOrchestrator(parent);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(parent, { gen: 0 });
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 60);
+
+    expect(state).toBeDefined();
+    // Pre-fix this is FAILED with "Orchestration instance '<parentId>:0001' already exists" (or the
+    // parent never completes because generation 1's colliding child cannot be created).
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+
+    const output = JSON.parse(state!.serializedOutput!) as {
+      gen0ChildId: string;
+      gen1ChildId: string;
+    };
+    // Surface the real DTS-derived child instance IDs in the CI log — the whole point of this test.
+    console.log(
+      `[suborch-id-collision-e2e] parentId=${id} gen0ChildId=${output.gen0ChildId} ` +
+        `gen1ChildId=${output.gen1ChildId} childActivityRuns=${childActivityRuns}`,
+    );
+
+    // Both generations' children actually ran their activity exactly once each. (A silent
+    // second-child-never-created would leave this at 1.)
+    expect(childActivityRuns).toEqual(2);
+
+    // Both children produced an ID, and the two generations got DIFFERENT IDs (no collision, and no
+    // silent reuse of generation 0's completed child for generation 1).
+    expect(output.gen0ChildId).toBeTruthy();
+    expect(output.gen1ChildId).toBeTruthy();
+    expect(output.gen0ChildId).not.toEqual(output.gen1ChildId);
+
+    // Premise check: each child ID is the two-segment `${executionId}:${hex4}` shape — a 32-hex
+    // executionId that the REAL DTS backend minted (Guid.ToString("N")) plus the 4-hex sequence
+    // suffix — NOT the legacy `${parentId}:${hex4}` fallback we emit only when executionId is empty
+    // (that would start with the 36-char parent GUID and fail this regex). Each is far within the DTS
+    // 100-char instance-ID limit. If DTS had NOT populated executionId these assertions would fail,
+    // surfacing a silent production no-op instead of hiding it behind green in-memory tests.
+    // (gen0 != gen1 is asserted above: the executionId is minted fresh per generation.)
+    const executionKeyedId = /^[0-9a-f]{32}:[0-9a-f]{4}$/;
+    for (const childId of [output.gen0ChildId, output.gen1ChildId]) {
+      expect(childId).toMatch(executionKeyedId);
+      expect(childId.length).toBeLessThanOrEqual(100);
+    }
+  }, 61000);
+
+  // Companion length check for the same fix: default-derived sub-orchestration instance IDs
+  // must stay within the DTS 100-character instance-ID limit even when sub-orchestrations NEST. The
+  // pre-fix `${parentId}:${executionId}:${hex4}` shape concatenated every ancestor, so a top-level
+  // orchestrator -> sub-orchestrator -> callHttp (2 levels) produced a ~112-char ID that DTS rejects.
+  // The `${executionId}:${hex4}` shape is constant-length (~37 chars) at every depth. Runs on the REAL
+  // DTS backend so the length is measured against the real server-side limit.
+  it("keeps default-derived sub-orchestration instance IDs within the DTS length limit when nested", async () => {
+    const grandchild: TOrchestrator = async (ctx: OrchestrationContext): Promise<string> => {
+      return ctx.instanceId;
+    };
+    const child: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const grandchildId: string = yield ctx.callSubOrchestrator(grandchild);
+      return { childId: ctx.instanceId, grandchildId };
+    };
+    const top: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const nested: { childId: string; grandchildId: string } = yield ctx.callSubOrchestrator(child);
+      return nested;
+    };
+
+    taskHubWorker.addOrchestrator(grandchild);
+    taskHubWorker.addOrchestrator(child);
+    taskHubWorker.addOrchestrator(top);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(top, null);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 60);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+
+    const output = JSON.parse(state!.serializedOutput!) as { childId: string; grandchildId: string };
+    // Surface the real DTS-derived nested instance IDs and their measured lengths in the CI log.
+    console.log(
+      `[suborch-id-nesting-e2e] parentId=${id} childId=${output.childId} ` +
+        `grandchildId=${output.grandchildId} childIdLen=${output.childId.length} ` +
+        `grandchildIdLen=${output.grandchildId.length}`,
+    );
+
+    // Two levels of default-ID nesting (the depth that broke pre-fix). Every derived ID is the
+    // two-segment `${executionId}:${hex4}` shape (32-hex executionId + 4-hex suffix = 37 chars) and
+    // far within the DTS 100-char limit — not the parent-prefixed shape, so it never grows with depth.
+    const executionKeyedId = /^[0-9a-f]{32}:[0-9a-f]{4}$/;
+    for (const childId of [output.childId, output.grandchildId]) {
+      expect(childId).toBeTruthy();
+      expect(childId).toMatch(executionKeyedId);
+      expect(childId.length).toBeLessThanOrEqual(100);
+    }
+    // Each level is keyed on its own fresh executionId, so the two levels' IDs differ — and, the whole
+    // point of the fix, are the SAME length (the pre-fix parent-prefixed shape grew ~38 chars/level).
+    expect(output.childId).not.toEqual(output.grandchildId);
+    expect(output.childId.length).toEqual(output.grandchildId.length);
+  }, 61000);
+
   it("should be able to run a single orchestration without activity", async () => {
     const orchestrator: TOrchestrator = async (ctx: OrchestrationContext, startVal: number) => {
       return startVal + 1;
