@@ -5,12 +5,19 @@ import * as pb from "../proto/orchestrator_service_pb";
 import * as pbh from "../utils/pb-helper.util";
 import { OrchestrationStatus as ClientOrchestrationStatus } from "../orchestration/enum/orchestration-status.enum";
 import { ParentOrchestrationInstance } from "../types/parent-orchestration-instance.type";
+import { randomUUID } from "crypto";
+
+/** Mints a fresh per-execution ID (DTFx `Guid.ToString("N")` idiom: 32 hex chars, no dashes). */
+function newExecutionId(): string {
+  return randomUUID().replace(/-/g, "");
+}
 
 /**
  * Internal orchestration instance state stored by the in-memory backend.
  */
 export interface OrchestrationInstance {
   instanceId: string;
+  executionId: string;
   name: string;
   status: pb.OrchestrationStatus;
   input?: string;
@@ -92,8 +99,13 @@ export class InMemoryOrchestrationBackend {
     const now = new Date();
     const startTime = scheduledStartTime && scheduledStartTime > now ? scheduledStartTime : now;
 
+    // A fresh per-execution ID. On continue-as-new a new one is minted (see completeOrchestration),
+    // which is what keeps default-derived child instance IDs unique across generations.
+    const executionId = newExecutionId();
+
     const instance: OrchestrationInstance = {
       instanceId,
+      executionId,
       name,
       status: pb.OrchestrationStatus.ORCHESTRATION_STATUS_PENDING,
       input,
@@ -106,7 +118,7 @@ export class InMemoryOrchestrationBackend {
 
     // Add initial events to start the orchestration
     const orchestratorStarted = pbh.newOrchestratorStartedEvent(startTime);
-    const executionStarted = pbh.newExecutionStartedEvent(name, instanceId, input, parentInstance);
+    const executionStarted = pbh.newExecutionStartedEvent(name, instanceId, input, parentInstance, executionId);
 
     instance.pendingEvents.push(orchestratorStarted);
     instance.pendingEvents.push(executionStarted);
@@ -582,6 +594,13 @@ export class InMemoryOrchestrationBackend {
       instance.customStatus = undefined;
       instance.failureDetails = undefined;
       instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_PENDING;
+      // Mint a NEW execution ID for the next generation. This mirrors DTFx
+      // (TaskOrchestrationDispatcher mints ExecutionId = Guid.NewGuid() on continue-as-new) and is
+      // the crux of the default child instance ID fix: because the parent instance ID and the
+      // per-work-item sequence number both repeat every generation, the executionId is the only
+      // input that varies, so it is what stops generation N+1 from re-deriving generation N's child
+      // IDs and colliding in createInstance.
+      instance.executionId = newExecutionId();
 
       // Add new execution started events first, then carryover events.
       // This matches the real sidecar behavior where OrchestratorStarted and
@@ -590,7 +609,7 @@ export class InMemoryOrchestrationBackend {
       // because it sets currentUtcDateTime, and ExecutionStarted must come before
       // carryover events because it initializes the orchestrator generator.
       const orchestratorStarted = pbh.newOrchestratorStartedEvent(new Date());
-      const executionStarted = pbh.newExecutionStartedEvent(instance.name, instance.instanceId, newInput);
+      const executionStarted = pbh.newExecutionStartedEvent(instance.name, instance.instanceId, newInput, undefined, instance.executionId);
       instance.pendingEvents = [orchestratorStarted, executionStarted, ...carryoverEvents];
 
       this.enqueueOrchestration(instance.instanceId);

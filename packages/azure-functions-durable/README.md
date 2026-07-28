@@ -44,12 +44,57 @@ changed:
   `LockHandle` — call `release()`, ideally in a `finally`) and query with
   `context.entities.isInCriticalSection()`. Restoring the v3 `df.lock` / `isLocked` surface is tracked
   in [#317](https://github.com/microsoft/durabletask-js/issues/317).
-- **`context.df.callHttp(...)` now throws.** v3 ran durable HTTP as a host-managed activity; the
-  consolidated gRPC backend has no equivalent primitive. Implement an HTTP activity in your app and
-  call it from the orchestrator. Restoring `callHttp` as a worker-side durable activity is tracked in
-  [#318](https://github.com/microsoft/durabletask-js/issues/318).
+- **`context.df.callHttp(...)` is restored** as a worker-side durable HTTP call
+  ([#318](https://github.com/microsoft/durabletask-js/issues/318)) — though **not** as a drop-in, fully
+  v3-equivalent replacement: the known incompatibilities and behavior differences listed below are
+  load-bearing for migration, so review them before relying on it. It accepts the v3
+  `CallHttpOptions` (`method`, `url`, `body`, `headers`, `tokenSource`, `enablePolling`) and returns a
+  `Task<DurableHttpResponse>` (`{ statusCode, headers, content }`), including automatic `202 Accepted`
+  polling that honors `Retry-After` via durable timers. **Trust-boundary change:** in v3 the Functions
+  **host** extension executed the HTTP request; here it runs as a durable **activity inside your
+  app/worker process** (via `fetch`). Outbound network path, source identity, and firewall/VNet rules
+  therefore follow the worker process, not the host — re-verify egress and any IP allow-lists. A
+  managed-identity `tokenSource` requires the optional
+  [`@azure/identity`](https://www.npmjs.com/package/@azure/identity) package
+  (`npm install @azure/identity`); without it, a request that uses a `tokenSource` throws a clear error.
+  A behavior note and several deliberate hardening/compat differences from v3:
+  - **Cross-origin `202` poll credentials are stripped.** The `Location` returned with a `202` is
+    callee-controlled, so when it points to a **different origin** (scheme/host/port) the poll drops
+    `Authorization`, `Cookie`, and the `tokenSource` (no token is re-minted for the attacker), and the
+    `x-functions-key` header is **always** dropped (both same- and cross-origin). Same-origin polls
+    still forward headers and the `tokenSource`, so legitimate async patterns keep working. This
+    mirrors the .NET extension's policy
+    ([Azure/azure-functions-durable-extension#3443](https://github.com/Azure/azure-functions-durable-extension/pull/3443)).
+  - **The initial request follows redirects with `fetch`'s defaults, which do not strip _custom_
+    credential headers.** Distinct from the `202` poll loop above, the first HTTP hop uses `fetch`'s
+    default `redirect: "follow"`. Per the Fetch Standard the implementation drops `Authorization` and
+    `Cookie` when a redirect crosses origins, but it does **not** drop custom credential headers such as
+    `x-functions-key`. Switching to `redirect: "manual"` with a per-hop cross-origin policy would close
+    this residual gap but change observable single-request semantics (hop count, effective URL, cookie
+    handling), so it is deliberately deferred; until then, avoid sending custom credential headers (e.g.
+    `x-functions-key`) to endpoints that may redirect cross-origin.
+  - **The built-in poll orchestrator cannot be started directly.** It is registered under a reserved
+    name (`BuiltIn__HttpPollOrchestrator`) and refuses a top-level start (it is only ever a
+    sub-orchestration of `callHttp`), so a dynamic `orchestrators/{name}` starter cannot be abused to
+    drive arbitrary SSRF or Managed-Identity token minting.
+  - **The default poll interval is 30 s** (matching the classic host) when a `202` carries no usable
+    `Retry-After`, rather than polling once per second.
+  - **Known incompatibility — a body on a `GET`/`HEAD` request throws.** v3 attached request content
+    regardless of method, and both the .NET extension (`TaskHttpActivityShim` builds the message with
+    no method check) and the durabletask-python SDK still pass the body to the request unconditionally.
+    The [Fetch Standard](https://fetch.spec.whatwg.org/) forbids a body on `GET`/`HEAD` and the
+    underlying `fetch` implementation rejects it, so this cannot be matched while `callHttp` is built on
+    `fetch`. Failing loudly was chosen over silently dropping the body (which would change the request
+    the app asked for): a migrated v3 workflow that relied on it must drop the `body` or switch to
+    `POST`/`PUT`/`PATCH`. Restoring the v3 behavior would require replacing `fetch` with a lower-level
+    HTTP transport, which is not planned.
+  - **Known incompatibility — `DurableHttpResponse` is a plain object, not a class.** The response
+    crosses the poll sub-orchestration's JSON boundary, so the v3 `response.getHeader(name)` method is
+    **not** available — existing `response.getHeader(...)` calls **fail at runtime** and must be
+    rewritten to index `response.headers[...]` by lower-cased key (response header names are lower-cased
+    by `fetch`).
 - **Some v3 top-level exports were removed** — `DummyOrchestrationContext` / `DummyEntityContext`
-  (testing utilities), `ManagedIdentityTokenSource`, and the entity-lock types above. `TaskFailedError`
+  (testing utilities) and the entity-lock types above. `TaskFailedError`
   is re-exported from the core SDK (aggregate failures surface as JS-native `AggregateError`); use the
   core `TestOrchestrationWorker` / `TestOrchestrationClient` for orchestration unit tests.
 - **A plain non-generator classic orchestrator is no longer supported.** A classic v3 orchestrator

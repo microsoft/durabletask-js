@@ -332,6 +332,79 @@ describe("In-Memory Backend", () => {
     expect(state?.serializedOutput).toEqual(JSON.stringify(5));
   });
 
+  it("should not collide default sub-orchestration instance IDs across continue-as-new generations", async () => {
+    // Regression for the callHttp-on-continueAsNew collision: a default (auto-derived) child
+    // instance ID must be unique per generation. Before the fix the derived ID was
+    // `${parentId}:${seqHex}`, and since neither input varies across a continueAsNew generation
+    // the second generation re-derived the first generation's child ID verbatim and the backend
+    // rejected it with "Orchestration instance '...:0001' already exists".
+    const childInstanceIds: string[] = [];
+
+    const child: TOrchestrator = async (ctx: OrchestrationContext, input: string) => {
+      if (!ctx.isReplaying) {
+        childInstanceIds.push(ctx.instanceId);
+      }
+      return `child-${input}`;
+    };
+
+    const parent: TOrchestrator = async function* (ctx: OrchestrationContext, gen: number): any {
+      const r = yield ctx.callSubOrchestrator(child, `gen${gen}`);
+      if (gen < 1) {
+        ctx.continueAsNew(gen + 1, true);
+        return;
+      }
+      return r;
+    };
+
+    worker.addOrchestrator(child);
+    worker.addOrchestrator(parent);
+    await worker.start();
+
+    const id = await client.scheduleNewOrchestration(parent, 0);
+    const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(state?.serializedOutput).toEqual(JSON.stringify("child-gen1"));
+
+    // Both generations scheduled a default-ID sub-orchestration; the IDs must differ.
+    expect(childInstanceIds.length).toBe(2);
+    expect(childInstanceIds[0]).not.toEqual(childInstanceIds[1]);
+  });
+
+  it("gives distinct deterministic default IDs to sequential sub-orchestrations within one execution", async () => {
+    // Control for the fix above: within a SINGLE execution (no continueAsNew) two sequential
+    // default-ID sub-orchestrations must still get stable, distinct IDs (their sequence numbers
+    // differ). A fix that made every child ID identical would pass the regression test's
+    // "different across generations" check only by accident and would break this one.
+    const childInstanceIds: string[] = [];
+
+    const child: TOrchestrator = async (ctx: OrchestrationContext) => {
+      if (!ctx.isReplaying) {
+        childInstanceIds.push(ctx.instanceId);
+      }
+      return "ok";
+    };
+
+    const parent: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      yield ctx.callSubOrchestrator(child);
+      yield ctx.callSubOrchestrator(child);
+      return "done";
+    };
+
+    worker.addOrchestrator(child);
+    worker.addOrchestrator(parent);
+    await worker.start();
+
+    const id = await client.scheduleNewOrchestration(parent);
+    const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(childInstanceIds.length).toBe(2);
+    expect(new Set(childInstanceIds).size).toBe(2);
+  });
+
   it("should deliver carryover events after ExecutionStarted during continue-as-new", async () => {
     // This test verifies that carryover events (saved external events) are
     // delivered AFTER OrchestratorStarted and ExecutionStarted when

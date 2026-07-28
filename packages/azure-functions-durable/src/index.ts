@@ -47,6 +47,12 @@ export { EntityStateResponse } from "./entity-state-response";
 export { PurgeHistoryResult } from "./purge-history-result";
 export { OrchestrationFilter } from "./orchestration-filter";
 
+// Durable HTTP (classic v3 `context.df.callHttp`) models. Value exports (classes) and type exports
+// so `import { DurableHttpRequest, ManagedIdentityTokenSource, CallHttpOptions, DurableHttpResponse,
+// TokenSource } from ...` resolves as it did in durable-functions v3.
+export { DurableHttpRequest, ManagedIdentityTokenSource } from "./http/models";
+export type { CallHttpOptions, DurableHttpResponse, TokenSource } from "./http/models";
+
 // Legacy durable-functions v3 API compatibility aliases (types only). These let orchestrator/
 // activity code written against the classic `durable-functions` v3 API type-check unchanged.
 export type { ActivityHandler } from "./app";

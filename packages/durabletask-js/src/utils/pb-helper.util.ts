@@ -22,11 +22,18 @@ export function newOrchestratorStartedEvent(timestamp?: Date | null): pb.History
   return event;
 }
 
-export function newExecutionStartedEvent(name: string, instanceId: string, encodedInput?: string, parentInstance?: { name: string; instanceId: string; taskScheduledId: number }): pb.HistoryEvent {
+export function newExecutionStartedEvent(name: string, instanceId: string, encodedInput?: string, parentInstance?: { name: string; instanceId: string; taskScheduledId: number }, executionId?: string): pb.HistoryEvent {
   const ts = new Timestamp();
 
   const orchestrationInstance = new pb.OrchestrationInstance();
   orchestrationInstance.setInstanceid(instanceId);
+  // The executionId is the per-generation identity of the orchestration. It changes on every
+  // continue-as-new, so it is what makes default-derived child instance IDs unique across
+  // generations (see RuntimeOrchestrationContext.callSubOrchestrator). Leave it unset when not
+  // provided so existing callers/behavior are unchanged.
+  if (executionId) {
+    orchestrationInstance.setExecutionid(getStringValue(executionId));
+  }
 
   const executionStartedEvent = new pb.ExecutionStartedEvent();
   executionStartedEvent.setName(name);
