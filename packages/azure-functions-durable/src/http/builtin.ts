@@ -198,15 +198,6 @@ function getCredential(): BearerCredential {
   return cachedCredential;
 }
 
-/**
- * Test-only hook: drop the cached credential so a re-swapped virtual `@azure/identity` mock (or a
- * fresh-construction assertion) is honored rather than served from a prior test's cache.
- * @internal
- */
-export function __resetCredentialCacheForTests(): void {
-  cachedCredential = undefined;
-}
-
 /** Acquire an AAD bearer token for `resource` from the shared, lazily constructed credential. */
 async function acquireBearerToken(resource: string): Promise<string> {
   const credential = getCredential();

@@ -4,11 +4,9 @@
 import { OrchestrationContext, Task } from "@microsoft/durabletask-js";
 import {
   BUILTIN_HTTP_ACTIVITY_NAME,
-  builtinHttpActivity,
   builtinHttpPollOrchestrator,
   isSameOrigin,
   retryAfterSeconds,
-  __resetCredentialCacheForTests,
 } from "../../src/http/builtin";
 import { DurableHttpRequestPayload, DurableHttpResponse } from "../../src/http/models";
 
@@ -116,15 +114,23 @@ describe("isSameOrigin", () => {
 describe("builtinHttpActivity", () => {
   const originalFetch = global.fetch;
 
+  // Re-required fresh before each test (see `beforeEach`), so this is a runtime-assigned binding
+  // rather than a static import — that is what lets each test observe an empty credential cache.
+  let builtinHttpActivity: typeof import("../../src/http/builtin").builtinHttpActivity;
+
   afterEach(() => {
     global.fetch = originalFetch;
     jest.clearAllMocks();
   });
 
-  // The credential is cached at module scope; clear it between tests so a swapped virtual mock (or a
-  // construction-count assertion) is never served a prior test's cached instance.
+  // The lazily constructed credential is cached at MODULE scope, so a test cannot clear it without a
+  // production reset hook. Instead, re-require the module before each test for an empty cache:
+  // `jest.resetModules()` busts Jest's require cache so the next `require` returns a fresh module
+  // instance (the same fresh-load pattern the nested "@azure/identity" suite uses via
+  // `loadActivityFresh()`). This keeps the test-only reset concern in the test, out of `builtin.ts`.
   beforeEach(() => {
-    __resetCredentialCacheForTests();
+    jest.resetModules();
+    builtinHttpActivity = require("../../src/http/builtin").builtinHttpActivity;
   });
 
   it("performs the request and passes the 200 response through", async () => {
