@@ -554,11 +554,6 @@ export class InMemoryOrchestrationBackend {
       case pb.OrchestratorAction.OrchestratoractiontypeCase.SENDENTITYMESSAGE:
         this.processSendEntityMessageAction(instance, action.getSendentitymessage()!);
         break;
-      case pb.OrchestratorAction.OrchestratoractiontypeCase.TERMINATEORCHESTRATION:
-        // Terminate-orchestration actions are used for recursive termination of
-        // sub-orchestrations. Process by terminating the target instance.
-        this.processTerminateOrchestrationAction(action);
-        break;
       case pb.OrchestratorAction.OrchestratoractiontypeCase.REWINDORCHESTRATION:
         this.processRewindOrchestrationAction(instance, action.getRewindorchestration()!);
         break;
@@ -780,26 +775,6 @@ export class InMemoryOrchestrationBackend {
           `Unknown entity message type '${messageType}' for orchestration '${instance.instanceId}'. ` +
             `This likely means the in-memory backend needs to be updated to handle a newly introduced entity message type.`,
         );
-    }
-  }
-
-  private processTerminateOrchestrationAction(action: pb.OrchestratorAction): void {
-    const terminateAction = action.getTerminateorchestration();
-    if (!terminateAction) {
-      return;
-    }
-
-    const targetInstanceId = terminateAction.getInstanceid();
-    if (!targetInstanceId) {
-      return;
-    }
-
-    const output = terminateAction.getReason()?.getValue();
-
-    try {
-      this.terminate(targetInstanceId, output);
-    } catch {
-      // Target instance may not exist or already terminated - ignore
     }
   }
 
