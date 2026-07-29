@@ -36,7 +36,7 @@ X.Y.Z-alpha.N  →  X.Y.Z-beta.N  →  X.Y.Z-rc.N  →  X.Y.Z (stable)
 | Release Candidate | `0.1.0-rc.1` | `--tag next` |
 | Stable | `0.1.0` | *(no tag, becomes `latest`)* |
 
-> Note: current tooling overrides the beta/rc rows above for prereleases. The **Prepare Release** workflow publishes every prerelease under the single `preview` dist-tag, and `durable-functions` 4.x previews ship under `preview` (`npm install durable-functions@preview`). See *Quick Reference: npm Dist Tags* below.
+> Note: current tooling overrides the beta/rc rows above for prereleases. The **Prepare Release** workflow emits an `npm publish … --tag preview` command (in its run summary, to run after the release PR merges) for **any** prerelease version — any version containing `-` — so prereleases go out under the single `preview` dist-tag rather than `beta`/`next`; `durable-functions` 4.x previews ship under `preview` (`npm install durable-functions@preview`). See *Quick Reference: npm Dist Tags* below.
 
 ## Automated Release Preparation (Recommended)
 
@@ -234,7 +234,7 @@ The general semver → dist-tag convention:
 
 **Current tooling and package-specific rules take precedence where they differ from the table above:**
 
-- The **Prepare Release** workflow publishes *every* prerelease (any version containing `-`) under the single **`preview`** dist-tag — its run summary suggests `npm publish --registry https://registry.npmjs.org/ --tag preview` — so a prerelease never moves `latest`.
+- The **Prepare Release** workflow prescribes publishing *every* prerelease (any version containing `-`) under the single **`preview`** dist-tag: its run summary emits `npm publish --registry https://registry.npmjs.org/ --tag preview` for you to run after the release PR merges — so a prerelease never moves `latest`.
 - **`durable-functions` 4.x previews ship under `preview`.** Its documented install line is `npm install durable-functions@preview` (see `packages/azure-functions-durable/CHANGELOG.md`); publish these with `npm publish --tag preview`.
 - Whether the **ESRP** pipeline (Step 3) can set a dist-tag is an open question (B11); the `--tag` guidance here applies to a manual `npm publish`.
 
