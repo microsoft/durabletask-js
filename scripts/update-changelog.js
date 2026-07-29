@@ -16,9 +16,29 @@ if (!version || !releaseDate || !changelogFile) {
 const changelogContent = fs.readFileSync(changelogFile, 'utf8').trim();
 let content = fs.readFileSync(targetChangelog, 'utf8');
 
+// Promote any curated notes from the current "## Upcoming" section into the release section.
+// A subsection that is just an empty scaffold heading (e.g. "### New" with nothing under it) is
+// dropped, so cutting a release with an untouched Upcoming section promotes nothing and produces
+// byte-for-byte the same output as before.
+let promoted = '';
+const currentUpcoming = content.match(/## Upcoming[\s\S]*?(?=\n## v|$)/);
+if (currentUpcoming) {
+  const body = currentUpcoming[0].replace(/^## Upcoming[^\n]*\n?/, '');
+  const kept = [];
+  for (const part of body.split(/(?=^### )/m)) {
+    const heading = part.match(/^### [^\n]*/);
+    if (!heading) continue; // whitespace before the first subsection heading
+    const subContent = part.slice(heading[0].length).trim();
+    if (subContent) {
+      kept.push(`${heading[0].trim()}\n\n${subContent}`);
+    }
+  }
+  promoted = kept.join('\n\n');
+}
+
 const newSection = `## v${version} (${releaseDate})
 
-### Changes
+${promoted ? promoted + '\n\n' : ''}### Changes
 
 ${changelogContent}
 `;

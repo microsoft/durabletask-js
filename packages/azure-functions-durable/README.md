@@ -42,8 +42,8 @@ changed:
   `context.df.isLocked()` and the `DurableLock` / `LockState` / `LockingRulesViolationError` exports
   are removed. Acquire locks with the core `context.entities.lockEntities(...entityIds)` (returns a
   `LockHandle` — call `release()`, ideally in a `finally`) and query with
-  `context.entities.isInCriticalSection()`. Restoring the v3 `df.lock` / `isLocked` surface is tracked
-  in [#317](https://github.com/microsoft/durabletask-js/issues/317).
+  `context.entities.isInCriticalSection()`. The v3 `df.lock` / `isLocked` surface is **not supported
+  and not planned** — there is no tracking issue.
 - **`context.df.callHttp(...)` is restored** as a worker-side durable HTTP call
   ([#318](https://github.com/microsoft/durabletask-js/issues/318)) — though **not** as a drop-in, fully
   v3-equivalent replacement: the known incompatibilities and behavior differences listed below are
@@ -105,6 +105,20 @@ changed:
   `(ctx) => ctx.instanceId` was mis-routed to the classic context. Standard classic orchestrators —
   sync **generators** (`function*`) using `context.df.*` — are unaffected; convert any non-generator
   classic orchestrator to generator form, or to the core-native `ctx.*` API.
+
+## Requirements
+
+This provider reaches the Durable Task backend over the Functions host's **gRPC** channel, which
+exists only in newer durable-extension builds. Your app's `host.json` must reference one of:
+
+- GA bundle — `Microsoft.Azure.Functions.ExtensionBundle` at **`[4.36.0, 5.0.0)`**, or
+- Preview bundle — `Microsoft.Azure.Functions.ExtensionBundle.Preview` at **`[4.29.0, 5.0.0)`**.
+
+Earlier GA v4 bundles (**<= 4.32.0**) predate that gRPC endpoint, so orchestration starters **hang
+for ~60 seconds and time out with no error**. A fresh app on the default GA range (`[4.*, 5.0.0)`)
+resolves to the latest GA (>= 4.36.0) and works — the trap is an **explicit** pin at or below
+4.32.0. GA and Preview are independent feeds whose version numbers are **not comparable** (a higher
+Preview number does not imply the GA bundle contains the same code).
 
 ## Getting started
 

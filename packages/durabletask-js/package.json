@@ -39,7 +39,8 @@
   },
   "homepage": "https://github.com/microsoft/durabletask-js#readme",
   "publishConfig": {
-    "registry": "https://registry.npmjs.org/"
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.14.4",
