@@ -4,7 +4,7 @@
 # 1. Bumps the selected package's version in its own package.json
 # 2. Generates a changelog from git history since the package's last release tag
 # 3. Updates the package's changelog file and creates a release branch + package-scoped tag
-# Packages are versioned and tagged independently (tag prefixes: v, azuremanaged-v, functions-v).
+# Packages are versioned and tagged independently (tag prefixes: v, azuremanaged-v, durable-functions-v).
 # After the workflow completes, manually open a PR from the release branch to main, then publish
 # from the package directory using the npm command shown in the run summary (mind the dist-tag).
 
@@ -63,7 +63,7 @@ jobs:
             azure-functions-durable)
               PKG_DIR="packages/azure-functions-durable"
               NPM_NAME="durable-functions"
-              TAG_PREFIX="functions-v"
+              TAG_PREFIX="durable-functions-v"
               CHANGELOG_PATH="packages/azure-functions-durable/CHANGELOG.md"
               ;;
             *)
@@ -127,8 +127,12 @@ jobs:
           # Get the latest tag for THIS package (its tag prefix), excluding the tag being
           # created so that re-runs don't use it as the baseline. The legacy core prefix "v"
           # still matches historical tags like v0.3.0 (intended, backward compatible) and never
-          # matches the "azuremanaged-v"/"functions-v" namespaces (they start with a/f, not v).
-          LATEST_TAG=$(git tag -l "${TAG_PREFIX}*" --sort=-v:refname | \
+          # matches the "azuremanaged-v"/"durable-functions-v" namespaces (they start with a/d, not v).
+          # Without versionsort.suffix=-, git ranks a prerelease (e.g. X-beta.1) ABOVE its own GA
+          # (X), so the release AFTER GA (e.g. X.0.1) would resolve LATEST_TAG to the prerelease and
+          # re-list every commit already shipped in GA. Treating "-" as the prerelease separator
+          # orders X-beta.1 below X.
+          LATEST_TAG=$(git -c versionsort.suffix=- tag -l "${TAG_PREFIX}*" --sort=-v:refname | \
             grep -v "^${TAG_PREFIX}${NEW_VERSION}$" | head -n 1)
           if [ -z "$LATEST_TAG" ]; then
             echo "No previous release tag found, using initial commit"
