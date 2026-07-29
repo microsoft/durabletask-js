@@ -143,12 +143,17 @@ jobs:
           LATEST_TAG="${{ steps.get-latest-tag.outputs.latest_tag }}"
           NEW_VERSION="${{ steps.calc-version.outputs.new_version }}"
           
-          echo "Generating changelog for changes between $LATEST_TAG and HEAD..."
+          PKG_DIR="${{ steps.resolve-package.outputs.pkg_dir }}"
+          echo "Generating changelog for changes between $LATEST_TAG and HEAD (scoped to $PKG_DIR)..."
           
-          # Get commits between last tag and HEAD.
+          # Get commits between last tag and HEAD, scoped to the released package's directory via the
+          # "-- $PKG_DIR" path filter so a release only lists commits that touched that package.
+          # Without it every package's commits are listed -- and since a package with no release tag
+          # yet falls back to the repo's initial commit, the first release would dump the ENTIRE repo
+          # history into that package's changelog.
           # GitHub squash-merges put the PR number in parentheses, e.g. "Some change (#123)".
           # We convert "(#N)" to a markdown link.
-          CHANGELOG_CONTENT=$(git log "$LATEST_TAG"..HEAD --pretty=format:"%s" --no-merges | \
+          CHANGELOG_CONTENT=$(git log "$LATEST_TAG"..HEAD --pretty=format:"%s" --no-merges -- "$PKG_DIR" | \
             sed 's/(#\([0-9]*\))/([#\1](https:\/\/github.com\/microsoft\/durabletask-js\/pull\/\1))/' | \
             sed 's/^/- /' | \
             grep -v '^- $' || echo "")

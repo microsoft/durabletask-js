@@ -27,7 +27,13 @@ if (currentUpcoming) {
   const kept = [];
   for (const part of body.split(/(?=^### )/m)) {
     const heading = part.match(/^### [^\n]*/);
-    if (!heading) continue; // whitespace before the first subsection heading
+    if (!heading) {
+      // Lead-in body text before the first "### " subsection (e.g. a preview notice). Promote it
+      // too, ahead of the subsections; a whitespace-only scaffold gap promotes nothing.
+      const lead = part.trim();
+      if (lead) kept.push(lead);
+      continue;
+    }
     const subContent = part.slice(heading[0].length).trim();
     if (subContent) {
       kept.push(`${heading[0].trim()}\n\n${subContent}`);
