@@ -196,8 +196,12 @@ jobs:
             exit 1
           fi
           echo "durable-functions pins @microsoft/durabletask-js@${PINNED}; verifying it is published on public npm..."
-          # Query the public registry explicitly: durable-functions is installed from npmjs.org,
-          # and the repo's committed .npmrc points npm at an auth-gated feed that would 401 here.
+          # Query the public registry explicitly: durable-functions is installed from npmjs.org.
+          # The repo has NO committed .npmrc; instead root package.json's "preinstall" hook
+          # (scripts/preinstallNpmrc.js) generates a gitignored .npmrc via scripts/setupNpmrc.js
+          # that points npm at the azfunc Azure DevOps feed for @microsoft.com users and azfunc CI
+          # builds. Forcing --registry keeps this check on public npm regardless of any such
+          # generated (or machine-level) npm config, which would otherwise 401 on this query.
           PUBLISHED=$(npm view "@microsoft/durabletask-js@${PINNED}" version --registry https://registry.npmjs.org/ 2>/dev/null || true)
           if [ "$PUBLISHED" = "$PINNED" ]; then
             echo "OK: @microsoft/durabletask-js@${PINNED} is published on npm."
@@ -250,9 +254,9 @@ jobs:
           # Derive the npm dist-tag from the version string. A prerelease (contains "-") must
           # publish under a non-default tag so it does NOT move the "latest" dist-tag.
           if [[ "$NEW_VERSION" == *-* ]]; then
-            PUBLISH_CMD="npm publish --tag preview"
+            PUBLISH_CMD="npm publish --registry https://registry.npmjs.org/ --tag preview"
           else
-            PUBLISH_CMD="npm publish"
+            PUBLISH_CMD="npm publish --registry https://registry.npmjs.org/"
           fi
           
           echo "## Release Preparation Complete! :rocket:" >> $GITHUB_STEP_SUMMARY

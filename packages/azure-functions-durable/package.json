@@ -44,6 +44,9 @@
     "url": "https://github.com/microsoft/durabletask-js/issues"
   },
   "homepage": "https://github.com/microsoft/durabletask-js/tree/main/packages/azure-functions-durable#readme",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
+  },
   "engines": {
     "node": ">=22.0.0"
   },
