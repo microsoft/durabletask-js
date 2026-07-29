@@ -113,7 +113,7 @@ Task<T>              — Base: result, exception, isComplete, isFailed, parent r
 │   ├── RetryableTask     — Policy-driven retries (exponential backoff)
 │   └── RetryHandlerTask  — Custom retry handler function
 └── CompositeTask    — Holds children with parent backlinks
-    ├── WhenAllTask  — Completes when ALL children done; fails fast on first failure
+    ├── WhenAllTask  — Completes when ALL children are terminal (waits for every child)
     └── WhenAnyTask  — Completes when ANY child done
 ```
 
@@ -123,11 +123,15 @@ Task<T>              — Base: result, exception, isComplete, isFailed, parent r
 **Important:** `CompositeTask` checks already-complete children in its constructor.
 A composite task can be **immediately complete upon construction** — callers must handle this.
 
-### WhenAll Fail-Fast Behavior
+### WhenAll Wait-All Behavior
 
-`WhenAllTask` marks itself complete on the **first** failed child. Other children may still
-be in flight. The `isComplete` guard prevents double-completion, but the mental model is:
-one failure = whole task fails immediately, remaining results ignored.
+`WhenAllTask` completes only when **every** child is terminal (`_completedTasks == _tasks.length`) —
+a failing child does **not** complete it early. This prevents a later failing sibling's `TaskFailed`
+from being dropped against an already-terminal instance (issue #301). `_exception` is set only at
+completion, so `isFailed` and `isComplete` flip together — otherwise `resume()` (which checks
+`isFailed` before `isComplete`) would throw into the generator before the other siblings finish,
+re-introducing fail-fast. On failure, all child exceptions are aggregated into an `AggregateError`
+whose message inlines each child message.
 
 ---
 
