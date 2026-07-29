@@ -1,15 +1,26 @@
 # Prepare Release Workflow
-# This workflow automates the release preparation process:
-# 1. Updates package versions in all package.json files
-# 2. Generates changelog from git diff between main and last release tag
-# 3. Creates a release branch and tag
-# After the workflow completes, manually create a PR from the release branch to main.
+# This workflow automates per-package release preparation. Choose which package to release
+# with the required `package` input; the workflow then, for THAT package only:
+# 1. Bumps the selected package's version in its own package.json
+# 2. Generates a changelog from git history since the package's last release tag
+# 3. Updates the package's changelog file and creates a release branch + package-scoped tag
+# Packages are versioned and tagged independently (tag prefixes: v, azuremanaged-v, durable-functions-v).
+# After the workflow completes, manually open a PR from the release branch to main, then publish
+# from the package directory using the npm command shown in the run summary (mind the dist-tag).
 
 name: Prepare Release
 
 on:
   workflow_dispatch:
     inputs:
+      package:
+        description: 'Which package to release'
+        required: true
+        type: choice
+        options:
+          - durabletask-js
+          - durabletask-js-azuremanaged
+          - azure-functions-durable
       version:
         description: 'Release version (e.g., 0.2.0-beta.1). Leave empty to auto-increment patch version.'
         required: false
@@ -32,10 +43,45 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Resolve package metadata
+        id: resolve-package
+        run: |
+          PACKAGE="${{ github.event.inputs.package }}"
+          case "$PACKAGE" in
+            durabletask-js)
+              PKG_DIR="packages/durabletask-js"
+              NPM_NAME="@microsoft/durabletask-js"
+              TAG_PREFIX="v"
+              CHANGELOG_PATH="CHANGELOG.md"
+              ;;
+            durabletask-js-azuremanaged)
+              PKG_DIR="packages/durabletask-js-azuremanaged"
+              NPM_NAME="@microsoft/durabletask-js-azuremanaged"
+              TAG_PREFIX="azuremanaged-v"
+              CHANGELOG_PATH="CHANGELOG.md"
+              ;;
+            azure-functions-durable)
+              PKG_DIR="packages/azure-functions-durable"
+              NPM_NAME="durable-functions"
+              TAG_PREFIX="durable-functions-v"
+              CHANGELOG_PATH="packages/azure-functions-durable/CHANGELOG.md"
+              ;;
+            *)
+              echo "::error::Unknown package '$PACKAGE'. Expected one of: durabletask-js, durabletask-js-azuremanaged, azure-functions-durable."
+              exit 1
+              ;;
+          esac
+          echo "pkg_dir=$PKG_DIR" >> $GITHUB_OUTPUT
+          echo "npm_name=$NPM_NAME" >> $GITHUB_OUTPUT
+          echo "tag_prefix=$TAG_PREFIX" >> $GITHUB_OUTPUT
+          echo "changelog_path=$CHANGELOG_PATH" >> $GITHUB_OUTPUT
+          echo "Releasing '$PACKAGE': dir=$PKG_DIR npm=$NPM_NAME tag_prefix=$TAG_PREFIX changelog=$CHANGELOG_PATH"
+
       - name: Get current version
         id: get-current-version
         run: |
-          CURRENT_VERSION=$(node -p "require('./packages/durabletask-js/package.json').version")
+          PKG_DIR="${{ steps.resolve-package.outputs.pkg_dir }}"
+          CURRENT_VERSION=$(node -p "require('./${PKG_DIR}/package.json').version")
           echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
           echo "Current version: $CURRENT_VERSION"
 
@@ -77,10 +123,17 @@ jobs:
         id: get-latest-tag
         run: |
           NEW_VERSION="${{ steps.calc-version.outputs.new_version }}"
-          # Get the latest tag that looks like a version (v*), excluding the
-          # tag being created so that re-runs don't use it as the baseline.
-          LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | \
-            grep -v "^v${NEW_VERSION}$" | head -n 1)
+          TAG_PREFIX="${{ steps.resolve-package.outputs.tag_prefix }}"
+          # Get the latest tag for THIS package (its tag prefix), excluding the tag being
+          # created so that re-runs don't use it as the baseline. The legacy core prefix "v"
+          # still matches historical tags like v0.3.0 (intended, backward compatible) and never
+          # matches the "azuremanaged-v"/"durable-functions-v" namespaces (they start with a/d, not v).
+          # Without versionsort.suffix=-, git ranks a prerelease (e.g. X-beta.1) ABOVE its own GA
+          # (X), so the release AFTER GA (e.g. X.0.1) would resolve LATEST_TAG to the prerelease and
+          # re-list every commit already shipped in GA. Treating "-" as the prerelease separator
+          # orders X-beta.1 below X.
+          LATEST_TAG=$(git -c versionsort.suffix=- tag -l "${TAG_PREFIX}*" --sort=-v:refname | \
+            grep -v "^${TAG_PREFIX}${NEW_VERSION}$" | head -n 1)
           if [ -z "$LATEST_TAG" ]; then
             echo "No previous release tag found, using initial commit"
             LATEST_TAG=$(git rev-list --max-parents=0 HEAD)
@@ -94,12 +147,17 @@ jobs:
           LATEST_TAG="${{ steps.get-latest-tag.outputs.latest_tag }}"
           NEW_VERSION="${{ steps.calc-version.outputs.new_version }}"
           
-          echo "Generating changelog for changes between $LATEST_TAG and HEAD..."
+          PKG_DIR="${{ steps.resolve-package.outputs.pkg_dir }}"
+          echo "Generating changelog for changes between $LATEST_TAG and HEAD (scoped to $PKG_DIR)..."
           
-          # Get commits between last tag and HEAD.
+          # Get commits between last tag and HEAD, scoped to the released package's directory via the
+          # "-- $PKG_DIR" path filter so a release only lists commits that touched that package.
+          # Without it every package's commits are listed -- and since a package with no release tag
+          # yet falls back to the repo's initial commit, the first release would dump the ENTIRE repo
+          # history into that package's changelog.
           # GitHub squash-merges put the PR number in parentheses, e.g. "Some change (#123)".
           # We convert "(#N)" to a markdown link.
-          CHANGELOG_CONTENT=$(git log "$LATEST_TAG"..HEAD --pretty=format:"%s" --no-merges | \
+          CHANGELOG_CONTENT=$(git log "$LATEST_TAG"..HEAD --pretty=format:"%s" --no-merges -- "$PKG_DIR" | \
             sed 's/(#\([0-9]*\))/([#\1](https:\/\/github.com\/microsoft\/durabletask-js\/pull\/\1))/' | \
             sed 's/^/- /' | \
             grep -v '^- $' || echo "")
@@ -111,48 +169,66 @@ jobs:
           echo "Generated changelog:"
           cat /tmp/changelog_content.txt
 
-      - name: Update package versions
+      - name: Update package version
         run: |
           NEW_VERSION="${{ steps.calc-version.outputs.new_version }}"
+          PKG_DIR="${{ steps.resolve-package.outputs.pkg_dir }}"
           
-          echo "Updating packages to version $NEW_VERSION..."
+          echo "Updating ${PKG_DIR} to version $NEW_VERSION..."
           
-          # Update durabletask-js package.json
           node -e "
             const fs = require('fs');
-            const pkg = JSON.parse(fs.readFileSync('packages/durabletask-js/package.json', 'utf8'));
+            const path = '${PKG_DIR}/package.json';
+            const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
             pkg.version = '$NEW_VERSION';
-            fs.writeFileSync('packages/durabletask-js/package.json', JSON.stringify(pkg, null, 2) + '\n');
+            fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');
           "
           
-          # Update durabletask-js-azuremanaged package.json
-          node -e "
-            const fs = require('fs');
-            const pkg = JSON.parse(fs.readFileSync('packages/durabletask-js-azuremanaged/package.json', 'utf8'));
-            pkg.version = '$NEW_VERSION';
-            // Also update peer dependency to the new version
-            if (pkg.peerDependencies && pkg.peerDependencies['@microsoft/durabletask-js']) {
-              pkg.peerDependencies['@microsoft/durabletask-js'] = '>=$NEW_VERSION';
-            }
-            fs.writeFileSync('packages/durabletask-js-azuremanaged/package.json', JSON.stringify(pkg, null, 2) + '\n');
-          "
-          
-          echo "Updated package.json files:"
-          grep '"version"' packages/durabletask-js/package.json
-          grep '"version"' packages/durabletask-js-azuremanaged/package.json
+          echo "Updated ${PKG_DIR}/package.json:"
+          grep '"version"' "${PKG_DIR}/package.json"
 
-      - name: Update CHANGELOG.md
+      - name: Update changelog
         run: |
           NEW_VERSION="${{ steps.calc-version.outputs.new_version }}"
           CHANGELOG_FILE="${{ steps.changelog-diff.outputs.changelog_file }}"
+          CHANGELOG_PATH="${{ steps.resolve-package.outputs.changelog_path }}"
           RELEASE_DATE=$(date +%Y-%m-%d)
-          node scripts/update-changelog.js "$NEW_VERSION" "$RELEASE_DATE" "$CHANGELOG_FILE"
+          node scripts/update-changelog.js "$NEW_VERSION" "$RELEASE_DATE" "$CHANGELOG_FILE" "$CHANGELOG_PATH"
+
+      - name: Verify pinned core dependency is published on npm
+        if: ${{ github.event.inputs.package == 'azure-functions-durable' }}
+        run: |
+          PKG_DIR="${{ steps.resolve-package.outputs.pkg_dir }}"
+          PINNED=$(node -p "require('./${PKG_DIR}/package.json').dependencies['@microsoft/durabletask-js'] || ''")
+          if [ -z "$PINNED" ]; then
+            echo "::error::Could not read the @microsoft/durabletask-js pin from ${PKG_DIR}/package.json."
+            exit 1
+          fi
+          echo "durable-functions pins @microsoft/durabletask-js@${PINNED}; verifying it is published on public npm..."
+          # Query the public registry explicitly: durable-functions is installed from npmjs.org.
+          # The repo has NO committed .npmrc; instead root package.json's "preinstall" hook
+          # (scripts/preinstallNpmrc.js) generates a gitignored .npmrc via scripts/setupNpmrc.js
+          # that points npm at the azfunc Azure DevOps feed for @microsoft.com users and azfunc CI
+          # builds. Forcing --registry keeps this check on public npm regardless of any such
+          # generated (or machine-level) npm config, which would otherwise 401 on this query.
+          PUBLISHED=$(npm view "@microsoft/durabletask-js@${PINNED}" version --registry https://registry.npmjs.org/ 2>/dev/null || true)
+          if [ "$PUBLISHED" = "$PINNED" ]; then
+            echo "OK: @microsoft/durabletask-js@${PINNED} is published on npm."
+          else
+            echo "::error::durable-functions depends on @microsoft/durabletask-js@${PINNED}, but that exact version is not published on the public npm registry. Release @microsoft/durabletask-js@${PINNED} first, otherwise the published durable-functions package will have an uninstallable dependency."
+            exit 1
+          fi
 
       - name: Create release branch and commit
         id: create-branch
         run: |
           NEW_VERSION="${{ steps.calc-version.outputs.new_version }}"
-          BRANCH_NAME="release/v${NEW_VERSION}"
+          PKG_DIR="${{ steps.resolve-package.outputs.pkg_dir }}"
+          NPM_NAME="${{ steps.resolve-package.outputs.npm_name }}"
+          TAG_PREFIX="${{ steps.resolve-package.outputs.tag_prefix }}"
+          CHANGELOG_PATH="${{ steps.resolve-package.outputs.changelog_path }}"
+          TAG_NAME="${TAG_PREFIX}${NEW_VERSION}"
+          BRANCH_NAME="release/${TAG_NAME}"
           
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -160,35 +236,59 @@ jobs:
           # Create and checkout release branch (idempotent)
           git checkout -B "$BRANCH_NAME"
           
-          # Stage and commit changes
-          git add packages/durabletask-js/package.json
-          git add packages/durabletask-js-azuremanaged/package.json
-          git add CHANGELOG.md
-          git commit -m "Release v${NEW_VERSION}"
+          # Stage and commit changes (only the released package and its changelog)
+          git add "${PKG_DIR}/package.json"
+          git add "${CHANGELOG_PATH}"
+          git commit -m "Release ${NPM_NAME}@${NEW_VERSION}"
           
           # Create release tag (idempotent)
-          git tag -f "v${NEW_VERSION}"
+          git tag -f "$TAG_NAME"
           
           # Push branch and tag (force to handle re-runs)
           git push -f origin "$BRANCH_NAME"
-          git push -f origin "v${NEW_VERSION}"
+          git push -f origin "$TAG_NAME"
           
           echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
-          echo "Created branch $BRANCH_NAME and tag v${NEW_VERSION}"
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "Created branch $BRANCH_NAME and tag $TAG_NAME"
 
       - name: Summary
         run: |
           NEW_VERSION="${{ steps.calc-version.outputs.new_version }}"
+          PKG_DIR="${{ steps.resolve-package.outputs.pkg_dir }}"
+          NPM_NAME="${{ steps.resolve-package.outputs.npm_name }}"
           BRANCH_NAME="${{ steps.create-branch.outputs.branch_name }}"
+          TAG_NAME="${{ steps.create-branch.outputs.tag_name }}"
+          
+          # Derive the npm dist-tag from the version string. A prerelease (contains "-") must
+          # publish under a non-default tag so it does NOT move the "latest" dist-tag.
+          if [[ "$NEW_VERSION" == *-* ]]; then
+            PUBLISH_CMD="npm publish --registry https://registry.npmjs.org/ --tag preview"
+          else
+            PUBLISH_CMD="npm publish --registry https://registry.npmjs.org/"
+          fi
           
           echo "## Release Preparation Complete! :rocket:" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version**: v${NEW_VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Package**: ${NPM_NAME}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${NEW_VERSION}" >> $GITHUB_STEP_SUMMARY
           echo "- **Branch**: ${BRANCH_NAME}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Tag**: v${NEW_VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tag**: ${TAG_NAME}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Step: Create a Pull Request" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Manually create a PR from **${BRANCH_NAME}** → **main** with title: **Release v${NEW_VERSION}**" >> $GITHUB_STEP_SUMMARY
+          echo "Manually create a PR from **${BRANCH_NAME}** → **main** with title: **Release ${NPM_NAME}@${NEW_VERSION}**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "[Create PR](https://github.com/microsoft/durabletask-js/compare/main...${BRANCH_NAME}?expand=1&title=Release+v${NEW_VERSION})" >> $GITHUB_STEP_SUMMARY
+          echo "[Create PR](https://github.com/microsoft/durabletask-js/compare/main...${BRANCH_NAME}?expand=1&title=Release+${NPM_NAME}@${NEW_VERSION})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Then Publish" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "After the release PR is merged, publish from the package directory:" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "cd ${PKG_DIR}" >> $GITHUB_STEP_SUMMARY
+          echo "${PUBLISH_CMD}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          if [[ "$NEW_VERSION" == *-* ]]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "> :warning: This is a prerelease. Omitting \`--tag preview\` would move the \`latest\` dist-tag to a prerelease version." >> $GITHUB_STEP_SUMMARY
+          fi
