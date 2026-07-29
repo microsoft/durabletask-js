@@ -987,4 +987,44 @@ describe("In-Memory Backend", () => {
     backend.reset();
     await longWaitPromise.catch(() => {}); // Ignore the reset rejection
   });
+
+  it("should cancel pending timers on continue-as-new", async () => {
+    // Timer IDs are per-execution sequence numbers that restart at 1 after
+    // continue-as-new. A timer left pending from iteration 1 therefore fires a
+    // TimerFired event whose ID collides with iteration 2's first task, completing
+    // it long before it is due. Iteration 1's timer is deliberately short and
+    // iteration 2's is long, so a leak shows up as an early completion.
+    const staleTimerSeconds = 0.05;
+    const iteration2TimerSeconds = 1.5;
+    let iteration2TimerFired = false;
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, input: number): any {
+      if (input === 1) {
+        // Created but never awaited, then abandoned by continue-as-new.
+        ctx.createTimer(staleTimerSeconds);
+        ctx.continueAsNew(2, false);
+      } else {
+        yield ctx.createTimer(iteration2TimerSeconds);
+        iteration2TimerFired = true;
+        return "done";
+      }
+    };
+
+    worker.addOrchestrator(orchestrator);
+    await worker.start();
+
+    const startedAt = Date.now();
+    const id = await client.scheduleNewOrchestration(orchestrator, 1);
+    const state = await client.waitForOrchestrationCompletion(id, true, 10);
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(state?.serializedOutput).toEqual(JSON.stringify("done"));
+    expect(iteration2TimerFired).toBe(true);
+
+    // Without the cancellation, the stale 50ms timer completes iteration 2's timer
+    // almost immediately. The margin is deliberately wide to stay reliable in CI.
+    expect(elapsedMs).toBeGreaterThan(1000);
+  });
 });

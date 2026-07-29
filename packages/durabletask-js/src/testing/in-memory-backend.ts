@@ -596,6 +596,11 @@ export class InMemoryOrchestrationBackend {
       const newInput = completeAction.getResult()?.getValue();
       const carryoverEvents = completeAction.getCarryovereventsList();
 
+      // Cancel timers still pending from the previous iteration. Their timer IDs are
+      // sequence numbers that restart at 1 in the new iteration, so a leaked timer
+      // would fire a TimerFired event that completes an unrelated task.
+      this.cancelInstanceTimers(instance.instanceId);
+
       // Reset instance state
       instance.history = [];
       instance.input = newInput;
