@@ -1,30 +1,5 @@
 ## Upcoming
 
-### Breaking changes
-
-- **`whenAll` no longer fails fast.** A `whenAll` task — and therefore the Durable Functions compat
-  `context.df.Task.all()`, which forwards straight to it — now completes only after **every** child
-  is terminal, instead of the moment the first child fails. Two user-visible effects: (1) **timing** —
-  the orchestrator resumes past the `whenAll` only once all siblings finish, not at the first failure;
-  (2) **error type** — on failure it throws a JS-native `AggregateError` (`.errors` populated, message
-  of the form `"<N> of <M> tasks in the whenAll failed: <child messages joined by '; '>"`) instead of
-  re-throwing the first child's own exception. This fixes a lost-failure bug where a later failing
-  sibling was dropped against an already-terminal `whenAll`
-  ([#301](https://github.com/microsoft/durabletask-js/issues/301)). Fan-out/fan-in is the canonical
-  Durable Functions pattern, so review any `Task.all()` error handling that relied on early completion
-  or on catching a single child error.
-- **Default sub-orchestration instance IDs now derive from the parent's execution ID.** When a
-  sub-orchestration is scheduled **without** an explicit `instanceId`, the auto-generated ID changed
-  from `${parentInstanceId}:${suffix}` to `${parentExecutionId}:${suffix}` (`suffix` is a 4-hex-digit
-  sequence number). Explicit `instanceId`s are untouched, and there is a **fallback**: backends that
-  do not populate an execution ID still get the legacy `${parentInstanceId}:${suffix}` form, so this
-  is not an unconditional format change. It fixes a continue-as-new collision — the sequence number
-  resets each work item and the parent instance ID is stable across generations, so a default-ID
-  sub-orchestration scheduled after continue-as-new (e.g. `callHttp`) re-derived the previous
-  generation's ID and failed with "instance already exists" — and keeps the ID constant-length
-  (~37 chars) at any nesting depth instead of concatenating every ancestor's ID, which would breach
-  the Durable Task Scheduler 100-character instance-ID limit at ~2 levels of nesting.
-
 ### New
 
 ### Fixes
