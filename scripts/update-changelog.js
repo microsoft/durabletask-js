@@ -16,6 +16,22 @@ if (!version || !releaseDate || !changelogFile) {
 const changelogContent = fs.readFileSync(changelogFile, 'utf8').trim();
 let content = fs.readFileSync(targetChangelog, 'utf8');
 
+// One-time normalization for the legacy azure-functions-durable changelog. It ships as a
+// placeholder skeleton ("# Changelog" + "## TBD" + a "Details to be finalized" bullet) instead of
+// the "## Upcoming"/"## v*" structure this script expects. Left as-is, the first release would
+// prepend new sections and strand that skeleton at the bottom, producing a mixed-format file.
+// Match ONLY that exact pristine skeleton (CRLF/LF tolerant) and swap in the standard empty
+// Upcoming scaffold; any real curated "## TBD" notes have a different shape and are left untouched.
+const nonEmptyLines = content.split('\n').map((line) => line.replace(/\r$/, '').trim()).filter(Boolean);
+const isLegacySkeleton =
+  nonEmptyLines.length === 3 &&
+  nonEmptyLines[0] === '# Changelog' &&
+  nonEmptyLines[1] === '## TBD' &&
+  nonEmptyLines[2] === '- Details to be finalized at release time.';
+if (isLegacySkeleton) {
+  content = '## Upcoming\n\n### New\n\n### Fixes\n';
+}
+
 // Promote any curated notes from the current "## Upcoming" section into the release section.
 // A subsection that is just an empty scaffold heading (e.g. "### New" with nothing under it) is
 // dropped, so cutting a release with an untouched Upcoming section promotes nothing and produces
