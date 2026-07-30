@@ -5,6 +5,7 @@ import * as pb from "../proto/orchestrator_service_pb";
 import * as pbh from "../utils/pb-helper.util";
 import { OrchestrationStatus as ClientOrchestrationStatus } from "../orchestration/enum/orchestration-status.enum";
 import { ParentOrchestrationInstance } from "../types/parent-orchestration-instance.type";
+import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 import { randomUUID } from "crypto";
 
 /** Mints a fresh per-execution ID (DTFx `Guid.ToString("N")` idiom: 32 hex chars, no dashes). */
@@ -43,6 +44,41 @@ export interface ActivityWorkItem {
 }
 
 /**
+ * Internal entity state stored by the in-memory backend.
+ */
+export interface EntityState {
+  instanceId: string;
+  serializedState?: string;
+  lastModifiedAt: Date;
+  /** Critical section ID currently holding the lock, if any. */
+  lockedBy?: string;
+  /** Operations queued but not yet dispatched to a worker. */
+  pendingOperations: pb.HistoryEvent[];
+  /** Operations handed to a worker and awaiting a batch result. */
+  dispatchedOperations: pb.HistoryEvent[];
+  completionToken: number;
+}
+
+/**
+ * Pending lock request from an orchestration that could not be granted immediately.
+ */
+interface PendingLockRequest {
+  criticalSectionId: string;
+  parentInstanceId: string;
+  lockSet: string[];
+}
+
+/**
+ * Entity work item that needs to be executed.
+ */
+export interface EntityWorkItem {
+  instanceId: string;
+  entityState?: string;
+  operations: pb.HistoryEvent[];
+  completionToken: number;
+}
+
+/**
  * Promise resolver for waiting on orchestration state changes.
  */
 interface StateWaiter {
@@ -68,6 +104,11 @@ export class InMemoryOrchestrationBackend {
   private readonly orchestrationQueue: string[] = [];
   private readonly orchestrationQueueSet: Set<string> = new Set();
   private readonly activityQueue: ActivityWorkItem[] = [];
+  private readonly entities: Map<string, EntityState> = new Map();
+  private readonly entityQueue: string[] = [];
+  private readonly entityQueueSet: Set<string> = new Set();
+  private readonly entityInFlight: Set<string> = new Set();
+  private pendingLockRequests: PendingLockRequest[] = [];
   private readonly stateWaiters: Map<string, StateWaiter[]> = new Map();
   private readonly pendingTimers: Set<ReturnType<typeof setTimeout>> = new Set();
   private readonly instanceTimers: Map<string, Set<ReturnType<typeof setTimeout>>> = new Map();
@@ -317,6 +358,176 @@ export class InMemoryOrchestrationBackend {
   }
 
   /**
+   * Gets the next entity work item to process, if any.
+   *
+   * Drains all operations queued for the entity into a single batch and marks the
+   * entity in-flight so it is not dispatched again until the batch completes.
+   */
+  getNextEntityWorkItem(): EntityWorkItem | undefined {
+    const skipped: string[] = [];
+    let workItem: EntityWorkItem | undefined;
+
+    while (this.entityQueue.length > 0) {
+      const entityId = this.entityQueue.shift()!;
+      this.entityQueueSet.delete(entityId);
+
+      const entity = this.entities.get(entityId);
+      if (!entity || entity.pendingOperations.length === 0) {
+        continue;
+      }
+
+      // Already executing a batch; re-queue so it is picked up after completion.
+      if (this.entityInFlight.has(entityId)) {
+        skipped.push(entityId);
+        continue;
+      }
+
+      this.entityInFlight.add(entityId);
+      entity.dispatchedOperations = entity.pendingOperations.slice();
+      entity.pendingOperations.length = 0;
+
+      workItem = {
+        instanceId: entity.instanceId,
+        entityState: entity.serializedState,
+        operations: entity.dispatchedOperations,
+        completionToken: entity.completionToken,
+      };
+      break;
+    }
+
+    for (const entityId of skipped) {
+      this.enqueueEntity(entityId);
+    }
+
+    return workItem;
+  }
+
+  /**
+   * Completes an entity batch execution: persists the new state, delivers operation
+   * results back to calling orchestrations, and applies entity side-effect actions.
+   */
+  completeEntityTask(instanceId: string, completionToken: number, result: pb.EntityBatchResult): void {
+    const entity = this.entities.get(instanceId);
+    if (!entity || entity.completionToken !== completionToken) {
+      return; // Entity was reset/purged, or this is a stale completion
+    }
+
+    const dispatched = entity.dispatchedOperations;
+
+    entity.serializedState = result.getEntitystate()?.getValue() ?? undefined;
+    entity.lastModifiedAt = new Date();
+    entity.dispatchedOperations = [];
+    entity.completionToken = this.nextCompletionToken++;
+    this.entityInFlight.delete(instanceId);
+
+    // Deliver results to callers. Results are index-aligned with the dispatched
+    // operations because the executor pushes exactly one result per operation.
+    const results = result.getResultsList();
+    for (let i = 0; i < dispatched.length; i++) {
+      this.deliverEntityOperationResult(dispatched[i], results[i]);
+    }
+
+    for (const action of result.getActionsList()) {
+      this.processEntityAction(action);
+    }
+
+    // A batch may have produced signals for this same entity, or the entity may have
+    // been signalled while its batch was running.
+    if (entity.pendingOperations.length > 0) {
+      this.enqueueEntity(instanceId);
+    }
+  }
+
+  /**
+   * Delivers a single entity operation result back to the orchestration that called it.
+   * Signals are fire-and-forget and produce no response.
+   */
+  private deliverEntityOperationResult(operation: pb.HistoryEvent, result?: pb.OperationResult): void {
+    const called = operation.getEntityoperationcalled();
+    if (!called || !result) {
+      return;
+    }
+
+    const parentInstanceId = called.getParentinstanceid()?.getValue();
+    if (!parentInstanceId) {
+      return;
+    }
+
+    const parent = this.instances.get(parentInstanceId);
+    if (!parent) {
+      return;
+    }
+
+    const event = new pb.HistoryEvent();
+    event.setEventid(-1);
+    event.setTimestamp(pbh.newTimestamp(new Date()));
+
+    const success = result.getSuccess();
+    const failure = result.getFailure();
+
+    if (success) {
+      const completed = new pb.EntityOperationCompletedEvent();
+      completed.setRequestid(called.getRequestid());
+      const output = success.getResult();
+      if (output) {
+        completed.setOutput(output);
+      }
+      event.setEntityoperationcompleted(completed);
+    } else if (failure) {
+      const failed = new pb.EntityOperationFailedEvent();
+      failed.setRequestid(called.getRequestid());
+      const details = failure.getFailuredetails();
+      if (details) {
+        failed.setFailuredetails(details);
+      }
+      event.setEntityoperationfailed(failed);
+    } else {
+      return;
+    }
+
+    parent.pendingEvents.push(event);
+    parent.lastUpdatedAt = new Date();
+    this.enqueueOrchestration(parentInstanceId);
+  }
+
+  /**
+   * Applies a side-effect action produced by an entity operation.
+   */
+  private processEntityAction(action: pb.OperationAction): void {
+    const sendSignal = action.getSendsignal();
+    if (sendSignal) {
+      this.signalEntityInternal(sendSignal.getInstanceid(), sendSignal.getName(), sendSignal.getInput()?.getValue());
+      return;
+    }
+
+    const startNew = action.getStartneworchestration();
+    if (startNew) {
+      const instanceId = startNew.getInstanceid() || randomUUID().replace(/-/g, "");
+      if (!this.instances.has(instanceId)) {
+        this.createInstance(instanceId, startNew.getName(), startNew.getInput()?.getValue());
+      }
+    }
+  }
+
+  /**
+   * Signals an entity from outside an orchestration (client-initiated, fire-and-forget).
+   *
+   * @param entityId The entity instance ID, in `@name@key` form.
+   * @param operation The operation name to invoke.
+   * @param input Optional serialized operation input.
+   */
+  signalEntity(entityId: string, operation: string, input?: string): void {
+    this.signalEntityInternal(entityId, operation, input);
+  }
+
+  /**
+   * Gets the current state of an entity, if it exists. Intended for test assertions.
+   */
+  getEntity(instanceId: string): EntityState | undefined {
+    return this.entities.get(instanceId);
+  }
+
+  /**
    * Completes an orchestration execution with the given actions.
    */
   completeOrchestration(
@@ -468,7 +679,7 @@ export class InMemoryOrchestrationBackend {
    * Checks if there are any pending work items.
    */
   hasPendingWork(): boolean {
-    return this.orchestrationQueue.length > 0 || this.activityQueue.length > 0;
+    return this.orchestrationQueue.length > 0 || this.activityQueue.length > 0 || this.entityQueue.length > 0;
   }
 
   /**
@@ -479,6 +690,11 @@ export class InMemoryOrchestrationBackend {
     this.orchestrationQueue.length = 0;
     this.orchestrationQueueSet.clear();
     this.activityQueue.length = 0;
+    this.entities.clear();
+    this.entityQueue.length = 0;
+    this.entityQueueSet.clear();
+    this.entityInFlight.clear();
+    this.pendingLockRequests = [];
     for (const waiters of this.stateWaiters.values()) {
       for (const waiter of waiters) {
         waiter.reject(new Error("Backend was reset"));
@@ -550,6 +766,9 @@ export class InMemoryOrchestrationBackend {
         break;
       case pb.OrchestratorAction.OrchestratoractiontypeCase.SENDEVENT:
         this.processSendEventAction(action.getSendevent()!);
+        break;
+      case pb.OrchestratorAction.OrchestratoractiontypeCase.SENDENTITYMESSAGE:
+        this.processSendEntityMessageAction(instance, action);
         break;
       case pb.OrchestratorAction.OrchestratoractiontypeCase.REWINDORCHESTRATION:
         this.processRewindOrchestrationAction(instance, action.getRewindorchestration()!);
@@ -828,6 +1047,215 @@ export class InMemoryOrchestrationBackend {
     instance.pendingEvents = [pbh.newOrchestratorStartedEvent(new Date())];
     instance.completionToken = this.nextCompletionToken++;
     this.enqueueOrchestration(instance.instanceId);
+  }
+
+  /**
+   * Handles an entity message emitted by an orchestration.
+   *
+   * Mirrors the Python in-memory backend: each outbound message is echoed into the
+   * orchestration history (so replay validation sees the confirmation) and then routed
+   * to the target entity or the lock manager.
+   */
+  private processSendEntityMessageAction(instance: OrchestrationInstance, action: pb.OrchestratorAction): void {
+    const entityMessage = action.getSendentitymessage()!;
+    const actionId = action.getId();
+    const messageTypeCase = pb.SendEntityMessageAction.EntitymessagetypeCase;
+
+    switch (entityMessage.getEntitymessagetypeCase()) {
+      case messageTypeCase.ENTITYOPERATIONSIGNALED: {
+        const signaled = entityMessage.getEntityoperationsignaled()!;
+        this.appendEntityHistoryEvent(instance, actionId, (e) => e.setEntityoperationsignaled(signaled));
+
+        const targetId = signaled.getTargetinstanceid()?.getValue();
+        if (targetId) {
+          const queued = new pb.HistoryEvent();
+          queued.setEventid(-1);
+          queued.setTimestamp(pbh.newTimestamp(new Date()));
+          queued.setEntityoperationsignaled(signaled);
+          this.queueEntityOperation(targetId, queued);
+        }
+        break;
+      }
+      case messageTypeCase.ENTITYOPERATIONCALLED: {
+        const called = entityMessage.getEntityoperationcalled()!;
+        this.appendEntityHistoryEvent(instance, actionId, (e) => e.setEntityoperationcalled(called));
+
+        if (instance.status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_PENDING) {
+          instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING;
+        }
+
+        const targetId = called.getTargetinstanceid()?.getValue();
+        if (targetId) {
+          const queued = new pb.HistoryEvent();
+          queued.setEventid(-1);
+          queued.setTimestamp(pbh.newTimestamp(new Date()));
+          queued.setEntityoperationcalled(called);
+          this.queueEntityOperation(targetId, queued);
+        }
+        break;
+      }
+      case messageTypeCase.ENTITYLOCKREQUESTED: {
+        const lockRequested = entityMessage.getEntitylockrequested()!;
+        this.appendEntityHistoryEvent(instance, actionId, (e) => e.setEntitylockrequested(lockRequested));
+
+        if (instance.status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_PENDING) {
+          instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING;
+        }
+
+        const parentId = lockRequested.getParentinstanceid()?.getValue();
+        if (parentId) {
+          this.tryGrantLock({
+            criticalSectionId: lockRequested.getCriticalsectionid(),
+            parentInstanceId: parentId,
+            lockSet: lockRequested.getLocksetList().slice(),
+          });
+        }
+        break;
+      }
+      case messageTypeCase.ENTITYUNLOCKSENT: {
+        const unlock = entityMessage.getEntityunlocksent()!;
+        this.appendEntityHistoryEvent(instance, actionId, (e) => e.setEntityunlocksent(unlock));
+
+        const targetId = unlock.getTargetinstanceid()?.getValue();
+        if (targetId) {
+          const entity = this.entities.get(targetId);
+          if (entity && entity.lockedBy === unlock.getCriticalsectionid()) {
+            entity.lockedBy = undefined;
+          }
+        }
+
+        this.tryGrantPendingLocks();
+        break;
+      }
+      default:
+        throw new Error(
+          `Unknown entity message type '${entityMessage.getEntitymessagetypeCase()}' for orchestration ` +
+            `'${instance.instanceId}'. This likely means the in-memory backend needs to be updated to handle ` +
+            `a newly introduced entity message type.`,
+        );
+    }
+  }
+
+  /**
+   * Appends the confirmation event for an outbound entity message to the orchestration history.
+   * The event ID must be the originating action ID so replay validation can match it.
+   */
+  private appendEntityHistoryEvent(
+    instance: OrchestrationInstance,
+    actionId: number,
+    populate: (event: pb.HistoryEvent) => void,
+  ): void {
+    const event = new pb.HistoryEvent();
+    event.setEventid(actionId);
+    event.setTimestamp(pbh.newTimestamp(new Date()));
+    populate(event);
+    instance.history.push(event);
+  }
+
+  /**
+   * Gets (or lazily creates) the state record for an entity.
+   */
+  private getOrCreateEntity(entityId: string): EntityState {
+    let entity = this.entities.get(entityId);
+    if (!entity) {
+      entity = {
+        instanceId: entityId,
+        lastModifiedAt: new Date(),
+        pendingOperations: [],
+        dispatchedOperations: [],
+        completionToken: this.nextCompletionToken++,
+      };
+      this.entities.set(entityId, entity);
+    }
+    return entity;
+  }
+
+  private queueEntityOperation(entityId: string, event: pb.HistoryEvent): void {
+    const entity = this.getOrCreateEntity(entityId);
+    entity.pendingOperations.push(event);
+    this.enqueueEntity(entityId);
+  }
+
+  private enqueueEntity(entityId: string): void {
+    if (!this.entityQueueSet.has(entityId)) {
+      this.entityQueue.push(entityId);
+      this.entityQueueSet.add(entityId);
+    }
+  }
+
+  /**
+   * Signals an entity as a side effect of another entity's operation.
+   */
+  private signalEntityInternal(entityId: string, operation: string, input?: string): void {
+    const signaled = new pb.EntityOperationSignaledEvent();
+    signaled.setRequestid(randomUUID().replace(/-/g, ""));
+    signaled.setOperation(operation);
+    if (input !== undefined) {
+      const value = new StringValue();
+      value.setValue(input);
+      signaled.setInput(value);
+    }
+    const target = new StringValue();
+    target.setValue(entityId);
+    signaled.setTargetinstanceid(target);
+
+    const event = new pb.HistoryEvent();
+    event.setEventid(-1);
+    event.setTimestamp(pbh.newTimestamp(new Date()));
+    event.setEntityoperationsignaled(signaled);
+
+    this.queueEntityOperation(entityId, event);
+  }
+
+  private canGrantLock(pending: PendingLockRequest): boolean {
+    return !pending.lockSet.some((entityId) => this.entities.get(entityId)?.lockedBy !== undefined);
+  }
+
+  /**
+   * Grants a lock to every entity in the lock set and notifies the parent orchestration.
+   * Assumes availability was already verified via {@link canGrantLock}.
+   */
+  private grantLock(pending: PendingLockRequest): void {
+    for (const entityId of pending.lockSet) {
+      this.getOrCreateEntity(entityId).lockedBy = pending.criticalSectionId;
+    }
+
+    const parent = this.instances.get(pending.parentInstanceId);
+    if (!parent) {
+      return;
+    }
+
+    const granted = new pb.EntityLockGrantedEvent();
+    granted.setCriticalsectionid(pending.criticalSectionId);
+
+    const event = new pb.HistoryEvent();
+    event.setEventid(-1);
+    event.setTimestamp(pbh.newTimestamp(new Date()));
+    event.setEntitylockgranted(granted);
+
+    parent.pendingEvents.push(event);
+    parent.lastUpdatedAt = new Date();
+    this.enqueueOrchestration(pending.parentInstanceId);
+  }
+
+  private tryGrantLock(pending: PendingLockRequest): void {
+    if (!this.canGrantLock(pending)) {
+      this.pendingLockRequests.push(pending);
+      return;
+    }
+    this.grantLock(pending);
+  }
+
+  private tryGrantPendingLocks(): void {
+    const stillPending: PendingLockRequest[] = [];
+    for (const pending of this.pendingLockRequests) {
+      if (this.canGrantLock(pending)) {
+        this.grantLock(pending);
+      } else {
+        stillPending.push(pending);
+      }
+    }
+    this.pendingLockRequests = stillPending;
   }
 
   private processSendEventAction(sendEvent: pb.SendEventAction): void {

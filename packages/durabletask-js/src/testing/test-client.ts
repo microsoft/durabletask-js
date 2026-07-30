@@ -7,6 +7,8 @@ import { TOrchestrator } from "../types/orchestrator.type";
 import { TInput } from "../types/input.type";
 import { OrchestrationState } from "../orchestration/orchestration-state";
 import { FailureDetails } from "../task/failure-details";
+import { EntityInstanceId } from "../entities/entity-instance-id";
+import { EntityMetadata } from "../entities/entity-metadata";
 import { InMemoryOrchestrationBackend, OrchestrationInstance } from "./in-memory-backend";
 import * as pb from "../proto/orchestrator_service_pb";
 
@@ -138,6 +140,49 @@ export class TestOrchestrationClient {
    */
   async rewindOrchestration(instanceId: string, reason?: string): Promise<void> {
     this.backend.rewindInstance(instanceId, reason);
+  }
+
+  /**
+   * Signals an entity with a one-way (fire-and-forget) operation.
+   *
+   * @param id The entity to signal.
+   * @param operationName The name of the operation to invoke.
+   * @param input Optional operation input. Serialized as JSON.
+   */
+  async signalEntity(id: EntityInstanceId, operationName: string, input?: unknown): Promise<void> {
+    this.backend.signalEntity(
+      id.toString(),
+      operationName,
+      input === undefined ? undefined : JSON.stringify(input),
+    );
+  }
+
+  /**
+   * Gets the metadata of an entity, or undefined if the entity does not exist.
+   *
+   * @param id The entity to look up.
+   * @param includeState Whether to deserialize and include the entity state.
+   */
+  async getEntity<T = unknown>(
+    id: EntityInstanceId,
+    includeState: boolean = true,
+  ): Promise<EntityMetadata<T> | undefined> {
+    const entity = this.backend.getEntity(id.toString());
+    if (!entity) {
+      return undefined;
+    }
+
+    return {
+      id,
+      lastModifiedTime: entity.lastModifiedAt,
+      backlogQueueSize: entity.pendingOperations.length,
+      lockedBy: entity.lockedBy,
+      includesState: includeState,
+      state:
+        includeState && entity.serializedState !== undefined
+          ? (JSON.parse(entity.serializedState) as T)
+          : undefined,
+    };
   }
 
   /**
