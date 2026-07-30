@@ -36,7 +36,7 @@ X.Y.Z-alpha.N  →  X.Y.Z-beta.N  →  X.Y.Z-rc.N  →  X.Y.Z (stable)
 | Release Candidate | `0.1.0-rc.1` |
 | Stable | `0.1.0` |
 
-The scheme above describes the version **string**. How a version maps to an **npm dist-tag** is a separate concern and does **not** follow a per-stage `beta`/`next` convention: the release tooling publishes every prerelease under a single `preview` dist-tag, and only a stable GA moves `latest`. See *Quick Reference: npm Dist Tags* below for the authoritative rule.
+The scheme above describes the version **string**. Mapping a version to an **npm dist-tag** is a separate concern and does **not** follow a per-stage `beta`/`next` convention: the **Prepare Release** workflow's emitted **manual fallback** `npm publish` command tags every prerelease `preview` and omits `--tag` for a stable GA (so only a GA moves `latest`). Publishing a prerelease through the sanctioned ESRP path is **blocked pending B11** until owners confirm whether the ESRP task can set that tag. See *Quick Reference: npm Dist Tags* below for the authoritative rule.
 
 ## Automated Release Preparation (Recommended)
 
@@ -237,7 +237,7 @@ Then follow the **Publishing** steps above (Steps 1-5).
 
 npm **dist-tags** are separate from the git tags this repo pushes (`v...`, `azuremanaged-v...`, `durable-functions-v...`); a git tag only names a release commit and never moves an npm dist-tag. This repo uses one simple rule, not the per-stage `alpha`/`beta`/`next` convention:
 
-- **Prerelease** — any version containing `-` (e.g. `0.4.0-beta.1`, `4.0.0-beta.1`). The **Prepare Release** workflow emits `npm publish --registry https://registry.npmjs.org/ --tag preview` in its run summary as a **manual fallback** to run after the release PR merges. Every prerelease publishes under the single `preview` dist-tag, so it never moves `latest`. `durable-functions` 4.x previews install with `npm install durable-functions@preview` (see `packages/azure-functions-durable/README.md`).
+- **Prerelease** — any version containing `-` (e.g. `0.4.0-beta.1`, `4.0.0-beta.1`). The **Prepare Release** workflow emits `npm publish --registry https://registry.npmjs.org/ --tag preview` in its run summary as a **manual fallback** to run after the release PR merges. When using this manual fallback, publish every prerelease under the single `preview` dist-tag, so it never moves `latest`. `durable-functions` 4.x previews install with `npm install durable-functions@preview` (see `packages/azure-functions-durable/README.md`).
 - **Stable GA** — no `-`. The emitted command omits `--tag`, so the publish moves `latest`.
 - **ESRP path (sanctioned, Step 3):** whether the ESRP release task can set an npm dist-tag is an **open question (B11)** and a **hard blocker** for publishing a prerelease such as `durable-functions@4.0.0-beta.1` through ESRP — confirm with the ESRP / 1ES owners how to apply the `preview` tag before publishing any prerelease via ESRP. Do **not** assume ESRP applies a dist-tag; the `--tag preview` guidance above is for a manual `npm publish`.
 
