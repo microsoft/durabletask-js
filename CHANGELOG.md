@@ -5,6 +5,29 @@
 ### Fixes
 
 
+## v0,4,0 (2026-07-31)
+
+### Changes
+
+- fix: trim whitespace from tenant values in connection string parsing ([#311](https://github.com/microsoft/durabletask-js/pull/311))
+- [copilot-finds] Bug: Fix off-by-one in createServiceConfig maxRetries→maxAttempts conversion ([#287](https://github.com/microsoft/durabletask-js/pull/287))
+- [copilot-finds] Improve: Add addEntity/addNamedEntity methods to DurableTaskAzureManagedWorkerBuilder ([#266](https://github.com/microsoft/durabletask-js/pull/266))
+- Fix race condition in AccessTokenCache concurrent token fetches ([#178](https://github.com/microsoft/durabletask-js/pull/178))
+- build(deps): bump @grpc/grpc-js ([#259](https://github.com/microsoft/durabletask-js/pull/259))
+- fix: preserve error cause in getHostAddress() for better debugging ([#194](https://github.com/microsoft/durabletask-js/pull/194))
+- [copilot-finds] Bug: Connection string parser uses case-sensitive key lookup ([#196](https://github.com/microsoft/durabletask-js/pull/196))
+- feat: Implement work item filters ([#168](https://github.com/microsoft/durabletask-js/pull/168))
+- Release v0.3.0 ([#147](https://github.com/microsoft/durabletask-js/pull/147))
+- refactor: streamline orchestration event handling and improve state management ([#115](https://github.com/microsoft/durabletask-js/pull/115))
+- Release v0.2.0 ([#112](https://github.com/microsoft/durabletask-js/pull/112))
+- Release v0.1.0-beta.1 ([#107](https://github.com/microsoft/durabletask-js/pull/107))
+- Add OpenTelemetry distributed tracing example for Azure Managed DTS ([#95](https://github.com/microsoft/durabletask-js/pull/95))
+- Versioning, recursive terminating/purging, Replay safe logger ([#93](https://github.com/microsoft/durabletask-js/pull/93))
+- Add Logger interface, AzureLoggerAdapter, and fix gRPC client stop ([#85](https://github.com/microsoft/durabletask-js/pull/85))
+- Update dependencies, ESLint configuration, and add pull request template ([#81](https://github.com/microsoft/durabletask-js/pull/81))
+- Set up E2E testing infrastructure aligned with durabletask-python ([#74](https://github.com/microsoft/durabletask-js/pull/74))
+- Add Azure-managed Durable Task support as separate npm package ([#73](https://github.com/microsoft/durabletask-js/pull/73))
+
 ## v0.4.0 (2026-07-31)
 
 ### Changes

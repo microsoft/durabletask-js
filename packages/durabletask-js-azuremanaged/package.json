@@ -1,6 +1,6 @@
 {
   "name": "@microsoft/durabletask-js-azuremanaged",
-  "version": "0.3.0",
+  "version": "0,4,0",
   "description": "Azure-managed Durable Task Scheduler support for the Durable Task JavaScript SDK",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
