@@ -4,11 +4,11 @@ This document describes how to cut a new release of the three npm packages publi
 
 ## Overview
 
-| Package (npm name) | Directory | npm |
-|---|---|---|
-| `@microsoft/durabletask-js` (core) | `packages/durabletask-js` | [npmjs](https://www.npmjs.com/package/@microsoft/durabletask-js) |
-| `@microsoft/durabletask-js-azuremanaged` | `packages/durabletask-js-azuremanaged` | [npmjs](https://www.npmjs.com/package/@microsoft/durabletask-js-azuremanaged) |
-| `durable-functions` | `packages/azure-functions-durable` | [npmjs](https://www.npmjs.com/package/durable-functions) |
+| Package (npm name) | Directory | Changelog | npm |
+|---|---|---|---|
+| `@microsoft/durabletask-js` (core) | `packages/durabletask-js` | `CHANGELOG.md` | [npmjs](https://www.npmjs.com/package/@microsoft/durabletask-js) |
+| `@microsoft/durabletask-js-azuremanaged` | `packages/durabletask-js-azuremanaged` | `packages/durabletask-js-azuremanaged/CHANGELOG.md` | [npmjs](https://www.npmjs.com/package/@microsoft/durabletask-js-azuremanaged) |
+| `durable-functions` | `packages/azure-functions-durable` | `packages/azure-functions-durable/CHANGELOG.md` | [npmjs](https://www.npmjs.com/package/durable-functions) |
 
 This is an **npm workspaces** monorepo. The official build (`eng/ci/official-build.yml`) produces signed `.tgz` artifacts, and the **sanctioned way to publish them to npm is the ESRP release pipeline** (`eng/ci/release.yml`, see Step 3 below). A manual `npm publish` from the package directory is documented as an alternative for maintainers who need it.
 
@@ -42,16 +42,9 @@ The scheme above describes the version **string**. Mapping a version to an **npm
 
 Use the **Prepare Release** GitHub Action to automate the release preparation process.
 
-### One-Time Preflight: Seed the `azuremanaged` Release Tag
+### Automatic Legacy Baseline for Azure Managed
 
-The changelog step lists commits since the released package's **last package-scoped tag** (`git log <last-tag>..HEAD -- <pkg-dir>`); if no tag with that package's prefix exists, it falls back to the repo's initial commit and would dump the entire history into the changelog. `@microsoft/durabletask-js-azuremanaged` uses the `azuremanaged-v` prefix and has no such tag yet — the last lockstep release is the unprefixed `v0.3.0`. **Before the first independent `azuremanaged` release**, seed its tag so changelog generation starts at `v0.3.0` instead of the repo root:
-
-```bash
-git tag azuremanaged-v0.3.0 v0.3.0
-git push origin azuremanaged-v0.3.0
-```
-
-Do this once (not as part of a normal release run).
+The changelog step lists commits since the released package's **last package-scoped tag** (`git log <last-tag>..HEAD -- <pkg-dir>`). If Azure Managed has no `azuremanaged-v` tag yet, the workflow automatically checks for the legacy lockstep tag `v${CURRENT_VERSION}` and uses it as the baseline. This keeps the first independent Azure Managed changelog scoped to changes after its matching legacy release without requiring a manually seeded tag. If neither tag exists, the workflow falls back to the repository's initial commit.
 
 ### Running the Workflow
 
@@ -68,7 +61,7 @@ For the **one package you selected** (and only that package):
 1. **Determines the next version**: uses the `version` input, or auto-increments the selected package's current version
 2. **Generates a changelog**: lists commits since that package's last release tag, scoped to the package's directory (`git log <last-tag>..HEAD -- <pkg-dir>`), so only commits that touched that package are included
 3. **Bumps the version**: updates `version` in that package's own `package.json`
-4. **Updates that package's changelog**: core and azuremanaged write the repo-root `CHANGELOG.md`; `durable-functions` writes `packages/azure-functions-durable/CHANGELOG.md`
+4. **Updates that package's changelog**: core writes `CHANGELOG.md`, Azure Managed writes `packages/durabletask-js-azuremanaged/CHANGELOG.md`, and `durable-functions` writes `packages/azure-functions-durable/CHANGELOG.md`
 5. **Creates a release branch and a package-scoped tag**: tag `<prefix><version>` and branch `release/<prefix><version>`, where the prefix is `v` (core), `azuremanaged-v`, or `durable-functions-v`
 6. **For `durable-functions` only**: verifies the exact-pinned `@microsoft/durabletask-js` version is already published on public npm, and fails the run if it is not (guards the uninstallable-dependency case)
 
@@ -149,7 +142,7 @@ Go to [GitHub Releases](https://github.com/microsoft/durabletask-js/releases) an
 
 - **Tag**: the package-scoped tag created by the release — e.g. `durable-functions-v4.0.0-beta.1`, `azuremanaged-v0.3.0`, or `v0.4.0`
 - **Title**: the same tag, or `<npm-name>@<version>`
-- **Description**: copy the relevant section from that package's changelog (`CHANGELOG.md` for core / azuremanaged, `packages/azure-functions-durable/CHANGELOG.md` for `durable-functions`)
+- **Description**: copy the relevant section from that package's changelog: `CHANGELOG.md` for core, `packages/durabletask-js-azuremanaged/CHANGELOG.md` for Azure Managed, or `packages/azure-functions-durable/CHANGELOG.md` for `durable-functions`
 - **Pre-release**: check this box for alpha/beta/rc/preview releases
 
 ## Manual Release Process (Alternative)
@@ -190,7 +183,13 @@ Then update the affected cross-package dependency **for the package you are rele
 
 ### 3. Update the Changelog
 
-Move items from the `## Upcoming` section of the package's changelog into a new versioned section. The changelog is a **generated** list of the released package's commit messages / PR links — not a place for hand-authored breaking-change narrative; detailed preview and migration guidance lives in `packages/azure-functions-durable/README.md` (for `durable-functions`), not the changelog. To reproduce the tooling manually, promote any curated `## Upcoming` notes into the new section and add one `### Changes` entry per commit, mirroring `git log <last-tag>..HEAD -- <pkg-dir>` (each commit subject with its `(#NN)` linked). Use the repo-root `CHANGELOG.md` for `@microsoft/durabletask-js` and `@microsoft/durabletask-js-azuremanaged`, or `packages/azure-functions-durable/CHANGELOG.md` for `durable-functions`:
+Move items from the `## Upcoming` section of the package's changelog into a new versioned section. The changelog is a **generated** list of the released package's commit messages / PR links — not a place for hand-authored breaking-change narrative; detailed preview and migration guidance lives in `packages/azure-functions-durable/README.md` (for `durable-functions`), not the changelog. To reproduce the tooling manually, promote any curated `## Upcoming` notes into the new section and add one `### Changes` entry per commit, mirroring `git log <last-tag>..HEAD -- <pkg-dir>` (each commit subject with its `(#NN)` linked). Update only the released package's changelog:
+
+| Package | Changelog |
+|---|---|
+| `@microsoft/durabletask-js` | `CHANGELOG.md` |
+| `@microsoft/durabletask-js-azuremanaged` | `packages/durabletask-js-azuremanaged/CHANGELOG.md` |
+| `durable-functions` | `packages/azure-functions-durable/CHANGELOG.md` |
 
 ```markdown
 ## Upcoming

@@ -58,7 +58,7 @@ jobs:
               PKG_DIR="packages/durabletask-js-azuremanaged"
               NPM_NAME="@microsoft/durabletask-js-azuremanaged"
               TAG_PREFIX="azuremanaged-v"
-              CHANGELOG_PATH="CHANGELOG.md"
+              CHANGELOG_PATH="packages/durabletask-js-azuremanaged/CHANGELOG.md"
               ;;
             azure-functions-durable)
               PKG_DIR="packages/azure-functions-durable"
