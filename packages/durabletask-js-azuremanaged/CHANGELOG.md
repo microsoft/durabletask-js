@@ -4,6 +4,13 @@
 
 ### Fixes
 
+
+## v0.4.0 (2026-07-31)
+
+### Changes
+
+- fix(release): give Azure Managed its own changelog ([#344](https://github.com/microsoft/durabletask-js/pull/344))
+
 ## v0.4.0 (2026-07-31)
 
 ### Changes
