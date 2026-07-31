@@ -256,4 +256,26 @@ describe("WhenAllTask", () => {
     expect(err.errors[0]).toBe(error0);
     expect(err.errors[1]).toBe(error2);
   });
+
+  // Issue #217: CompositeTask has no separate failed-task counter. `_completedTasks`
+  // counts every settled child alike, successful and failed, which is why the unused
+  // `_failedTasks` field was safe to delete.
+  it("should count both successful and failed children in completedTasks", () => {
+    const child1 = new CompletableTask<number>();
+    const child2 = new CompletableTask<number>();
+    const task = new WhenAllTask([child1, child2]);
+
+    child1.complete(1);
+    expect(task.completedTasks).toBe(1);
+    expect(task.pendingTasks()).toBe(1);
+
+    // The failing child increments the SAME counter as the successful one.
+    child2.fail("child failed");
+    expect(task.completedTasks).toBe(2);
+    expect(task.pendingTasks()).toBe(0);
+
+    // Every child is now settled, so wait-all completes the task as failed.
+    expect(task.isComplete).toBe(true);
+    expect(task.isFailed).toBe(true);
+  });
 });
