@@ -107,7 +107,7 @@ Never publish from the release branch — it exists only to carry the version/ch
 
 ### Step 3: Run the Release Pipeline
 
-Trigger the release pipeline to publish one signed package to npm via ESRP. **This is the sanctioned publish path.** `eng/ci/release.yml` consumes the `durabletask-js.official` build artifact from **`main`** (its pipeline resource is pinned to `branch: main`), so its source is the `main` official build selected in Step 2 — not the release branch. The pipeline's required `package` runtime parameter controls which one of these release stages is inserted into the compiled 1ES plan:
+Trigger the release pipeline to publish one signed package to npm via ESRP. **This is the sanctioned publish path.** `eng/ci/release.yml` consumes the `durabletask-js.official` build artifact from **`main`** (its pipeline resource is pinned to `branch: main`), so its source is the `main` official build selected in Step 2 — not the release branch. The pipeline's `package` runtime parameter controls which one of these release stages is inserted into the compiled 1ES plan:
 
 - `durabletask-js` inserts `release_durabletask_js` for core `@microsoft/durabletask-js`.
 - `durabletask-js-azuremanaged` inserts `release_durabletask_js_azuremanaged` for `@microsoft/durabletask-js-azuremanaged`.
