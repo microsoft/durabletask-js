@@ -9,7 +9,7 @@
 
 ### Changes
 
-- feat(durable-functions): restore worker-side callHttp ([#318](https://github.com/microsoft/durabletask-js/pull/318)) (#333)
+- feat(durable-functions): restore worker-side callHttp ([#333](https://github.com/microsoft/durabletask-js/pull/333), fixes [#318](https://github.com/microsoft/durabletask-js/issues/318))
 - [copilot-finds] Bug: Entity getState() produces unhelpful SyntaxError for corrupted state ([#309](https://github.com/microsoft/durabletask-js/pull/309))
 - fix: prevent infinite loop in suspend/resume event buffer iteration ([#306](https://github.com/microsoft/durabletask-js/pull/306))
 - fix: clear stale in-memory purge queue entries ([#285](https://github.com/microsoft/durabletask-js/pull/285))
