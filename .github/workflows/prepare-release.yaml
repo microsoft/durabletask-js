@@ -159,7 +159,7 @@ jobs:
           # re-list every commit already shipped in GA. Treating "-" as the prerelease separator
           # orders X-beta.1 below X.
           LATEST_TAG=$(git -c versionsort.suffix=- tag -l "${TAG_PREFIX}*" --sort=-v:refname | \
-            grep -v "^${TARGET_TAG}$" | head -n 1)
+            grep -Fvx -- "$TARGET_TAG" | head -n 1)
           if [ -z "$LATEST_TAG" ]; then
             LEGACY_TAG="v${CURRENT_VERSION}"
             if [ "$PACKAGE" = "durabletask-js-azuremanaged" ] && \
