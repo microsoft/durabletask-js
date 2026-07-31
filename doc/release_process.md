@@ -86,7 +86,7 @@ After the release PR is merged to `main`, follow these steps to build, sign, and
 
 Manually trigger the code mirror pipeline to sync the release to the internal ADO repo:
 
-**Pipeline**: [durabletask-js code mirror](https://dev.azure.com/azfunc/internal/_build?definitionId=1004)
+**Pipeline**: [durabletask-js code mirror](https://dev.azure.com/azfunc/internal/_build?definitionId=1757)
 
 Run it on the `main` branch (which now contains the release commit).
 
@@ -98,7 +98,7 @@ Trigger the official build pipeline to produce signed `.tgz` artifacts. The offi
 
 1. Click **Run pipeline** on `main` (or locate the `main` run that already contains the release commit)
 2. Wait for it to complete
-3. A single `main` build packs **all three** packages into one `drop` artifact; which package(s) actually publish is decided later by stage selection in the release pipeline (Step 3). Verify `drop` contains the correctly versioned `.tgz` files:
+3. A single `main` build packs **all three** packages into one `drop` artifact; which single package publishes is decided later by the `package` parameter in the release pipeline (Step 3). Verify `drop` contains the correctly versioned `.tgz` files:
    - `buildoutputs/durabletask-js/microsoft-durabletask-js-X.Y.Z.tgz`
    - `buildoutputs/durabletask-js-azuremanaged/microsoft-durabletask-js-azuremanaged-X.Y.Z.tgz`
    - `buildoutputs/azure-functions-durable/durable-functions-X.Y.Z.tgz`
@@ -107,21 +107,22 @@ Never publish from the release branch — it exists only to carry the version/ch
 
 ### Step 3: Run the Release Pipeline
 
-Trigger the release pipeline to publish the signed packages to npm via ESRP. **This is the sanctioned publish path.** `eng/ci/release.yml` consumes the `durabletask-js.official` build artifact from **`main`** (its pipeline resource is pinned to `branch: main`), so its source is the `main` official build selected in Step 2 — not the release branch. It is a 1ES multi-stage pipeline with **one stage per package**, each publishing that package's `.tgz` from its own `buildoutputs/` folder via the `EsrpRelease@9` task:
+Trigger the release pipeline to publish one signed package to npm via ESRP. **This is the sanctioned publish path.** `eng/ci/release.yml` consumes the `durabletask-js.official` build artifact from **`main`** (its pipeline resource is pinned to `branch: main`), so its source is the `main` official build selected in Step 2 — not the release branch. The pipeline's required `package` runtime parameter controls which one of these release stages is inserted into the compiled 1ES plan:
 
-- `release_durabletask_js` — core `@microsoft/durabletask-js`; has no stage dependency.
-- `release_durabletask_js_azuremanaged` — `@microsoft/durabletask-js-azuremanaged`; `dependsOn: release_durabletask_js`.
-- `release_durable_functions` — `durable-functions`; `dependsOn: release_durabletask_js`.
+- `durabletask-js` inserts `release_durabletask_js` for core `@microsoft/durabletask-js`.
+- `durabletask-js-azuremanaged` inserts `release_durabletask_js_azuremanaged` for `@microsoft/durabletask-js-azuremanaged`.
+- `azure-functions-durable` inserts `release_durable_functions` for `durable-functions`.
 
-**Pipeline**: `eng/ci/release.yml` (ADO pipeline link: TBD)
+**Pipeline**: [durabletask-js.release](https://dev.azure.com/azfunc/internal/_build?definitionId=1686)
 
 1. Click **Run pipeline**
 2. Select the **`main` official build from Step 2** (the one containing the release commit) as the source pipeline artifact
-3. **Choose which stage(s) to run.** Stages are individually selectable at queue time, so you can release one package at a time. Both dependent stages `dependsOn` the core stage only — they are siblings, not chained to each other.
-4. **Respect the ordering rule:** release the core stage before (or in the same run as) `durable-functions`, because compat exact-pins core. Each dependent stage carries an explicit condition — `in(dependencies.release_durabletask_js.result, 'Succeeded', 'SucceededWithIssues', 'Skipped')` — so it still runs when the core stage is **de-selected (Skipped)** at queue time (letting you release that package on its own once core is already on npm), but it will **not** run if the core stage actually **Failed** or was **Canceled**, which preserves the publish ordering.
-5. Approve the ESRP release when prompted — each selected stage runs its own `EsrpRelease@9` task with its own approver, so expect one ESRP approval per package.
+3. Choose the one package to publish from the **`package`** parameter. Exactly one release stage is compiled and exactly one package is published; do not use queue-time stage selection to choose packages.
+4. Approve the ESRP release when prompted.
 
-**Two waves for core + compat.** The compat **Prepare Release** run guards on core already being published to **public npm** — it runs `npm view @microsoft/durabletask-js@<pinned-version> --registry https://registry.npmjs.org/` and fails if that exact version is absent (`durable-functions` exact-pins core). So core and compat cannot go out in a single pass: publish core to public npm first, then run compat **Prepare Release** and its release stage. Treat core and `durable-functions` as two separate release waves. (`azuremanaged` depends on core only through a peer floor and has no such constraint.)
+This compile-time selection eliminates the failure demonstrated by run **294746**: de-selecting the core stage at queue time did not expose its result to the Azure Managed dependency condition as the expected literal `Skipped`, so the selected package's stage was skipped too. The selected package now has no cross-stage dependency because the other package stages do not exist in that run's compiled plan.
+
+**Two runs for core + compat.** The compat **Prepare Release** run guards on core already being published to **public npm** — it runs `npm view @microsoft/durabletask-js@<pinned-version> --registry https://registry.npmjs.org/` and fails if that exact version is absent (`durable-functions` exact-pins core). Publish and verify core first; only then prepare `durable-functions` and publish it in a later release-pipeline run. (`azuremanaged` depends on core only through a peer floor that is already satisfied and has no ordering constraint.)
 
 > **Open question (B11) — hard blocker for ESRP prereleases:** it is not yet confirmed whether the ESRP release task can set the npm **dist-tag** (e.g. publish a prerelease under `preview` rather than moving `latest`). Publishing a prerelease such as `durable-functions@4.0.0-beta.1` through ESRP is **blocked** until the ESRP / 1ES pipeline owners confirm how to apply the `preview` tag — do **not** assume ESRP applies a dist-tag. The `--tag` guidance in *Quick Reference: npm Dist Tags* applies to a manual `npm publish`.
 

@@ -1,6 +1,16 @@
 pr: none
 trigger: none
 
+parameters:
+- name: package
+  displayName: Package
+  type: string
+  default: durabletask-js
+  values:
+  - durabletask-js
+  - durabletask-js-azuremanaged
+  - azure-functions-durable
+
 resources:
   repositories:
   - repository: 1ESPipelineTemplates
@@ -21,127 +31,107 @@ extends:
       os: linux
 
     stages:
-    - stage: release_durabletask_js
-      displayName: 'Release @microsoft/durabletask-js'
-      jobs:
-      - job: durabletask_js
+    - ${{ if eq(parameters.package, 'durabletask-js') }}:
+      - stage: release_durabletask_js
         displayName: 'Release @microsoft/durabletask-js'
-        templateContext:
-          type: releaseJob
-          isProduction: true
-          inputs:
-          - input: pipelineArtifact
-            pipeline: DurableTaskJSBuildPipeline
-            artifactName: drop
-            targetPath: $(System.DefaultWorkingDirectory)/drop
+        jobs:
+        - job: durabletask_js
+          displayName: 'Release @microsoft/durabletask-js'
+          templateContext:
+            type: releaseJob
+            isProduction: true
+            inputs:
+            - input: pipelineArtifact
+              pipeline: DurableTaskJSBuildPipeline
+              artifactName: drop
+              targetPath: $(System.DefaultWorkingDirectory)/drop
 
-        steps:
-        - task: SFP.release-tasks.custom-build-release-task.EsrpRelease@9
-          displayName: 'ESRP Release @microsoft/durabletask-js'
-          inputs:
-            connectedservicename: 'dtfx-internal-esrp-prod'
-            usemanagedidentity: true
-            keyvaultname: 'durable-esrp-akv'
-            signcertname: 'dts-esrp-cert'
-            clientid: '0b3ed1a4-0727-4a50-b82a-02c2bd9dec89'
-            intent: 'PackageDistribution'
-            contenttype: 'npm'
-            contentsource: 'Folder'
-            folderlocation: '$(System.DefaultWorkingDirectory)/drop/buildoutputs/durabletask-js'
-            waitforreleasecompletion: true
-            owners: 'wangbill@microsoft.com'
-            approvers: 'kaibocai@microsoft.com'
-            serviceendpointurl: 'https://api.esrp.microsoft.com'
-            mainpublisher: 'durabletask-java'
-            domaintenantid: '33e01921-4d64-4f8c-a055-5bdaffd5e33d'
+          steps:
+          - task: SFP.release-tasks.custom-build-release-task.EsrpRelease@9
+            displayName: 'ESRP Release @microsoft/durabletask-js'
+            inputs:
+              connectedservicename: 'dtfx-internal-esrp-prod'
+              usemanagedidentity: true
+              keyvaultname: 'durable-esrp-akv'
+              signcertname: 'dts-esrp-cert'
+              clientid: '0b3ed1a4-0727-4a50-b82a-02c2bd9dec89'
+              intent: 'PackageDistribution'
+              contenttype: 'npm'
+              contentsource: 'Folder'
+              folderlocation: '$(System.DefaultWorkingDirectory)/drop/buildoutputs/durabletask-js'
+              waitforreleasecompletion: true
+              owners: 'wangbill@microsoft.com'
+              approvers: 'kaibocai@microsoft.com'
+              serviceendpointurl: 'https://api.esrp.microsoft.com'
+              mainpublisher: 'durabletask-java'
+              domaintenantid: '33e01921-4d64-4f8c-a055-5bdaffd5e33d'
 
-    - stage: release_durabletask_js_azuremanaged
-      displayName: 'Release @microsoft/durabletask-js-azuremanaged'
-      # Publish the core durabletask-js stage before this dependent package so its
-      # "@microsoft/durabletask-js" dependency resolves against the just-published core.
-      # This depends on the core stage only, not on the other provider stage (they are
-      # siblings, mirroring durabletask-python). ADO's default stage condition requires the
-      # core stage to have completed and succeeded, so a de-selected (Skipped) core would
-      # otherwise skip this stage too; the explicit condition below also accepts a Skipped
-      # core, which is what lets this package release on its own when core is de-selected at
-      # queue time. It deliberately does NOT accept Failed or Canceled, so a real core publish
-      # failure still blocks this stage and the publish ordering is preserved.
-      dependsOn: release_durabletask_js
-      condition: in(dependencies.release_durabletask_js.result, 'Succeeded', 'SucceededWithIssues', 'Skipped')
-      jobs:
-      - job: durabletask_js_azuremanaged
+    - ${{ if eq(parameters.package, 'durabletask-js-azuremanaged') }}:
+      - stage: release_durabletask_js_azuremanaged
         displayName: 'Release @microsoft/durabletask-js-azuremanaged'
-        templateContext:
-          type: releaseJob
-          isProduction: true
-          inputs:
-          - input: pipelineArtifact
-            pipeline: DurableTaskJSBuildPipeline
-            artifactName: drop
-            targetPath: $(System.DefaultWorkingDirectory)/drop
+        jobs:
+        - job: durabletask_js_azuremanaged
+          displayName: 'Release @microsoft/durabletask-js-azuremanaged'
+          templateContext:
+            type: releaseJob
+            isProduction: true
+            inputs:
+            - input: pipelineArtifact
+              pipeline: DurableTaskJSBuildPipeline
+              artifactName: drop
+              targetPath: $(System.DefaultWorkingDirectory)/drop
 
-        steps:
-        - task: SFP.release-tasks.custom-build-release-task.EsrpRelease@9
-          displayName: 'ESRP Release @microsoft/durabletask-js-azuremanaged'
-          inputs:
-            connectedservicename: 'dtfx-internal-esrp-prod'
-            usemanagedidentity: true
-            keyvaultname: 'durable-esrp-akv'
-            signcertname: 'dts-esrp-cert'
-            clientid: '0b3ed1a4-0727-4a50-b82a-02c2bd9dec89'
-            intent: 'PackageDistribution'
-            contenttype: 'npm'
-            contentsource: 'Folder'
-            folderlocation: '$(System.DefaultWorkingDirectory)/drop/buildoutputs/durabletask-js-azuremanaged'
-            waitforreleasecompletion: true
-            owners: 'wangbill@microsoft.com'
-            approvers: 'kaibocai@microsoft.com'
-            serviceendpointurl: 'https://api.esrp.microsoft.com'
-            mainpublisher: 'durabletask-java'
-            domaintenantid: '33e01921-4d64-4f8c-a055-5bdaffd5e33d'
+          steps:
+          - task: SFP.release-tasks.custom-build-release-task.EsrpRelease@9
+            displayName: 'ESRP Release @microsoft/durabletask-js-azuremanaged'
+            inputs:
+              connectedservicename: 'dtfx-internal-esrp-prod'
+              usemanagedidentity: true
+              keyvaultname: 'durable-esrp-akv'
+              signcertname: 'dts-esrp-cert'
+              clientid: '0b3ed1a4-0727-4a50-b82a-02c2bd9dec89'
+              intent: 'PackageDistribution'
+              contenttype: 'npm'
+              contentsource: 'Folder'
+              folderlocation: '$(System.DefaultWorkingDirectory)/drop/buildoutputs/durabletask-js-azuremanaged'
+              waitforreleasecompletion: true
+              owners: 'wangbill@microsoft.com'
+              approvers: 'kaibocai@microsoft.com'
+              serviceendpointurl: 'https://api.esrp.microsoft.com'
+              mainpublisher: 'durabletask-java'
+              domaintenantid: '33e01921-4d64-4f8c-a055-5bdaffd5e33d'
 
-    - stage: release_durable_functions
-      displayName: 'Release durable-functions'
-      # Publish the core durabletask-js stage before this dependent package: durable-functions
-      # pins "@microsoft/durabletask-js" to an EXACT version, so core must be on the registry
-      # first or the published package is uninstallable. This depends on the core stage only,
-      # not on the azuremanaged stage (they are siblings, mirroring durabletask-python). ADO's
-      # default stage condition requires the core stage to have completed and succeeded, so a
-      # de-selected (Skipped) core would otherwise skip this stage too; the explicit condition
-      # below also accepts a Skipped core, which is what lets durable-functions release on its
-      # own when core is de-selected at queue time. It deliberately does NOT accept Failed or
-      # Canceled, so if the core publish actually fails this stage still will not run and the
-      # exact-pin ordering guarantee holds.
-      dependsOn: release_durabletask_js
-      condition: in(dependencies.release_durabletask_js.result, 'Succeeded', 'SucceededWithIssues', 'Skipped')
-      jobs:
-      - job: durable_functions
+    - ${{ if eq(parameters.package, 'azure-functions-durable') }}:
+      - stage: release_durable_functions
         displayName: 'Release durable-functions'
-        templateContext:
-          type: releaseJob
-          isProduction: true
-          inputs:
-          - input: pipelineArtifact
-            pipeline: DurableTaskJSBuildPipeline
-            artifactName: drop
-            targetPath: $(System.DefaultWorkingDirectory)/drop
+        jobs:
+        - job: durable_functions
+          displayName: 'Release durable-functions'
+          templateContext:
+            type: releaseJob
+            isProduction: true
+            inputs:
+            - input: pipelineArtifact
+              pipeline: DurableTaskJSBuildPipeline
+              artifactName: drop
+              targetPath: $(System.DefaultWorkingDirectory)/drop
 
-        steps:
-        - task: SFP.release-tasks.custom-build-release-task.EsrpRelease@9
-          displayName: 'ESRP Release durable-functions'
-          inputs:
-            connectedservicename: 'dtfx-internal-esrp-prod'
-            usemanagedidentity: true
-            keyvaultname: 'durable-esrp-akv'
-            signcertname: 'dts-esrp-cert'
-            clientid: '0b3ed1a4-0727-4a50-b82a-02c2bd9dec89'
-            intent: 'PackageDistribution'
-            contenttype: 'npm'
-            contentsource: 'Folder'
-            folderlocation: '$(System.DefaultWorkingDirectory)/drop/buildoutputs/azure-functions-durable'
-            waitforreleasecompletion: true
-            owners: 'wangbill@microsoft.com'
-            approvers: 'kaibocai@microsoft.com'
-            serviceendpointurl: 'https://api.esrp.microsoft.com'
-            mainpublisher: 'durabletask-java'
-            domaintenantid: '33e01921-4d64-4f8c-a055-5bdaffd5e33d'
+          steps:
+          - task: SFP.release-tasks.custom-build-release-task.EsrpRelease@9
+            displayName: 'ESRP Release durable-functions'
+            inputs:
+              connectedservicename: 'dtfx-internal-esrp-prod'
+              usemanagedidentity: true
+              keyvaultname: 'durable-esrp-akv'
+              signcertname: 'dts-esrp-cert'
+              clientid: '0b3ed1a4-0727-4a50-b82a-02c2bd9dec89'
+              intent: 'PackageDistribution'
+              contenttype: 'npm'
+              contentsource: 'Folder'
+              folderlocation: '$(System.DefaultWorkingDirectory)/drop/buildoutputs/azure-functions-durable'
+              waitforreleasecompletion: true
+              owners: 'wangbill@microsoft.com'
+              approvers: 'kaibocai@microsoft.com'
+              serviceendpointurl: 'https://api.esrp.microsoft.com'
+              mainpublisher: 'durabletask-java'
+              domaintenantid: '33e01921-4d64-4f8c-a055-5bdaffd5e33d'
