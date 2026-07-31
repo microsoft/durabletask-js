@@ -59,11 +59,12 @@ The changelog step lists commits since the released package's **last package-sco
 For the **one package you selected** (and only that package):
 
 1. **Determines the next version**: uses the `version` input, or auto-increments the selected package's current version
-2. **Generates a changelog**: lists commits since that package's last release tag, scoped to the package's directory (`git log <last-tag>..HEAD -- <pkg-dir>`), so only commits that touched that package are included
-3. **Bumps the version**: updates `version` in that package's own `package.json`
-4. **Updates that package's changelog**: core writes `CHANGELOG.md`, Azure Managed writes `packages/durabletask-js-azuremanaged/CHANGELOG.md`, and `durable-functions` writes `packages/azure-functions-durable/CHANGELOG.md`
-5. **Creates a release branch**: branch `release/<prefix><version>`, where the target tag prefix is `v` (core), `azuremanaged-v`, or `durable-functions-v`. The workflow does not create or modify the tag.
-6. **For `durable-functions` only**: verifies the exact-pinned `@microsoft/durabletask-js` version is already published on public npm, and fails the run if it is not (guards the uninstallable-dependency case)
+2. **Verifies the target tag is unused**: fails before preparing the release if the package-scoped tag already exists on `origin`; existing release tags are immutable
+3. **Generates a changelog**: lists commits since that package's last release tag, scoped to the package's directory (`git log <last-tag>..HEAD -- <pkg-dir>`), so only commits that touched that package are included
+4. **Bumps the version**: updates `version` in that package's own `package.json`
+5. **Updates that package's changelog**: core writes `CHANGELOG.md`, Azure Managed writes `packages/durabletask-js-azuremanaged/CHANGELOG.md`, and `durable-functions` writes `packages/azure-functions-durable/CHANGELOG.md`
+6. **Creates a release branch**: branch `release/<prefix><version>`, where the target tag prefix is `v` (core), `azuremanaged-v`, or `durable-functions-v`. The workflow does not create or modify the tag.
+7. **For `durable-functions` only**: verifies the exact-pinned `@microsoft/durabletask-js` version is already published on public npm, and fails the run if it is not (guards the uninstallable-dependency case)
 
 ### After the Workflow Completes
 

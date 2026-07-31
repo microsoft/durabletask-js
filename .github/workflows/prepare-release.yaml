@@ -122,16 +122,36 @@ jobs:
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "New version: $NEW_VERSION"
 
+      - name: Verify target release tag is unused
+        id: target-tag
+        env:
+          NEW_VERSION: ${{ steps.calc-version.outputs.new_version }}
+          TAG_PREFIX: ${{ steps.resolve-package.outputs.tag_prefix }}
+        run: |
+          TAG_NAME="${TAG_PREFIX}${NEW_VERSION}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG_NAME}" >/dev/null; then
+            echo "::error::Release tag ${TAG_NAME} already exists on origin. Refusing to prepare another release for an immutable tag."
+            exit 1
+          else
+            STATUS=$?
+            if [ "$STATUS" -ne 2 ]; then
+              echo "::error::Could not verify whether release tag ${TAG_NAME} exists on origin."
+              exit "$STATUS"
+            fi
+          fi
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "Verified release tag ${TAG_NAME} does not exist on origin"
+
       - name: Get latest release tag
         id: get-latest-tag
         env:
           PACKAGE: ${{ github.event.inputs.package }}
           CURRENT_VERSION: ${{ steps.get-current-version.outputs.current_version }}
-          NEW_VERSION: ${{ steps.calc-version.outputs.new_version }}
           TAG_PREFIX: ${{ steps.resolve-package.outputs.tag_prefix }}
+          TARGET_TAG: ${{ steps.target-tag.outputs.tag_name }}
         run: |
           # Get the latest tag for THIS package (its tag prefix), excluding the target release
-          # tag so an accidental post-release re-run doesn't use it as the baseline. The legacy core prefix "v"
+          # tag as a defense against it appearing after the validation step. The legacy core prefix "v"
           # still matches historical tags like v0.3.0 (intended, backward compatible) and never
           # matches the "azuremanaged-v"/"durable-functions-v" namespaces (they start with a/d, not v).
           # Without versionsort.suffix=-, git ranks a prerelease (e.g. X-beta.1) ABOVE its own GA
@@ -139,7 +159,7 @@ jobs:
           # re-list every commit already shipped in GA. Treating "-" as the prerelease separator
           # orders X-beta.1 below X.
           LATEST_TAG=$(git -c versionsort.suffix=- tag -l "${TAG_PREFIX}*" --sort=-v:refname | \
-            grep -v "^${TAG_PREFIX}${NEW_VERSION}$" | head -n 1)
+            grep -v "^${TARGET_TAG}$" | head -n 1)
           if [ -z "$LATEST_TAG" ]; then
             LEGACY_TAG="v${CURRENT_VERSION}"
             if [ "$PACKAGE" = "durabletask-js-azuremanaged" ] && \
@@ -253,9 +273,8 @@ jobs:
           NEW_VERSION="${{ steps.calc-version.outputs.new_version }}"
           PKG_DIR="${{ steps.resolve-package.outputs.pkg_dir }}"
           NPM_NAME="${{ steps.resolve-package.outputs.npm_name }}"
-          TAG_PREFIX="${{ steps.resolve-package.outputs.tag_prefix }}"
           CHANGELOG_PATH="${{ steps.resolve-package.outputs.changelog_path }}"
-          TAG_NAME="${TAG_PREFIX}${NEW_VERSION}"
+          TAG_NAME="${{ steps.target-tag.outputs.tag_name }}"
           BRANCH_NAME="release/${TAG_NAME}"
           
           git config user.name "github-actions[bot]"
