@@ -3,7 +3,7 @@ trigger: none
 
 parameters:
 - name: package
-  displayName: Package
+  displayName: Package to publish (verify before queueing)
   type: string
   default: durabletask-js
   values:

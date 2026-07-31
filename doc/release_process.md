@@ -107,7 +107,7 @@ Never publish from the release branch — it exists only to carry the version/ch
 
 ### Step 3: Run the Release Pipeline
 
-Trigger the release pipeline to publish one signed package to npm via ESRP. **This is the sanctioned publish path.** `eng/ci/release.yml` consumes the `durabletask-js.official` build artifact from **`main`** (its pipeline resource is pinned to `branch: main`), so its source is the `main` official build selected in Step 2 — not the release branch. The pipeline's `package` runtime parameter controls which one of these release stages is inserted into the compiled 1ES plan:
+Trigger the release pipeline to publish one signed package to npm via ESRP. **This is the sanctioned publish path.** `eng/ci/release.yml` consumes the `durabletask-js.official` build artifact from **`main`** (its pipeline resource is pinned to `branch: main`), so its source is the `main` official build selected in Step 2 — not the release branch. The pipeline's `package` runtime parameter controls which one of these release stages is inserted into the compiled 1ES plan. It defaults to `durabletask-js`, so verify or change it before queueing: a wrong or unchanged default compiles the wrong package stage. ESRP approval remains the final safety gate before publishing.
 
 - `durabletask-js` inserts `release_durabletask_js` for core `@microsoft/durabletask-js`.
 - `durabletask-js-azuremanaged` inserts `release_durabletask_js_azuremanaged` for `@microsoft/durabletask-js-azuremanaged`.
@@ -117,7 +117,7 @@ Trigger the release pipeline to publish one signed package to npm via ESRP. **Th
 
 1. Click **Run pipeline**
 2. Select the **`main` official build from Step 2** (the one containing the release commit) as the source pipeline artifact
-3. Choose the one package to publish from the **`package`** parameter. Exactly one release stage is compiled and exactly one package is published; do not use queue-time stage selection to choose packages.
+3. Verify or change the **`package`** parameter to the one package to publish. Exactly one release stage is compiled and exactly one package is published; do not use queue-time stage selection to choose packages.
 4. Approve the ESRP release when prompted.
 
 This compile-time selection eliminates the failure demonstrated by run **294746**: de-selecting the core stage at queue time did not expose its result to the Azure Managed dependency condition as the expected literal `Skipped`, so the selected package's stage was skipped too. The selected package now has no cross-stage dependency because the other package stages do not exist in that run's compiled plan.
