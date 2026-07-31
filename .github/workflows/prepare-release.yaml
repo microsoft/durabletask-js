@@ -87,43 +87,49 @@ jobs:
 
       - name: Calculate next version
         id: calc-version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          CURRENT_VERSION: ${{ steps.get-current-version.outputs.current_version }}
         run: |
-          INPUT_VERSION="${{ github.event.inputs.version }}"
-          CURRENT_VERSION="${{ steps.get-current-version.outputs.current_version }}"
-          
-          if [ -n "$INPUT_VERSION" ]; then
-            # Use the specified version
-            NEW_VERSION="$INPUT_VERSION"
-          else
-            # Auto-increment: parse current version and bump appropriately
-            # Handle pre-release versions like 0.1.0-alpha.2 -> 0.1.0-alpha.3
-            # Handle stable versions like 0.1.0 -> 0.1.1
-            NEW_VERSION=$(node -e "
-              const v = '$CURRENT_VERSION';
-              const match = v.match(/^(\d+)\.(\d+)\.(\d+)(?:-([a-z]+)\.(\d+))?$/);
-              if (!match) {
-                console.log(v);
-                process.exit(0);
-              }
-              const [, major, minor, patch, preType, preNum] = match;
-              if (preType && preNum) {
-                // Increment pre-release number
-                console.log(\`\${major}.\${minor}.\${patch}-\${preType}.\${parseInt(preNum) + 1}\`);
-              } else {
-                // Increment patch version
-                console.log(\`\${major}.\${minor}.\${parseInt(patch) + 1}\`);
-              }
-            ")
+          if ! NEW_VERSION=$(node -e '
+            const pattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([a-z]+)\.(0|[1-9]\d*))?$/;
+            const input = process.env.INPUT_VERSION;
+            const current = process.env.CURRENT_VERSION;
+            const currentMatch = current.match(pattern);
+
+            if (!currentMatch) {
+              console.error(`::error::Current package version "${current}" is invalid. Expected MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-PRERELEASE.NUMBER.`);
+              process.exit(1);
+            }
+            if (input && !pattern.test(input)) {
+              console.error(`::error::Release version "${input}" is invalid. Expected MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-PRERELEASE.NUMBER.`);
+              process.exit(1);
+            }
+            if (input) {
+              console.log(input);
+              process.exit(0);
+            }
+
+            const [, major, minor, patch, preType, preNum] = currentMatch;
+            const increment = (value) => (BigInt(value) + 1n).toString();
+            console.log(preType
+              ? `${major}.${minor}.${patch}-${preType}.${increment(preNum)}`
+              : `${major}.${minor}.${increment(patch)}`);
+          '); then
+            exit 1
           fi
-          
+
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "New version: $NEW_VERSION"
 
       - name: Get latest release tag
         id: get-latest-tag
+        env:
+          PACKAGE: ${{ github.event.inputs.package }}
+          CURRENT_VERSION: ${{ steps.get-current-version.outputs.current_version }}
+          NEW_VERSION: ${{ steps.calc-version.outputs.new_version }}
+          TAG_PREFIX: ${{ steps.resolve-package.outputs.tag_prefix }}
         run: |
-          NEW_VERSION="${{ steps.calc-version.outputs.new_version }}"
-          TAG_PREFIX="${{ steps.resolve-package.outputs.tag_prefix }}"
           # Get the latest tag for THIS package (its tag prefix), excluding the tag being
           # created so that re-runs don't use it as the baseline. The legacy core prefix "v"
           # still matches historical tags like v0.3.0 (intended, backward compatible) and never
@@ -135,8 +141,15 @@ jobs:
           LATEST_TAG=$(git -c versionsort.suffix=- tag -l "${TAG_PREFIX}*" --sort=-v:refname | \
             grep -v "^${TAG_PREFIX}${NEW_VERSION}$" | head -n 1)
           if [ -z "$LATEST_TAG" ]; then
-            echo "No previous release tag found, using initial commit"
-            LATEST_TAG=$(git rev-list --max-parents=0 HEAD)
+            LEGACY_TAG="v${CURRENT_VERSION}"
+            if [ "$PACKAGE" = "durabletask-js-azuremanaged" ] && \
+               git rev-parse --verify --quiet "refs/tags/${LEGACY_TAG}" >/dev/null; then
+              echo "No previous Azure Managed tag found; using legacy tag ${LEGACY_TAG}"
+              LATEST_TAG="$LEGACY_TAG"
+            else
+              echo "No previous release tag found, using initial commit"
+              LATEST_TAG=$(git rev-list --max-parents=0 HEAD)
+            fi
           fi
           echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
           echo "Latest tag: $LATEST_TAG"
@@ -157,7 +170,10 @@ jobs:
           # history into that package's changelog.
           # GitHub squash-merges put the PR number in parentheses, e.g. "Some change (#123)".
           # We convert "(#N)" to a markdown link.
-          CHANGELOG_CONTENT=$(git log "$LATEST_TAG"..HEAD --pretty=format:"%s" --no-merges -- "$PKG_DIR" | \
+          # Release commits only change version metadata and changelogs; listing them in the next
+          # release repeats old release history instead of describing a product change.
+          CHANGELOG_CONTENT=$(git log "$LATEST_TAG"..HEAD --pretty=format:"%s" --no-merges \
+            --invert-grep --grep='^Release ' -- "$PKG_DIR" | \
             sed 's/(#\([0-9]*\))/([#\1](https:\/\/github.com\/microsoft\/durabletask-js\/pull\/\1))/' | \
             sed 's/^/- /' | \
             grep -v '^- $' || echo "")
@@ -170,22 +186,34 @@ jobs:
           cat /tmp/changelog_content.txt
 
       - name: Update package version
+        env:
+          NEW_VERSION: ${{ steps.calc-version.outputs.new_version }}
+          PKG_DIR: ${{ steps.resolve-package.outputs.pkg_dir }}
         run: |
-          NEW_VERSION="${{ steps.calc-version.outputs.new_version }}"
-          PKG_DIR="${{ steps.resolve-package.outputs.pkg_dir }}"
-          
           echo "Updating ${PKG_DIR} to version $NEW_VERSION..."
-          
-          node -e "
-            const fs = require('fs');
-            const path = '${PKG_DIR}/package.json';
-            const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
-            pkg.version = '$NEW_VERSION';
-            fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');
-          "
-          
+
+          node -e '
+            const fs = require("fs");
+            const packagePath = `${process.env.PKG_DIR}/package.json`;
+            const pkg = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+            pkg.version = process.env.NEW_VERSION;
+            fs.writeFileSync(packagePath, JSON.stringify(pkg, null, 2) + "\n");
+
+            const lockPath = "package-lock.json";
+            const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+            const workspace = lock.packages?.[process.env.PKG_DIR];
+            if (!workspace) {
+              console.error(`::error::Workspace "${process.env.PKG_DIR}" is missing from ${lockPath}.`);
+              process.exit(1);
+            }
+            workspace.version = process.env.NEW_VERSION;
+            fs.writeFileSync(lockPath, JSON.stringify(lock, null, 2) + "\n");
+          '
+
           echo "Updated ${PKG_DIR}/package.json:"
           grep '"version"' "${PKG_DIR}/package.json"
+          echo "Updated ${PKG_DIR} in package-lock.json:"
+          node -p "require('./package-lock.json').packages['${PKG_DIR}'].version"
 
       - name: Update changelog
         run: |
@@ -236,8 +264,9 @@ jobs:
           # Create and checkout release branch (idempotent)
           git checkout -B "$BRANCH_NAME"
           
-          # Stage and commit changes (only the released package and its changelog)
+          # Stage and commit changes (only the released package, lockfile, and its changelog)
           git add "${PKG_DIR}/package.json"
+          git add package-lock.json
           git add "${CHANGELOG_PATH}"
           git commit -m "Release ${NPM_NAME}@${NEW_VERSION}"
           
