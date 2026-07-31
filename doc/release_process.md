@@ -112,13 +112,13 @@ git push origin "refs/tags/${TAG_NAME}"
 
 Both tag commands deliberately omit `-f`. Fetching tags makes the explicit check fail when the tag already exists locally or on `origin`; the non-force push also rejects a tag created remotely in the meantime. **Never delete or force-move an existing release tag.** Stop and investigate any conflict.
 
-### Step 1: Run the Code Mirror Pipeline
+### Step 1: Confirm the Tag-Triggered Code Mirror
 
-Manually trigger the code mirror pipeline to sync the release to the internal ADO repo:
+Pushing the post-merge package tag in Step 0 automatically triggers the code mirror pipeline. The pipeline keeps its existing `main` branch trigger and also triggers for every tag, so a new release tag is mirrored immediately rather than waiting for a later `main` push:
 
 **Pipeline**: [durabletask-js code mirror](https://dev.azure.com/azfunc/internal/_build?definitionId=1757)
 
-Run it on the `main` branch, which contains the tagged merged commit. The mirror must receive the same immutable package-scoped tag.
+Wait for the run whose source ref is the new package-scoped tag and confirm it succeeds. Do not substitute a manual `main` run for this step: the shared engineering template routes tag refs through `ci/internal/code-mirror-tag.yml`, which compares the destination tag, deletes and recreates it with the mirror identity when required, and re-locks it. A `main` run uses the normal branch mirror path and pushes tags with the branch, so it does not provide the dedicated tag handling. The shared tag path operates on the internal mirror; it does not move or delete the immutable source tag on GitHub.
 
 ### Step 2: Run the Official Build Pipeline
 
