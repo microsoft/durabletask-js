@@ -82,12 +82,13 @@ orchestration replays, activity executions, and entity operations.
 
 ### Package Structure
 
-This is an npm workspaces monorepo with two published packages:
+This is an npm workspaces monorepo with three published packages:
 
-| Package | Role |
-|---|---|
-| Core SDK | Orchestration engine, client, worker, entities, testing, tracing |
-| Azure Managed Backend | Connection string / Entra ID auth, credential factory, builder pattern |
+| Package | Role | Changelog |
+|---|---|---|
+| Core SDK | Orchestration engine, client, worker, entities, testing, tracing | `CHANGELOG.md` |
+| Azure Managed Backend | Connection string / Entra ID auth, credential factory, builder pattern | `packages/durabletask-js-azuremanaged/CHANGELOG.md` |
+| Azure Functions Durable Provider | Azure Functions v4 compatibility provider | `packages/azure-functions-durable/CHANGELOG.md` |
 
 The Azure package **peers on** the core package — it adds authentication and connection
 management but delegates all domain logic to core.
