@@ -62,12 +62,12 @@ For the **one package you selected** (and only that package):
 2. **Generates a changelog**: lists commits since that package's last release tag, scoped to the package's directory (`git log <last-tag>..HEAD -- <pkg-dir>`), so only commits that touched that package are included
 3. **Bumps the version**: updates `version` in that package's own `package.json`
 4. **Updates that package's changelog**: core writes `CHANGELOG.md`, Azure Managed writes `packages/durabletask-js-azuremanaged/CHANGELOG.md`, and `durable-functions` writes `packages/azure-functions-durable/CHANGELOG.md`
-5. **Creates a release branch and a package-scoped tag**: tag `<prefix><version>` and branch `release/<prefix><version>`, where the prefix is `v` (core), `azuremanaged-v`, or `durable-functions-v`
+5. **Creates a release branch**: branch `release/<prefix><version>`, where the target tag prefix is `v` (core), `azuremanaged-v`, or `durable-functions-v`. The workflow does not create or modify the tag.
 6. **For `durable-functions` only**: verifies the exact-pinned `@microsoft/durabletask-js` version is already published on public npm, and fails the run if it is not (guards the uninstallable-dependency case)
 
 ### After the Workflow Completes
 
-The workflow only **prepares** a release — it bumps the version, generates the changelog, and creates the release branch and package-scoped tag. It does **not** publish to npm. Its run summary includes a **Create PR** link and an `npm publish` command; that command is a **manual fallback** for maintainers, and the sanctioned publish path is the ADO official build + ESRP release pipeline (see **Publishing** below).
+The workflow only **prepares** a release — it bumps the version, generates the changelog, and creates the release branch. It does **not** create or modify a Git tag and does **not** publish to npm. Its run summary includes a **Create PR** link, safe post-merge tagging instructions, and an `npm publish` command; that publish command is a **manual fallback** for maintainers, and the sanctioned publish path is the ADO official build + ESRP release pipeline (see **Publishing** below).
 
 You must **manually create a pull request** from the release branch to `main`. The branch is `release/<tag>` where `<tag>` is the package-scoped tag — e.g. `release/durable-functions-v4.0.0-beta.1`, `release/azuremanaged-v0.3.0`, or `release/v0.4.0`:
 
@@ -76,11 +76,40 @@ You must **manually create a pull request** from the release branch to `main`. T
 3. Review the version bump and changelog update — only the released package should change
 4. Merge the PR after CI passes
 
-After the PR is merged, follow the **Publishing** steps below to build and publish.
+After the PR is merged, follow the **Publishing** steps below. The package-scoped tag must be created only after merge and must point to the exact merged commit on `main`.
 
 ## Publishing (After Release PR is Merged)
 
 After the release PR is merged to `main`, follow these steps to build, sign, and publish the packages.
+
+### Step 0: Tag the Exact Merged Commit
+
+Sync the latest `main`, identify the merged release PR's exact commit, and verify both that it is on `main` and that it contains the expected package version. Then create and push the package-scoped tag without force. Replace the example values before running:
+
+```bash
+set -euo pipefail
+git switch main
+git pull --ff-only origin main
+git fetch origin --tags
+
+PR_NUMBER=1234  # replace with the merged release PR number
+PKG_DIR="packages/durabletask-js-azuremanaged"  # replace with the released package directory
+NEW_VERSION="0.4.0"  # replace with the released version
+TAG_NAME="azuremanaged-v0.4.0"  # replace with the package-scoped tag
+
+MERGED_COMMIT=$(gh pr view "$PR_NUMBER" --repo microsoft/durabletask-js --json mergeCommit --jq '.mergeCommit.oid')
+git merge-base --is-ancestor "$MERGED_COMMIT" origin/main
+test "$(git show "${MERGED_COMMIT}:${PKG_DIR}/package.json" | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")" = "$NEW_VERSION"
+
+if git rev-parse --verify --quiet "refs/tags/${TAG_NAME}" >/dev/null; then
+  echo "Tag ${TAG_NAME} already exists; refusing to move it." >&2
+  exit 1
+fi
+git tag "$TAG_NAME" "$MERGED_COMMIT"
+git push origin "refs/tags/${TAG_NAME}"
+```
+
+Both tag commands deliberately omit `-f`. Fetching tags makes the explicit check fail when the tag already exists locally or on `origin`; the non-force push also rejects a tag created remotely in the meantime. **Never delete or force-move an existing release tag.** Stop and investigate any conflict.
 
 ### Step 1: Run the Code Mirror Pipeline
 
@@ -88,22 +117,22 @@ Manually trigger the code mirror pipeline to sync the release to the internal AD
 
 **Pipeline**: [durabletask-js code mirror](https://dev.azure.com/azfunc/internal/_build?definitionId=1757)
 
-Run it on the `main` branch (which now contains the release commit).
+Run it on the `main` branch, which contains the tagged merged commit. The mirror must receive the same immutable package-scoped tag.
 
 ### Step 2: Run the Official Build Pipeline
 
-Trigger the official build pipeline to produce signed `.tgz` artifacts. The official build (`eng/ci/official-build.yml`) triggers on and builds **`main`** — it has no branch/tag selector and never builds the short-lived release branch. Use (or pick the automatic run of) the official build whose source commit **includes the merged release commit(s)**:
+Trigger the official build pipeline to produce signed `.tgz` artifacts. The official build (`eng/ci/official-build.yml`) triggers on and builds **`main`** — it has no branch/tag selector and never builds the short-lived release branch. Use the official build whose source commit is **exactly the merged release commit tagged in Step 0**, not merely a later commit that includes it:
 
 **Pipeline**: [durabletask-js.official](https://dev.azure.com/azfunc/internal/_build?definitionId=1012&_a=summary)
 
-1. Click **Run pipeline** on `main` (or locate the `main` run that already contains the release commit)
+1. Locate the automatic `main` run whose source version exactly matches `MERGED_COMMIT` / `TAG_NAME` from Step 0. If no exact run is available, stop and coordinate an exact-commit build with the pipeline owners; do not substitute a later `main` build.
 2. Wait for it to complete
 3. A single `main` build packs **all three** packages into one `drop` artifact; which single package publishes is decided later by the `package` parameter in the release pipeline (Step 3). Verify `drop` contains the correctly versioned `.tgz` files:
    - `buildoutputs/durabletask-js/microsoft-durabletask-js-X.Y.Z.tgz`
    - `buildoutputs/durabletask-js-azuremanaged/microsoft-durabletask-js-azuremanaged-X.Y.Z.tgz`
    - `buildoutputs/azure-functions-durable/durable-functions-X.Y.Z.tgz`
 
-Never publish from the release branch — it exists only to carry the version/changelog PR into `main`.
+Never publish from the release branch — it exists only to carry the version/changelog PR into `main`. The official build, merged commit, and package-scoped tag must all identify the same commit.
 
 ### Step 3: Run the Release Pipeline
 
@@ -116,7 +145,7 @@ Trigger the release pipeline to publish one signed package to npm via ESRP. **Th
 **Pipeline**: [durabletask-js.release](https://dev.azure.com/azfunc/internal/_build?definitionId=1686)
 
 1. Click **Run pipeline**
-2. Select the **`main` official build from Step 2** (the one containing the release commit) as the source pipeline artifact
+2. Select the **`main` official build from Step 2** (the one whose source commit exactly equals the tagged merged release commit) as the source pipeline artifact
 3. Verify or change the **`package`** parameter to the one package to publish. Exactly one release stage is compiled and exactly one package is published; do not use queue-time stage selection to choose packages.
 4. Approve the ESRP release when prompted.
 
@@ -141,7 +170,7 @@ npm view durable-functions dist-tags
 
 Go to [GitHub Releases](https://github.com/microsoft/durabletask-js/releases) and create a new release:
 
-- **Tag**: the package-scoped tag created by the release — e.g. `durable-functions-v4.0.0-beta.1`, `azuremanaged-v0.3.0`, or `v0.4.0`
+- **Tag**: the package-scoped tag created on the exact merged commit in Step 0 — e.g. `durable-functions-v4.0.0-beta.1`, `azuremanaged-v0.3.0`, or `v0.4.0`
 - **Title**: the same tag, or `<npm-name>@<version>`
 - **Description**: copy the relevant section from that package's changelog: `CHANGELOG.md` for core, `packages/durabletask-js-azuremanaged/CHANGELOG.md` for Azure Managed, or `packages/azure-functions-durable/CHANGELOG.md` for `durable-functions`
 - **Pre-release**: check this box for alpha/beta/rc/preview releases
@@ -221,17 +250,9 @@ Create a release branch named `release/<tag>`, where `<tag>` is the package-scop
 
 ### 6. Merge and Tag
 
-After the PR is approved and merged to `main`, create the package-scoped tag (`<prefix><version>`):
+After the PR is approved and merged to `main`, follow **Publishing Step 0** to sync `main`, identify and verify the exact merged commit, and create the package-scoped tag (`<prefix><version>`) without force. If the tag already exists, stop; never delete or move it.
 
-```bash
-git checkout main
-git pull
-# e.g. durable-functions-v4.0.0-beta.1, azuremanaged-v0.3.0, or v0.4.0
-git tag <prefix><version>
-git push origin <prefix><version>
-```
-
-Then follow the **Publishing** steps above (Steps 1-5).
+Then continue with **Publishing** Steps 1-5.
 
 ## Quick Reference: npm Dist Tags
 

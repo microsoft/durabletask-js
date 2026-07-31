@@ -3,10 +3,10 @@
 # with the required `package` input; the workflow then, for THAT package only:
 # 1. Bumps the selected package's version in its own package.json
 # 2. Generates a changelog from git history since the package's last release tag
-# 3. Updates the package's changelog file and creates a release branch + package-scoped tag
+# 3. Updates the package's changelog file and creates a release branch
 # Packages are versioned and tagged independently (tag prefixes: v, azuremanaged-v, durable-functions-v).
-# After the workflow completes, manually open a PR from the release branch to main, then publish
-# from the package directory using the npm command shown in the run summary (mind the dist-tag).
+# After the workflow completes, manually open and merge a PR from the release branch to main.
+# Only then create the package-scoped tag on the exact merged commit and publish.
 
 name: Prepare Release
 
@@ -130,8 +130,8 @@ jobs:
           NEW_VERSION: ${{ steps.calc-version.outputs.new_version }}
           TAG_PREFIX: ${{ steps.resolve-package.outputs.tag_prefix }}
         run: |
-          # Get the latest tag for THIS package (its tag prefix), excluding the tag being
-          # created so that re-runs don't use it as the baseline. The legacy core prefix "v"
+          # Get the latest tag for THIS package (its tag prefix), excluding the target release
+          # tag so an accidental post-release re-run doesn't use it as the baseline. The legacy core prefix "v"
           # still matches historical tags like v0.3.0 (intended, backward compatible) and never
           # matches the "azuremanaged-v"/"durable-functions-v" namespaces (they start with a/d, not v).
           # Without versionsort.suffix=-, git ranks a prerelease (e.g. X-beta.1) ABOVE its own GA
@@ -261,8 +261,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Create and checkout release branch (idempotent)
-          git checkout -B "$BRANCH_NAME"
+          # Create and checkout a new release branch.
+          git checkout -b "$BRANCH_NAME"
           
           # Stage and commit changes (only the released package, lockfile, and its changelog)
           git add "${PKG_DIR}/package.json"
@@ -270,16 +270,13 @@ jobs:
           git add "${CHANGELOG_PATH}"
           git commit -m "Release ${NPM_NAME}@${NEW_VERSION}"
           
-          # Create release tag (idempotent)
-          git tag -f "$TAG_NAME"
-          
-          # Push branch and tag (force to handle re-runs)
-          git push -f origin "$BRANCH_NAME"
-          git push -f origin "$TAG_NAME"
+          # Never overwrite an existing release branch. A conflicting re-run must fail so its
+          # version and changelog changes can be reviewed instead of replacing remote history.
+          git push origin "$BRANCH_NAME"
           
           echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
           echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
-          echo "Created branch $BRANCH_NAME and tag $TAG_NAME"
+          echo "Created branch $BRANCH_NAME; create tag $TAG_NAME only after the PR merges"
 
       - name: Summary
         run: |
@@ -302,7 +299,7 @@ jobs:
           echo "- **Package**: ${NPM_NAME}" >> $GITHUB_STEP_SUMMARY
           echo "- **Version**: ${NEW_VERSION}" >> $GITHUB_STEP_SUMMARY
           echo "- **Branch**: ${BRANCH_NAME}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Tag**: ${TAG_NAME}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Post-merge tag**: ${TAG_NAME} (not created by this workflow)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Step: Create a Pull Request" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -310,9 +307,29 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "[Create PR](https://github.com/microsoft/durabletask-js/compare/main...${BRANCH_NAME}?expand=1&title=Release+${NPM_NAME}@${NEW_VERSION})" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### After Merge: Tag the Exact Merged Commit" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Replace \`1234\` with the merged release PR number. These commands deliberately omit \`-f\`: if **${TAG_NAME}** already exists, stop and investigate; never move an existing release tag." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "set -euo pipefail" >> $GITHUB_STEP_SUMMARY
+          echo "git switch main" >> $GITHUB_STEP_SUMMARY
+          echo "git pull --ff-only origin main" >> $GITHUB_STEP_SUMMARY
+          echo "git fetch origin --tags" >> $GITHUB_STEP_SUMMARY
+          echo "PR_NUMBER=1234  # replace with the merged release PR number" >> $GITHUB_STEP_SUMMARY
+          echo "MERGED_COMMIT=\$(gh pr view \"\$PR_NUMBER\" --repo microsoft/durabletask-js --json mergeCommit --jq '.mergeCommit.oid')" >> $GITHUB_STEP_SUMMARY
+          echo "git merge-base --is-ancestor \"\$MERGED_COMMIT\" origin/main" >> $GITHUB_STEP_SUMMARY
+          echo "test \"\$(git show \"\${MERGED_COMMIT}:${PKG_DIR}/package.json\" | node -p \"JSON.parse(require('fs').readFileSync(0, 'utf8')).version\")\" = \"${NEW_VERSION}\"" >> $GITHUB_STEP_SUMMARY
+          echo "if git rev-parse --verify --quiet \"refs/tags/${TAG_NAME}\" >/dev/null; then echo \"Tag ${TAG_NAME} already exists; refusing to move it.\" >&2; exit 1; fi" >> $GITHUB_STEP_SUMMARY
+          echo "git tag \"${TAG_NAME}\" \"\$MERGED_COMMIT\"" >> $GITHUB_STEP_SUMMARY
+          echo "git push origin \"refs/tags/${TAG_NAME}\"" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Run the code mirror, then use the official \`main\` build whose source commit is exactly \`\$MERGED_COMMIT\` (the commit tagged **${TAG_NAME}**). Never substitute a later \`main\` build." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Then Publish" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "After the release PR is merged, publish from the package directory:" >> $GITHUB_STEP_SUMMARY
+          echo "Use the ADO official build + ESRP release pipeline. If a maintainer must use the documented manual fallback, publish from the package directory:" >> $GITHUB_STEP_SUMMARY
           echo '```bash' >> $GITHUB_STEP_SUMMARY
           echo "cd ${PKG_DIR}" >> $GITHUB_STEP_SUMMARY
           echo "${PUBLISH_CMD}" >> $GITHUB_STEP_SUMMARY
