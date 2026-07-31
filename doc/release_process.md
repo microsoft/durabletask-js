@@ -118,7 +118,13 @@ Pushing the post-merge package tag in Step 0 automatically triggers the code mir
 
 **Pipeline**: [durabletask-js code mirror](https://dev.azure.com/azfunc/internal/_build?definitionId=1757)
 
-Wait for the run whose source ref is the new package-scoped tag and confirm it succeeds. Do not substitute a manual `main` run for this step: the shared engineering template routes tag refs through `ci/internal/code-mirror-tag.yml`, which compares the destination tag, deletes and recreates it with the mirror identity when required, and re-locks it. A `main` run uses the normal branch mirror path and pushes tags with the branch, so it does not provide the dedicated tag handling. The shared tag path operates on the internal mirror; it does not move or delete the immutable source tag on GitHub.
+Before continuing to the official build, verify all of the following in the tag-triggered run:
+
+1. Its source ref is the new package-scoped tag.
+2. The mirrored internal tag resolves to exactly `MERGED_COMMIT` from Step 0.
+3. The internal tag is locked after the mirror completes.
+
+Do not substitute a manual `main` run for this step: the shared engineering template routes tag refs through `ci/internal/code-mirror-tag.yml`, which compares the destination tag, deletes and recreates it with the mirror identity when required, and re-locks it. A `main` run uses the normal branch mirror path and pushes tags with the branch, so it does not provide the dedicated tag handling. The shared tag path operates on the internal mirror; it does not move or delete the immutable source tag on GitHub.
 
 ### Step 2: Run the Official Build Pipeline
 

@@ -344,7 +344,7 @@ jobs:
           echo "git push origin \"refs/tags/${TAG_NAME}\"" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Pushing **${TAG_NAME}** triggers the code mirror's dedicated tag path. Wait for that run, then use the official \`main\` build whose source commit is exactly \`\$MERGED_COMMIT\` (the commit tagged **${TAG_NAME}**). Never substitute a later \`main\` build." >> $GITHUB_STEP_SUMMARY
+          echo "Pushing **${TAG_NAME}** triggers the code mirror's dedicated tag path. Before continuing, verify that run mirrored **${TAG_NAME}** to exactly \`\$MERGED_COMMIT\` and re-locked the internal tag. Then use the official \`main\` build whose source commit is exactly \`\$MERGED_COMMIT\`; never substitute a later \`main\` build." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Then Publish" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
