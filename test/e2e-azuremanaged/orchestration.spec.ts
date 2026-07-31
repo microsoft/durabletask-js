@@ -341,6 +341,91 @@ describe("Durable Task Scheduler (DTS) E2E Tests", () => {
     expect(state?.failureDetails?.message).toContain("activity B failed");
   }, 31000);
 
+  // PR #329: the resume() success fast-path loop only checked `isComplete`, never `isFailed`.
+  // A task that is already complete AND failed when the generator yields it therefore fell
+  // through to `generator.next(task._result)` — and `_result` on a failed task is undefined.
+  // The exception was never thrown into the generator, so `try/catch` never fired and the
+  // orchestration reported COMPLETED despite a failed activity.
+  //
+  // The trigger is the ordinary "start early, join later" pattern: hold a task handle without
+  // awaiting it, await something else, then join the handle after it has already failed. No
+  // whenAll is required — a plain callActivity handle reproduces it.
+  it("should throw into the generator when joining a plain activity handle that already failed", async () => {
+    const failFast = async (_: ActivityContext): Promise<void> => {
+      throw new Error("prefetch exploded");
+    };
+
+    const slowSuccess = async (_: ActivityContext): Promise<string> => {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      return "other-done";
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      // Kick off the prefetch but do not await it — it fails almost immediately.
+      const prefetch = ctx.callActivity(failFast);
+
+      // Await different work first, so the prefetch's TaskFailed is already in history
+      // by the time the generator gets around to joining it.
+      yield ctx.callActivity(slowSuccess);
+
+      try {
+        const data = yield prefetch;
+        return `NO-THROW:${JSON.stringify(data)}`;
+      } catch (e: any) {
+        return `caught:${e.message}`;
+      }
+    };
+
+    taskHubWorker.addActivity(failFast);
+    taskHubWorker.addActivity(slowSuccess);
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+
+    const output = JSON.parse(state?.serializedOutput ?? '""');
+    // Without the fix this is "NO-THROW:undefined" — the catch block never runs.
+    expect(output).toContain("caught:");
+    expect(output).toContain("prefetch exploded");
+  }, 31000);
+
+  it("should fail the orchestration when an already-failed activity handle is joined and not caught", async () => {
+    const failFast = async (_: ActivityContext): Promise<void> => {
+      throw new Error("uncaught prefetch exploded");
+    };
+
+    const slowSuccess = async (_: ActivityContext): Promise<string> => {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      return "other-done";
+    };
+
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const prefetch = ctx.callActivity(failFast);
+      yield ctx.callActivity(slowSuccess);
+      const data = yield prefetch;
+      return `NO-THROW:${JSON.stringify(data)}`;
+    };
+
+    taskHubWorker.addActivity(failFast);
+    taskHubWorker.addActivity(slowSuccess);
+    taskHubWorker.addOrchestrator(orchestrator);
+    await taskHubWorker.start();
+
+    const id = await taskHubClient.scheduleNewOrchestration(orchestrator);
+    const state = await taskHubClient.waitForOrchestrationCompletion(id, undefined, 30);
+
+    expect(state).toBeDefined();
+    // Without the fix this is COMPLETED with output "NO-THROW:undefined" — a failed activity
+    // silently producing a successful orchestration, which is the real danger of this bug.
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(state?.failureDetails).toBeDefined();
+    expect(state?.failureDetails?.message).toContain("uncaught prefetch exploded");
+  }, 31000);
+
   // Issue #131: WhenAllTask constructor was resetting the _completedTasks counter,
   // causing whenAll to hang when some children were already completed during replay.
   // This test validates the fix by scheduling activities that complete at different
