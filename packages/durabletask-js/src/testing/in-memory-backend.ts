@@ -50,8 +50,12 @@ export interface EntityState {
   instanceId: string;
   serializedState?: string;
   lastModifiedAt: Date;
-  /** Critical section ID currently holding the lock, if any. */
+  /** Orchestration instance currently holding the lock, if any. */
   lockedBy?: string;
+  /** Execution of the orchestration that owns the current critical section. */
+  lockOwnerExecutionId?: string;
+  /** Critical section ID used to correlate the matching unlock action. */
+  lockCriticalSectionId?: string;
   /** Operations queued but not yet dispatched to a worker. */
   pendingOperations: pb.HistoryEvent[];
   /** Operations handed to a worker and awaiting a batch result. */
@@ -65,8 +69,17 @@ export interface EntityState {
 interface PendingLockRequest {
   criticalSectionId: string;
   parentInstanceId: string;
+  parentExecutionId: string;
   lockSet: string[];
+  sequenceNumber: number;
 }
+
+interface RewindSnapshotEntry {
+  executionId: string;
+  completionToken: number;
+}
+
+type RewindSnapshot = Map<string, RewindSnapshotEntry>;
 
 /**
  * Entity work item that needs to be executed.
@@ -108,11 +121,14 @@ export class InMemoryOrchestrationBackend {
   private readonly entityQueue: string[] = [];
   private readonly entityQueueSet: Set<string> = new Set();
   private readonly entityInFlight: Set<string> = new Set();
+  private readonly entityOperationSequence: WeakMap<pb.HistoryEvent, number> = new WeakMap();
   private pendingLockRequests: PendingLockRequest[] = [];
   private readonly stateWaiters: Map<string, StateWaiter[]> = new Map();
   private readonly pendingTimers: Set<ReturnType<typeof setTimeout>> = new Set();
   private readonly instanceTimers: Map<string, Set<ReturnType<typeof setTimeout>>> = new Map();
+  private readonly rewindSnapshots: Map<string, RewindSnapshot> = new Map();
   private nextCompletionToken: number = 1;
+  private nextEntityMessageSequence: number = 1;
   private readonly maxHistorySize: number;
 
   /**
@@ -295,6 +311,8 @@ export class InMemoryOrchestrationBackend {
       return false;
     }
 
+    this.cleanupLocksForExecution(instance.instanceId, instance.executionId);
+    this.clearRewindSnapshot(instanceId);
     this.instances.delete(instanceId);
     this.orchestrationQueueSet.delete(instanceId);
     const queueIndex = this.orchestrationQueue.indexOf(instanceId);
@@ -330,7 +348,9 @@ export class InMemoryOrchestrationBackend {
       throw new Error(`Orchestration instance '${instanceId}' is not in a failed state`);
     }
 
-    this.prepareRewind(instance, reason);
+    const snapshot: RewindSnapshot = new Map();
+    this.validateRewindLockState(instance, snapshot);
+    this.prepareRewind(instance, reason, snapshot);
     this.notifyWaiters(instanceId);
   }
 
@@ -382,9 +402,23 @@ export class InMemoryOrchestrationBackend {
         continue;
       }
 
+      const dispatchableOperations: pb.HistoryEvent[] = [];
+      const blockedOperations: pb.HistoryEvent[] = [];
+      for (const operation of entity.pendingOperations) {
+        if (this.canDispatchEntityOperation(entity, operation)) {
+          dispatchableOperations.push(operation);
+        } else {
+          blockedOperations.push(operation);
+        }
+      }
+
+      if (dispatchableOperations.length === 0) {
+        continue;
+      }
+
       this.entityInFlight.add(entityId);
-      entity.dispatchedOperations = entity.pendingOperations.slice();
-      entity.pendingOperations.length = 0;
+      entity.dispatchedOperations = dispatchableOperations;
+      entity.pendingOperations = blockedOperations;
 
       workItem = {
         instanceId: entity.instanceId,
@@ -431,9 +465,12 @@ export class InMemoryOrchestrationBackend {
       this.processEntityAction(action);
     }
 
+    // An entity that was busy when a lock was requested may now be available.
+    this.tryGrantPendingLocks();
+
     // A batch may have produced signals for this same entity, or the entity may have
     // been signalled while its batch was running.
-    if (entity.pendingOperations.length > 0) {
+    if (entity.pendingOperations.some((operation) => this.canDispatchEntityOperation(entity, operation))) {
       this.enqueueEntity(instanceId);
     }
   }
@@ -695,6 +732,7 @@ export class InMemoryOrchestrationBackend {
     this.entityQueueSet.clear();
     this.entityInFlight.clear();
     this.pendingLockRequests = [];
+    this.nextEntityMessageSequence = 1;
     for (const waiters of this.stateWaiters.values()) {
       for (const waiter of waiters) {
         waiter.reject(new Error("Backend was reset"));
@@ -706,6 +744,7 @@ export class InMemoryOrchestrationBackend {
     }
     this.pendingTimers.clear();
     this.instanceTimers.clear();
+    this.rewindSnapshots.clear();
   }
 
   /**
@@ -786,6 +825,11 @@ export class InMemoryOrchestrationBackend {
     completeAction: pb.CompleteOrchestrationAction,
   ): void {
     const status = completeAction.getOrchestrationstatus();
+    if (this.isTerminalStatus(status) || status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW) {
+      this.cleanupLocksForExecution(instance.instanceId, instance.executionId);
+      this.clearRewindSnapshot(instance.instanceId);
+    }
+
     instance.status = status;
     instance.output = completeAction.getResult()?.getValue();
     // Use an explicit presence check: a protobuf singular message accessor may materialize an
@@ -958,7 +1002,11 @@ export class InMemoryOrchestrationBackend {
       });
   }
 
-  private prepareRewind(instance: OrchestrationInstance, reason?: string): void {
+  private prepareRewind(
+    instance: OrchestrationInstance,
+    reason?: string,
+    snapshot?: RewindSnapshot,
+  ): void {
     // Reset instance state so it can be re-processed.
     instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING;
     instance.output = undefined;
@@ -974,6 +1022,14 @@ export class InMemoryOrchestrationBackend {
 
     // Refresh the completion token and enqueue.
     instance.completionToken = this.nextCompletionToken++;
+    if (snapshot) {
+      const expected = snapshot.get(instance.instanceId);
+      if (!expected) {
+        throw new Error(`Cannot prepare unvalidated orchestration '${instance.instanceId}' for rewind`);
+      }
+      expected.completionToken = instance.completionToken;
+      this.rewindSnapshots.set(instance.instanceId, snapshot);
+    }
     this.enqueueOrchestration(instance.instanceId);
   }
 
@@ -981,10 +1037,33 @@ export class InMemoryOrchestrationBackend {
     instance: OrchestrationInstance,
     rewindAction: pb.RewindOrchestrationAction,
   ): void {
+    const snapshot = this.rewindSnapshots.get(instance.instanceId);
+    const expectedInstance = snapshot?.get(instance.instanceId);
+    if (
+      !snapshot ||
+      !expectedInstance ||
+      expectedInstance.executionId !== instance.executionId ||
+      expectedInstance.completionToken !== instance.completionToken
+    ) {
+      throw new Error(`Cannot apply stale rewind for orchestration '${instance.instanceId}'`);
+    }
+
     const newHistory = rewindAction.getNewhistoryList();
+    const executionId = newHistory
+      .find((event) => event.hasExecutionstarted())
+      ?.getExecutionstarted()
+      ?.getOrchestrationinstance()
+      ?.getExecutionid()
+      ?.getValue();
+    if (!executionId) {
+      throw new Error(
+        `Cannot apply rewind for orchestration '${instance.instanceId}': the rewritten history has no execution ID`,
+      );
+    }
 
     // Replace the history with the SDK-computed clean version.
     instance.history = newHistory;
+    instance.executionId = executionId;
     instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING;
     instance.output = undefined;
     instance.failureDetails = undefined;
@@ -1034,7 +1113,13 @@ export class InMemoryOrchestrationBackend {
           taskScheduledId: taskId,
         });
       } else if (subInstance.status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED) {
-        this.prepareRewind(subInstance, reason);
+        const expectedSubInstance = snapshot.get(subInstanceId);
+        if (
+          expectedSubInstance?.executionId === subInstance.executionId &&
+          expectedSubInstance.completionToken === subInstance.completionToken
+        ) {
+          this.prepareRewind(subInstance, reason, snapshot);
+        }
       }
       this.watchSubOrchestration(instance.instanceId, subInstanceId, taskId);
     }
@@ -1046,6 +1131,7 @@ export class InMemoryOrchestrationBackend {
     // executionCompleted is no longer in the history.
     instance.pendingEvents = [pbh.newOrchestratorStartedEvent(new Date())];
     instance.completionToken = this.nextCompletionToken++;
+    this.clearRewindSnapshot(instance.instanceId);
     this.enqueueOrchestration(instance.instanceId);
   }
 
@@ -1107,7 +1193,9 @@ export class InMemoryOrchestrationBackend {
           this.tryGrantLock({
             criticalSectionId: lockRequested.getCriticalsectionid(),
             parentInstanceId: parentId,
+            parentExecutionId: instance.executionId,
             lockSet: lockRequested.getLocksetList().slice(),
+            sequenceNumber: this.nextEntityMessageSequence++,
           });
         }
         break;
@@ -1117,10 +1205,21 @@ export class InMemoryOrchestrationBackend {
         this.appendEntityHistoryEvent(instance, actionId, (e) => e.setEntityunlocksent(unlock));
 
         const targetId = unlock.getTargetinstanceid()?.getValue();
+        const parentId = unlock.getParentinstanceid()?.getValue();
         if (targetId) {
           const entity = this.entities.get(targetId);
-          if (entity && entity.lockedBy === unlock.getCriticalsectionid()) {
+          if (
+            entity &&
+            entity.lockCriticalSectionId === unlock.getCriticalsectionid() &&
+            entity.lockedBy === parentId &&
+            entity.lockOwnerExecutionId === instance.executionId
+          ) {
             entity.lockedBy = undefined;
+            entity.lockOwnerExecutionId = undefined;
+            entity.lockCriticalSectionId = undefined;
+            if (entity.pendingOperations.length > 0) {
+              this.enqueueEntity(targetId);
+            }
           }
         }
 
@@ -1172,6 +1271,7 @@ export class InMemoryOrchestrationBackend {
 
   private queueEntityOperation(entityId: string, event: pb.HistoryEvent): void {
     const entity = this.getOrCreateEntity(entityId);
+    this.entityOperationSequence.set(event, this.nextEntityMessageSequence++);
     entity.pendingOperations.push(event);
     this.enqueueEntity(entityId);
   }
@@ -1181,6 +1281,39 @@ export class InMemoryOrchestrationBackend {
       this.entityQueue.push(entityId);
       this.entityQueueSet.add(entityId);
     }
+  }
+
+  private canDispatchEntityOperation(entity: EntityState, operation: pb.HistoryEvent): boolean {
+    if (entity.lockedBy !== undefined) {
+      const called = operation.getEntityoperationcalled();
+      return (
+        called?.getParentinstanceid()?.getValue() === entity.lockedBy &&
+        called?.getParentexecutionid()?.getValue() === entity.lockOwnerExecutionId
+      );
+    }
+
+    const lockBarrier = this.getNextLockBarrier(entity.instanceId);
+    if (lockBarrier === undefined) {
+      return true;
+    }
+
+    const operationSequence = this.entityOperationSequence.get(operation);
+    return operationSequence !== undefined && operationSequence < lockBarrier;
+  }
+
+  private getNextLockBarrier(entityId: string): number | undefined {
+    let barrier: number | undefined;
+    for (const pending of this.pendingLockRequests) {
+      if (pending.lockSet.includes(entityId) && (barrier === undefined || pending.sequenceNumber < barrier)) {
+        barrier = pending.sequenceNumber;
+      }
+    }
+    return barrier;
+  }
+
+  private operationPrecedesLock(operation: pb.HistoryEvent, pending: PendingLockRequest): boolean {
+    const operationSequence = this.entityOperationSequence.get(operation);
+    return operationSequence === undefined || operationSequence < pending.sequenceNumber;
   }
 
   /**
@@ -1208,21 +1341,44 @@ export class InMemoryOrchestrationBackend {
   }
 
   private canGrantLock(pending: PendingLockRequest): boolean {
-    return !pending.lockSet.some((entityId) => this.entities.get(entityId)?.lockedBy !== undefined);
+    return !pending.lockSet.some((entityId) => {
+      const entity = this.entities.get(entityId);
+      return (
+        entity?.lockedBy !== undefined ||
+        this.entityInFlight.has(entityId) ||
+        entity?.pendingOperations.some((operation) => this.operationPrecedesLock(operation, pending))
+      );
+    });
+  }
+
+  private hasEarlierOverlappingLockRequest(pending: PendingLockRequest): boolean {
+    const lockSet = new Set(pending.lockSet);
+    return this.pendingLockRequests.some(
+      (earlier) =>
+        earlier.sequenceNumber < pending.sequenceNumber &&
+        this.getActiveLockRequestParent(earlier) !== undefined &&
+        earlier.lockSet.some((entityId) => lockSet.has(entityId)),
+    );
+  }
+
+  private getActiveLockRequestParent(pending: PendingLockRequest): OrchestrationInstance | undefined {
+    const parent = this.instances.get(pending.parentInstanceId);
+    if (!parent || parent.executionId !== pending.parentExecutionId || this.isTerminalStatus(parent.status)) {
+      return undefined;
+    }
+    return parent;
   }
 
   /**
    * Grants a lock to every entity in the lock set and notifies the parent orchestration.
    * Assumes availability was already verified via {@link canGrantLock}.
    */
-  private grantLock(pending: PendingLockRequest): void {
+  private grantLock(pending: PendingLockRequest, parent: OrchestrationInstance): void {
     for (const entityId of pending.lockSet) {
-      this.getOrCreateEntity(entityId).lockedBy = pending.criticalSectionId;
-    }
-
-    const parent = this.instances.get(pending.parentInstanceId);
-    if (!parent) {
-      return;
+      const entity = this.getOrCreateEntity(entityId);
+      entity.lockedBy = pending.parentInstanceId;
+      entity.lockOwnerExecutionId = pending.parentExecutionId;
+      entity.lockCriticalSectionId = pending.criticalSectionId;
     }
 
     const granted = new pb.EntityLockGrantedEvent();
@@ -1239,23 +1395,153 @@ export class InMemoryOrchestrationBackend {
   }
 
   private tryGrantLock(pending: PendingLockRequest): void {
-    if (!this.canGrantLock(pending)) {
+    const parent = this.getActiveLockRequestParent(pending);
+    if (!parent) {
+      return;
+    }
+
+    if (this.hasEarlierOverlappingLockRequest(pending) || !this.canGrantLock(pending)) {
       this.pendingLockRequests.push(pending);
       return;
     }
-    this.grantLock(pending);
+    this.grantLock(pending, parent);
   }
 
   private tryGrantPendingLocks(): void {
     const stillPending: PendingLockRequest[] = [];
     for (const pending of this.pendingLockRequests) {
-      if (this.canGrantLock(pending)) {
-        this.grantLock(pending);
+      const parent = this.getActiveLockRequestParent(pending);
+      if (!parent) {
+        this.enqueuePendingEntityOperations(pending.lockSet);
+        continue;
+      }
+
+      if (!this.hasEarlierOverlappingLockRequest(pending) && this.canGrantLock(pending)) {
+        this.grantLock(pending, parent);
       } else {
         stillPending.push(pending);
       }
     }
     this.pendingLockRequests = stillPending;
+  }
+
+  private cleanupLocksForExecution(instanceId: string, executionId: string): void {
+    const retainedLockRequests: PendingLockRequest[] = [];
+    for (const pending of this.pendingLockRequests) {
+      if (pending.parentInstanceId === instanceId && pending.parentExecutionId === executionId) {
+        this.enqueuePendingEntityOperations(pending.lockSet);
+      } else {
+        retainedLockRequests.push(pending);
+      }
+    }
+    this.pendingLockRequests = retainedLockRequests;
+
+    for (const [entityId, entity] of this.entities) {
+      if (entity.lockedBy !== instanceId || entity.lockOwnerExecutionId !== executionId) {
+        continue;
+      }
+
+      entity.lockedBy = undefined;
+      entity.lockOwnerExecutionId = undefined;
+      entity.lockCriticalSectionId = undefined;
+      if (entity.pendingOperations.length > 0) {
+        this.enqueueEntity(entityId);
+      }
+    }
+
+    this.tryGrantPendingLocks();
+  }
+
+  private enqueuePendingEntityOperations(entityIds: string[]): void {
+    for (const entityId of entityIds) {
+      if ((this.entities.get(entityId)?.pendingOperations.length ?? 0) > 0) {
+        this.enqueueEntity(entityId);
+      }
+    }
+  }
+
+  private hasUnreleasedEntityLock(history: pb.HistoryEvent[]): boolean {
+    const remainingLockSets = new Map<string, Set<string>>();
+
+    for (const event of history) {
+      const lockRequested = event.getEntitylockrequested();
+      if (lockRequested) {
+        remainingLockSets.set(
+          lockRequested.getCriticalsectionid(),
+          new Set(lockRequested.getLocksetList()),
+        );
+        continue;
+      }
+
+      const unlock = event.getEntityunlocksent();
+      const targetId = unlock?.getTargetinstanceid()?.getValue();
+      if (!unlock || !targetId) {
+        continue;
+      }
+
+      const remaining = remainingLockSets.get(unlock.getCriticalsectionid());
+      if (!remaining) {
+        continue;
+      }
+
+      remaining.delete(targetId);
+      if (remaining.size === 0) {
+        remainingLockSets.delete(unlock.getCriticalsectionid());
+      }
+    }
+
+    return remainingLockSets.size > 0;
+  }
+
+  private validateRewindLockState(
+    instance: OrchestrationInstance,
+    snapshot: RewindSnapshot,
+  ): void {
+    if (snapshot.has(instance.instanceId)) {
+      return;
+    }
+    snapshot.set(instance.instanceId, {
+      executionId: instance.executionId,
+      completionToken: instance.completionToken,
+    });
+
+    if (this.hasUnreleasedEntityLock(instance.history)) {
+      throw new Error(
+        `Cannot rewind an orchestration with an unreleased entity lock: '${instance.instanceId}'`,
+      );
+    }
+
+    const completedSubOrchestrationTaskIds = new Set<number>();
+    const createdSubOrchestrations = new Map<number, string>();
+    for (const event of instance.history) {
+      const created = event.getSuborchestrationinstancecreated();
+      if (created) {
+        createdSubOrchestrations.set(event.getEventid(), created.getInstanceid());
+        continue;
+      }
+
+      const completed = event.getSuborchestrationinstancecompleted();
+      if (completed) {
+        completedSubOrchestrationTaskIds.add(completed.getTaskscheduledid());
+      }
+    }
+
+    for (const [taskId, subInstanceId] of createdSubOrchestrations) {
+      if (completedSubOrchestrationTaskIds.has(taskId)) {
+        continue;
+      }
+
+      const subInstance = this.instances.get(subInstanceId);
+      if (subInstance?.status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED) {
+        this.validateRewindLockState(subInstance, snapshot);
+      }
+    }
+  }
+
+  private clearRewindSnapshot(instanceId: string): void {
+    const snapshot = this.rewindSnapshots.get(instanceId);
+    this.rewindSnapshots.delete(instanceId);
+    snapshot?.delete(instanceId);
   }
 
   private processSendEventAction(sendEvent: pb.SendEventAction): void {

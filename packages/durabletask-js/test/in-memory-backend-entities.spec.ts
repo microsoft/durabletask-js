@@ -11,6 +11,9 @@ import {
   TaskEntity,
   EntityInstanceId,
 } from "../src";
+import * as pb from "../src/proto/orchestrator_service_pb";
+import * as pbh from "../src/utils/pb-helper.util";
+import { buildRewindResult } from "../src/worker/rewind";
 
 class CounterEntity extends TaskEntity<{ count: number }> {
   add(amount: number): number {
@@ -64,6 +67,7 @@ describe("In-Memory Backend - Entities", () => {
   let worker: TestOrchestrationWorker;
 
   const counterId = new EntityInstanceId("counter", "mykey");
+  const otherCounterId = new EntityInstanceId("counter", "other");
 
   beforeEach(() => {
     backend = new InMemoryOrchestrationBackend();
@@ -222,6 +226,545 @@ describe("In-Memory Backend - Entities", () => {
 
     const released = await waitFor(() => backend.getEntity(counterId.toString())?.lockedBy === undefined);
     expect(released).toBe(true);
+  });
+
+  it("should process already queued operations before granting an entity lock", async () => {
+    const lockHolder: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const lock = yield ctx.entities.lockEntities(counterId);
+      const value = yield ctx.entities.callEntity<number>(counterId, "get");
+      lock.release();
+      return value;
+    };
+
+    worker.addOrchestrator(lockHolder);
+    worker.addNamedEntity("counter", () => new CounterEntity());
+
+    await client.signalEntity(counterId, "add", 3);
+    const holderId = await client.scheduleNewOrchestration(lockHolder);
+    await worker.start();
+
+    const holderState = await client.waitForOrchestrationCompletion(holderId, true, 10);
+
+    expect(holderState?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(holderState?.serializedOutput).toEqual(JSON.stringify(3));
+  });
+
+  it("should defer client signals until an entity lock is released", async () => {
+    const lockHolder: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const lock = yield ctx.entities.lockEntities(counterId);
+      yield ctx.waitForExternalEvent("release");
+      lock.release();
+    };
+
+    worker.addOrchestrator(lockHolder);
+    worker.addNamedEntity("counter", () => new CounterEntity());
+    await worker.start();
+
+    const holderId = await client.scheduleNewOrchestration(lockHolder);
+    const locked = await waitFor(() => backend.getEntity(counterId.toString())?.lockedBy !== undefined);
+    expect(locked).toBe(true);
+
+    await client.signalEntity(counterId, "add", 5);
+    await client.signalEntity(otherCounterId, "add", 1);
+
+    const otherProcessed = await waitFor(
+      () => backend.getEntity(otherCounterId.toString())?.serializedState !== undefined,
+    );
+    expect(otherProcessed).toBe(true);
+    expect(backend.getEntity(counterId.toString())?.serializedState).toBeUndefined();
+    expect(backend.getEntity(counterId.toString())?.pendingOperations).toHaveLength(1);
+
+    await client.raiseOrchestrationEvent(holderId, "release");
+    await client.waitForOrchestrationCompletion(holderId, true, 10);
+
+    const processedAfterRelease = await waitFor(
+      () => backend.getEntity(counterId.toString())?.serializedState !== undefined,
+    );
+    expect(processedAfterRelease).toBe(true);
+    expect((await client.getEntity<{ count: number }>(counterId))?.state?.count).toEqual(5);
+  });
+
+  it("should defer calls from other orchestrations until an entity lock is released", async () => {
+    const lockHolder: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const lock = yield ctx.entities.lockEntities(counterId);
+      yield ctx.waitForExternalEvent("release");
+      lock.release();
+    };
+    const caller: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      return yield ctx.entities.callEntity<number>(counterId, "add", 7);
+    };
+
+    worker.addOrchestrator(lockHolder);
+    worker.addOrchestrator(caller);
+    worker.addNamedEntity("counter", () => new CounterEntity());
+    await worker.start();
+
+    const holderId = await client.scheduleNewOrchestration(lockHolder);
+    const locked = await waitFor(() => backend.getEntity(counterId.toString())?.lockedBy !== undefined);
+    expect(locked).toBe(true);
+
+    const callerId = await client.scheduleNewOrchestration(caller);
+    await client.signalEntity(otherCounterId, "add", 1);
+
+    const otherProcessed = await waitFor(
+      () => backend.getEntity(otherCounterId.toString())?.serializedState !== undefined,
+    );
+    expect(otherProcessed).toBe(true);
+    expect(backend.getInstance(callerId)?.output).toBeUndefined();
+    expect(backend.getEntity(counterId.toString())?.serializedState).toBeUndefined();
+    expect(backend.getEntity(counterId.toString())?.pendingOperations).toHaveLength(1);
+
+    await client.raiseOrchestrationEvent(holderId, "release");
+    await client.waitForOrchestrationCompletion(holderId, true, 10);
+    const callerState = await client.waitForOrchestrationCompletion(callerId, true, 10);
+
+    expect(callerState?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(callerState?.serializedOutput).toEqual(JSON.stringify(7));
+  });
+
+  it("should discard stale pending lock requests when their orchestration is purged", async () => {
+    const holder: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const lock = yield ctx.entities.lockEntities(counterId);
+      yield ctx.waitForExternalEvent("release");
+      lock.release();
+    };
+    const waiter: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      yield ctx.entities.lockEntities(counterId);
+      return "acquired";
+    };
+
+    worker.addOrchestrator(holder);
+    worker.addOrchestrator(waiter);
+    worker.addNamedEntity("counter", () => new CounterEntity());
+    await worker.start();
+
+    const holderId = await client.scheduleNewOrchestration(holder);
+    const holderLocked = await waitFor(() => backend.getEntity(counterId.toString())?.lockedBy !== undefined);
+    expect(holderLocked).toBe(true);
+
+    const waiterId = await client.scheduleNewOrchestration(waiter);
+    await client.waitForOrchestrationStart(waiterId, false, 10);
+    await client.terminateOrchestration(waiterId);
+    await client.waitForOrchestrationCompletion(waiterId, false, 10);
+    expect((await client.purgeOrchestration(waiterId)).deletedInstanceCount).toEqual(1);
+
+    await client.raiseOrchestrationEvent(holderId, "release");
+    await client.waitForOrchestrationCompletion(holderId, false, 10);
+
+    await client.signalEntity(counterId, "add", 5);
+    await client.signalEntity(otherCounterId, "add", 1);
+    const otherProcessed = await waitFor(
+      () => backend.getEntity(otherCounterId.toString())?.serializedState !== undefined,
+    );
+    expect(otherProcessed).toBe(true);
+
+    expect(backend.getEntity(counterId.toString())?.lockedBy).toBeUndefined();
+    expect((await client.getEntity<{ count: number }>(counterId))?.state?.count).toEqual(5);
+  });
+
+  it("should release entity locks when their orchestration terminates", async () => {
+    const holder: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      yield ctx.entities.lockEntities(counterId);
+      yield ctx.waitForExternalEvent("never");
+    };
+
+    worker.addOrchestrator(holder);
+    worker.addNamedEntity("counter", () => new CounterEntity());
+    await worker.start();
+
+    const holderId = await client.scheduleNewOrchestration(holder);
+    const locked = await waitFor(() => backend.getEntity(counterId.toString())?.lockedBy !== undefined);
+    expect(locked).toBe(true);
+
+    await client.terminateOrchestration(holderId);
+    await client.waitForOrchestrationCompletion(holderId, false, 10);
+
+    await client.signalEntity(counterId, "add", 5);
+    await client.signalEntity(otherCounterId, "add", 1);
+    const otherProcessed = await waitFor(
+      () => backend.getEntity(otherCounterId.toString())?.serializedState !== undefined,
+    );
+    expect(otherProcessed).toBe(true);
+
+    expect(backend.getEntity(counterId.toString())?.lockedBy).toBeUndefined();
+    expect((await client.getEntity<{ count: number }>(counterId))?.state?.count).toEqual(5);
+  });
+
+  it("should match a lock owner by execution ID when an instance ID is reused", async () => {
+    const holder: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      yield ctx.entities.lockEntities(counterId);
+      yield ctx.waitForExternalEvent("never");
+    };
+    const caller: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      return yield ctx.entities.callEntity<number>(counterId, "add", 7);
+    };
+    const reusedInstanceId = "reused-owner";
+
+    worker.addOrchestrator(holder);
+    worker.addOrchestrator(caller);
+    worker.addNamedEntity("counter", () => new CounterEntity());
+    await worker.start();
+
+    await client.scheduleNewOrchestration(holder, undefined, reusedInstanceId);
+    const locked = await waitFor(() => backend.getEntity(counterId.toString())?.lockedBy !== undefined);
+    expect(locked).toBe(true);
+    const oldExecutionId = backend.getInstance(reusedInstanceId)!.executionId;
+
+    await client.terminateOrchestration(reusedInstanceId);
+    await client.waitForOrchestrationCompletion(reusedInstanceId, false, 10);
+    expect((await client.purgeOrchestration(reusedInstanceId)).deletedInstanceCount).toEqual(1);
+
+    Object.assign(backend.getEntity(counterId.toString())!, {
+      lockedBy: reusedInstanceId,
+      lockOwnerExecutionId: oldExecutionId,
+      lockCriticalSectionId: "stale-lock",
+    });
+
+    const callerId = await client.scheduleNewOrchestration(caller, undefined, reusedInstanceId);
+    await client.signalEntity(otherCounterId, "add", 1);
+    const otherProcessed = await waitFor(
+      () => backend.getEntity(otherCounterId.toString())?.serializedState !== undefined,
+    );
+    expect(otherProcessed).toBe(true);
+
+    expect(backend.getInstance(callerId)?.executionId).not.toEqual(oldExecutionId);
+    expect(backend.getInstance(callerId)?.output).toBeUndefined();
+    expect(backend.getEntity(counterId.toString())?.serializedState).toBeUndefined();
+  });
+
+  it("should grant overlapping lock requests in request order", async () => {
+    const entityA = new EntityInstanceId("counter", "a");
+    const entityB = new EntityInstanceId("counter", "b");
+
+    const blocker: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const lock = yield ctx.entities.lockEntities(entityB);
+      yield ctx.waitForExternalEvent("release");
+      lock.release();
+    };
+    const firstWaiter: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const lock = yield ctx.entities.lockEntities(entityA, entityB);
+      yield ctx.waitForExternalEvent("release");
+      lock.release();
+    };
+    const secondWaiter: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const lock = yield ctx.entities.lockEntities(entityA);
+      yield ctx.waitForExternalEvent("release");
+      lock.release();
+    };
+
+    worker.addOrchestrator(blocker);
+    worker.addOrchestrator(firstWaiter);
+    worker.addOrchestrator(secondWaiter);
+    await worker.start();
+
+    const blockerId = await client.scheduleNewOrchestration(blocker);
+    const entityBLocked = await waitFor(() => backend.getEntity(entityB.toString())?.lockedBy === blockerId);
+    expect(entityBLocked).toBe(true);
+
+    const firstId = await client.scheduleNewOrchestration(firstWaiter);
+    await client.waitForOrchestrationStart(firstId, false, 10);
+    const secondId = await client.scheduleNewOrchestration(secondWaiter);
+    await client.waitForOrchestrationStart(secondId, false, 10);
+
+    expect(backend.getEntity(entityA.toString())?.lockedBy).toBeUndefined();
+
+    await client.raiseOrchestrationEvent(blockerId, "release");
+    await client.waitForOrchestrationCompletion(blockerId, false, 10);
+    const firstGranted = await waitFor(
+      () =>
+        backend.getEntity(entityA.toString())?.lockedBy === firstId &&
+        backend.getEntity(entityB.toString())?.lockedBy === firstId,
+    );
+    expect(firstGranted).toBe(true);
+
+    await client.raiseOrchestrationEvent(firstId, "release");
+    await client.waitForOrchestrationCompletion(firstId, false, 10);
+    const secondGranted = await waitFor(
+      () => backend.getEntity(entityA.toString())?.lockedBy === secondId,
+    );
+    expect(secondGranted).toBe(true);
+
+    await client.raiseOrchestrationEvent(secondId, "release");
+    await client.waitForOrchestrationCompletion(secondId, false, 10);
+  });
+
+  it("should finish an old owner batch before granting a waiting lock", async () => {
+    let markOperationStarted!: () => void;
+    let releaseOperation!: () => void;
+    const operationStarted = new Promise<void>((resolve) => {
+      markOperationStarted = resolve;
+    });
+    const operationReleased = new Promise<void>((resolve) => {
+      releaseOperation = resolve;
+    });
+
+    class BlockingCounterEntity extends CounterEntity {
+      async block(): Promise<void> {
+        markOperationStarted();
+        await operationReleased;
+      }
+    }
+
+    const holder: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const lock = yield ctx.entities.lockEntities(counterId);
+      yield ctx.waitForExternalEvent("start");
+      yield ctx.entities.callEntity(counterId, "block");
+      lock.release();
+    };
+    const waiter: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const lock = yield ctx.entities.lockEntities(counterId);
+      yield ctx.waitForExternalEvent("release");
+      lock.release();
+    };
+    const secondWorker = new TestOrchestrationWorker(backend);
+
+    for (const testWorker of [worker, secondWorker]) {
+      testWorker.addOrchestrator(holder);
+      testWorker.addOrchestrator(waiter);
+      testWorker.addNamedEntity("counter", () => new BlockingCounterEntity());
+      await testWorker.start();
+    }
+
+    try {
+      const holderId = await client.scheduleNewOrchestration(holder);
+      const holderLocked = await waitFor(
+        () => backend.getEntity(counterId.toString())?.lockedBy === holderId,
+      );
+      expect(holderLocked).toBe(true);
+
+      const waiterId = await client.scheduleNewOrchestration(waiter);
+      await client.waitForOrchestrationStart(waiterId, false, 10);
+
+      await client.raiseOrchestrationEvent(holderId, "start");
+      await operationStarted;
+      await client.terminateOrchestration(holderId);
+      await client.waitForOrchestrationCompletion(holderId, false, 10);
+
+      expect(backend.getEntity(counterId.toString())?.lockedBy).toBeUndefined();
+
+      releaseOperation();
+      const waiterGranted = await waitFor(
+        () => backend.getEntity(counterId.toString())?.lockedBy === waiterId,
+      );
+      expect(waiterGranted).toBe(true);
+
+      await client.raiseOrchestrationEvent(waiterId, "release");
+      await client.waitForOrchestrationCompletion(waiterId, false, 10);
+    } finally {
+      releaseOperation();
+      await secondWorker.stop();
+    }
+  });
+
+  it("should synchronize the execution ID before acquiring entity locks after rewind", async () => {
+    let shouldFail = true;
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      if (shouldFail) {
+        throw new Error("Fail before acquiring the lock");
+      }
+
+      const lock = yield ctx.entities.lockEntities(counterId);
+      const value = yield ctx.entities.callEntity<number>(counterId, "add", 2);
+      lock.release();
+      return value;
+    };
+
+    worker.addOrchestrator(orchestrator);
+    worker.addNamedEntity("counter", () => new CounterEntity());
+    await worker.start();
+
+    const instanceId = await client.scheduleNewOrchestration(orchestrator);
+    const failedState = await client.waitForOrchestrationCompletion(instanceId, false, 10);
+    expect(failedState?.runtimeStatus).toEqual(OrchestrationStatus.FAILED);
+    const oldExecutionId = backend.getInstance(instanceId)!.executionId;
+
+    shouldFail = false;
+    await client.rewindOrchestration(instanceId);
+    const historyRewritten = await waitFor(() => {
+      const executionId = backend
+        .getInstance(instanceId)
+        ?.history.find((event) => event.hasExecutionstarted())
+        ?.getExecutionstarted()
+        ?.getOrchestrationinstance()
+        ?.getExecutionid()
+        ?.getValue();
+      return executionId !== undefined && executionId !== oldExecutionId;
+    });
+    expect(historyRewritten).toBe(true);
+
+    const instance = backend.getInstance(instanceId)!;
+    const historyExecutionId = instance.history
+      .find((event) => event.hasExecutionstarted())!
+      .getExecutionstarted()!
+      .getOrchestrationinstance()!
+      .getExecutionid()!
+      .getValue();
+    expect(instance.executionId).toEqual(historyExecutionId);
+
+    const completedState = await client.waitForOrchestrationCompletion(instanceId, true, 10);
+    expect(completedState?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(completedState?.serializedOutput).toEqual(JSON.stringify(2));
+  });
+
+  it("should reject rewinding an orchestration with an unreleased entity lock", async () => {
+    const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      yield ctx.entities.lockEntities(counterId);
+      throw new Error("Fail while holding the lock");
+    };
+
+    worker.addOrchestrator(orchestrator);
+    await worker.start();
+
+    const instanceId = await client.scheduleNewOrchestration(orchestrator);
+    const failedState = await client.waitForOrchestrationCompletion(instanceId, false, 10);
+    expect(failedState?.runtimeStatus).toEqual(OrchestrationStatus.FAILED);
+
+    await expect(client.rewindOrchestration(instanceId)).rejects.toThrow(
+      "Cannot rewind an orchestration with an unreleased entity lock",
+    );
+  });
+
+  it("should reject rewinding a parent whose failed child has an unreleased entity lock", async () => {
+    const child: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      yield ctx.entities.lockEntities(counterId);
+      throw new Error("Child failed while holding the lock");
+    };
+    const parent: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      return yield ctx.callSubOrchestrator(child);
+    };
+
+    worker.addOrchestrator(parent);
+    worker.addOrchestrator(child);
+    await worker.start();
+
+    const parentId = await client.scheduleNewOrchestration(parent);
+    const failedState = await client.waitForOrchestrationCompletion(parentId, false, 10);
+    expect(failedState?.runtimeStatus).toEqual(OrchestrationStatus.FAILED);
+
+    await expect(client.rewindOrchestration(parentId)).rejects.toThrow(
+      "Cannot rewind an orchestration with an unreleased entity lock",
+    );
+  });
+
+  it("should not rewind a child that fails after recursive rewind validation", async () => {
+    const child: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      yield ctx.entities.lockEntities(counterId);
+      yield ctx.waitForExternalEvent("never");
+    };
+    const parent: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      ctx.callSubOrchestrator(child);
+      yield ctx.waitForExternalEvent("fail");
+      throw new Error("Parent failed while child was running");
+    };
+
+    worker.addOrchestrator(parent);
+    worker.addOrchestrator(child);
+    await worker.start();
+
+    const parentId = await client.scheduleNewOrchestration(parent);
+    const childCreated = await waitFor(() =>
+      backend.getInstance(parentId)!.history.some((event) => event.hasSuborchestrationinstancecreated()),
+    );
+    expect(childCreated).toBe(true);
+    const childId = backend
+      .getInstance(parentId)!
+      .history.find((event) => event.hasSuborchestrationinstancecreated())!
+      .getSuborchestrationinstancecreated()!
+      .getInstanceid();
+    const childLocked = await waitFor(() => backend.getEntity(counterId.toString())?.lockedBy === childId);
+    expect(childLocked).toBe(true);
+
+    await client.raiseOrchestrationEvent(parentId, "fail");
+    const parentState = await client.waitForOrchestrationCompletion(parentId, false, 10);
+    expect(parentState?.runtimeStatus).toEqual(OrchestrationStatus.FAILED);
+    expect(backend.getInstance(childId)?.status).toEqual(
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING,
+    );
+    await worker.stop();
+
+    backend.rewindInstance(parentId);
+    const parentWorkItem = backend.getNextOrchestrationWorkItem()!;
+    const rewindResult = buildRewindResult(parentWorkItem.history, parentWorkItem.pendingEvents);
+
+    const childInstance = backend.getInstance(childId)!;
+    const failAction = pbh.newCompleteOrchestrationAction(
+      -1,
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+      undefined,
+      pbh.newFailureDetails(new Error("Child failed after validation")),
+    );
+    backend.completeOrchestration(childId, childInstance.completionToken, [failAction]);
+    backend.completeOrchestration(
+      parentId,
+      parentWorkItem.completionToken,
+      rewindResult.actions,
+      rewindResult.customStatus,
+    );
+
+    expect(backend.getInstance(childId)?.status).toEqual(
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+    );
+  });
+
+  it("should wait for an in-flight entity batch before granting its lock", async () => {
+    let markOperationStarted!: () => void;
+    let releaseOperation!: () => void;
+    const operationStarted = new Promise<void>((resolve) => {
+      markOperationStarted = resolve;
+    });
+    const operationReleased = new Promise<void>((resolve) => {
+      releaseOperation = resolve;
+    });
+
+    class BlockingCounterEntity extends CounterEntity {
+      async block(): Promise<void> {
+        markOperationStarted();
+        await operationReleased;
+      }
+    }
+
+    const holder: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      const lock = yield ctx.entities.lockEntities(counterId);
+      const value = yield ctx.entities.callEntity<number>(counterId, "get");
+      yield ctx.waitForExternalEvent("release");
+      lock.release();
+      return value;
+    };
+    const secondWorker = new TestOrchestrationWorker(backend);
+
+    for (const testWorker of [worker, secondWorker]) {
+      testWorker.addOrchestrator(holder);
+      testWorker.addNamedEntity("counter", () => new BlockingCounterEntity());
+      await testWorker.start();
+    }
+
+    try {
+      await client.signalEntity(counterId, "block");
+      await operationStarted;
+
+      const holderId = await client.scheduleNewOrchestration(holder);
+      await client.waitForOrchestrationStart(holderId, false, 10);
+
+      expect(backend.getEntity(counterId.toString())?.lockedBy).toBeUndefined();
+
+      await client.signalEntity(counterId, "add", 5);
+      releaseOperation();
+      const lockGranted = await waitFor(() => backend.getEntity(counterId.toString())?.lockedBy !== undefined);
+      expect(lockGranted).toBe(true);
+
+      await client.raiseOrchestrationEvent(holderId, "release");
+      const holderState = await client.waitForOrchestrationCompletion(holderId, true, 10);
+      expect(holderState?.serializedOutput).toEqual(JSON.stringify(0));
+
+      const signalProcessed = await waitFor(() => {
+        const serializedState = backend.getEntity(counterId.toString())?.serializedState;
+        return serializedState !== undefined && JSON.parse(serializedState).count === 5;
+      });
+      expect(signalProcessed).toBe(true);
+    } finally {
+      releaseOperation();
+      await secondWorker.stop();
+    }
   });
 
   it("should deliver a client-initiated signal to the entity", async () => {
