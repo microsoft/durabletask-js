@@ -117,7 +117,7 @@ extends:
               targetPath: $(System.DefaultWorkingDirectory)/drop
 
           steps:
-          - task: SFP.release-tasks.custom-build-release-task.EsrpRelease@9
+          - task: SFP.release-tasks.custom-build-release-task.EsrpRelease@12
             displayName: 'ESRP Release durable-functions'
             inputs:
               connectedservicename: 'dtfx-internal-esrp-prod'

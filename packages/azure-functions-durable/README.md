@@ -8,6 +8,16 @@ Write [Azure Durable Functions](https://learn.microsoft.com/azure/azure-function
 
 This package supersedes the legacy [`durable-functions`](https://github.com/Azure/azure-functions-durable-js) package. New and existing (classic v3) orchestration, activity, and entity code all run on the same gRPC engine.
 
+## Install the v4 preview
+
+Install the latest v4 prerelease from its major-specific npm channel:
+
+```bash
+npm install durable-functions@preview-v4
+```
+
+The `preview-v4` tag advances across v4 beta and release-candidate builds. Pin an exact version such as `durable-functions@4.0.0-beta.1` for reproducible installs. Until v4 reaches GA, an unqualified `npm install durable-functions` continues to install the stable v3 release from npm's `latest` tag.
+
 ## Why it is needed
 
 - **One gRPC protocol.** Durable work items flow between the Functions host and your app over a single gRPC channel instead of the legacy out-of-proc HTTP protocol, keeping the JavaScript provider aligned with the .NET, Python, and Java Durable providers.

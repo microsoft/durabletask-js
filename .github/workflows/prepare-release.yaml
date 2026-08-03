@@ -197,6 +197,17 @@ jobs:
             const packagePath = `${process.env.PKG_DIR}/package.json`;
             const pkg = JSON.parse(fs.readFileSync(packagePath, "utf8"));
             pkg.version = process.env.NEW_VERSION;
+            if (process.env.PKG_DIR === "packages/azure-functions-durable") {
+              if (process.env.NEW_VERSION.includes("-")) {
+                const majorVersion = process.env.NEW_VERSION.split(".")[0];
+                pkg.publishConfig = { ...pkg.publishConfig, tag: `preview-v${majorVersion}` };
+              } else if (pkg.publishConfig) {
+                delete pkg.publishConfig.tag;
+                if (Object.keys(pkg.publishConfig).length === 0) {
+                  delete pkg.publishConfig;
+                }
+              }
+            }
             fs.writeFileSync(packagePath, JSON.stringify(pkg, null, 2) + "\n");
 
             const lockPath = "package-lock.json";
@@ -292,7 +303,13 @@ jobs:
           # Derive the npm dist-tag from the version string. A prerelease (contains "-") must
           # publish under a non-default tag so it does NOT move the "latest" dist-tag.
           if [[ "$NEW_VERSION" == *-* ]]; then
-            PUBLISH_CMD="npm publish --registry https://registry.npmjs.org/ --tag preview"
+            if [[ "$NPM_NAME" == "durable-functions" ]]; then
+              MAJOR_VERSION="${NEW_VERSION%%.*}"
+              PUBLISH_TAG="preview-v${MAJOR_VERSION}"
+            else
+              PUBLISH_TAG="preview"
+            fi
+            PUBLISH_CMD="npm publish --registry https://registry.npmjs.org/ --tag ${PUBLISH_TAG}"
           else
             PUBLISH_CMD="npm publish --registry https://registry.npmjs.org/"
           fi
@@ -319,5 +336,5 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           if [[ "$NEW_VERSION" == *-* ]]; then
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "> :warning: This is a prerelease. Omitting \`--tag preview\` would move the \`latest\` dist-tag to a prerelease version." >> $GITHUB_STEP_SUMMARY
+            echo "> :warning: This is a prerelease. Omitting \`--tag ${PUBLISH_TAG}\` would move the \`latest\` dist-tag to a prerelease version." >> $GITHUB_STEP_SUMMARY
           fi

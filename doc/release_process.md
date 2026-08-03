@@ -36,7 +36,7 @@ X.Y.Z-alpha.N  →  X.Y.Z-beta.N  →  X.Y.Z-rc.N  →  X.Y.Z (stable)
 | Release Candidate | `0.1.0-rc.1` |
 | Stable | `0.1.0` |
 
-The scheme above describes the version **string**. Mapping a version to an **npm dist-tag** is a separate concern and does **not** follow a per-stage `beta`/`next` convention: the **Prepare Release** workflow's emitted **manual fallback** `npm publish` command tags every prerelease `preview` and omits `--tag` for a stable GA (so only a GA moves `latest`). Publishing a prerelease through the sanctioned ESRP path is **blocked pending B11** until owners confirm whether the ESRP task can set that tag. See *Quick Reference: npm Dist Tags* below for the authoritative rule.
+The scheme above describes the version **string**. Mapping a version to an **npm dist-tag** is a separate concern and does **not** follow a per-stage `beta`/`next` convention. For `durable-functions`, each prerelease uses a major-specific channel such as `preview-v4`; the package's `publishConfig.tag` carries that channel through the signed tarball to ESRP. A stable `durable-functions` release removes the preview tag so the publish moves `latest`. The other packages retain their existing `preview` manual-fallback convention. See *Quick Reference: npm Dist Tags* below for the authoritative rules.
 
 ## Automated Release Preparation (Recommended)
 
@@ -107,7 +107,7 @@ Never publish from the release branch — it exists only to carry the version/ch
 
 ### Step 3: Run the Release Pipeline
 
-Trigger the release pipeline to publish one signed package to npm via ESRP. **This is the sanctioned publish path.** `eng/ci/release.yml` consumes the `durabletask-js.official` build artifact from **`main`** (its pipeline resource is pinned to `branch: main`), so its source is the `main` official build selected in Step 2 — not the release branch. The pipeline's `package` runtime parameter controls which one of these release stages is inserted into the compiled 1ES plan. It defaults to `durabletask-js`, so verify or change it before queueing: a wrong or unchanged default compiles the wrong package stage. ESRP approval remains the final safety gate before publishing.
+Trigger the release pipeline to publish one signed package to npm via ESRP. **This is the sanctioned publish path.** `eng/ci/release.yml` consumes the `durabletask-js.official` build artifact from **`main`** (its pipeline resource is pinned to `branch: main`), so its source is the `main` official build selected in Step 2 — not the release branch. The pipeline's `package` runtime parameter controls which one of these release stages is inserted into the compiled 1ES plan. It defaults to `durabletask-js`, so verify or change it before queueing: a wrong or unchanged default compiles the wrong package stage. The `durable-functions` stage uses ESRP Release v12, which is auto-approved and publishes without a manual ESRP prompt, so complete every artifact and parameter check before queueing.
 
 - `durabletask-js` inserts `release_durabletask_js` for core `@microsoft/durabletask-js`.
 - `durabletask-js-azuremanaged` inserts `release_durabletask_js_azuremanaged` for `@microsoft/durabletask-js-azuremanaged`.
@@ -118,13 +118,13 @@ Trigger the release pipeline to publish one signed package to npm via ESRP. **Th
 1. Click **Run pipeline**
 2. Select the **`main` official build from Step 2** (the one containing the release commit) as the source pipeline artifact
 3. Verify or change the **`package`** parameter to the one package to publish. Exactly one release stage is compiled and exactly one package is published; do not use queue-time stage selection to choose packages.
-4. Approve the ESRP release when prompted.
+4. For `durable-functions`, inspect the selected `.tgz` before starting the run. Confirm its `package/package.json` contains the intended version and `publishConfig.tag`; then queue the pipeline. Do not expect a later ESRP approval prompt.
 
 This compile-time selection eliminates the failure demonstrated by run **294746**: de-selecting the core stage at queue time did not expose its result to the Azure Managed dependency condition as the expected literal `Skipped`, so the selected package's stage was skipped too. The selected package now has no cross-stage dependency because the other package stages do not exist in that run's compiled plan.
 
 **Two runs for core + compat.** The compat **Prepare Release** run guards on core already being published to **public npm** — it runs `npm view @microsoft/durabletask-js@<pinned-version> --registry https://registry.npmjs.org/` and fails if that exact version is absent (`durable-functions` exact-pins core). Publish and verify core first; only then prepare `durable-functions` and publish it in a later release-pipeline run. (`azuremanaged` depends on core only through a peer floor that is already satisfied and has no ordering constraint.)
 
-> **Open question (B11) — hard blocker for ESRP prereleases:** it is not yet confirmed whether the ESRP release task can set the npm **dist-tag** (e.g. publish a prerelease under `preview` rather than moving `latest`). Publishing a prerelease such as `durable-functions@4.0.0-beta.1` through ESRP is **blocked** until the ESRP / 1ES pipeline owners confirm how to apply the `preview` tag — do **not** assume ESRP applies a dist-tag. The `--tag` guidance in *Quick Reference: npm Dist Tags* applies to a manual `npm publish`.
+> **`durable-functions` prereleases:** the package manifest sets `publishConfig.tag` to `preview-v<major>` (for example, `preview-v4`). ESRP Release v12 infers the npm dist-tag from that metadata inside the signed `.tgz`. Before queueing, inspect the tarball's `package/package.json` and confirm the expected version and `publishConfig.tag`; after publishing, verify that `preview-v4` moved and `latest` did not. This rule applies only to `durable-functions`. ESRP prerelease tagging for the two `@microsoft` packages remains unconfirmed; do not publish their prereleases through ESRP until their tag behavior is defined.
 
 ### Step 4: Verify npm Publish
 
@@ -162,6 +162,17 @@ Bump the `"version"` field in **only the package you are releasing**:
 # core:         packages/durabletask-js/package.json                → "version": "X.Y.Z"
 # azuremanaged: packages/durabletask-js-azuremanaged/package.json   → "version": "X.Y.Z"
 # compat:       packages/azure-functions-durable/package.json       → "version": "X.Y.Z"
+```
+
+For `durable-functions`, keep the npm channel aligned with the version:
+
+- For a prerelease, set `publishConfig.tag` to `preview-v<major>` (for example, `preview-v4` for `4.0.0-beta.1`).
+- For a stable GA release, remove `publishConfig.tag`; if `publishConfig` is then empty, remove the object.
+
+```jsonc
+"publishConfig": {
+  "tag": "preview-v4"
+}
 ```
 
 Then update the affected cross-package dependency **for the package you are releasing**:
@@ -235,11 +246,11 @@ Then follow the **Publishing** steps above (Steps 1-5).
 
 ## Quick Reference: npm Dist Tags
 
-npm **dist-tags** are separate from the git tags this repo pushes (`v...`, `azuremanaged-v...`, `durable-functions-v...`); a git tag only names a release commit and never moves an npm dist-tag. This repo uses one simple rule, not the per-stage `alpha`/`beta`/`next` convention:
+npm **dist-tags** are separate from the git tags this repo pushes (`v...`, `azuremanaged-v...`, `durable-functions-v...`); a git tag only names a release commit and never moves an npm dist-tag. This repo does not use the per-stage `alpha`/`beta`/`next` convention:
 
-- **Prerelease** — any version containing `-` (e.g. `0.4.0-beta.1`, `4.0.0-beta.1`). The **Prepare Release** workflow emits `npm publish --registry https://registry.npmjs.org/ --tag preview` in its run summary as a **manual fallback** to run after the release PR merges. When using this manual fallback, publish every prerelease under the single `preview` dist-tag, so it never moves `latest`. `durable-functions` 4.x previews install with `npm install durable-functions@preview` (see `packages/azure-functions-durable/README.md`).
-- **Stable GA** — no `-`. The emitted command omits `--tag`, so the publish moves `latest`.
-- **ESRP path (sanctioned, Step 3):** whether the ESRP release task can set an npm dist-tag is an **open question (B11)** and a **hard blocker** for publishing a prerelease such as `durable-functions@4.0.0-beta.1` through ESRP — confirm with the ESRP / 1ES owners how to apply the `preview` tag before publishing any prerelease via ESRP. Do **not** assume ESRP applies a dist-tag; the `--tag preview` guidance above is for a manual `npm publish`.
+- **`durable-functions` prerelease** — any `durable-functions` version containing `-` uses `preview-v<major>` (for example, `4.0.0-beta.1` uses `preview-v4`). The Prepare Release workflow updates `publishConfig.tag`, and ESRP infers the tag from the signed package metadata. The manual fallback emits the matching `--tag preview-v4`. Install with `npm install durable-functions@preview-v4`.
+- **Other-package prerelease** — the manual fallback uses the generic `preview` tag. Their ESRP prerelease behavior remains undefined and blocked as described above.
+- **Stable GA** — no `-`. For `durable-functions`, Prepare Release removes the major-specific preview tag. The emitted manual command omits `--tag`, so the publish moves `latest`.
 
 ## Rolling Back a Release
 
