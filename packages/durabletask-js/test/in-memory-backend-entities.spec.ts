@@ -206,6 +206,121 @@ describe("In-Memory Backend - Entities", () => {
     expect(state?.serializedOutput).toContain("caught:");
   });
 
+  it("should preserve entity state when the entity factory fails", async () => {
+    let failFactory = false;
+    const orchestrator: TOrchestrator = async function* (
+      ctx: OrchestrationContext,
+      input: { operation: string; amount?: number },
+    ): any {
+      try {
+        return yield ctx.entities.callEntity<number>(counterId, input.operation, input.amount);
+      } catch (e) {
+        return `caught:${(e as Error).message}`;
+      }
+    };
+
+    worker.addOrchestrator(orchestrator);
+    worker.addNamedEntity("counter", () => {
+      if (failFactory) {
+        throw new Error("Intentional entity factory failure");
+      }
+      return new CounterEntity();
+    });
+    await worker.start();
+
+    const seedId = await client.scheduleNewOrchestration(orchestrator, { operation: "add", amount: 4 });
+    const seedState = await client.waitForOrchestrationCompletion(seedId, true, 10);
+    expect(seedState?.serializedOutput).toEqual(JSON.stringify(4));
+
+    failFactory = true;
+    const failureId = await client.scheduleNewOrchestration(orchestrator, { operation: "get" });
+    const failureState = await client.waitForOrchestrationCompletion(failureId, true, 10);
+    expect(failureState?.serializedOutput).toContain("Intentional entity factory failure");
+    expect((await client.getEntity<{ count: number }>(counterId))?.state?.count).toEqual(4);
+
+    failFactory = false;
+    const readId = await client.scheduleNewOrchestration(orchestrator, { operation: "get" });
+    const readState = await client.waitForOrchestrationCompletion(readId, true, 10);
+    expect(readState?.serializedOutput).toEqual(JSON.stringify(4));
+  });
+
+  it("should not deliver a stale entity result to a recreated orchestration", async () => {
+    let markOperationStarted!: () => void;
+    let releaseOperation!: () => void;
+    const operationStarted = new Promise<void>((resolve) => {
+      markOperationStarted = resolve;
+    });
+    const operationReleased = new Promise<void>((resolve) => {
+      releaseOperation = resolve;
+    });
+
+    class BlockingCounterEntity extends CounterEntity {
+      async block(): Promise<number> {
+        markOperationStarted();
+        await operationReleased;
+        return 42;
+      }
+    }
+
+    const staleCaller: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      return yield ctx.entities.callEntity<number>(counterId, "block");
+    };
+    const recreatedCaller: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      yield ctx.waitForExternalEvent("finish");
+      return "done";
+    };
+    const reusedInstanceId = "recreated-entity-caller";
+    const secondWorker = new TestOrchestrationWorker(backend);
+
+    for (const testWorker of [worker, secondWorker]) {
+      testWorker.addOrchestrator(staleCaller);
+      testWorker.addOrchestrator(recreatedCaller);
+      testWorker.addNamedEntity("counter", () => new BlockingCounterEntity());
+    }
+    await worker.start();
+
+    try {
+      await client.scheduleNewOrchestration(staleCaller, undefined, reusedInstanceId);
+      await operationStarted;
+
+      const dispatchedCall = backend
+        .getEntity(counterId.toString())!
+        .dispatchedOperations[0].getEntityoperationcalled()!;
+      const staleRequestId = dispatchedCall.getRequestid();
+      const staleExecutionId = dispatchedCall.getParentexecutionid()!.getValue();
+
+      await secondWorker.start();
+      await client.terminateOrchestration(reusedInstanceId);
+      await client.waitForOrchestrationCompletion(reusedInstanceId, false, 10);
+      expect((await client.purgeOrchestration(reusedInstanceId)).deletedInstanceCount).toEqual(1);
+
+      await client.scheduleNewOrchestration(recreatedCaller, undefined, reusedInstanceId);
+      await client.waitForOrchestrationStart(reusedInstanceId, false, 10);
+      expect(backend.getInstance(reusedInstanceId)?.executionId).not.toEqual(staleExecutionId);
+
+      releaseOperation();
+      const batchCompleted = await waitFor(
+        () => backend.getEntity(counterId.toString())?.dispatchedOperations.length === 0,
+      );
+      expect(batchCompleted).toBe(true);
+
+      const recreatedInstance = backend.getInstance(reusedInstanceId)!;
+      const staleResultDelivered = [...recreatedInstance.history, ...recreatedInstance.pendingEvents].some(
+        (event) =>
+          event.getEntityoperationcompleted()?.getRequestid() === staleRequestId ||
+          event.getEntityoperationfailed()?.getRequestid() === staleRequestId,
+      );
+      expect(staleResultDelivered).toBe(false);
+
+      await client.raiseOrchestrationEvent(reusedInstanceId, "finish");
+      const recreatedState = await client.waitForOrchestrationCompletion(reusedInstanceId, true, 10);
+      expect(recreatedState?.serializedOutput).toEqual(JSON.stringify("done"));
+    } finally {
+      releaseOperation();
+      await secondWorker.stop();
+    }
+  });
+
   it("should grant and release entity locks", async () => {
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
       const lock = yield ctx.entities.lockEntities(counterId);

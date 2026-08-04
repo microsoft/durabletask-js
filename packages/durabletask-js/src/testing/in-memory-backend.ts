@@ -491,7 +491,7 @@ export class InMemoryOrchestrationBackend {
     }
 
     const parent = this.instances.get(parentInstanceId);
-    if (!parent) {
+    if (!parent || parent.executionId !== called.getParentexecutionid()?.getValue()) {
       return;
     }
 

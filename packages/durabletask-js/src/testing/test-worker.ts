@@ -234,7 +234,11 @@ export class TestOrchestrationWorker {
       const factory = this.registry.getEntity(entityId.name);
 
       if (!factory) {
-        return this.createEntityFailureResult(operations, new Error(`No entity task named '${entityId.name}' was found.`));
+        return this.createEntityFailureResult(
+          operations,
+          entityState,
+          new Error(`No entity task named '${entityId.name}' was found.`),
+        );
       }
 
       const request = new pb.EntityBatchRequest();
@@ -250,7 +254,7 @@ export class TestOrchestrationWorker {
       return await shim.executeAsync(request);
     } catch (error: unknown) {
       const err = error instanceof Error ? error : new Error(String(error));
-      return this.createEntityFailureResult(operations, err);
+      return this.createEntityFailureResult(operations, entityState, err);
     }
   }
 
@@ -284,9 +288,19 @@ export class TestOrchestrationWorker {
   /**
    * Builds a batch result that fails every operation in the batch with the same error.
    */
-  private createEntityFailureResult(operations: pb.HistoryEvent[], error: Error): pb.EntityBatchResult {
+  private createEntityFailureResult(
+    operations: pb.HistoryEvent[],
+    entityState: string | undefined,
+    error: Error,
+  ): pb.EntityBatchResult {
     const batchResult = new pb.EntityBatchResult();
     const failureDetails = pbh.newFailureDetails(error);
+
+    if (entityState !== undefined) {
+      const state = new StringValue();
+      state.setValue(entityState);
+      batchResult.setEntitystate(state);
+    }
 
     batchResult.setResultsList(
       operations.map(() => {
