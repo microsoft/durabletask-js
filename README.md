@@ -88,6 +88,10 @@ const state = await client.waitForOrchestrationCompletion(id, true, 60);
 console.log(`Result: ${state?.serializedOutput}`);
 ```
 
+`await worker.start()` resolves only after the initial sidecar handshake succeeds and the
+work-item stream is established. Startup times out after 30 seconds by default; use
+the worker builder's `.startupTimeout(milliseconds)` method to configure it.
+
 You can find more samples in the [examples/azure-managed](./examples/azure-managed) directory.
 
 ## Supported patterns
