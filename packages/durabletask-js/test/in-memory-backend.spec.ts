@@ -372,6 +372,41 @@ describe("In-Memory Backend", () => {
     expect(observedVersions).toEqual(["1.0.0", "2.0.0", "2.0.0"]);
   });
 
+  it("should clear the current version when continue-as-new specifies an empty version", async () => {
+    const observedVersions: string[] = [];
+    const orchestrator: TOrchestrator = async (ctx: OrchestrationContext, input: number) => {
+      if (!ctx.isReplaying) {
+        observedVersions.push(ctx.version);
+      }
+
+      if (input === 0) {
+        ctx.continueAsNew(1, false, "");
+        return;
+      }
+
+      return ctx.version;
+    };
+
+    worker.addOrchestrator(orchestrator);
+    const id = "clear-version-continue-as-new";
+    backend.createInstance(id, getName(orchestrator), JSON.stringify(0));
+    const initialExecutionStarted = backend
+      .getInstance(id)
+      ?.pendingEvents.find((event) => event.hasExecutionstarted())
+      ?.getExecutionstarted();
+    const initialVersion = new StringValue();
+    initialVersion.setValue("2.0.0");
+    initialExecutionStarted?.setVersion(initialVersion);
+    await worker.start();
+
+    const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(state?.serializedOutput).toEqual(JSON.stringify(""));
+    expect(observedVersions).toEqual(["2.0.0", ""]);
+  });
+
   it("should not collide default sub-orchestration instance IDs across continue-as-new generations", async () => {
     // Regression for the callHttp-on-continueAsNew collision: a default (auto-derived) child
     // instance ID must be unique per generation. Before the fix the derived ID was

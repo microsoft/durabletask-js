@@ -46,7 +46,7 @@ export function newExecutionStartedEvent(
   executionStartedEvent.setName(name);
   executionStartedEvent.setInput(getStringValue(encodedInput));
   executionStartedEvent.setOrchestrationinstance(orchestrationInstance);
-  executionStartedEvent.setVersion(getStringValue(version));
+  executionStartedEvent.setVersion(getStringValueIfDefined(version));
 
   // Set parent instance info if provided (for sub-orchestrations)
   if (parentInstance) {
@@ -368,6 +368,16 @@ export function getStringValue(val?: string): StringValue | undefined {
   return stringValue;
 }
 
+function getStringValueIfDefined(val?: string): StringValue | undefined {
+  if (val === undefined) {
+    return;
+  }
+
+  const stringValue = new StringValue();
+  stringValue.setValue(val);
+  return stringValue;
+}
+
 /**
  * Populates a tag map with the provided tags.
  *
@@ -405,7 +415,7 @@ export function newCompleteOrchestrationAction(
   completeOrchestrationAction.setResult(getStringValue(result));
   completeOrchestrationAction.setFailuredetails(failureDetails);
   completeOrchestrationAction.setCarryovereventsList(carryoverEvents || []);
-  completeOrchestrationAction.setNewversion(getStringValue(newVersion));
+  completeOrchestrationAction.setNewversion(getStringValueIfDefined(newVersion));
 
   const action = new pb.OrchestratorAction();
   action.setId(id);
