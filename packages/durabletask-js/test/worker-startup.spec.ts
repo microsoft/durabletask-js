@@ -27,19 +27,13 @@ function createMockStream(): MockStream {
 function createMockStub(
   hello: (...args: any[]) => grpc.ClientUnaryCall,
   stream: MockStream = createMockStream(),
-  autoReady: boolean = true,
 ): {
   stub: stubs.TaskHubSidecarServiceClient;
   stream: MockStream;
   getWorkItems: jest.Mock;
   close: jest.Mock;
 } {
-  const getWorkItems = jest.fn(() => {
-    if (autoReady) {
-      queueMicrotask(() => stream.emit("metadata", new grpc.Metadata()));
-    }
-    return stream;
-  });
+  const getWorkItems = jest.fn().mockReturnValue(stream);
   const close = jest.fn();
   const stub = {
     hello: jest.fn(hello),
@@ -74,16 +68,12 @@ describe("TaskHubGrpcWorker startup", () => {
     jest.restoreAllMocks();
   });
 
-  it("waits for the hello handshake and work-item stream before start resolves", async () => {
+  it("resolves after hello succeeds and an idle work-item stream is configured", async () => {
     let completeHello: HelloCallback | undefined;
-    const { stub, stream, getWorkItems } = createMockStub(
-      (...args: any[]) => {
-        completeHello = getHelloCallback(args);
-        return { cancel: jest.fn() } as any;
-      },
-      undefined,
-      false,
-    );
+    const { stub, getWorkItems } = createMockStub((...args: any[]) => {
+      completeHello = getHelloCallback(args);
+      return { cancel: jest.fn() } as any;
+    });
     useMockStub(stub);
     const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
 
@@ -97,14 +87,10 @@ describe("TaskHubGrpcWorker startup", () => {
     expect(getWorkItems).not.toHaveBeenCalled();
 
     completeHello!(null, new Empty());
-    await flushAsync();
-
-    expect(getWorkItems).toHaveBeenCalledTimes(1);
-    expect(started).toBe(false);
-
-    stream.emit("metadata", new grpc.Metadata());
     await startPromise;
 
+    expect(getWorkItems).toHaveBeenCalledTimes(1);
+    expect(started).toBe(true);
     expect((worker as any)._responseStream).not.toBeNull();
   });
 
@@ -147,29 +133,6 @@ describe("TaskHubGrpcWorker startup", () => {
     expect((worker as any)._isRunning).toBe(false);
   });
 
-  it("times out and cancels a work-item stream that never becomes ready", async () => {
-    const { stub, stream, close } = createMockStub(
-      (...args: any[]) => {
-        getHelloCallback(args)(null, new Empty());
-        return { cancel: jest.fn() } as any;
-      },
-      undefined,
-      false,
-    );
-    useMockStub(stub);
-    const worker = new TaskHubGrpcWorker({
-      logger: new NoOpLogger(),
-      startupTimeoutMs: 10,
-    });
-
-    await expect(worker.start()).rejects.toThrow("while establishing the work-item stream");
-
-    expect(stream.cancel).toHaveBeenCalled();
-    expect(stream.destroy).toHaveBeenCalled();
-    expect(close).toHaveBeenCalled();
-    expect((worker as any)._isRunning).toBe(false);
-  });
-
   it("rejects startup timeouts above the maximum Node.js timer delay", () => {
     expect(
       () =>
@@ -194,10 +157,7 @@ describe("TaskHubGrpcWorker startup", () => {
       }
       return { cancel: jest.fn() } as any;
     });
-    const getWorkItems = jest.fn(() => {
-      queueMicrotask(() => stream.emit("metadata", new grpc.Metadata()));
-      return stream;
-    });
+    const getWorkItems = jest.fn().mockReturnValue(stream);
     useMockStub({ hello, getWorkItems, close } as unknown as stubs.TaskHubSidecarServiceClient);
     const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
 
@@ -212,26 +172,24 @@ describe("TaskHubGrpcWorker startup", () => {
     expect((worker as any)._isRunning).toBe(true);
   });
 
-  it("rejects startup when the initial stream fails before becoming ready", async () => {
-    const { stub, stream, close } = createMockStub(
-      (...args: any[]) => {
-        getHelloCallback(args)(null, new Empty());
-        return { cancel: jest.fn() } as any;
-      },
-      undefined,
-      false,
-    );
-    useMockStub(stub);
+  it("remains retryable after synchronous gRPC client construction fails", async () => {
+    const { stub, getWorkItems } = createMockStub((...args: any[]) => {
+      getHelloCallback(args)(null, new Empty());
+      return { cancel: jest.fn() } as any;
+    });
+    jest
+      .spyOn(GrpcClient.prototype as any, "_generateClient")
+      .mockImplementationOnce(() => {
+        throw new Error("client construction failed");
+      })
+      .mockReturnValue(stub);
     const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
 
-    const startPromise = worker.start();
-    await flushAsync();
-    stream.emit("error", new Error("14 UNAVAILABLE during startup"));
-
-    await expect(startPromise).rejects.toThrow("14 UNAVAILABLE during startup");
-    expect(close).toHaveBeenCalled();
+    await expect(worker.start()).rejects.toThrow("client construction failed");
     expect((worker as any)._isRunning).toBe(false);
-    expect((worker as any)._responseStream).toBeNull();
+
+    await expect(worker.start()).resolves.toBeUndefined();
+    expect(getWorkItems).toHaveBeenCalledTimes(1);
   });
 
   it("cancels an in-flight hello when stopped during startup", async () => {
@@ -269,22 +227,14 @@ describe("TaskHubGrpcWorker startup", () => {
     let secondHello: HelloCallback | undefined;
     const firstStream = createMockStream();
     const secondStream = createMockStream();
-    const first = createMockStub(
-      (...args: any[]) => {
-        firstHello = getHelloCallback(args);
-        return { cancel: jest.fn() } as any;
-      },
-      firstStream,
-      false,
-    );
-    const second = createMockStub(
-      (...args: any[]) => {
-        secondHello = getHelloCallback(args);
-        return { cancel: jest.fn() } as any;
-      },
-      secondStream,
-      false,
-    );
+    const first = createMockStub((...args: any[]) => {
+      firstHello = getHelloCallback(args);
+      return { cancel: jest.fn() } as any;
+    }, firstStream);
+    const second = createMockStub((...args: any[]) => {
+      secondHello = getHelloCallback(args);
+      return { cancel: jest.fn() } as any;
+    }, secondStream);
     jest
       .spyOn(GrpcClient.prototype as any, "_generateClient")
       .mockReturnValueOnce(first.stub)
@@ -309,8 +259,6 @@ describe("TaskHubGrpcWorker startup", () => {
     expect(second.getWorkItems).not.toHaveBeenCalled();
 
     secondHello!(null, new Empty());
-    await flushAsync();
-    secondStream.emit("metadata", new grpc.Metadata());
     await secondStart;
     await firstStartRejection;
 
@@ -334,27 +282,6 @@ describe("TaskHubGrpcWorker startup", () => {
 
     expect(retry).toHaveBeenCalledTimes(1);
     expect(stream.destroy).toHaveBeenCalled();
-  });
-
-  it("retries when a replacement stream never becomes ready", async () => {
-    const { stub } = createMockStub(
-      (...args: any[]) => {
-        getHelloCallback(args)(null, new Empty());
-        return { cancel: jest.fn() } as any;
-      },
-      undefined,
-      false,
-    );
-    const worker = new TaskHubGrpcWorker({
-      logger: new NoOpLogger(),
-      startupTimeoutMs: 10,
-    });
-    const retry = jest.fn().mockResolvedValue(undefined);
-    (worker as any)._createNewClientAndRetry = retry;
-
-    await worker.internalRunWorker({ stub } as GrpcClient, true);
-
-    expect(retry).toHaveBeenCalledTimes(1);
   });
 
   it("stops and cleans up a stream established by start", async () => {

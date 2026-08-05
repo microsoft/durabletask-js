@@ -65,8 +65,7 @@ export interface TaskHubGrpcWorkerOptions {
   /** Optional timeout in milliseconds for graceful shutdown. Defaults to 30000. */
   shutdownTimeoutMs?: number;
   /**
-   * Optional timeout in milliseconds for establishing the initial sidecar connection,
-   * including metadata generation, the hello handshake, and work-item stream readiness.
+   * Optional timeout in milliseconds for initial metadata generation and the sidecar hello handshake.
    * Defaults to 30000.
    */
   startupTimeoutMs?: number;
@@ -430,10 +429,10 @@ export class TaskHubGrpcWorker {
       throw new Error("The worker is already running.");
     }
 
+    const client = new GrpcClient(this._hostAddress, this._grpcChannelOptions, this._tls, this._grpcChannelCredentials);
     this._isRunning = true;
     this._stopWorker = false;
     const generation = ++this._connectionGeneration;
-    const client = new GrpcClient(this._hostAddress, this._grpcChannelOptions, this._tls, this._grpcChannelCredentials);
     this._stub = client.stub;
 
     try {
@@ -477,7 +476,7 @@ export class TaskHubGrpcWorker {
         () => timeoutMessage,
       );
     let attemptStream: grpc.ClientReadableStream<pb.WorkItem> | null = null;
-    let streamReady = false;
+    let connectionEstablished = false;
 
     try {
       // send a "Hello" message to the sidecar to ensure that it's listening
@@ -502,24 +501,9 @@ export class TaskHubGrpcWorker {
       const stream = client.stub.getWorkItems(request, metadata);
       attemptStream = stream;
       this._responseStream = stream;
-      let resolveStreamReady: () => void;
-      let rejectStreamReady: (error: Error) => void;
-      const streamReadyPromise = new Promise<void>((resolve, reject) => {
-        resolveStreamReady = resolve;
-        rejectStreamReady = reject;
-      });
-      const markStreamReady = () => {
-        if (!streamReady) {
-          streamReady = true;
-          resolveStreamReady();
-        }
-      };
-
-      stream.once("metadata", markStreamReady);
 
       // Wait for a work item to be received
       stream.on("data", (workItem: pb.WorkItem) => {
-        markStreamReady();
         const completionToken = workItem.getCompletiontoken();
         if (workItem.hasOrchestratorrequest()) {
           WorkerLogs.workItemReceived(
@@ -548,11 +532,6 @@ export class TaskHubGrpcWorker {
 
       // Wait for the stream to end or error
       stream.on("end", () => {
-        if (!streamReady) {
-          this._disposeResponseStream(stream);
-          rejectStreamReady(new Error("The work-item stream ended before the worker connection was established."));
-          return;
-        }
         if (this._stopWorker) {
           WorkerLogs.streamEnded(this._logger);
           this._disposeResponseStream(stream);
@@ -569,11 +548,6 @@ export class TaskHubGrpcWorker {
       });
 
       stream.on("error", (err: Error) => {
-        if (!streamReady) {
-          this._disposeResponseStream(stream);
-          rejectStreamReady(err);
-          return;
-        }
         // Ignore cancellation errors when the worker is being stopped intentionally
         if (this._stopWorker) {
           return;
@@ -593,11 +567,8 @@ export class TaskHubGrpcWorker {
         });
       });
 
-      await waitForStartup(
-        streamReadyPromise,
-        `Timed out starting worker after ${this._startupTimeoutMs}ms while establishing the work-item stream`,
-      );
       this._ensureConnectionAttemptActive(generation);
+      connectionEstablished = true;
       this._backoff.reset();
       WorkerLogs.workerConnected(this._logger, this._hostAddress ?? "localhost:4001");
     } catch (err) {
@@ -606,7 +577,7 @@ export class TaskHubGrpcWorker {
         connectionAbort.abort(error);
         this._helloCall?.cancel();
       }
-      if (attemptStream && !streamReady) {
+      if (attemptStream && !connectionEstablished) {
         attemptStream.cancel();
         this._disposeResponseStream(attemptStream);
       }

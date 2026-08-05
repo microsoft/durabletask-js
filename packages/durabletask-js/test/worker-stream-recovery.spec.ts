@@ -36,10 +36,7 @@ function createMockClient(): {
       callback(null, {});
       return { cancel: jest.fn() } as any;
     },
-    getWorkItems: jest.fn(() => {
-      queueMicrotask(() => mockStream.emit("metadata", {}));
-      return mockStream;
-    }),
+    getWorkItems: jest.fn().mockReturnValue(mockStream),
   };
 
   const client = { stub } as unknown as GrpcClient;
