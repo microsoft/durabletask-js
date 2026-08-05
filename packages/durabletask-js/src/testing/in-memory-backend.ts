@@ -594,7 +594,14 @@ export class InMemoryOrchestrationBackend {
     if (status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW) {
       // Handle continue-as-new
       const newInput = completeAction.getResult()?.getValue();
-      const newVersion = completeAction.getNewversion()?.getValue();
+      const currentVersion = instance.history
+        .find((event) => event.hasExecutionstarted())
+        ?.getExecutionstarted()
+        ?.getVersion()
+        ?.getValue();
+      const newVersion = completeAction.hasNewversion()
+        ? completeAction.getNewversion()?.getValue()
+        : currentVersion;
       const carryoverEvents = completeAction.getCarryovereventsList();
 
       // Cancel timers still pending from the previous iteration. Their timer IDs are
