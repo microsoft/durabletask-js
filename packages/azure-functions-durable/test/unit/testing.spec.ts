@@ -86,15 +86,16 @@ describe("durable-functions/testing", () => {
     });
   });
 
-  it("does not hang cleanup when an activity never settles", async () => {
+  it("bounds cleanup without cancelling already-running activity code", async () => {
     let activityStarted!: () => void;
-    let releaseActivity!: () => void;
+    let activityFinished!: () => void;
     const started = new Promise<void>((resolve) => {
       activityStarted = resolve;
     });
-    const neverSettlingActivity = new Promise<void>((resolve) => {
-      releaseActivity = resolve;
+    const finished = new Promise<void>((resolve) => {
+      activityFinished = resolve;
     });
+    let sideEffectCompleted = false;
     const orchestrator: OrchestrationHandler = function* (
       context: OrchestrationContext,
     ): Generator<unknown, void, unknown> {
@@ -106,23 +107,23 @@ describe("durable-functions/testing", () => {
       activities: {
         never: () => {
           activityStarted();
-          return neverSettlingActivity;
+          return new Promise<void>((resolve) => {
+            setTimeout(() => {
+              sideEffectCompleted = true;
+              activityFinished();
+              resolve();
+            }, 250);
+          });
         },
       },
     });
     await started;
 
-    const outcome = await Promise.race([
-      execution.then(
-        () => "settled",
-        () => "settled",
-      ),
-      new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 250)),
-    ]);
+    await expect(execution).rejects.toThrow("Timeout waiting for orchestration");
+    expect(sideEffectCompleted).toBe(false);
 
-    releaseActivity();
-    await execution.catch(() => undefined);
-    expect(outcome).toBe("settled");
+    await finished;
+    expect(sideEffectCompleted).toBe(true);
   });
 
   it("serializes concurrent harness starts through one worker startup", async () => {

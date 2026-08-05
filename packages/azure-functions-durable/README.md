@@ -188,6 +188,11 @@ expect(orchestrationResult.output).toBe("Hello, World!");
 Failed orchestrations return `status: "Failed"` with plain `failure` details instead of requiring
 manual parsing of core state.
 
+An orchestration timeout or harness disposal stops the helper from waiting for an in-flight activity
+and bounds worker shutdown, but it **does not cancel JavaScript activity code that has already
+started**. That code may continue running timers, I/O, or other side effects after the helper
+returns. Use finite activity stubs, or stubs that cancel their own external resources.
+
 ### Interactive orchestration tests
 
 Use a harness when a test needs to raise events, terminate, suspend, or resume an instance:

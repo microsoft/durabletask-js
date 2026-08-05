@@ -76,11 +76,19 @@ export interface OrchestrationStartOptions<TInput = unknown> {
 /** Options for a one-shot orchestrator test. */
 export interface OrchestratorTestOptions<TInput = unknown> extends OrchestrationStartOptions<TInput> {
   activities?: Readonly<Record<string, TestActivityHandler<any, any>>>;
+  /**
+   * Maximum time to wait for orchestration completion. Timing out bounds harness shutdown but
+   * cannot cancel activity code that has already started.
+   */
   timeoutMs?: number;
 }
 
 /** Options for an interactive orchestration harness. */
 export interface OrchestrationHarnessOptions {
+  /**
+   * Default wait timeout. Timing out bounds harness waiting but cannot cancel activity code that
+   * has already started.
+   */
   timeoutMs?: number;
 }
 
@@ -111,6 +119,10 @@ export interface OrchestrationHarness {
     name: string,
     options?: OrchestrationStartOptions<TInput>,
   ): Promise<OrchestrationRun<TOutput>>;
+  /**
+   * Stops harness processing. Already-running activity code is abandoned, not cancelled, and may
+   * continue its own timers, I/O, or side effects.
+   */
   dispose(): Promise<void>;
 }
 
@@ -119,6 +131,9 @@ export interface OrchestrationHarness {
  *
  * @remarks Durable timers use real wall-clock time. The current core in-memory backend does not
  * expose a virtual clock or timer-advance API, so tests should schedule short timer delays.
+ * Timeout or disposal stops the harness from waiting for an activity and bounds worker shutdown,
+ * but JavaScript cannot forcibly cancel activity code that has already started. Such code may
+ * continue timers, I/O, or side effects; use finite or independently cancellable activity stubs.
  */
 export function createOrchestrationHarness(options: OrchestrationHarnessOptions = {}): OrchestrationHarness {
   return new InMemoryOrchestrationHarness(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
@@ -129,6 +144,9 @@ export function createOrchestrationHarness(options: OrchestrationHarnessOptions 
  *
  * @remarks Durable timers use real wall-clock time. The current core in-memory backend does not
  * expose a virtual clock or timer-advance API, so tests should schedule short timer delays.
+ * A timeout stops waiting and bounds worker shutdown, but JavaScript cannot forcibly cancel
+ * activity code that has already started. Such code may continue timers, I/O, or side effects; use
+ * finite or independently cancellable activity stubs.
  */
 export async function runOrchestrator<TOutput = unknown, TInput = unknown>(
   handler: OrchestrationHandler,
