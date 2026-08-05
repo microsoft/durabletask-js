@@ -94,7 +94,7 @@ You can find more samples in the [examples/azure-managed](./examples/azure-manag
 
 Pass an `orchestrationIdReusePolicy` when an instance ID may be reused. `dedupeStatuses`
 lists the existing runtime statuses that must continue to produce a duplicate-ID error;
-instances in every other runtime status are atomically replaced:
+instances in every other supported runtime status are atomically replaced:
 
 ```typescript
 import { OrchestrationStatus } from "@microsoft/durabletask-js";
@@ -108,9 +108,10 @@ await client.scheduleNewOrchestration(helloCities, undefined, {
 ```
 
 Omitting the policy preserves the backend's default duplicate-ID behavior. An empty
-`dedupeStatuses` list makes every runtime status replaceable. The current shared protocol
-does not define a no-op/`IGNORE` action: a matching dedupe status is an error, while a
-non-matching status is replaced.
+`dedupeStatuses` list makes every supported runtime status replaceable. The transient
+`CONTINUED_AS_NEW` status is not replaceable. The current shared protocol does not define a
+no-op/`IGNORE` action: a matching dedupe status is an error, while a non-matching status is
+replaced.
 
 ## Supported patterns
 

@@ -8,7 +8,8 @@
   Interactive scenarios (external events, termination, suspend/resume) and entity batches are
   covered by driving the `@microsoft/durabletask-js` in-memory test stack with `wrapOrchestrator` /
   `wrapEntity`; see the README.
-- Forward orchestration instance ID reuse policies through `DurableFunctionsClient.startNew()`.
+- Forward status-based duplicate rejection and atomic replacement policies through
+  `DurableFunctionsClient.startNew()`; the shared protocol does not support atomic no-op/`IGNORE`.
 
 ### Fixes
 

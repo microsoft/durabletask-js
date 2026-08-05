@@ -74,7 +74,10 @@ export interface StartNewOptions {
   instanceId?: string;
   /** Orchestration version to assign (forwarded to the core scheduler). */
   version?: string;
-  /** Controls duplicate instance-ID handling based on the existing orchestration's runtime status. */
+  /**
+   * Controls duplicate-ID errors and atomic replacement by existing runtime status.
+   * The current shared protocol does not support an atomic no-op/IGNORE action.
+   */
   orchestrationIdReusePolicy?: OrchestrationIdReusePolicy;
 }
 

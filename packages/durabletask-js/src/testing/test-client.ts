@@ -24,6 +24,9 @@ export class TestOrchestrationClient {
 
   /**
    * Schedules a new orchestration.
+   *
+   * The in-memory backend does not model orchestration versions or tags, so passing
+   * either option throws instead of silently diverging from TaskHubGrpcClient.
    */
   async scheduleNewOrchestration(
     orchestrator: TOrchestrator | string,
@@ -43,6 +46,14 @@ export class TestOrchestrationClient {
     startAt?: Date,
   ): Promise<string> {
     const name = typeof orchestrator === "string" ? orchestrator : getName(orchestrator);
+    if (typeof instanceIdOrOptions === "object") {
+      if (instanceIdOrOptions.tags !== undefined) {
+        throw new Error("TestOrchestrationClient does not support the 'tags' option");
+      }
+      if (instanceIdOrOptions.version !== undefined) {
+        throw new Error("TestOrchestrationClient does not support the 'version' option");
+      }
+    }
     const instanceId =
       typeof instanceIdOrOptions === "string" || instanceIdOrOptions === undefined
         ? instanceIdOrOptions
@@ -227,7 +238,8 @@ export class TestOrchestrationClient {
     return (
       status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED ||
       status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED ||
-      status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED
+      status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED ||
+      status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_CANCELED
     );
   }
 

@@ -38,6 +38,7 @@ export interface OrchestrationInstance {
  */
 export interface ActivityWorkItem {
   instanceId: string;
+  executionId: string;
   name: string;
   taskId: number;
   input?: string;
@@ -648,6 +649,7 @@ export class InMemoryOrchestrationBackend {
    */
   completeActivity(
     instanceId: string,
+    executionId: string,
     taskId: number,
     result?: string,
     error?: Error,
@@ -655,6 +657,9 @@ export class InMemoryOrchestrationBackend {
     const instance = this.instances.get(instanceId);
     if (!instance) {
       return; // Instance may have been purged
+    }
+    if (instance.executionId !== executionId) {
+      return; // Completion belongs to a replaced or continued-as-new execution
     }
 
     let event: pb.HistoryEvent;
@@ -843,7 +848,8 @@ export class InMemoryOrchestrationBackend {
     return (
       status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED ||
       status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED ||
-      status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED
+      status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED ||
+      status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_CANCELED
     );
   }
 
@@ -954,6 +960,7 @@ export class InMemoryOrchestrationBackend {
     // Queue activity for execution
     this.activityQueue.push({
       instanceId: instance.instanceId,
+      executionId: instance.executionId,
       name: taskName,
       taskId,
       input,
@@ -978,12 +985,17 @@ export class InMemoryOrchestrationBackend {
     // Schedule timer firing
     const now = new Date();
     const delay = Math.max(0, fireAt.getTime() - now.getTime());
+    const executionId = instance.executionId;
 
     const timerHandle = setTimeout(() => {
       this.pendingTimers.delete(timerHandle);
       this.removeInstanceTimer(instance.instanceId, timerHandle);
       const currentInstance = this.instances.get(instance.instanceId);
-      if (currentInstance && !this.isTerminalStatus(currentInstance.status)) {
+      if (
+        currentInstance &&
+        currentInstance.executionId === executionId &&
+        !this.isTerminalStatus(currentInstance.status)
+      ) {
         const timerFiredEvent = pbh.newTimerFiredEvent(timerId, fireAt);
         currentInstance.pendingEvents.push(timerFiredEvent);
         currentInstance.lastUpdatedAt = new Date();
@@ -1019,7 +1031,7 @@ export class InMemoryOrchestrationBackend {
       });
 
       // Watch for sub-orchestration completion
-      this.watchSubOrchestration(instance.instanceId, subInstanceId, taskId);
+      this.watchSubOrchestration(instance.instanceId, instance.executionId, subInstanceId, taskId);
     } catch (error: unknown) {
       // Sub-orchestration creation failed
       const err = error instanceof Error ? error : new Error(String(error));
@@ -1029,7 +1041,12 @@ export class InMemoryOrchestrationBackend {
     }
   }
 
-  private watchSubOrchestration(parentInstanceId: string, subInstanceId: string, taskId: number): void {
+  private watchSubOrchestration(
+    parentInstanceId: string,
+    parentExecutionId: string,
+    subInstanceId: string,
+    taskId: number,
+  ): void {
     // Use the stateWaiters mechanism instead of polling to avoid infinite loops
     // and unnecessary resource consumption
     this.waitForState(
@@ -1041,7 +1058,7 @@ export class InMemoryOrchestrationBackend {
         const parentInstance = this.instances.get(parentInstanceId);
 
         // If parent or sub no longer exists, nothing to do
-        if (!subInstance || !parentInstance) {
+        if (!subInstance || !parentInstance || parentInstance.executionId !== parentExecutionId) {
           return;
         }
 
@@ -1186,7 +1203,7 @@ export class InMemoryOrchestrationBackend {
           this.prepareRewind(subInstance, reason, snapshot);
         }
       }
-      this.watchSubOrchestration(instance.instanceId, subInstanceId, taskId);
+      this.watchSubOrchestration(instance.instanceId, instance.executionId, subInstanceId, taskId);
     }
 
     // Re-enqueue so the orchestration replays with the clean history. The executionRewound

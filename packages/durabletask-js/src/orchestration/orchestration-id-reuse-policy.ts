@@ -15,14 +15,17 @@ const REPLACEABLE_RUNTIME_STATUSES: readonly OrchestrationStatus[] = [
 ];
 
 /**
- * Controls what happens when a new orchestration uses an existing instance ID.
+ * Controls whether a new orchestration rejects or atomically replaces an existing instance.
+ *
+ * The current shared protocol does not support an atomic no-op/IGNORE action.
  */
 export interface OrchestrationIdReusePolicy {
   /**
-   * Existing instances in one of these runtime statuses must not be replaced.
+   * Existing instances in one of these runtime statuses produce a duplicate-ID error.
    *
-   * An empty list makes every runtime status replaceable. Omitting the policy
-   * preserves the backend's default duplicate-ID behavior.
+   * Instances in every other supported runtime status are atomically replaced. An empty
+   * list makes every supported runtime status replaceable. Omitting the policy preserves the
+   * backend's default duplicate-ID behavior.
    */
   readonly dedupeStatuses: readonly OrchestrationStatus[];
 }
