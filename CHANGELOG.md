@@ -2,6 +2,8 @@
 
 ### New
 
+- Add an optional `newVersion` parameter to `OrchestrationContext.continueAsNew()` for version migrations.
+
 ### Fixes
 
 

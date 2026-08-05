@@ -594,6 +594,7 @@ export class InMemoryOrchestrationBackend {
     if (status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW) {
       // Handle continue-as-new
       const newInput = completeAction.getResult()?.getValue();
+      const newVersion = completeAction.getNewversion()?.getValue();
       const carryoverEvents = completeAction.getCarryovereventsList();
 
       // Cancel timers still pending from the previous iteration. Their timer IDs are
@@ -623,7 +624,14 @@ export class InMemoryOrchestrationBackend {
       // because it sets currentUtcDateTime, and ExecutionStarted must come before
       // carryover events because it initializes the orchestrator generator.
       const orchestratorStarted = pbh.newOrchestratorStartedEvent(new Date());
-      const executionStarted = pbh.newExecutionStartedEvent(instance.name, instance.instanceId, newInput, undefined, instance.executionId);
+      const executionStarted = pbh.newExecutionStartedEvent(
+        instance.name,
+        instance.instanceId,
+        newInput,
+        undefined,
+        instance.executionId,
+        newVersion,
+      );
       instance.pendingEvents = [orchestratorStarted, executionStarted, ...carryoverEvents];
 
       this.enqueueOrchestration(instance.instanceId);

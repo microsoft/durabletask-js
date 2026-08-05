@@ -331,6 +331,33 @@ describe("In-Memory Backend", () => {
     expect(state?.serializedOutput).toEqual(JSON.stringify(5));
   });
 
+  it("should use the requested version after continue-as-new", async () => {
+    const observedVersions: string[] = [];
+    const orchestrator: TOrchestrator = async (ctx: OrchestrationContext, input: number) => {
+      if (!ctx.isReplaying) {
+        observedVersions.push(ctx.version);
+      }
+
+      if (input === 0) {
+        ctx.continueAsNew(1, false, "2.0.0");
+        return;
+      }
+
+      return ctx.version;
+    };
+
+    worker.addOrchestrator(orchestrator);
+    await worker.start();
+
+    const id = await client.scheduleNewOrchestration(orchestrator, 0);
+    const state = await client.waitForOrchestrationCompletion(id, true, 10);
+
+    expect(state).toBeDefined();
+    expect(state?.runtimeStatus).toEqual(OrchestrationStatus.COMPLETED);
+    expect(state?.serializedOutput).toEqual(JSON.stringify("2.0.0"));
+    expect(observedVersions).toEqual(["", "2.0.0"]);
+  });
+
   it("should not collide default sub-orchestration instance IDs across continue-as-new generations", async () => {
     // Regression for the callHttp-on-continueAsNew collision: a default (auto-derived) child
     // instance ID must be unique per generation. Before the fix the derived ID was

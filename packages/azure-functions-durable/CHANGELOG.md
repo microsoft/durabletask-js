@@ -2,6 +2,8 @@
 
 ### New
 
+- Add optional orchestration version migration support to `context.df.continueAsNew()`.
+
 ### Fixes
 
 
