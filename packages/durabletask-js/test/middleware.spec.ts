@@ -148,6 +148,81 @@ describe("Activity middleware", () => {
     expect(body).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves activity and duplicate-next failures together", async () => {
+    const bodyFailure = new Error("activity body failed");
+    const registry = new Registry();
+    const body = jest.fn(() => {
+      throw bodyFailure;
+    });
+    const name = "activity";
+    registry.addNamedActivity(name, body);
+    const middleware: ActivityMiddleware = async (context, next) => {
+      try {
+        await next(context);
+      } catch {
+        // Invoke next again to ensure the contract failure does not mask the body failure.
+      }
+      await next(context);
+    };
+    const executor = new ActivityExecutor(registry, testLogger, [middleware]);
+
+    const error = await executor.execute(instanceId, name, 1).catch((failure: unknown) => failure);
+
+    expect(error).toBeInstanceOf(AggregateError);
+    if (!(error instanceof AggregateError)) {
+      throw new Error("Expected an AggregateError.");
+    }
+    expect(error.message).toContain(bodyFailure.message);
+    expect(error.message).toContain("Activity middleware must call next at most once");
+    expect(error.errors).toEqual(expect.arrayContaining([bodyFailure]));
+    expect(body).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves an activity AggregateError when it is the only failure", async () => {
+    const expected = new AggregateError([new Error("child failure")], "activity aggregate failed");
+    const registry = new Registry();
+    const name = "activity";
+    registry.addNamedActivity(name, () => {
+      throw expected;
+    });
+    const executor = new ActivityExecutor(registry, testLogger);
+
+    await expect(executor.execute(instanceId, name, 1)).rejects.toBe(expected);
+  });
+
+  it("preserves nested activity and duplicate-next failures when outer middleware catches", async () => {
+    const bodyFailure = new Error("nested activity body failed");
+    const registry = new Registry();
+    const body = jest.fn(() => {
+      throw bodyFailure;
+    });
+    const name = "activity";
+    registry.addNamedActivity(name, body);
+    const outer: ActivityMiddleware = async (context, next) => {
+      try {
+        await next(context);
+      } catch {
+        // Downstream failures remain recorded even when caught at this boundary.
+      }
+    };
+    const inner: ActivityMiddleware = async (context, next) => {
+      try {
+        await next(context);
+      } catch {
+        // Trigger a contract failure without losing the activity failure.
+      }
+      await next(context);
+    };
+    const executor = new ActivityExecutor(registry, testLogger, [outer, inner]);
+
+    const error = await executor.execute(instanceId, name, 1).catch((failure: unknown) => failure);
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as Error).message).toContain(bodyFailure.message);
+    expect((error as Error).message).toContain("Activity middleware must call next at most once");
+    expect(body).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects an ignored duplicate next call without creating an unhandled rejection", async () => {
     const registry = new Registry();
     const name = "activity";
@@ -214,6 +289,61 @@ describe("Activity middleware", () => {
     await expect(executor.execute(instanceId, name, 1)).rejects.toThrow(
       "Activity middleware must call next exactly once or call setResult",
     );
+  });
+
+  it("does not allow outer middleware to swallow a nested activity failure", async () => {
+    const expected = new Error("inner activity middleware failed");
+    let caught: unknown;
+    let observedFailure: Error | undefined;
+    const registry = new Registry();
+    const body = jest.fn(() => "body");
+    const name = "activity";
+    registry.addNamedActivity(name, body);
+    const outer: ActivityMiddleware = async (context, next) => {
+      try {
+        await next(context);
+      } catch (error) {
+        caught = error;
+        observedFailure = context.failure;
+      }
+    };
+    const failingInner: ActivityMiddleware = async () => {
+      throw expected;
+    };
+    const executor = new ActivityExecutor(registry, testLogger, [outer, failingInner]);
+
+    await expect(executor.execute(instanceId, name, 1)).rejects.toBe(expected);
+    expect(caught).toBe(expected);
+    expect(observedFailure).toBe(expected);
+    expect(body).not.toHaveBeenCalled();
+  });
+
+  it("allows outer activity middleware to recover from a nested failure with setResult", async () => {
+    const expected = new Error("inner activity middleware failed");
+    let caught: unknown;
+    let observedFailure: Error | undefined;
+    const registry = new Registry();
+    const body = jest.fn(() => "body");
+    const name = "activity";
+    registry.addNamedActivity(name, body);
+    const outer: ActivityMiddleware = async (context, next) => {
+      try {
+        await next(context);
+      } catch (error) {
+        caught = error;
+        observedFailure = context.failure;
+        context.setResult("recovered");
+      }
+    };
+    const failingInner: ActivityMiddleware = async () => {
+      throw expected;
+    };
+    const executor = new ActivityExecutor(registry, testLogger, [outer, failingInner]);
+
+    await expect(executor.execute(instanceId, name, 1)).resolves.toBe('"recovered"');
+    expect(caught).toBe(expected);
+    expect(observedFailure).toBe(expected);
+    expect(body).not.toHaveBeenCalled();
   });
 
   it("rejects middleware that returns before next completes", async () => {
@@ -328,6 +458,27 @@ describe("Orchestration middleware", () => {
     expect(Object.isFrozen(capturedContext?.tags)).toBe(true);
   });
 
+  it("exposes the current work-item timestamp before replay starts", async () => {
+    const previousTimestamp = new Date("2026-01-01T00:00:00.000Z");
+    const currentTimestamp = new Date("2026-01-02T00:00:00.000Z");
+    let observedTimestamp: Date | undefined;
+    const middleware: OrchestrationMiddleware = async (context, next) => {
+      observedTimestamp = context.orchestrationContext.currentUtcDateTime;
+      await next(context);
+    };
+    const registry = new Registry();
+    registry.addNamedOrchestrator("orchestrator", async () => "done");
+    const executor = new OrchestrationExecutor(registry, testLogger, [middleware]);
+
+    await executor.execute(
+      instanceId,
+      [newOrchestratorStartedEvent(previousTimestamp), newExecutionStartedEvent("orchestrator", instanceId)],
+      [newOrchestratorStartedEvent(currentTimestamp)],
+    );
+
+    expect(observedTimestamp).toEqual(currentTimestamp);
+  });
+
   it("rejects successful middleware that does not call next", async () => {
     const middleware: OrchestrationMiddleware = async () => {};
 
@@ -345,6 +496,47 @@ describe("Orchestration middleware", () => {
 
     const result = await executeOrchestration([middleware], body);
 
+    expectFailure(result, "Orchestration middleware must call next exactly once");
+    expect(body).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves orchestration and duplicate-next failures together", async () => {
+    const bodyFailure = new Error("orchestration body failed");
+    const body = jest.fn(async () => {
+      throw bodyFailure;
+    });
+    const middleware: OrchestrationMiddleware = async (context, next) => {
+      await next(context);
+      await next(context);
+    };
+
+    const result = await executeOrchestration([middleware], body);
+
+    expectFailure(result, bodyFailure.message);
+    expectFailure(result, "Orchestration middleware must call next exactly once");
+    expect(body).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves nested orchestration and duplicate-next failures when outer middleware catches", async () => {
+    const bodyFailure = new Error("nested orchestration body failed");
+    const body = jest.fn(async () => {
+      throw bodyFailure;
+    });
+    const outer: OrchestrationMiddleware = async (context, next) => {
+      try {
+        await next(context);
+      } catch {
+        // Downstream failures remain fatal even when caught at this boundary.
+      }
+    };
+    const inner: OrchestrationMiddleware = async (context, next) => {
+      await next(context);
+      await next(context);
+    };
+
+    const result = await executeOrchestration([outer, inner], body);
+
+    expectFailure(result, bodyFailure.message);
     expectFailure(result, "Orchestration middleware must call next exactly once");
     expect(body).toHaveBeenCalledTimes(1);
   });
@@ -486,6 +678,31 @@ describe("Orchestration middleware", () => {
     const result = await executeOrchestration([outer, invalidInner]);
 
     expectFailure(result, "Orchestration middleware must call next exactly once");
+  });
+
+  it("does not allow outer middleware to swallow a nested orchestration failure", async () => {
+    const expected = new Error("inner orchestration middleware failed");
+    let caught: unknown;
+    let observedFailure: Error | undefined;
+    const body = jest.fn(async () => "done");
+    const outer: OrchestrationMiddleware = async (context, next) => {
+      try {
+        await next(context);
+      } catch (error) {
+        caught = error;
+        observedFailure = context.failure;
+      }
+    };
+    const failingInner: OrchestrationMiddleware = async () => {
+      throw expected;
+    };
+
+    const result = await executeOrchestration([outer, failingInner], body);
+
+    expectFailure(result, expected.message);
+    expect(caught).toBe(expected);
+    expect(observedFailure).toBe(expected);
+    expect(body).not.toHaveBeenCalled();
   });
 
   it("rejects orchestration middleware that returns before next completes", async () => {

@@ -184,6 +184,7 @@ export async function runOrchestrationMiddleware(
   suspended?: Promise<void>,
 ): Promise<"completed" | "suspended"> {
   const validation = new MiddlewareValidation();
+  let downstreamFailure: Error | undefined;
 
   const invoke = async (index: number): Promise<void> => {
     if (index === middleware.length) {
@@ -206,6 +207,11 @@ export async function runOrchestrationMiddleware(
         nextStarted = true;
         try {
           await invoke(index + 1);
+        } catch (error: unknown) {
+          const failure = toError(error);
+          downstreamFailure = combineFailures(downstreamFailure, failure);
+          context.setExecutionResult(context.result, combineFailures(context.failure, failure));
+          throw failure;
         } finally {
           nextSettled = true;
         }
@@ -237,11 +243,13 @@ export async function runOrchestrationMiddleware(
     if (outcome === "suspended") {
       await Promise.resolve();
     }
-    validation.throwIfFailed();
+    const failure = combineFailures(context.failure, downstreamFailure, validation.failure);
+    if (failure) {
+      throw failure;
+    }
     return outcome;
   } catch (error: unknown) {
-    validation.throwIfFailed();
-    throw error;
+    throw combineFailures(context.failure, downstreamFailure, toError(error), validation.failure) ?? toError(error);
   }
 }
 
@@ -287,6 +295,10 @@ export async function runActivityMiddleware(
         nextStarted = true;
         try {
           await invoke(index + 1);
+        } catch (error: unknown) {
+          const failure = toError(error);
+          context.setFailure(combineFailures(context.failure, failure) ?? failure);
+          throw failure;
         } finally {
           nextSettled = true;
         }
@@ -308,15 +320,49 @@ export async function runActivityMiddleware(
 
   try {
     await invoke(0);
-    validation.throwIfFailed();
-    if (context.failure) {
-      throw context.failure;
+    const failure = combineFailures(context.failure, validation.failure);
+    if (failure) {
+      throw failure;
     }
   } catch (error: unknown) {
-    const failure = validation.failure ?? (error instanceof Error ? error : new Error(String(error)));
+    const failure = combineFailures(context.failure, toError(error), validation.failure) ?? toError(error);
     context.setFailure(failure);
     throw failure;
   }
+}
+
+function combineFailures(...failures: Array<Error | undefined>): Error | undefined {
+  const unique = failures.filter(
+    (failure, index): failure is Error => failure !== undefined && failures.indexOf(failure) === index,
+  );
+  const distinct = unique.filter(
+    (failure) => !unique.some((other) => other !== failure && containsFailure(other, failure)),
+  );
+  if (distinct.length === 0) {
+    return undefined;
+  }
+  if (distinct.length === 1) {
+    return distinct[0];
+  }
+
+  return new AggregateError(
+    distinct,
+    `Multiple middleware failures: ${distinct.map((failure) => failure.message).join("; ")}`,
+  );
+}
+
+function containsFailure(container: Error, candidate: Error): boolean {
+  return (
+    container === candidate ||
+    (container instanceof AggregateError &&
+      container.errors.some(
+        (nested: unknown) => nested instanceof Error && containsFailure(nested, candidate),
+      ))
+  );
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 function copyTags(tags: Readonly<Record<string, string>> | undefined): Readonly<Record<string, string>> | undefined {
