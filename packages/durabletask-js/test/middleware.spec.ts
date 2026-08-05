@@ -458,27 +458,6 @@ describe("Orchestration middleware", () => {
     expect(Object.isFrozen(capturedContext?.tags)).toBe(true);
   });
 
-  it("exposes the current work-item timestamp before replay starts", async () => {
-    const previousTimestamp = new Date("2026-01-01T00:00:00.000Z");
-    const currentTimestamp = new Date("2026-01-02T00:00:00.000Z");
-    let observedTimestamp: Date | undefined;
-    const middleware: OrchestrationMiddleware = async (context, next) => {
-      observedTimestamp = context.orchestrationContext.currentUtcDateTime;
-      await next(context);
-    };
-    const registry = new Registry();
-    registry.addNamedOrchestrator("orchestrator", async () => "done");
-    const executor = new OrchestrationExecutor(registry, testLogger, [middleware]);
-
-    await executor.execute(
-      instanceId,
-      [newOrchestratorStartedEvent(previousTimestamp), newExecutionStartedEvent("orchestrator", instanceId)],
-      [newOrchestratorStartedEvent(currentTimestamp)],
-    );
-
-    expect(observedTimestamp).toEqual(currentTimestamp);
-  });
-
   it("rejects successful middleware that does not call next", async () => {
     const middleware: OrchestrationMiddleware = async () => {};
 
@@ -663,6 +642,49 @@ describe("Orchestration middleware", () => {
     );
 
     expectCompleteResult(secondResult, '"body"');
+  });
+
+  it("replays pre-next deterministic values against the original orchestration clock", async () => {
+    const firstTimestamp = new Date("2026-01-01T00:00:00.000Z");
+    const secondTimestamp = new Date("2026-01-02T00:00:00.000Z");
+    const generatedGuids: string[] = [];
+    const middlewareActivity = (_context: ActivityContext) => "middleware";
+    const bodyActivity = (_context: ActivityContext) => "body";
+    const orchestrator: TOrchestrator = async function* (context: OrchestrationContext): any {
+      return yield context.callActivity(bodyActivity);
+    };
+    const middleware: OrchestrationMiddleware = async (context, next) => {
+      const guid = context.orchestrationContext.newGuid();
+      generatedGuids.push(guid);
+      context.orchestrationContext.callActivity(middlewareActivity, guid);
+      await next(context);
+    };
+    const registry = new Registry();
+    const name = registry.addOrchestrator(orchestrator);
+
+    const firstResult = await new OrchestrationExecutor(registry, testLogger, [middleware]).execute(
+      instanceId,
+      [],
+      [newOrchestratorStartedEvent(firstTimestamp), newExecutionStartedEvent(name, instanceId)],
+    );
+
+    expect(firstResult.actions[0].getScheduletask()?.getInput()?.getValue()).toBe(JSON.stringify(generatedGuids[0]));
+
+    const secondResult = await new OrchestrationExecutor(registry, testLogger, [middleware]).execute(
+      instanceId,
+      [
+        newOrchestratorStartedEvent(firstTimestamp),
+        newExecutionStartedEvent(name, instanceId),
+        newTaskScheduledEvent(1, middlewareActivity.name),
+        newTaskScheduledEvent(2, bodyActivity.name),
+        newTaskCompletedEvent(1, '"middleware"'),
+      ],
+      [newOrchestratorStartedEvent(secondTimestamp), newTaskCompletedEvent(2, '"body"')],
+    );
+
+    expectCompleteResult(secondResult, '"body"');
+    expect(generatedGuids).toHaveLength(2);
+    expect(generatedGuids[1]).toBe(generatedGuids[0]);
   });
 
   it("does not allow outer middleware to swallow a nested next-call violation", async () => {

@@ -104,9 +104,7 @@ export class OrchestrationExecutor {
 
     const allEvents = [...oldEvents, ...newEvents];
     const executionStarted = allEvents.find((event) => event.hasExecutionstarted())?.getExecutionstarted();
-    const currentOrchestratorStarted =
-      newEvents.find((event) => event.hasOrchestratorstarted()) ??
-      [...oldEvents].reverse().find((event) => event.hasOrchestratorstarted());
+    const initialOrchestratorStarted = allEvents.find((event) => event.hasOrchestratorstarted());
     const rawInput = isEmpty(executionStarted?.getInput()) ? undefined : executionStarted?.getInput()?.getValue();
     const parentInstance = executionStarted?.getParentinstance();
     const parentOrchestrationInstance = parentInstance?.getOrchestrationinstance();
@@ -119,7 +117,7 @@ export class OrchestrationExecutor {
         }
       : undefined;
     ctx._isReplaying = oldEvents.length > 0;
-    ctx._currentUtcDatetime = currentOrchestratorStarted?.getTimestamp()?.toDate() ?? ctx._currentUtcDatetime;
+    ctx._currentUtcDatetime = initialOrchestratorStarted?.getTimestamp()?.toDate() ?? ctx._currentUtcDatetime;
     this._orchestratorName = executionStarted?.getName() ?? "(unknown)";
 
     try {
