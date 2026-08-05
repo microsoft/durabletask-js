@@ -2,6 +2,8 @@
 
 ### New
 
+- Add orchestration and activity middleware registration to `DurableTaskAzureManagedWorkerBuilder`.
+
 ### Fixes
 
 ## v0.4.0 (2026-07-31)
