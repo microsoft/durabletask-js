@@ -188,10 +188,11 @@ expect(orchestrationResult.output).toBe("Hello, World!");
 Failed orchestrations return `status: "Failed"` with plain `failure` details instead of requiring
 manual parsing of core state.
 
-An orchestration timeout or harness disposal stops the helper from waiting for an in-flight activity
-and bounds worker shutdown, but it **does not cancel JavaScript activity code that has already
-started**. That code may continue running timers, I/O, or other side effects after the helper
-returns. Use finite activity stubs, or stubs that cancel their own external resources.
+`runOrchestrator` intentionally has no forced timeout. It returns only after the orchestration
+reaches a terminal state and worker cleanup finishes, so activity code cannot keep mutating test
+state after the helper returns. Arbitrary JavaScript promises cannot be forcibly cancelled: if an
+orchestrator or activity never settles, the helper also remains pending and the test runner's own
+timeout applies.
 
 ### Interactive orchestration tests
 
@@ -220,6 +221,11 @@ try {
   await harness.dispose();
 }
 ```
+
+Harness wait timeouts are observation-only: a timed-out `waitForStart()` or
+`waitForCompletion()` call leaves the explicitly owned harness running. `dispose()` waits for
+in-flight orchestrator and activity handlers to settle before it reports completion; if
+non-cooperative user code never settles, disposal also remains pending.
 
 Durable timers are supported with **real wall-clock delays**. The current core in-memory backend has
 no virtual clock or timer-advance API, so use short timer delays in tests. The harness does not add a

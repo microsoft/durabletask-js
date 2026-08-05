@@ -71,22 +71,7 @@ describe("durable-functions/testing", () => {
     });
   });
 
-  it("stops one-shot resources when waiting times out", async () => {
-    const orchestrator: OrchestrationHandler = function* (
-      context: OrchestrationContext,
-    ): Generator<unknown, void, unknown> {
-      yield context.df.waitForExternalEvent("never");
-    };
-
-    await expect(runOrchestrator(orchestrator, { timeoutMs: 10 })).rejects.toThrow("Timeout waiting for orchestration");
-
-    await expect(runOrchestrator(async () => "still runs", { timeoutMs: 1000 })).resolves.toMatchObject({
-      status: "Completed",
-      output: "still runs",
-    });
-  });
-
-  it("bounds cleanup without cancelling already-running activity code", async () => {
+  it("does not return before a delayed activity settles", async () => {
     let activityStarted!: () => void;
     let activityFinished!: () => void;
     const started = new Promise<void>((resolve) => {
@@ -95,35 +80,56 @@ describe("durable-functions/testing", () => {
     const finished = new Promise<void>((resolve) => {
       activityFinished = resolve;
     });
-    let sideEffectCompleted = false;
+    const mutations: string[] = [];
     const orchestrator: OrchestrationHandler = function* (
       context: OrchestrationContext,
     ): Generator<unknown, void, unknown> {
       yield context.df.callActivity("never");
     };
 
+    let executionSettled = false;
     const execution = runOrchestrator(orchestrator, {
-      timeoutMs: 25,
       activities: {
         never: () => {
           activityStarted();
           return new Promise<void>((resolve) => {
             setTimeout(() => {
-              sideEffectCompleted = true;
+              mutations.push("activity");
               activityFinished();
               resolve();
-            }, 250);
+            }, 100);
           });
         },
       },
+    }).finally(() => {
+      executionSettled = true;
     });
     await started;
 
-    await expect(execution).rejects.toThrow("Timeout waiting for orchestration");
-    expect(sideEffectCompleted).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(executionSettled).toBe(false);
 
     await finished;
-    expect(sideEffectCompleted).toBe(true);
+    await expect(execution).resolves.toMatchObject({ status: "Completed" });
+    expect(mutations).toEqual(["activity"]);
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(mutations).toEqual(["activity"]);
+  });
+
+  it("does not return before a delayed async orchestrator settles", async () => {
+    let settled = false;
+    const execution = runOrchestrator(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 75));
+      settled = true;
+      return "done";
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(settled).toBe(false);
+
+    await expect(execution).resolves.toMatchObject({ status: "Completed", output: "done" });
+    expect(settled).toBe(true);
   });
 
   it("serializes concurrent harness starts through one worker startup", async () => {
@@ -300,6 +306,38 @@ describe("durable-functions/testing", () => {
 
     await expect(run.waitForCompletion()).rejects.toThrow("The orchestration harness has been disposed.");
     await expect(run.refresh()).rejects.toThrow("The orchestration harness has been disposed.");
+  });
+
+  it("does not finish disposal while activity code is still running", async () => {
+    let activityStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      activityStarted = resolve;
+    });
+    let activityFinished = false;
+    const harness = createOrchestrationHarness({ timeoutMs: 20 });
+    harness.registerActivity("slow", async () => {
+      activityStarted();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      activityFinished = true;
+    });
+    harness.registerOrchestrator("slow", function* (context: OrchestrationContext): Generator<unknown, void, unknown> {
+      yield context.df.callActivity("slow");
+    });
+
+    const run = await harness.start("slow");
+    await started;
+    await expect(run.waitForCompletion()).rejects.toThrow("Timeout waiting for orchestration");
+
+    let disposalSettled = false;
+    const disposal = harness.dispose().finally(() => {
+      disposalSettled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(disposalSettled).toBe(false);
+    expect(activityFinished).toBe(false);
+
+    await disposal;
+    expect(activityFinished).toBe(true);
   });
 
   it("runs a classic entity batch and deserializes state and operation results", async () => {

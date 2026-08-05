@@ -20,7 +20,6 @@ const DEFAULT_ORCHESTRATOR_NAME = "orchestrator";
 const DEFAULT_ENTITY_NAME = "entity";
 const DEFAULT_ENTITY_KEY = "test";
 const HARNESS_DISPOSED_MESSAGE = "The orchestration harness has been disposed.";
-const ACTIVITY_CANCELLED = Symbol("activityCancelled");
 
 /** An Azure Functions activity handler used by the testing helpers. */
 export type TestActivityHandler<TInput = unknown, TOutput = unknown> = (
@@ -76,18 +75,13 @@ export interface OrchestrationStartOptions<TInput = unknown> {
 /** Options for a one-shot orchestrator test. */
 export interface OrchestratorTestOptions<TInput = unknown> extends OrchestrationStartOptions<TInput> {
   activities?: Readonly<Record<string, TestActivityHandler<any, any>>>;
-  /**
-   * Maximum time to wait for orchestration completion. Timing out bounds harness shutdown but
-   * cannot cancel activity code that has already started.
-   */
-  timeoutMs?: number;
 }
 
 /** Options for an interactive orchestration harness. */
 export interface OrchestrationHarnessOptions {
   /**
-   * Default wait timeout. Timing out bounds harness waiting but cannot cancel activity code that
-   * has already started.
+   * Default timeout for observing a run. A timeout rejects only that wait; the harness remains live
+   * and owned by the caller until {@link OrchestrationHarness.dispose} finishes.
    */
   timeoutMs?: number;
 }
@@ -120,8 +114,10 @@ export interface OrchestrationHarness {
     options?: OrchestrationStartOptions<TInput>,
   ): Promise<OrchestrationRun<TOutput>>;
   /**
-   * Stops harness processing. Already-running activity code is abandoned, not cancelled, and may
-   * continue its own timers, I/O, or side effects.
+   * Stops harness processing after in-flight orchestrator and activity handlers settle.
+   *
+   * @remarks Arbitrary JavaScript promises cannot be forcibly cancelled. If user code never
+   * settles, disposal also remains pending.
    */
   dispose(): Promise<void>;
 }
@@ -131,9 +127,9 @@ export interface OrchestrationHarness {
  *
  * @remarks Durable timers use real wall-clock time. The current core in-memory backend does not
  * expose a virtual clock or timer-advance API, so tests should schedule short timer delays.
- * Timeout or disposal stops the harness from waiting for an activity and bounds worker shutdown,
- * but JavaScript cannot forcibly cancel activity code that has already started. Such code may
- * continue timers, I/O, or side effects; use finite or independently cancellable activity stubs.
+ * Wait timeouts reject only the observation call; the harness remains live and must still be
+ * disposed. Disposal awaits in-flight orchestrator and activity handlers because arbitrary
+ * JavaScript promises cannot be forcibly cancelled.
  */
 export function createOrchestrationHarness(options: OrchestrationHarnessOptions = {}): OrchestrationHarness {
   return new InMemoryOrchestrationHarness(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
@@ -144,15 +140,15 @@ export function createOrchestrationHarness(options: OrchestrationHarnessOptions 
  *
  * @remarks Durable timers use real wall-clock time. The current core in-memory backend does not
  * expose a virtual clock or timer-advance API, so tests should schedule short timer delays.
- * A timeout stops waiting and bounds worker shutdown, but JavaScript cannot forcibly cancel
- * activity code that has already started. Such code may continue timers, I/O, or side effects; use
- * finite or independently cancellable activity stubs.
+ * This helper intentionally has no forced timeout: it awaits terminal orchestration execution and
+ * worker cleanup before returning. Arbitrary JavaScript promises cannot be forcibly cancelled, so
+ * non-cooperative orchestrator or activity code remains subject to the test runner's own timeout.
  */
 export async function runOrchestrator<TOutput = unknown, TInput = unknown>(
   handler: OrchestrationHandler,
   options: OrchestratorTestOptions<TInput> = {},
 ): Promise<OrchestrationTestResult<TOutput>> {
-  const harness = createOrchestrationHarness({ timeoutMs: options.timeoutMs });
+  const harness = createOrchestrationHarness({ timeoutMs: 0 });
   harness.registerOrchestrator(DEFAULT_ORCHESTRATOR_NAME, handler);
   for (const [name, activity] of Object.entries(options.activities ?? {})) {
     harness.registerActivity(name, activity);
@@ -243,21 +239,14 @@ class InMemoryOrchestrationHarness implements OrchestrationHarness {
   private readonly worker = new TestOrchestrationWorker(this.backend);
   private readonly client = new TestOrchestrationClient(this.backend);
   private readonly runs = new Set<InMemoryOrchestrationRun<unknown>>();
-  private readonly activityCancellation: Promise<typeof ACTIVITY_CANCELLED>;
-  private cancelActivities!: () => void;
   private transition: Promise<void> = Promise.resolve();
   private workerStartPromise: Promise<void> | undefined;
   private workerStarted = false;
   private startRequested = false;
-  private activityCancellationRequested = false;
   private disposed = false;
   private disposePromise: Promise<void> | undefined;
 
-  constructor(private readonly timeoutMs: number) {
-    this.activityCancellation = new Promise((resolve) => {
-      this.cancelActivities = () => resolve(ACTIVITY_CANCELLED);
-    });
-  }
+  constructor(private readonly timeoutMs: number) {}
 
   registerOrchestrator(name: string, handler: OrchestrationHandler): OrchestrationHarness {
     this.ensureCanRegister();
@@ -268,17 +257,7 @@ class InMemoryOrchestrationHarness implements OrchestrationHarness {
   registerActivity<TInput, TOutput>(name: string, handler: TestActivityHandler<TInput, TOutput>): OrchestrationHarness {
     this.ensureCanRegister();
     this.worker.addNamedActivity(name, async (_context, input) => {
-      if (this.activityCancellationRequested) {
-        throw createHarnessDisposedError();
-      }
-      const result = await Promise.race([
-        runActivity(handler, input as TInput, { functionName: name }),
-        this.activityCancellation,
-      ]);
-      if (result === ACTIVITY_CANCELLED) {
-        throw createHarnessDisposedError();
-      }
-      return result;
+      return await runActivity(handler, input as TInput, { functionName: name });
     });
     return this;
   }
@@ -311,8 +290,6 @@ class InMemoryOrchestrationHarness implements OrchestrationHarness {
   dispose(): Promise<void> {
     if (!this.disposePromise) {
       this.disposed = true;
-      this.activityCancellationRequested = true;
-      this.cancelActivities();
       for (const run of this.runs) {
         run.markDisposed();
       }
