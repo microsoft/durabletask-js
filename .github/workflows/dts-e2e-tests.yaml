@@ -66,3 +66,31 @@ jobs:
       - name: ✅ Run E2E tests — ${{ matrix.test-group.name }}
         run: npx jest ${{ matrix.test-group.pattern }} --runInBand --detectOpenHandles
         timeout-minutes: 15
+
+  worker-stream-recovery:
+    name: "e2e (worker-stream-recovery, node 22.x)"
+    env:
+      EMULATOR_VERSION: "latest"
+      TASKHUB: "default"
+      ENDPOINT: "localhost:8080"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: 🐳 Pull Docker image
+        run: docker pull mcr.microsoft.com/dts/dts-emulator:$EMULATOR_VERSION
+
+      - name: ⚙️ NodeJS - Install
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.x"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: ⚙️ Install dependencies
+        run: npm ci
+
+      - name: ✅ Run worker stream recovery E2E test
+        run: npx jest test/e2e-azuremanaged/worker-stream-recovery.spec.ts --runInBand --detectOpenHandles
+        timeout-minutes: 5
