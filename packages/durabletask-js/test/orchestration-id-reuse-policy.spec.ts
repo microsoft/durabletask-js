@@ -321,4 +321,71 @@ describe("TestOrchestrationClient replacement generation fences", () => {
     const state = await client.waitForOrchestrationCompletion("parent-race", true, 5);
     expect(state?.serializedOutput).toBe(JSON.stringify("replacement"));
   });
+
+  it("fails a current parent when its running child is replaced", async () => {
+    const childStarted = deferred();
+    const child: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      if (!ctx.isReplaying) {
+        childStarted.resolve();
+      }
+      return yield ctx.waitForExternalEvent("finish");
+    };
+    const parent: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      try {
+        return yield ctx.callSubOrchestrator(child, undefined, { instanceId: "replaced-child" });
+      } catch (error: any) {
+        return `caught: ${error.message}`;
+      }
+    };
+
+    worker.addOrchestrator(parent);
+    worker.addOrchestrator(child);
+    await worker.start();
+
+    await client.scheduleNewOrchestration(parent, undefined, { instanceId: "current-parent" });
+    await childStarted.promise;
+
+    await client.scheduleNewOrchestration(child, undefined, {
+      instanceId: "replaced-child",
+      orchestrationIdReusePolicy: { dedupeStatuses: [] },
+    });
+
+    const state = await client.waitForOrchestrationCompletion("current-parent", true, 5);
+    expect(JSON.parse(state?.serializedOutput ?? "")).toContain(
+      "Sub-orchestration instance 'replaced-child' was replaced by a new execution",
+    );
+  });
+
+  it("removes child watchers owned by a replaced parent execution", async () => {
+    const childStarted = deferred();
+    const child: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+      if (!ctx.isReplaying) {
+        childStarted.resolve();
+      }
+      return yield ctx.waitForExternalEvent("finish");
+    };
+    const parent: TOrchestrator = async function* (ctx: OrchestrationContext, input: string): any {
+      if (input === "replacement") {
+        return yield ctx.waitForExternalEvent("finish");
+      }
+      return yield ctx.callSubOrchestrator(child, undefined, { instanceId: "orphaned-child" });
+    };
+
+    worker.addOrchestrator(parent);
+    worker.addOrchestrator(child);
+    await worker.start();
+
+    await client.scheduleNewOrchestration(parent, "original", { instanceId: "replaced-parent" });
+    await childStarted.promise;
+
+    const stateWaiters = (backend as any).stateWaiters as Map<string, any[]>;
+    expect(stateWaiters.get("orphaned-child")).toHaveLength(1);
+
+    await client.scheduleNewOrchestration(parent, "replacement", {
+      instanceId: "replaced-parent",
+      orchestrationIdReusePolicy: { dedupeStatuses: [] },
+    });
+
+    expect(stateWaiters.has("orphaned-child")).toBe(false);
+  });
 });

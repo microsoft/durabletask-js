@@ -100,6 +100,13 @@ interface StateWaiter {
   resolve: (instance: OrchestrationInstance | undefined) => void;
   reject: (error: Error) => void;
   predicate: (instance: OrchestrationInstance) => boolean;
+  subOrchestrationWatcher?: SubOrchestrationWatcher;
+}
+
+interface SubOrchestrationWatcher {
+  parentInstanceId: string;
+  parentExecutionId: string;
+  taskId: number;
 }
 
 /**
@@ -682,6 +689,15 @@ export class InMemoryOrchestrationBackend {
     predicate: (instance: OrchestrationInstance) => boolean,
     timeoutMs: number = 30000,
   ): Promise<OrchestrationInstance | undefined> {
+    return this.waitForStateInternal(instanceId, predicate, timeoutMs);
+  }
+
+  private async waitForStateInternal(
+    instanceId: string,
+    predicate: (instance: OrchestrationInstance) => boolean,
+    timeoutMs: number,
+    subOrchestrationWatcher?: SubOrchestrationWatcher,
+  ): Promise<OrchestrationInstance | undefined> {
     const instance = this.instances.get(instanceId);
     if (instance && predicate(instance)) {
       return instance;
@@ -689,7 +705,7 @@ export class InMemoryOrchestrationBackend {
 
     return new Promise((resolve, reject) => {
       // When timeoutMs is 0, no timeout is applied — the waiter will only be
-      // resolved by a matching state change or rejected by reset().
+      // resolved by a matching state change or rejected by lifecycle cleanup.
       // `waiter` is declared before the timer so the timeout callback can find it by
       // object identity; the waiter reads `timer` only when invoked, by which point
       // it has been assigned.
@@ -711,6 +727,7 @@ export class InMemoryOrchestrationBackend {
           reject(error);
         },
         predicate,
+        subOrchestrationWatcher,
       };
 
       if (timeoutMs > 0) {
@@ -812,8 +829,18 @@ export class InMemoryOrchestrationBackend {
   }
 
   private removeInstanceForReplacement(instanceId: string): void {
+    const instance = this.instances.get(instanceId);
+    if (!instance) {
+      return;
+    }
+
     this.cancelInstanceTimers(instanceId);
-    this.rejectStateWaiters(
+    this.cancelSubOrchestrationWatchers(
+      instanceId,
+      instance.executionId,
+      new Error(`Parent orchestration instance '${instanceId}' was replaced by a new execution`),
+    );
+    this.rejectStateWaitersForReplacement(
       instanceId,
       new Error(`Orchestration instance '${instanceId}' was replaced by a new execution`),
     );
@@ -832,7 +859,7 @@ export class InMemoryOrchestrationBackend {
     }
   }
 
-  private rejectStateWaiters(instanceId: string, error: Error): void {
+  private rejectStateWaitersForReplacement(instanceId: string, error: Error): void {
     const waiters = this.stateWaiters.get(instanceId);
     if (!waiters) {
       return;
@@ -840,8 +867,56 @@ export class InMemoryOrchestrationBackend {
 
     this.stateWaiters.delete(instanceId);
     for (const waiter of waiters) {
+      if (waiter.subOrchestrationWatcher) {
+        this.failSubOrchestrationWatcher(
+          waiter.subOrchestrationWatcher,
+          new Error(`Sub-orchestration instance '${instanceId}' was replaced by a new execution`),
+        );
+      }
       waiter.reject(error);
     }
+  }
+
+  private cancelSubOrchestrationWatchers(
+    parentInstanceId: string,
+    parentExecutionId: string,
+    error: Error,
+  ): void {
+    for (const [instanceId, waiters] of this.stateWaiters) {
+      const cancelledWaiters = waiters.filter(
+        (waiter) =>
+          waiter.subOrchestrationWatcher?.parentInstanceId === parentInstanceId &&
+          waiter.subOrchestrationWatcher.parentExecutionId === parentExecutionId,
+      );
+      if (cancelledWaiters.length === 0) {
+        continue;
+      }
+
+      const remainingWaiters = waiters.filter((waiter) => !cancelledWaiters.includes(waiter));
+      if (remainingWaiters.length === 0) {
+        this.stateWaiters.delete(instanceId);
+      } else {
+        this.stateWaiters.set(instanceId, remainingWaiters);
+      }
+      for (const waiter of cancelledWaiters) {
+        waiter.reject(error);
+      }
+    }
+  }
+
+  private failSubOrchestrationWatcher(watcher: SubOrchestrationWatcher, error: Error): void {
+    const parentInstance = this.instances.get(watcher.parentInstanceId);
+    if (
+      !parentInstance ||
+      parentInstance.executionId !== watcher.parentExecutionId ||
+      this.isTerminalStatus(parentInstance.status)
+    ) {
+      return;
+    }
+
+    parentInstance.pendingEvents.push(pbh.newSubOrchestrationFailedEvent(watcher.taskId, error));
+    parentInstance.lastUpdatedAt = new Date();
+    this.enqueueOrchestration(watcher.parentInstanceId);
   }
 
   private isTerminalStatus(status: pb.OrchestrationStatus): boolean {
@@ -1049,10 +1124,11 @@ export class InMemoryOrchestrationBackend {
   ): void {
     // Use the stateWaiters mechanism instead of polling to avoid infinite loops
     // and unnecessary resource consumption
-    this.waitForState(
+    this.waitForStateInternal(
       subInstanceId,
       (inst) => this.isTerminalStatus(inst.status),
       0, // No timeout — sub-orchestration will eventually complete, fail, or be terminated
+      { parentInstanceId, parentExecutionId, taskId },
     )
       .then((subInstance) => {
         const parentInstance = this.instances.get(parentInstanceId);
@@ -1080,7 +1156,7 @@ export class InMemoryOrchestrationBackend {
         this.enqueueOrchestration(parentInstanceId);
       })
       .catch(() => {
-        // Reset — sub-orchestration watcher cancelled, nothing to do
+        // The watcher was cancelled by reset or parent/child replacement.
       });
   }
 
