@@ -6,6 +6,7 @@ import { status as grpcStatus } from "@grpc/grpc-js";
 import {
   EntityInstanceId,
   OrchestrationQuery,
+  OrchestrationIdReusePolicy,
   OrchestrationState,
   OrchestrationStatus,
   PurgeInstanceCriteria,
@@ -73,6 +74,8 @@ export interface StartNewOptions {
   instanceId?: string;
   /** Orchestration version to assign (forwarded to the core scheduler). */
   version?: string;
+  /** Controls duplicate instance-ID handling based on the existing orchestration's runtime status. */
+  orchestrationIdReusePolicy?: OrchestrationIdReusePolicy;
 }
 
 /**
@@ -213,8 +216,14 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    */
   async startNew(orchestratorName: string, options?: StartNewOptions): Promise<string> {
     const scheduleOptions =
-      options?.instanceId !== undefined || options?.version !== undefined
-        ? { instanceId: options?.instanceId, version: options?.version }
+      options?.instanceId !== undefined ||
+      options?.version !== undefined ||
+      options?.orchestrationIdReusePolicy !== undefined
+        ? {
+            instanceId: options?.instanceId,
+            version: options?.version,
+            orchestrationIdReusePolicy: options?.orchestrationIdReusePolicy,
+          }
         : undefined;
     return this.scheduleNewOrchestration(orchestratorName, options?.input, scheduleOptions);
   }

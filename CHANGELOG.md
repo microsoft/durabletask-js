@@ -3,9 +3,10 @@
 ### New
 
 - Implement entity support in the in-memory testing backend ([#341](https://github.com/microsoft/durabletask-js/pull/341))
+- Add orchestration instance ID reuse policies with status-based deduplication and atomic replacement.
+- Add the `CANCELED` member to the public `OrchestrationStatus` enum.
 
 ### Fixes
-
 
 ## v0.4.0 (2026-07-31)
 

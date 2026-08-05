@@ -8,6 +8,7 @@
   Interactive scenarios (external events, termination, suspend/resume) and entity batches are
   covered by driving the `@microsoft/durabletask-js` in-memory test stack with `wrapOrchestrator` /
   `wrapEntity`; see the README.
+- Forward orchestration instance ID reuse policies through `DurableFunctionsClient.startNew()`.
 
 ### Fixes
 

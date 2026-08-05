@@ -11,10 +11,11 @@ import { EntityInstanceId } from "../entities/entity-instance-id";
 import { EntityMetadata } from "../entities/entity-metadata";
 import { InMemoryOrchestrationBackend, OrchestrationInstance } from "./in-memory-backend";
 import * as pb from "../proto/orchestrator_service_pb";
+import { StartOrchestrationOptions } from "../task/options";
 
 /**
  * Client for scheduling and managing orchestrations in the in-memory backend.
- * 
+ *
  * This client provides a similar API to TaskHubGrpcClient but operates
  * entirely in-memory for testing purposes.
  */
@@ -29,12 +30,42 @@ export class TestOrchestrationClient {
     input?: TInput,
     instanceId?: string,
     startAt?: Date,
+  ): Promise<string>;
+  async scheduleNewOrchestration(
+    orchestrator: TOrchestrator | string,
+    input?: TInput,
+    options?: StartOrchestrationOptions,
+  ): Promise<string>;
+  async scheduleNewOrchestration(
+    orchestrator: TOrchestrator | string,
+    input?: TInput,
+    instanceIdOrOptions?: string | StartOrchestrationOptions,
+    startAt?: Date,
   ): Promise<string> {
     const name = typeof orchestrator === "string" ? orchestrator : getName(orchestrator);
+    const instanceId =
+      typeof instanceIdOrOptions === "string" || instanceIdOrOptions === undefined
+        ? instanceIdOrOptions
+        : instanceIdOrOptions.instanceId;
+    const scheduledStartAt =
+      typeof instanceIdOrOptions === "string" || instanceIdOrOptions === undefined
+        ? startAt
+        : instanceIdOrOptions.startAt;
+    const orchestrationIdReusePolicy =
+      typeof instanceIdOrOptions === "string" || instanceIdOrOptions === undefined
+        ? undefined
+        : instanceIdOrOptions.orchestrationIdReusePolicy;
     const id = instanceId ?? randomUUID();
     const encodedInput = input !== undefined ? JSON.stringify(input) : undefined;
 
-    this.backend.createInstance(id, name, encodedInput, startAt);
+    this.backend.createInstance(
+      id,
+      name,
+      encodedInput,
+      scheduledStartAt,
+      undefined,
+      orchestrationIdReusePolicy,
+    );
     return id;
   }
 

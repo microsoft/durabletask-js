@@ -3,6 +3,7 @@
 
 import { RetryPolicy } from "../retry/retry-policy";
 import { AsyncRetryHandler, RetryHandler } from "../retry/retry-handler";
+import { OrchestrationIdReusePolicy } from "../../orchestration/orchestration-id-reuse-policy";
 
 /**
  * Union type representing the available retry strategies for a task.
@@ -74,6 +75,11 @@ export interface StartOrchestrationOptions {
    * via the OrchestrationContext.version property.
    */
   version?: string;
+  /**
+   * Controls whether an existing orchestration with the same instance ID is
+   * deduplicated or atomically replaced based on its runtime status.
+   */
+  orchestrationIdReusePolicy?: OrchestrationIdReusePolicy;
 }
 
 /**

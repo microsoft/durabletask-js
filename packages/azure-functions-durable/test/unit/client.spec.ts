@@ -4,6 +4,7 @@
 import { HttpRequest } from "@azure/functions";
 import { status as grpcStatus } from "@grpc/grpc-js";
 import {
+  OrchestrationIdReusePolicy,
   OrchestrationState,
   OrchestrationStatus,
   PurgeInstanceCriteria,
@@ -380,6 +381,29 @@ describe("DurableFunctionsClient", () => {
         schedule.mockClear();
         await client.startNew("MyOrch", { input: "x" });
         expect(schedule).toHaveBeenCalledWith("MyOrch", "x", undefined);
+      } finally {
+        await client.stop();
+      }
+    });
+
+    it("startNew forwards the orchestration ID reuse policy to the core scheduler", async () => {
+      const client = new DurableFunctionsClient(CLIENT_CONFIG);
+      try {
+        const schedule = jest.spyOn(client, "scheduleNewOrchestration").mockResolvedValue("inst-9");
+        const orchestrationIdReusePolicy: OrchestrationIdReusePolicy = {
+          dedupeStatuses: [OrchestrationStatus.RUNNING],
+        };
+
+        await client.startNew("MyOrch", {
+          instanceId: "inst-9",
+          orchestrationIdReusePolicy,
+        });
+
+        expect(schedule).toHaveBeenCalledWith("MyOrch", undefined, {
+          instanceId: "inst-9",
+          version: undefined,
+          orchestrationIdReusePolicy,
+        });
       } finally {
         await client.stop();
       }

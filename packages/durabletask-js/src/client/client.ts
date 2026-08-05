@@ -27,6 +27,7 @@ import { HistoryEvent } from "../orchestration/history-event";
 import { convertProtoHistoryEvent } from "../utils/history-event-converter";
 import { Logger, ConsoleLogger } from "../types/logger.type";
 import { StartOrchestrationOptions } from "../task/options";
+import { toProtobufOrchestrationIdReusePolicy } from "../orchestration/orchestration-id-reuse-policy";
 import { mapToRecord } from "../utils/tags.util";
 import { populateTagsMap } from "../utils/pb-helper.util";
 import { EntityInstanceId } from "../entities/entity-instance-id";
@@ -174,7 +175,7 @@ export class TaskHubGrpcClient {
    *
    * @param {TOrchestrator | string} orchestrator - The orchestrator or the name of the orchestrator to be scheduled.
    * @param {TInput} input - Optional input for the orchestrator.
-   * @param {StartOrchestrationOptions} options - Options for instance ID, start time, and tags.
+   * @param {StartOrchestrationOptions} options - Options for instance ID, start time, tags, version, and ID reuse.
    * @return {Promise<string>} A Promise resolving to the unique ID of the scheduled orchestrator instance.
    */
   async scheduleNewOrchestration(
@@ -211,6 +212,10 @@ export class TaskHubGrpcClient {
       typeof instanceIdOrOptions === "string" || instanceIdOrOptions === undefined
         ? undefined
         : instanceIdOrOptions.version;
+    const orchestrationIdReusePolicy =
+      typeof instanceIdOrOptions === "string" || instanceIdOrOptions === undefined
+        ? undefined
+        : instanceIdOrOptions.orchestrationIdReusePolicy;
 
     // Use provided version, or fall back to client's default version
     const effectiveVersion = version ?? this._defaultVersion;
@@ -232,6 +237,10 @@ export class TaskHubGrpcClient {
       const v = new StringValue();
       v.setValue(effectiveVersion);
       req.setVersion(v);
+    }
+
+    if (orchestrationIdReusePolicy) {
+      req.setOrchestrationidreusepolicy(toProtobufOrchestrationIdReusePolicy(orchestrationIdReusePolicy));
     }
 
     populateTagsMap(req.getTagsMap(), tags);

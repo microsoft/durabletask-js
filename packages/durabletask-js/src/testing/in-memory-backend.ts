@@ -7,6 +7,7 @@ import { OrchestrationStatus as ClientOrchestrationStatus } from "../orchestrati
 import { ParentOrchestrationInstance } from "../types/parent-orchestration-instance.type";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 import { randomUUID } from "crypto";
+import { OrchestrationIdReusePolicy } from "../orchestration/orchestration-id-reuse-policy";
 
 /** Mints a fresh per-execution ID (DTFx `Guid.ToString("N")` idiom: 32 hex chars, no dashes). */
 function newExecutionId(): string {
@@ -102,12 +103,12 @@ interface StateWaiter {
 
 /**
  * In-memory backend for durable orchestrations suitable for testing.
- * 
+ *
  * This backend stores all orchestration state in memory and processes
  * work items synchronously within the same process. It is designed for
  * unit testing and integration testing scenarios where a sidecar process
  * or external storage is not desired.
- * 
+ *
  * Thread-safety: All state mutations are performed synchronously via
  * the event loop. The backend uses a simple work queue pattern to ensure
  * that orchestration and activity processing happens in a predictable order.
@@ -148,9 +149,16 @@ export class InMemoryOrchestrationBackend {
     input?: string,
     scheduledStartTime?: Date,
     parentInstance?: ParentOrchestrationInstance,
+    orchestrationIdReusePolicy?: OrchestrationIdReusePolicy,
   ): string {
-    if (this.instances.has(instanceId)) {
-      throw new Error(`Orchestration instance '${instanceId}' already exists`);
+    const existingInstance = this.instances.get(instanceId);
+    if (existingInstance) {
+      const existingStatus = this.toClientStatus(existingInstance.status);
+      if (!orchestrationIdReusePolicy || orchestrationIdReusePolicy.dedupeStatuses.includes(existingStatus)) {
+        throw new Error(`Orchestration instance '${instanceId}' already exists`);
+      }
+
+      this.removeInstanceForReplacement(instanceId);
     }
 
     const now = new Date();
@@ -362,7 +370,7 @@ export class InMemoryOrchestrationBackend {
       const instanceId = this.orchestrationQueue.shift()!;
       this.orchestrationQueueSet.delete(instanceId);
       const instance = this.instances.get(instanceId);
-      
+
       if (instance && instance.pendingEvents.length > 0) {
         return instance;
       }
@@ -777,6 +785,8 @@ export class InMemoryOrchestrationBackend {
         return ClientOrchestrationStatus.COMPLETED;
       case pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED:
         return ClientOrchestrationStatus.FAILED;
+      case pb.OrchestrationStatus.ORCHESTRATION_STATUS_CANCELED:
+        return ClientOrchestrationStatus.CANCELED;
       case pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED:
         return ClientOrchestrationStatus.TERMINATED;
       case pb.OrchestrationStatus.ORCHESTRATION_STATUS_SUSPENDED:
@@ -793,6 +803,39 @@ export class InMemoryOrchestrationBackend {
     if (!this.orchestrationQueueSet.has(instanceId)) {
       this.orchestrationQueue.push(instanceId);
       this.orchestrationQueueSet.add(instanceId);
+    }
+  }
+
+  private removeInstanceForReplacement(instanceId: string): void {
+    this.cancelInstanceTimers(instanceId);
+    this.rejectStateWaiters(
+      instanceId,
+      new Error(`Orchestration instance '${instanceId}' was replaced by a new execution`),
+    );
+    this.instances.delete(instanceId);
+    this.orchestrationQueueSet.delete(instanceId);
+
+    const orchestrationQueueIndex = this.orchestrationQueue.indexOf(instanceId);
+    if (orchestrationQueueIndex >= 0) {
+      this.orchestrationQueue.splice(orchestrationQueueIndex, 1);
+    }
+
+    for (let i = this.activityQueue.length - 1; i >= 0; i--) {
+      if (this.activityQueue[i].instanceId === instanceId) {
+        this.activityQueue.splice(i, 1);
+      }
+    }
+  }
+
+  private rejectStateWaiters(instanceId: string, error: Error): void {
+    const waiters = this.stateWaiters.get(instanceId);
+    if (!waiters) {
+      return;
+    }
+
+    this.stateWaiters.delete(instanceId);
+    for (const waiter of waiters) {
+      waiter.reject(error);
     }
   }
 

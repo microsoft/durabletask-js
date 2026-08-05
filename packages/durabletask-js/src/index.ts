@@ -28,6 +28,7 @@ export {
   TERMINATE_OPTIONS_SYMBOL,
 } from "./orchestration/orchestration-terminate-options";
 export { OrchestrationStatus } from "./orchestration/enum/orchestration-status.enum";
+export { OrchestrationIdReusePolicy } from "./orchestration/orchestration-id-reuse-policy";
 export { OrchestrationState } from "./orchestration/orchestration-state";
 
 // Query types
