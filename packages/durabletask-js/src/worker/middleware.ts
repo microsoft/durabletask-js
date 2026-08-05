@@ -355,9 +355,7 @@ function containsFailure(container: Error, candidate: Error): boolean {
   return (
     container === candidate ||
     (container instanceof AggregateError &&
-      container.errors.some(
-        (nested: unknown) => nested instanceof Error && containsFailure(nested, candidate),
-      ))
+      container.errors.some((nested: unknown) => nested instanceof Error && containsFailure(nested, candidate)))
   );
 }
 
