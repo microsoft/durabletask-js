@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 import { InvocationContext } from "@azure/functions";
-import { TaskEntity } from "@microsoft/durabletask-js";
+import { TaskEntity, TestOrchestrationWorker } from "@microsoft/durabletask-js";
 import {
   EntityOperationError,
   createOrchestrationHarness,
@@ -84,6 +84,101 @@ describe("durable-functions/testing", () => {
       status: "Completed",
       output: "still runs",
     });
+  });
+
+  it("does not hang cleanup when an activity never settles", async () => {
+    let activityStarted!: () => void;
+    let releaseActivity!: () => void;
+    const started = new Promise<void>((resolve) => {
+      activityStarted = resolve;
+    });
+    const neverSettlingActivity = new Promise<void>((resolve) => {
+      releaseActivity = resolve;
+    });
+    const orchestrator: OrchestrationHandler = function* (
+      context: OrchestrationContext,
+    ): Generator<unknown, void, unknown> {
+      yield context.df.callActivity("never");
+    };
+
+    const execution = runOrchestrator(orchestrator, {
+      timeoutMs: 25,
+      activities: {
+        never: () => {
+          activityStarted();
+          return neverSettlingActivity;
+        },
+      },
+    });
+    await started;
+
+    const outcome = await Promise.race([
+      execution.then(
+        () => "settled",
+        () => "settled",
+      ),
+      new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 250)),
+    ]);
+
+    releaseActivity();
+    await execution.catch(() => undefined);
+    expect(outcome).toBe("settled");
+  });
+
+  it("serializes concurrent harness starts through one worker startup", async () => {
+    const harness = createOrchestrationHarness();
+    harness.registerOrchestrator("ready", async (_context, input) => input);
+
+    try {
+      const [first, second] = await Promise.all([
+        harness.start("ready", { instanceId: "first", input: 1 }),
+        harness.start("ready", { instanceId: "second", input: 2 }),
+      ]);
+
+      await expect(first.waitForCompletion()).resolves.toMatchObject({ output: 1 });
+      await expect(second.waitForCompletion()).resolves.toMatchObject({ output: 2 });
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it("stops a worker when disposal races its startup", async () => {
+    let releaseStart!: () => void;
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const startSpy = jest.spyOn(TestOrchestrationWorker.prototype, "start").mockImplementation(async () => startGate);
+    const stopSpy = jest.spyOn(TestOrchestrationWorker.prototype, "stop").mockResolvedValue();
+    const harness = createOrchestrationHarness();
+    harness.registerOrchestrator("ready", async () => "done");
+
+    try {
+      const starting = harness.start("ready");
+      await Promise.resolve();
+      const disposing = harness.dispose();
+      releaseStart();
+
+      await expect(starting).rejects.toThrow("The orchestration harness has been disposed.");
+      await disposing;
+      expect(startSpy).toHaveBeenCalledTimes(1);
+      expect(stopSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      startSpy.mockRestore();
+      stopSpy.mockRestore();
+    }
+  });
+
+  it("rejects future scheduled starts that the in-memory backend cannot defer", async () => {
+    const harness = createOrchestrationHarness();
+    harness.registerOrchestrator("ready", async () => "done");
+
+    try {
+      await expect(harness.start("ready", { startAt: new Date(Date.now() + 60_000) })).rejects.toThrow(
+        "Future startAt values are not supported",
+      );
+    } finally {
+      await harness.dispose();
+    }
   });
 
   it("drives external events through an orchestration harness", async () => {
@@ -170,6 +265,42 @@ describe("durable-functions/testing", () => {
     }
   });
 
+  it("retains terminal results but rejects other run operations after disposal", async () => {
+    const harness = createOrchestrationHarness({ timeoutMs: 20 });
+    harness.registerOrchestrator("ready", async () => ({ done: true }));
+    const run = await harness.start<{ done: boolean }>("ready");
+    const completed = await run.waitForCompletion();
+
+    await harness.dispose();
+
+    await expect(run.waitForCompletion()).resolves.toEqual(completed);
+    expect(run.output).toEqual({ done: true });
+    await expect(run.waitForStart()).rejects.toThrow("The orchestration harness has been disposed.");
+    await expect(run.refresh()).rejects.toThrow("The orchestration harness has been disposed.");
+    await expect(run.raiseEvent("ignored")).rejects.toThrow("The orchestration harness has been disposed.");
+    await expect(run.terminate()).rejects.toThrow("The orchestration harness has been disposed.");
+    await expect(run.suspend()).rejects.toThrow("The orchestration harness has been disposed.");
+    await expect(run.resume()).rejects.toThrow("The orchestration harness has been disposed.");
+  });
+
+  it("rejects nonterminal run operations immediately after disposal", async () => {
+    const harness = createOrchestrationHarness({ timeoutMs: 20 });
+    harness.registerOrchestrator("waiting", function* (context: OrchestrationContext): Generator<
+      unknown,
+      void,
+      unknown
+    > {
+      yield context.df.waitForExternalEvent("never");
+    });
+    const run = await harness.start("waiting");
+    await run.waitForStart();
+
+    await harness.dispose();
+
+    await expect(run.waitForCompletion()).rejects.toThrow("The orchestration harness has been disposed.");
+    await expect(run.refresh()).rejects.toThrow("The orchestration harness has been disposed.");
+  });
+
   it("runs a classic entity batch and deserializes state and operation results", async () => {
     const entity: EntityHandler<number> = (context) => {
       const current = context.df.getState(() => 0) ?? 0;
@@ -213,6 +344,26 @@ describe("durable-functions/testing", () => {
     });
 
     expect(result).toEqual({ state: 4, results: [4] });
+  });
+
+  it("treats null initial entity state as absent while preserving null operation input", async () => {
+    const entity: EntityHandler<number> = (context) => {
+      context.df.return({
+        input: context.df.getInput(),
+        isNewlyConstructed: context.df.isNewlyConstructed,
+        state: context.df.getState(() => 7),
+      });
+    };
+
+    const result = await runEntity<number | null, { input: null; isNewlyConstructed: boolean; state: number }>(entity, {
+      initialState: null,
+      operations: [{ name: "inspect", input: null }],
+    });
+
+    expect(result).toEqual({
+      state: undefined,
+      results: [{ input: null, isNewlyConstructed: true, state: 7 }],
+    });
   });
 
   it("surfaces entity operation failures without committing their state", async () => {

@@ -220,6 +220,10 @@ Durable timers are supported with **real wall-clock delays**. The current core i
 no virtual clock or timer-advance API, so use short timer delays in tests. The harness does not add a
 synthetic fast-forward operation.
 
+Future `startAt` values are rejected because the current in-memory backend enqueues scheduled starts
+immediately instead of deferring their execution. Past `startAt` values are accepted and start
+immediately.
+
 ### Entities
 
 `runEntity` executes a classic or core-native entity batch directly through the existing entity

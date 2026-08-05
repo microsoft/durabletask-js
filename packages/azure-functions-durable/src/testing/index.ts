@@ -19,6 +19,8 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_ORCHESTRATOR_NAME = "orchestrator";
 const DEFAULT_ENTITY_NAME = "entity";
 const DEFAULT_ENTITY_KEY = "test";
+const HARNESS_DISPOSED_MESSAGE = "The orchestration harness has been disposed.";
+const ACTIVITY_CANCELLED = Symbol("activityCancelled");
 
 /** An Azure Functions activity handler used by the testing helpers. */
 export type TestActivityHandler<TInput = unknown, TOutput = unknown> = (
@@ -67,6 +69,7 @@ export interface OrchestrationTestResult<TOutput = unknown> {
 export interface OrchestrationStartOptions<TInput = unknown> {
   input?: TInput;
   instanceId?: string;
+  /** A past time is accepted, but future scheduled starts are not supported by the in-memory backend. */
   startAt?: Date;
 }
 
@@ -221,10 +224,22 @@ class InMemoryOrchestrationHarness implements OrchestrationHarness {
   private readonly backend = new InMemoryOrchestrationBackend();
   private readonly worker = new TestOrchestrationWorker(this.backend);
   private readonly client = new TestOrchestrationClient(this.backend);
-  private started = false;
+  private readonly runs = new Set<InMemoryOrchestrationRun<unknown>>();
+  private readonly activityCancellation: Promise<typeof ACTIVITY_CANCELLED>;
+  private cancelActivities!: () => void;
+  private transition: Promise<void> = Promise.resolve();
+  private workerStartPromise: Promise<void> | undefined;
+  private workerStarted = false;
+  private startRequested = false;
+  private activityCancellationRequested = false;
   private disposed = false;
+  private disposePromise: Promise<void> | undefined;
 
-  constructor(private readonly timeoutMs: number) {}
+  constructor(private readonly timeoutMs: number) {
+    this.activityCancellation = new Promise((resolve) => {
+      this.cancelActivities = () => resolve(ACTIVITY_CANCELLED);
+    });
+  }
 
   registerOrchestrator(name: string, handler: OrchestrationHandler): OrchestrationHarness {
     this.ensureCanRegister();
@@ -235,39 +250,66 @@ class InMemoryOrchestrationHarness implements OrchestrationHarness {
   registerActivity<TInput, TOutput>(name: string, handler: TestActivityHandler<TInput, TOutput>): OrchestrationHarness {
     this.ensureCanRegister();
     this.worker.addNamedActivity(name, async (_context, input) => {
-      return await runActivity(handler, input as TInput, { functionName: name });
+      if (this.activityCancellationRequested) {
+        throw createHarnessDisposedError();
+      }
+      const result = await Promise.race([
+        runActivity(handler, input as TInput, { functionName: name }),
+        this.activityCancellation,
+      ]);
+      if (result === ACTIVITY_CANCELLED) {
+        throw createHarnessDisposedError();
+      }
+      return result;
     });
     return this;
   }
 
-  async start<TOutput, TInput>(
+  start<TOutput, TInput>(
     name: string,
     options: OrchestrationStartOptions<TInput> = {},
   ): Promise<OrchestrationRun<TOutput>> {
-    this.ensureNotDisposed();
-    if (!this.started) {
-      await this.worker.start();
-      this.started = true;
-    }
+    this.startRequested = true;
+    return this.enqueueTransition(async () => {
+      this.ensureNotDisposed();
+      validateStartAt(options.startAt);
+      await this.ensureWorkerStarted();
+      this.ensureNotDisposed();
 
-    const instanceId = await this.client.scheduleNewOrchestration(
-      name,
-      options.input,
-      options.instanceId,
-      options.startAt,
-    );
-    return new InMemoryOrchestrationRun<TOutput>(instanceId, this.client, this.timeoutMs);
+      const instanceId = await this.client.scheduleNewOrchestration(
+        name,
+        options.input,
+        options.instanceId,
+        options.startAt,
+      );
+      this.ensureNotDisposed();
+
+      const run = new InMemoryOrchestrationRun<TOutput>(instanceId, this.client, this.timeoutMs);
+      this.runs.add(run as InMemoryOrchestrationRun<unknown>);
+      return run;
+    });
   }
 
-  async dispose(): Promise<void> {
-    if (this.disposed) {
-      return;
+  dispose(): Promise<void> {
+    if (!this.disposePromise) {
+      this.disposed = true;
+      this.activityCancellationRequested = true;
+      this.cancelActivities();
+      for (const run of this.runs) {
+        run.markDisposed();
+      }
+      this.disposePromise = this.enqueueTransition(() => this.disposeCore());
     }
-    this.disposed = true;
+    return this.disposePromise;
+  }
+
+  private async disposeCore(): Promise<void> {
+    await this.workerStartPromise?.catch(() => undefined);
     try {
-      if (this.started) {
+      if (this.workerStarted) {
         await this.worker.stop();
       }
+      await Promise.all([...this.runs].map((run) => run.captureTerminalSnapshot()));
     } finally {
       this.backend.reset();
       await this.client.stop();
@@ -276,15 +318,33 @@ class InMemoryOrchestrationHarness implements OrchestrationHarness {
 
   private ensureCanRegister(): void {
     this.ensureNotDisposed();
-    if (this.started) {
+    if (this.startRequested) {
       throw new Error("Orchestrators and activities must be registered before the first run starts.");
     }
   }
 
   private ensureNotDisposed(): void {
     if (this.disposed) {
-      throw new Error("The orchestration harness has been disposed.");
+      throw createHarnessDisposedError();
     }
+  }
+
+  private ensureWorkerStarted(): Promise<void> {
+    if (!this.workerStartPromise) {
+      this.workerStartPromise = this.worker.start().then(() => {
+        this.workerStarted = true;
+      });
+    }
+    return this.workerStartPromise;
+  }
+
+  private enqueueTransition<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.transition.then(operation);
+    this.transition = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 }
 
@@ -293,6 +353,8 @@ class InMemoryOrchestrationRun<TOutput> implements OrchestrationRun<TOutput> {
   private currentOutput: TOutput | undefined;
   private currentCustomStatus: unknown;
   private currentFailure: OrchestrationTestFailure | undefined;
+  private terminalResult: OrchestrationTestResult<TOutput> | undefined;
+  private disposed = false;
 
   constructor(
     readonly instanceId: string,
@@ -317,36 +379,69 @@ class InMemoryOrchestrationRun<TOutput> implements OrchestrationRun<TOutput> {
   }
 
   async waitForStart(timeoutMs: number = this.timeoutMs): Promise<OrchestrationTestResult<TOutput>> {
-    const state = await this.client.waitForOrchestrationStart(this.instanceId, true, timeoutMs / 1000);
+    const state = await this.executeWhileActive(() =>
+      this.client.waitForOrchestrationStart(this.instanceId, true, timeoutMs / 1000),
+    );
     return this.applyState(requireState(state, this.instanceId));
   }
 
   async waitForCompletion(timeoutMs: number = this.timeoutMs): Promise<OrchestrationTestResult<TOutput>> {
-    const state = await this.client.waitForOrchestrationCompletion(this.instanceId, true, timeoutMs / 1000);
-    return this.applyState(requireState(state, this.instanceId));
+    if (this.terminalResult) {
+      return this.terminalResult;
+    }
+    if (this.disposed) {
+      throw createHarnessDisposedError();
+    }
+
+    try {
+      const state = await this.client.waitForOrchestrationCompletion(this.instanceId, true, timeoutMs / 1000);
+      return this.applyState(requireState(state, this.instanceId));
+    } catch (error) {
+      if (this.disposed) {
+        if (this.terminalResult) {
+          return this.terminalResult;
+        }
+        throw createHarnessDisposedError();
+      }
+      throw error;
+    }
   }
 
   async raiseEvent<TData>(name: string, data?: TData): Promise<void> {
-    await this.client.raiseOrchestrationEvent(this.instanceId, name, data);
+    await this.executeWhileActive(() => this.client.raiseOrchestrationEvent(this.instanceId, name, data));
   }
 
   async terminate<TOutputData>(output?: TOutputData): Promise<void> {
-    await this.client.terminateOrchestration(this.instanceId, output);
+    await this.executeWhileActive(() => this.client.terminateOrchestration(this.instanceId, output));
   }
 
   async suspend(): Promise<void> {
-    await this.client.suspendOrchestration(this.instanceId);
+    await this.executeWhileActive(() => this.client.suspendOrchestration(this.instanceId));
     await this.refresh();
   }
 
   async resume(): Promise<void> {
-    await this.client.resumeOrchestration(this.instanceId);
+    await this.executeWhileActive(() => this.client.resumeOrchestration(this.instanceId));
     await this.refresh();
   }
 
   async refresh(): Promise<OrchestrationTestResult<TOutput>> {
-    const state = await this.client.getOrchestrationState(this.instanceId, true);
+    const state = await this.executeWhileActive(() => this.client.getOrchestrationState(this.instanceId, true));
     return this.applyState(requireState(state, this.instanceId));
+  }
+
+  markDisposed(): void {
+    this.disposed = true;
+  }
+
+  async captureTerminalSnapshot(): Promise<void> {
+    if (this.terminalResult) {
+      return;
+    }
+    const state = await this.client.getOrchestrationState(this.instanceId, true);
+    if (state && isTerminalStatus(state.runtimeStatus)) {
+      this.applyState(state);
+    }
   }
 
   private applyState(state: OrchestrationState): OrchestrationTestResult<TOutput> {
@@ -361,13 +456,37 @@ class InMemoryOrchestrationRun<TOutput> implements OrchestrationRun<TOutput> {
         }
       : undefined;
 
-    return {
+    const result = {
       instanceId: this.instanceId,
       status: this.currentStatus,
       output: this.currentOutput,
       customStatus: this.currentCustomStatus,
       failure: this.currentFailure,
     };
+    if (isTerminalStatus(state.runtimeStatus)) {
+      this.terminalResult = result;
+    }
+    return result;
+  }
+
+  private async executeWhileActive<T>(operation: () => Promise<T>): Promise<T> {
+    this.ensureActive();
+    try {
+      const result = await operation();
+      this.ensureActive();
+      return result;
+    } catch (error) {
+      if (this.disposed) {
+        throw createHarnessDisposedError();
+      }
+      throw error;
+    }
+  }
+
+  private ensureActive(): void {
+    if (this.disposed) {
+      throw createHarnessDisposedError();
+    }
   }
 }
 
@@ -378,7 +497,7 @@ function createEntityBatchRequest<TState>(
   // TaskEntityShim reads only these protobuf accessors. Keeping this adapter local avoids exposing
   // generated protocol types through the durable-functions testing API.
   const request = {
-    getEntitystate: () => serializedValue(initialState),
+    getEntitystate: () => serializedStateValue(initialState),
     getOperationsList: () =>
       operations.map((operation) => ({
         getOperation: () => operation.name,
@@ -397,6 +516,10 @@ function serializedValue(value: unknown): { getValue(): string } | undefined {
     throw new TypeError("Test values must be JSON-serializable.");
   }
   return { getValue: () => serialized };
+}
+
+function serializedStateValue(value: unknown): { getValue(): string } | undefined {
+  return value == null ? undefined : serializedValue(value);
 }
 
 function deserialize<T>(value: string | undefined): T | undefined {
@@ -427,8 +550,32 @@ function toTestStatus(status: OrchestrationStatus): OrchestrationTestStatus {
     case OrchestrationStatus.CONTINUED_AS_NEW:
       return "Running";
     default:
-      throw new Error(`Unexpected orchestration status value: ${String(status)}.`);
+      return "Running";
   }
+}
+
+function isTerminalStatus(status: OrchestrationStatus): boolean {
+  return (
+    status === OrchestrationStatus.COMPLETED ||
+    status === OrchestrationStatus.FAILED ||
+    status === OrchestrationStatus.TERMINATED
+  );
+}
+
+function validateStartAt(startAt: Date | undefined): void {
+  if (!startAt) {
+    return;
+  }
+  if (Number.isNaN(startAt.getTime())) {
+    throw new TypeError("startAt must be a valid Date.");
+  }
+  if (startAt.getTime() > Date.now()) {
+    throw new Error("Future startAt values are not supported by the in-memory orchestration harness.");
+  }
+}
+
+function createHarnessDisposedError(): Error {
+  return new Error(HARNESS_DISPOSED_MESSAGE);
 }
 
 /** Namespace-style access matching the rest of the Durable Functions API. */
