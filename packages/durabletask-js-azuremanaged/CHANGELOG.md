@@ -4,6 +4,8 @@
 
 ### Fixes
 
+- Add `startupTimeout()` to configure the core worker's sidecar connection startup timeout.
+
 ## v0.4.0 (2026-07-31)
 
 ### Changes

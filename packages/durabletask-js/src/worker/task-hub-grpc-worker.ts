@@ -37,9 +37,14 @@ import {
   setSpanOk,
   endSpan,
 } from "../tracing";
+import { raceWithTimeout } from "../utils/timeout.util";
+import { TimeoutError } from "../exception/timeout-error";
 
 /** Default timeout in milliseconds for graceful shutdown. */
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30000;
+/** Default timeout in milliseconds for establishing the initial worker connection. */
+const DEFAULT_STARTUP_TIMEOUT_MS = 30000;
+const MAX_TIMER_DELAY_MS = 2147483647;
 
 /**
  * Options for creating a TaskHubGrpcWorker.
@@ -59,6 +64,12 @@ export interface TaskHubGrpcWorkerOptions {
   logger?: Logger;
   /** Optional timeout in milliseconds for graceful shutdown. Defaults to 30000. */
   shutdownTimeoutMs?: number;
+  /**
+   * Optional timeout in milliseconds for establishing the initial sidecar connection,
+   * including metadata generation, the hello handshake, and work-item stream readiness.
+   * Defaults to 30000.
+   */
+  startupTimeoutMs?: number;
   /** Optional versioning options for filtering orchestrations by version. */
   versioning?: VersioningOptions;
   /**
@@ -73,6 +84,7 @@ export interface TaskHubGrpcWorkerOptions {
 
 export class TaskHubGrpcWorker {
   private _responseStream: grpc.ClientReadableStream<pb.WorkItem> | null;
+  private _helloCall: grpc.ClientUnaryCall | null;
   private _registry: Registry;
   private _hostAddress?: string;
   private _tls?: boolean;
@@ -85,9 +97,12 @@ export class TaskHubGrpcWorker {
   private _logger: Logger;
   private _pendingWorkItems: Set<Promise<void>>;
   private _shutdownTimeoutMs: number;
+  private _startupTimeoutMs: number;
   private _backoff: ExponentialBackoff;
   private _versioning?: VersioningOptions;
   private _workItemFilters?: WorkItemFilters | "auto";
+  private _connectionGeneration: number;
+  private _connectionAbort: { generation: number; abort: (error: Error) => void } | null;
 
   /**
    * Creates a new TaskHubGrpcWorker instance.
@@ -134,6 +149,7 @@ export class TaskHubGrpcWorker {
     let resolvedMetadataGenerator: MetadataGenerator | undefined;
     let resolvedLogger: Logger | undefined;
     let resolvedShutdownTimeoutMs: number | undefined;
+    let resolvedStartupTimeoutMs: number | undefined;
     let resolvedVersioning: VersioningOptions | undefined;
     let resolvedWorkItemFilters: WorkItemFilters | "auto" | undefined;
 
@@ -146,6 +162,7 @@ export class TaskHubGrpcWorker {
       resolvedMetadataGenerator = hostAddressOrOptions.metadataGenerator;
       resolvedLogger = hostAddressOrOptions.logger;
       resolvedShutdownTimeoutMs = hostAddressOrOptions.shutdownTimeoutMs;
+      resolvedStartupTimeoutMs = hostAddressOrOptions.startupTimeoutMs;
       resolvedVersioning = hostAddressOrOptions.versioning;
       resolvedWorkItemFilters = hostAddressOrOptions.workItemFilters;
     } else {
@@ -166,12 +183,23 @@ export class TaskHubGrpcWorker {
     this._grpcChannelCredentials = resolvedCredentials;
     this._metadataGenerator = resolvedMetadataGenerator;
     this._responseStream = null;
+    this._helloCall = null;
     this._isRunning = false;
     this._stopWorker = false;
     this._stub = null;
     this._logger = resolvedLogger ?? new ConsoleLogger();
     this._pendingWorkItems = new Set();
     this._shutdownTimeoutMs = resolvedShutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
+    this._startupTimeoutMs = resolvedStartupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
+    if (
+      !Number.isFinite(this._startupTimeoutMs) ||
+      this._startupTimeoutMs < 0 ||
+      this._startupTimeoutMs > MAX_TIMER_DELAY_MS
+    ) {
+      throw new RangeError(
+        `startupTimeoutMs must be a finite number between 0 and ${MAX_TIMER_DELAY_MS}, got ${this._startupTimeoutMs}`,
+      );
+    }
     this._backoff = new ExponentialBackoff({
       initialDelayMs: 1000,
       maxDelayMs: 30000,
@@ -179,6 +207,8 @@ export class TaskHubGrpcWorker {
     });
     this._versioning = resolvedVersioning;
     this._workItemFilters = resolvedWorkItemFilters;
+    this._connectionGeneration = 0;
+    this._connectionAbort = null;
   }
 
   /**
@@ -195,13 +225,21 @@ export class TaskHubGrpcWorker {
    * Creates a new gRPC client and retries the worker.
    * Properly closes the old client to prevent connection leaks.
    */
-  private async _createNewClientAndRetry(): Promise<void> {
+  private async _createNewClientAndRetry(generation: number = this._connectionGeneration): Promise<void> {
+    if (!this._isConnectionAttemptActive(generation)) {
+      return;
+    }
+
     // Close the old stub to prevent connection leaks
     if (this._stub) {
       this._stub.close();
+      this._stub = null;
     }
 
     await this._backoff.wait();
+    if (!this._isConnectionAttemptActive(generation)) {
+      return;
+    }
 
     const newClient = new GrpcClient(
       this._hostAddress,
@@ -212,7 +250,7 @@ export class TaskHubGrpcWorker {
     this._stub = newClient.stub;
 
     // Do not await - run in background
-    this.internalRunWorker(newClient, true).catch((err) => {
+    this.internalRunWorker(newClient, true, generation).catch((err) => {
       if (!this._stopWorker) {
         WorkerLogs.workerError(this._logger, err);
       }
@@ -382,45 +420,106 @@ export class TaskHubGrpcWorker {
   /**
    * In node.js we don't require a new thread as we have a main event loop
    * Therefore, we open the stream and simply listen through the eventemitter behind the scenes
+   *
+   * @remarks Resolves after the sidecar hello handshake succeeds and the initial
+   * work-item stream is established. Later stream failures reconnect automatically.
+   * @throws {@link TimeoutError} if the hello handshake exceeds `startupTimeoutMs`.
    */
   async start(): Promise<void> {
     if (this._isRunning) {
       throw new Error("The worker is already running.");
     }
 
+    this._isRunning = true;
+    this._stopWorker = false;
+    const generation = ++this._connectionGeneration;
     const client = new GrpcClient(this._hostAddress, this._grpcChannelOptions, this._tls, this._grpcChannelCredentials);
     this._stub = client.stub;
 
-    // Run in background but catch any unhandled errors to prevent unhandled rejections
-    this.internalRunWorker(client).catch((err) => {
-      // Only log if the worker wasn't stopped intentionally
-      if (!this._stopWorker) {
-        WorkerLogs.workerError(this._logger, err);
+    try {
+      await this.internalRunWorker(client, false, generation);
+      this._ensureConnectionAttemptActive(generation);
+    } catch (err) {
+      client.stub.close();
+      if (this._stub === client.stub) {
+        this._stub = null;
       }
-    });
-
-    this._isRunning = true;
+      if (generation === this._connectionGeneration) {
+        this._responseStream = null;
+        this._isRunning = false;
+      }
+      throw err;
+    }
   }
 
-  async internalRunWorker(client: GrpcClient, isRetry: boolean = false): Promise<void> {
+  async internalRunWorker(
+    client: GrpcClient,
+    isRetry: boolean = false,
+    generation: number = this._connectionGeneration,
+  ): Promise<void> {
+    let abortConnection: (error: Error) => void;
+    const connectionAborted = new Promise<never>((_, reject) => {
+      let aborted = false;
+      abortConnection = (error: Error) => {
+        if (!aborted) {
+          aborted = true;
+          reject(error);
+        }
+      };
+    });
+    const connectionAbort = { generation, abort: abortConnection! };
+    this._connectionAbort = connectionAbort;
+    const deadline = Date.now() + this._startupTimeoutMs;
+    const waitForStartup = <T>(promise: Promise<T>, timeoutMessage: string): Promise<T> =>
+      raceWithTimeout(
+        Promise.race([promise, connectionAborted]),
+        Math.max(0, deadline - Date.now()),
+        () => timeoutMessage,
+      );
+    let attemptStream: grpc.ClientReadableStream<pb.WorkItem> | null = null;
+    let streamReady = false;
+
     try {
       // send a "Hello" message to the sidecar to ensure that it's listening
-      await callWithMetadata(client.stub.hello.bind(client.stub), new Empty(), this._metadataGenerator);
-
-      // Reset backoff on successful connection
-      this._backoff.reset();
+      const helloMetadata = await waitForStartup(
+        this._getMetadata(),
+        `Timed out starting worker after ${this._startupTimeoutMs}ms while generating sidecar metadata`,
+      );
+      await waitForStartup(
+        this._waitForHello(client, generation, helloMetadata, new Date(deadline)),
+        `Timed out starting worker after ${this._startupTimeoutMs}ms while waiting for sidecar hello response`,
+      );
+      this._ensureConnectionAttemptActive(generation);
 
       // Stream work items from the sidecar (pass metadata for insecure connections)
-      const metadata = await this._getMetadata();
+      const metadata = await waitForStartup(
+        this._getMetadata(),
+        `Timed out starting worker after ${this._startupTimeoutMs}ms while generating work-item stream metadata`,
+      );
+      this._ensureConnectionAttemptActive(generation);
       const request = this._buildGetWorkItemsRequest();
 
       const stream = client.stub.getWorkItems(request, metadata);
+      attemptStream = stream;
       this._responseStream = stream;
+      let resolveStreamReady: () => void;
+      let rejectStreamReady: (error: Error) => void;
+      const streamReadyPromise = new Promise<void>((resolve, reject) => {
+        resolveStreamReady = resolve;
+        rejectStreamReady = reject;
+      });
+      const markStreamReady = () => {
+        if (!streamReady) {
+          streamReady = true;
+          resolveStreamReady();
+        }
+      };
 
-      WorkerLogs.workerConnected(this._logger, this._hostAddress ?? "localhost:4001");
+      stream.once("metadata", markStreamReady);
 
       // Wait for a work item to be received
       stream.on("data", (workItem: pb.WorkItem) => {
+        markStreamReady();
         const completionToken = workItem.getCompletiontoken();
         if (workItem.hasOrchestratorrequest()) {
           WorkerLogs.workItemReceived(
@@ -449,18 +548,20 @@ export class TaskHubGrpcWorker {
 
       // Wait for the stream to end or error
       stream.on("end", () => {
+        if (!streamReady) {
+          this._disposeResponseStream(stream);
+          rejectStreamReady(new Error("The work-item stream ended before the worker connection was established."));
+          return;
+        }
         if (this._stopWorker) {
           WorkerLogs.streamEnded(this._logger);
-          stream.removeAllListeners();
-          stream.destroy();
+          this._disposeResponseStream(stream);
           return;
         }
         // Stream ended unexpectedly - clean up and retry
-        stream.removeAllListeners();
-        stream.on("error", () => {}); // Prevent unhandled "error" after cleanup
-        stream.destroy();
+        this._disposeResponseStream(stream);
         WorkerLogs.streamRetry(this._logger, this._backoff.peekNextDelay());
-        this._createNewClientAndRetry().catch((retryErr) => {
+        this._createNewClientAndRetry(generation).catch((retryErr) => {
           if (!this._stopWorker) {
             WorkerLogs.workerError(this._logger, retryErr instanceof Error ? retryErr : new Error(String(retryErr)));
           }
@@ -468,6 +569,11 @@ export class TaskHubGrpcWorker {
       });
 
       stream.on("error", (err: Error) => {
+        if (!streamReady) {
+          this._disposeResponseStream(stream);
+          rejectStreamReady(err);
+          return;
+        }
         // Ignore cancellation errors when the worker is being stopped intentionally
         if (this._stopWorker) {
           return;
@@ -478,29 +584,101 @@ export class TaskHubGrpcWorker {
         // In Node.js, gRPC stream errors (e.g., UNAVAILABLE, transport failures)
         // may not always be followed by an "end" event. Without recovery here,
         // the worker would silently stop processing work items.
-        stream.removeAllListeners();
-        stream.on("error", () => {}); // Prevent unhandled "error" after cleanup
-        stream.destroy();
+        this._disposeResponseStream(stream);
         WorkerLogs.streamRetry(this._logger, this._backoff.peekNextDelay());
-        this._createNewClientAndRetry().catch((retryErr) => {
+        this._createNewClientAndRetry(generation).catch((retryErr) => {
           if (!this._stopWorker) {
             WorkerLogs.workerError(this._logger, retryErr instanceof Error ? retryErr : new Error(String(retryErr)));
           }
         });
       });
+
+      await waitForStartup(
+        streamReadyPromise,
+        `Timed out starting worker after ${this._startupTimeoutMs}ms while establishing the work-item stream`,
+      );
+      this._ensureConnectionAttemptActive(generation);
+      this._backoff.reset();
+      WorkerLogs.workerConnected(this._logger, this._hostAddress ?? "localhost:4001");
     } catch (err) {
-      if (this._stopWorker) {
-        // ignoring the error because the worker has been stopped
+      const error = err instanceof Error ? err : new Error(String(err));
+      if (error instanceof TimeoutError) {
+        connectionAbort.abort(error);
+        this._helloCall?.cancel();
+      }
+      if (attemptStream && !streamReady) {
+        attemptStream.cancel();
+        this._disposeResponseStream(attemptStream);
+      }
+      if (!this._isConnectionAttemptActive(generation)) {
+        if (!isRetry) {
+          throw error;
+        }
         return;
       }
-      const error = err instanceof Error ? err : new Error(String(err));
       WorkerLogs.streamError(this._logger, error);
       if (!isRetry) {
         throw error;
       }
       WorkerLogs.connectionRetry(this._logger, this._backoff.peekNextDelay());
-      await this._createNewClientAndRetry();
+      await this._createNewClientAndRetry(generation);
       return;
+    } finally {
+      if (this._connectionAbort === connectionAbort) {
+        this._connectionAbort = null;
+      }
+    }
+  }
+
+  private async _waitForHello(
+    client: GrpcClient,
+    generation: number,
+    metadata: grpc.Metadata,
+    deadline: Date,
+  ): Promise<void> {
+    this._ensureConnectionAttemptActive(generation);
+    const timeoutMessage = `Timed out starting worker after ${this._startupTimeoutMs}ms while waiting for sidecar hello response`;
+    let call: grpc.ClientUnaryCall | undefined;
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        call = client.stub.hello(new Empty(), metadata, { deadline }, (error) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve();
+          }
+        });
+        this._helloCall = call;
+      });
+    } catch (err) {
+      if (err && typeof err === "object" && "code" in err && err.code === grpc.status.DEADLINE_EXCEEDED) {
+        throw new TimeoutError(timeoutMessage);
+      }
+      throw err;
+    } finally {
+      if (this._helloCall === call) {
+        this._helloCall = null;
+      }
+    }
+  }
+
+  private _ensureConnectionAttemptActive(generation: number): void {
+    if (!this._isConnectionAttemptActive(generation)) {
+      throw new Error("Worker startup was stopped before the connection was established.");
+    }
+  }
+
+  private _isConnectionAttemptActive(generation: number): boolean {
+    return !this._stopWorker && generation === this._connectionGeneration;
+  }
+
+  private _disposeResponseStream(stream: grpc.ClientReadableStream<pb.WorkItem>): void {
+    stream.removeAllListeners();
+    stream.on("error", () => {});
+    stream.destroy();
+    if (this._responseStream === stream) {
+      this._responseStream = null;
     }
   }
 
@@ -514,6 +692,9 @@ export class TaskHubGrpcWorker {
     }
 
     this._stopWorker = true;
+    this._connectionGeneration++;
+    this._connectionAbort?.abort(new Error("Worker startup was stopped before the connection was established."));
+    this._helloCall?.cancel();
 
     // Cancel stream first while error handlers are still attached
     // This allows the error handler to suppress CANCELLED errors
@@ -562,7 +743,9 @@ export class TaskHubGrpcWorker {
     if (this._stub) {
       // Close the gRPC client - this is a synchronous operation
       this._stub.close();
+      this._stub = null;
     }
+    this._responseStream = null;
     this._isRunning = false;
 
     // Brief pause to allow gRPC cleanup

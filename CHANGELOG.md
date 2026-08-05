@@ -13,6 +13,8 @@
 
 ### Fixes
 
+- Make `TaskHubGrpcWorker.start()` wait for its initial work-item stream and time out unresponsive sidecar startup connections.
+
 ## v0.4.0 (2026-07-31)
 
 ### Changes
