@@ -2,8 +2,11 @@
 
 ### New
 
-### Fixes
+- Added a first-class `durable-functions/testing` entry point with one-shot activity,
+  orchestration, and entity helpers plus an interactive in-memory orchestration harness for events,
+  termination, suspension, resumption, and real-time durable timers.
 
+### Fixes
 
 ## v4.0.0-beta.1 (2026-07-31)
 

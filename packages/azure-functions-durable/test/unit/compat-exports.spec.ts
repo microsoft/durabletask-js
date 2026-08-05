@@ -10,6 +10,7 @@ import type {
   OrchestrationHandler,
 } from "../../src";
 import { TaskFailedError } from "../../src";
+import packageJson from "../../package.json";
 
 describe("v3 compatibility type aliases", () => {
   it("exposes ActivityHandler / OrchestrationHandler / OrchestrationContext", () => {
@@ -20,6 +21,17 @@ describe("v3 compatibility type aliases", () => {
     };
     expect(typeof activity).toBe("function");
     expect(typeof orchestrator).toBe("function");
+  });
+
+  describe("package exports", () => {
+    it("publishes the testing subpath independently from the runtime entry point", () => {
+      const exports = packageJson.exports as Record<string, unknown>;
+      expect(exports["./testing"]).toEqual({
+        types: "./dist/testing/index.d.ts",
+        require: "./dist/testing/index.js",
+        import: "./dist/testing/index.js",
+      });
+    });
   });
 
   it("exposes generic EntityContext<TState> / EntityHandler<TState> and DurableClient", () => {

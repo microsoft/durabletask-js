@@ -96,12 +96,13 @@ changed:
     **not** available — existing `response.getHeader(...)` calls **fail at runtime** and must be
     rewritten to index `response.headers[...]` by lower-cased key (response header names are lower-cased
     by `fetch`).
-- **Some v3 top-level exports were removed** — `DummyOrchestrationContext` / `DummyEntityContext`
-  (testing utilities) and the entity-lock types above. `TaskFailedError`
-  is re-exported from the core SDK (aggregate failures surface as JS-native `AggregateError`); use the
-  core `TestOrchestrationWorker` / `TestOrchestrationClient` for orchestration unit tests.
+- **The v3 dummy contexts were replaced by `durable-functions/testing`.** The new helpers run
+  orchestrators through the real in-memory replay engine and run entity batches directly, without a
+  Functions host or imports from `@microsoft/durabletask-js`. The entity-lock types above remain
+  removed. `TaskFailedError` is re-exported from the core SDK (aggregate failures surface as
+  JS-native `AggregateError`).
 - **A plain non-generator classic orchestrator is no longer supported.** A classic v3 orchestrator
-  written as a *synchronous, single-argument, non-generator* function `(context) => context.df.*`
+  written as a _synchronous, single-argument, non-generator_ function `(context) => context.df.*`
   (one that never `yield`s) is now treated as a **core-native** orchestrator and receives the core
   `OrchestrationContext`, which has no `.df`. This resolves
   [#321](https://github.com/microsoft/durabletask-js/issues/321), where a core-native
@@ -148,6 +149,106 @@ app.http("startHello", {
   },
 });
 ```
+
+## Testing
+
+Import the first-class test helpers from `durable-functions/testing`. They create the compatibility
+wrappers and core in-memory components internally, deserialize outputs, and clean up workers after
+one-shot runs.
+
+### Activities and one-shot orchestrations
+
+```typescript
+import type { OrchestrationContext } from "durable-functions";
+import { runActivity, runOrchestrator } from "durable-functions/testing";
+
+const helloOrchestrator = function* (context: OrchestrationContext) {
+  const name = context.df.getInput<string>();
+  return yield context.df.callActivity("sayHello", name);
+};
+
+const activityOutput = await runActivity(
+  (name: string, context) => `${context.functionName}: Hello, ${name}!`,
+  "World",
+  { functionName: "sayHello" },
+);
+
+const orchestrationResult = await runOrchestrator(helloOrchestrator, {
+  input: "World",
+  activities: {
+    sayHello: (name: unknown) => `Hello, ${String(name)}!`,
+  },
+});
+
+expect(activityOutput).toBe("sayHello: Hello, World!");
+expect(orchestrationResult.status).toBe("Completed");
+expect(orchestrationResult.output).toBe("Hello, World!");
+```
+
+Failed orchestrations return `status: "Failed"` with plain `failure` details instead of requiring
+manual parsing of core state.
+
+### Interactive orchestration tests
+
+Use a harness when a test needs to raise events, terminate, suspend, or resume an instance:
+
+```typescript
+import type { OrchestrationContext } from "durable-functions";
+import { createOrchestrationHarness } from "durable-functions/testing";
+
+const approvalOrchestrator = function* (context: OrchestrationContext) {
+  const approved = yield context.df.waitForExternalEvent<boolean>("approved");
+  return { approved };
+};
+
+const harness = createOrchestrationHarness();
+harness.registerOrchestrator("approval", approvalOrchestrator);
+
+try {
+  const run = await harness.start("approval", { input: { orderId: "42" } });
+  await run.waitForStart();
+  await run.raiseEvent("approved", true);
+
+  const result = await run.waitForCompletion();
+  expect(result.output).toEqual({ approved: true });
+} finally {
+  await harness.dispose();
+}
+```
+
+Durable timers are supported with **real wall-clock delays**. The current core in-memory backend has
+no virtual clock or timer-advance API, so use short timer delays in tests. The harness does not add a
+synthetic fast-forward operation.
+
+### Entities
+
+`runEntity` executes a classic or core-native entity batch directly through the existing entity
+executor, preserving per-operation rollback semantics:
+
+```typescript
+import type { EntityHandler } from "durable-functions";
+import { runEntity } from "durable-functions/testing";
+
+const counterEntity: EntityHandler<number> = (context) => {
+  const state = context.df.getState(() => 0) ?? 0;
+  if (context.df.operationName === "add") {
+    context.df.setState(state + (context.df.getInput<number>() ?? 0));
+  } else if (context.df.operationName === "get") {
+    context.df.return(state);
+  }
+};
+
+const result = await runEntity(counterEntity, {
+  initialState: 0,
+  operations: [{ name: "add", input: 5 }, { name: "get" }],
+});
+
+expect(result.state).toBe(5);
+expect(result.results).toEqual([undefined, 5]);
+```
+
+This is a direct, host-free entity unit seam. End-to-end entity messaging through the
+orchestration harness is not supported by the current core in-memory backend.
 
 ### Client (starter) functions
 
