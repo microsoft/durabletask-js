@@ -99,12 +99,13 @@ changed:
     **not** available — existing `response.getHeader(...)` calls **fail at runtime** and must be
     rewritten to index `response.headers[...]` by lower-cased key (response header names are lower-cased
     by `fetch`).
-- **Some v3 top-level exports were removed** — `DummyOrchestrationContext` / `DummyEntityContext`
-  (testing utilities) and the entity-lock types above. `TaskFailedError`
-  is re-exported from the core SDK (aggregate failures surface as JS-native `AggregateError`); use the
-  core `TestOrchestrationWorker` / `TestOrchestrationClient` for orchestration unit tests.
+- **The v3 dummy contexts were replaced by `durable-functions/testing`.** The new helpers run
+  orchestrators through the real in-memory replay engine and run entity batches directly, without a
+  Functions host or imports from `@microsoft/durabletask-js`. The entity-lock types above remain
+  removed. `TaskFailedError` is re-exported from the core SDK (aggregate failures surface as
+  JS-native `AggregateError`).
 - **A plain non-generator classic orchestrator is no longer supported.** A classic v3 orchestrator
-  written as a *synchronous, single-argument, non-generator* function `(context) => context.df.*`
+  written as a _synchronous, single-argument, non-generator_ function `(context) => context.df.*`
   (one that never `yield`s) is now treated as a **core-native** orchestrator and receives the core
   `OrchestrationContext`, which has no `.df`. This resolves
   [#321](https://github.com/microsoft/durabletask-js/issues/321), where a core-native
@@ -150,6 +151,104 @@ app.http("startHello", {
     return client.createCheckStatusResponse(request, instanceId);
   },
 });
+```
+
+## Testing
+
+`durable-functions/testing` provides one helper for the common case — running an orchestrator to
+completion against fake activities — plus a factory for the activity invocation context. Everything
+else is already covered by the in-memory test stack in `@microsoft/durabletask-js`.
+
+### Activities
+
+Activity handlers are ordinary Azure Functions handlers with no durable state, so call them directly
+and pass a context:
+
+```typescript
+import type { InvocationContext } from "@azure/functions";
+import { createActivityContext } from "durable-functions/testing";
+
+const sayHello = (name: string, context: InvocationContext) => `${context.functionName}: Hello, ${name}!`;
+
+expect(await sayHello("World", createActivityContext("sayHello"))).toBe("sayHello: Hello, World!");
+```
+
+### Orchestrations
+
+`runOrchestrator` registers the orchestrator and the supplied activities on an in-memory worker, runs
+the instance to a terminal state, and stops the worker before returning:
+
+```typescript
+import type { OrchestrationContext } from "durable-functions";
+import { OrchestrationRuntimeStatus } from "durable-functions";
+import { runOrchestrator } from "durable-functions/testing";
+
+const helloOrchestrator = function* (context: OrchestrationContext) {
+  const name = context.df.getInput<string>();
+  return yield context.df.callActivity("sayHello", name);
+};
+
+const result = await runOrchestrator<string>(helloOrchestrator, {
+  input: "World",
+  activities: {
+    sayHello: (name: unknown) => `Hello, ${String(name)}!`,
+  },
+});
+
+expect(result.runtimeStatus).toBe(OrchestrationRuntimeStatus.Completed);
+expect(result.output).toBe("Hello, World!");
+```
+
+`runtimeStatus`, `output`, and `customStatus` are produced by the same mapping `client.getStatus()`
+applies at runtime, so a test asserts on the values a deployed client would observe. A failed run
+returns `OrchestrationRuntimeStatus.Failed` together with `failure` (`errorType`, `message`,
+`stackTrace`).
+
+`runOrchestrator` intentionally has no forced timeout. It returns only after the orchestration is
+terminal and the worker has drained, so activity code cannot keep mutating test state afterwards.
+Arbitrary JavaScript promises cannot be cancelled: if a handler never settles, the helper stays
+pending and the test runner's own timeout applies.
+
+Durable timers run on **real wall-clock delays** — the in-memory backend has no virtual clock, so
+keep timer delays short in tests.
+
+### Interactive scenarios and entities
+
+External events, termination, suspend/resume, and entity batches are not wrapped. Drive the core
+in-memory stack directly and register Durable Functions handlers with `wrapOrchestrator` (or
+`wrapEntity`):
+
+```typescript
+import {
+  InMemoryOrchestrationBackend,
+  TestOrchestrationClient,
+  TestOrchestrationWorker,
+} from "@microsoft/durabletask-js";
+import { toDurableOrchestrationStatus, wrapOrchestrator } from "durable-functions";
+
+const backend = new InMemoryOrchestrationBackend();
+const worker = new TestOrchestrationWorker(backend);
+const client = new TestOrchestrationClient(backend);
+
+worker.addNamedOrchestrator(
+  "approval",
+  wrapOrchestrator(function* (context) {
+    return { approved: yield context.df.waitForExternalEvent<boolean>("approved") };
+  }),
+);
+await worker.start();
+
+try {
+  const instanceId = await client.scheduleNewOrchestration("approval", undefined, "approval-1");
+  await client.waitForOrchestrationStart(instanceId, true, 10);
+  await client.raiseOrchestrationEvent(instanceId, "approved", true);
+
+  const state = await client.waitForOrchestrationCompletion(instanceId, true, 10);
+  expect(toDurableOrchestrationStatus(state!).output).toEqual({ approved: true });
+} finally {
+  await worker.stop();
+  backend.reset();
+}
 ```
 
 ### Client (starter) functions
