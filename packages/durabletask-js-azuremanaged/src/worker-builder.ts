@@ -15,6 +15,8 @@ import {
   ConsoleLogger,
   VersioningOptions,
   WorkItemFilters,
+  ActivityMiddleware,
+  OrchestrationMiddleware,
 } from "@microsoft/durabletask-js";
 
 /**
@@ -31,6 +33,8 @@ export class DurableTaskAzureManagedWorkerBuilder {
   private _shutdownTimeoutMs?: number;
   private _versioning?: VersioningOptions;
   private _workItemFilters?: WorkItemFilters | "auto";
+  private _orchestrationMiddleware: OrchestrationMiddleware[] = [];
+  private _activityMiddleware: ActivityMiddleware[] = [];
 
   /**
    * Creates a new instance of DurableTaskAzureManagedWorkerBuilder.
@@ -188,6 +192,22 @@ export class DurableTaskAzureManagedWorkerBuilder {
   }
 
   /**
+   * Adds orchestration middleware to the worker.
+   */
+  useOrchestrationMiddleware(middleware: OrchestrationMiddleware): DurableTaskAzureManagedWorkerBuilder {
+    this._orchestrationMiddleware.push(middleware);
+    return this;
+  }
+
+  /**
+   * Adds activity middleware to the worker.
+   */
+  useActivityMiddleware(middleware: ActivityMiddleware): DurableTaskAzureManagedWorkerBuilder {
+    this._activityMiddleware.push(middleware);
+    return this;
+  }
+
+  /**
    * Registers an entity factory with the worker.
    * The entity name is derived from the factory function name.
    *
@@ -296,6 +316,14 @@ export class DurableTaskAzureManagedWorkerBuilder {
       versioning: this._versioning,
       workItemFilters: this._workItemFilters,
     });
+
+    for (const middleware of this._orchestrationMiddleware) {
+      worker.useOrchestrationMiddleware(middleware);
+    }
+
+    for (const middleware of this._activityMiddleware) {
+      worker.useActivityMiddleware(middleware);
+    }
 
     // Register all orchestrators
     for (const { name, fn } of this._orchestrators) {

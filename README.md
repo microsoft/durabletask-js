@@ -18,18 +18,86 @@ worker.addActivity(myActivity);
 worker.addEntity(myEntity);
 
 const orchestrationResponseBytes = await worker.processOrchestratorRequest(orchestrationRequestBytes);
+const activityResponseBytes = await worker.processActivityRequest(activityRequestBytes);
 const entityResponseBytes = await worker.processEntityBatchRequest(entityBatchRequestBytes);
 ```
 
 `TaskHubGrpcClient` already exposes orchestration start/query/event/terminate/suspend/resume/purge APIs and entity signal/read/query/clean APIs through its existing `hostAddress` and `metadataGenerator` options. Host integrations that need task-hub routing metadata should provide it through `metadataGenerator`, keeping host-specific metadata policy outside the core client. Azure-managed scheduler connection strings remain in `@microsoft/durabletask-js-azuremanaged`.
 
+## Durable Task middleware
+
+Worker-level middleware runs around orchestration or activity execution. The first registered middleware is outermost, so middleware runs in registration order before user code and unwinds in reverse order afterward.
+
+```typescript
+import { ActivityMiddleware, OrchestrationMiddleware, TaskHubGrpcWorker } from "@microsoft/durabletask-js";
+
+const orchestrationLogging: OrchestrationMiddleware = async (context, next) => {
+  const logger = context.orchestrationContext.createReplaySafeLogger(appLogger);
+  logger.info(`Starting ${context.name} (${context.instanceId})`);
+
+  await next(context);
+
+  if (context.failure) {
+    logger.error(`Failed ${context.name}: ${context.failure.message}`);
+  } else if (context.result !== undefined) {
+    logger.info(`Completed ${context.name}`);
+  }
+};
+
+const activityCache: ActivityMiddleware = async (context, next) => {
+  const cached = await cache.get(context.name, context.input);
+  if (cached !== undefined) {
+    context.setResult(cached);
+    return;
+  }
+
+  await next(context);
+  await cache.set(context.name, context.input, context.result);
+};
+
+const worker = new TaskHubGrpcWorker();
+worker
+  .useOrchestrationMiddleware(orchestrationLogging)
+  .useActivityMiddleware(activityCache)
+  .addOrchestrator(myOrchestrator);
+worker.addActivity(myActivity);
+```
+
+Orchestration middleware participates in generator replay: code before `next(context)` re-executes on each replay pass, while `next` remains suspended with the orchestrator and code after it unwinds only when the orchestration reaches a terminal result or failure. Orchestration middleware must call `next(context)` exactly once and must not return before it completes. It cannot short-circuit, replace the orchestration result, or suppress a downstream failure by catching it. Activity middleware must either call `next(context)` once without returning before it completes, or explicitly short-circuit with `context.setResult(...)`; calling `next` after `setResult` is invalid, while calling `setResult` after `next` may replace a result or explicitly recover from a caught downstream failure. Missing, duplicate, and incomplete `next` calls are rejected. In normal `async` middleware, use `await next(context)` as shown above.
+
+Orchestration middleware follows the same determinism rules as orchestrator code. Do not await nondurable promises or use wall-clock time, random values, mutable process state, file/network I/O, or host state that can change across replay. Use durable context APIs and `createReplaySafeLogger()` instead. Put I/O in activities or activity middleware.
+
+### Host features
+
+`MiddlewareFeatures` is a typed, symbol-keyed map for per-invocation host objects. Feature values remain process-local and are never serialized into durable history.
+
+```typescript
+import { MiddlewareFeatures, createMiddlewareFeature } from "@microsoft/durabletask-js";
+
+interface HostInvocation {
+  invocationId: string;
+}
+
+const hostInvocation = createMiddlewareFeature<HostInvocation>("host invocation");
+const features = new MiddlewareFeatures().set(hostInvocation, currentInvocation);
+
+worker.useActivityMiddleware(async (context, next) => {
+  const invocation = context.features.get(hostInvocation);
+  await next(context);
+});
+
+await worker.processActivityRequest(activityRequestBytes, features);
+```
+
+Hosts can pass features to `processOrchestratorRequest()` and `processActivityRequest()`. Durable Task middleware is for durable-aware invocation data such as task name, instance ID, version, parent, tags, input, replay state, result, and failure. Host or framework middleware remains the right layer for concerns that apply to every host invocation, such as HTTP headers, authentication preprocessing, and nondurable bindings. Entity middleware is not supported in this version.
+
 ## npm packages
 
 The following npm packages are available for download.
 
-| Name | Latest version | Description |
-| - | - | - |
-| Core SDK | [![npm version](https://img.shields.io/npm/v/@microsoft/durabletask-js)](https://www.npmjs.com/package/@microsoft/durabletask-js) | Core Durable Task SDK for JavaScript/TypeScript. |
+| Name             | Latest version                                                                                                                                              | Description                                                                                                                                                                     |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Core SDK         | [![npm version](https://img.shields.io/npm/v/@microsoft/durabletask-js)](https://www.npmjs.com/package/@microsoft/durabletask-js)                           | Core Durable Task SDK for JavaScript/TypeScript.                                                                                                                                |
 | AzureManaged SDK | [![npm version](https://img.shields.io/npm/v/@microsoft/durabletask-js-azuremanaged)](https://www.npmjs.com/package/@microsoft/durabletask-js-azuremanaged) | Azure-managed [Durable Task Scheduler](https://learn.microsoft.com/azure/azure-functions/durable/durable-functions-task-scheduler) support for the Durable Task JavaScript SDK. |
 
 ## Prerequisites
@@ -50,15 +118,8 @@ npm install @microsoft/durabletask-js @microsoft/durabletask-js-azuremanaged
 You can then use the following code to define a simple "Hello, cities" durable orchestration.
 
 ```typescript
-import {
-  ActivityContext,
-  OrchestrationContext,
-  TOrchestrator,
-} from "@microsoft/durabletask-js";
-import {
-  createAzureManagedClient,
-  createAzureManagedWorkerBuilder,
-} from "@microsoft/durabletask-js-azuremanaged";
+import { ActivityContext, OrchestrationContext, TOrchestrator } from "@microsoft/durabletask-js";
+import { createAzureManagedClient, createAzureManagedWorkerBuilder } from "@microsoft/durabletask-js-azuremanaged";
 
 // Define an activity function
 const sayHello = async (_: ActivityContext, name: string): Promise<string> => {
@@ -125,10 +186,7 @@ An orchestration can wait for external events, such as a human approval, with op
 ```typescript
 import { whenAny } from "@microsoft/durabletask-js";
 
-const purchaseOrderWorkflow: TOrchestrator = async function* (
-  ctx: OrchestrationContext,
-  order: Order,
-): any {
+const purchaseOrderWorkflow: TOrchestrator = async function* (ctx: OrchestrationContext, order: Order): any {
   // Orders under $1000 are auto-approved
   if (order.cost < 1000) {
     return "Auto-approved";

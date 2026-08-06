@@ -26,6 +26,15 @@ const client = createAzureManagedClient(
 const worker = createAzureManagedWorkerBuilder(
   "Endpoint=https://myservice.durabletask.io;Authentication=DefaultAzure;TaskHub=myTaskHub",
 )
+  .useOrchestrationMiddleware(async (context, next) => {
+    const logger = context.orchestrationContext.createReplaySafeLogger(appLogger);
+    logger.info(`Running ${context.name} (${context.instanceId})`);
+    await next(context);
+  })
+  .useActivityMiddleware(async (context, next) => {
+    await next(context);
+    appLogger.info(`Activity ${context.name} returned`, context.result);
+  })
   .addOrchestrator(myOrchestrator)
   .addActivity(myActivity)
   .build();

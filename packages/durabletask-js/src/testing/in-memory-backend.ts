@@ -7,6 +7,7 @@ import { OrchestrationStatus as ClientOrchestrationStatus } from "../orchestrati
 import { ParentOrchestrationInstance } from "../types/parent-orchestration-instance.type";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 import { randomUUID } from "crypto";
+import { mapToRecord } from "../utils/tags.util";
 
 /** Mints a fresh per-execution ID (DTFx `Guid.ToString("N")` idiom: 32 hex chars, no dashes). */
 function newExecutionId(): string {
@@ -40,6 +41,8 @@ export interface ActivityWorkItem {
   name: string;
   taskId: number;
   input?: string;
+  version?: string;
+  tags?: Record<string, string>;
   completionToken: number;
 }
 
@@ -102,12 +105,12 @@ interface StateWaiter {
 
 /**
  * In-memory backend for durable orchestrations suitable for testing.
- * 
+ *
  * This backend stores all orchestration state in memory and processes
  * work items synchronously within the same process. It is designed for
  * unit testing and integration testing scenarios where a sidecar process
  * or external storage is not desired.
- * 
+ *
  * Thread-safety: All state mutations are performed synchronously via
  * the event loop. The backend uses a simple work queue pattern to ensure
  * that orchestration and activity processing happens in a predictable order.
@@ -362,7 +365,7 @@ export class InMemoryOrchestrationBackend {
       const instanceId = this.orchestrationQueue.shift()!;
       this.orchestrationQueueSet.delete(instanceId);
       const instance = this.instances.get(instanceId);
-      
+
       if (instance && instance.pendingEvents.length > 0) {
         return instance;
       }
@@ -623,9 +626,7 @@ export class InMemoryOrchestrationBackend {
     // Continue-as-new resets status to PENDING and rewind resets it to RUNNING, so neither is
     // terminal here and neither gets a bookend.
     if (this.isTerminalStatus(instance.status)) {
-      instance.history.push(
-        pbh.newExecutionCompletedEvent(instance.status, instance.output, instance.failureDetails),
-      );
+      instance.history.push(pbh.newExecutionCompletedEvent(instance.status, instance.output, instance.failureDetails));
     }
 
     // Update completion token for next execution
@@ -638,12 +639,7 @@ export class InMemoryOrchestrationBackend {
   /**
    * Completes an activity execution.
    */
-  completeActivity(
-    instanceId: string,
-    taskId: number,
-    result?: string,
-    error?: Error,
-  ): void {
+  completeActivity(instanceId: string, taskId: number, result?: string, error?: Error): void {
     const instance = this.instances.get(instanceId);
     if (!instance) {
       return; // Instance may have been purged
@@ -886,7 +882,13 @@ export class InMemoryOrchestrationBackend {
       // because it sets currentUtcDateTime, and ExecutionStarted must come before
       // carryover events because it initializes the orchestrator generator.
       const orchestratorStarted = pbh.newOrchestratorStartedEvent(new Date());
-      const executionStarted = pbh.newExecutionStartedEvent(instance.name, instance.instanceId, newInput, undefined, instance.executionId);
+      const executionStarted = pbh.newExecutionStartedEvent(
+        instance.name,
+        instance.instanceId,
+        newInput,
+        undefined,
+        instance.executionId,
+      );
       instance.pendingEvents = [orchestratorStarted, executionStarted, ...carryoverEvents];
 
       this.enqueueOrchestration(instance.instanceId);
@@ -898,6 +900,8 @@ export class InMemoryOrchestrationBackend {
     const taskId = action.getId();
     const taskName = scheduleTask.getName();
     const input = scheduleTask.getInput()?.getValue();
+    const version = scheduleTask.getVersion()?.getValue() || undefined;
+    const tags = mapToRecord(scheduleTask.getTagsMap());
 
     // Add TaskScheduled event to history
     const event = pbh.newTaskScheduledEvent(taskId, taskName, input);
@@ -914,6 +918,8 @@ export class InMemoryOrchestrationBackend {
       name: taskName,
       taskId,
       input,
+      version,
+      tags,
       completionToken: instance.completionToken,
     });
   }
@@ -1024,11 +1030,7 @@ export class InMemoryOrchestrationBackend {
       });
   }
 
-  private prepareRewind(
-    instance: OrchestrationInstance,
-    reason?: string,
-    snapshot?: RewindSnapshot,
-  ): void {
+  private prepareRewind(instance: OrchestrationInstance, reason?: string, snapshot?: RewindSnapshot): void {
     // Reset instance state so it can be re-processed.
     instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING;
     instance.output = undefined;
@@ -1488,10 +1490,7 @@ export class InMemoryOrchestrationBackend {
     for (const event of history) {
       const lockRequested = event.getEntitylockrequested();
       if (lockRequested) {
-        remainingLockSets.set(
-          lockRequested.getCriticalsectionid(),
-          new Set(lockRequested.getLocksetList()),
-        );
+        remainingLockSets.set(lockRequested.getCriticalsectionid(), new Set(lockRequested.getLocksetList()));
         continue;
       }
 
@@ -1515,10 +1514,7 @@ export class InMemoryOrchestrationBackend {
     return remainingLockSets.size > 0;
   }
 
-  private validateRewindLockState(
-    instance: OrchestrationInstance,
-    snapshot: RewindSnapshot,
-  ): void {
+  private validateRewindLockState(instance: OrchestrationInstance, snapshot: RewindSnapshot): void {
     if (snapshot.has(instance.instanceId)) {
       return;
     }
@@ -1528,9 +1524,7 @@ export class InMemoryOrchestrationBackend {
     });
 
     if (this.hasUnreleasedEntityLock(instance.history)) {
-      throw new Error(
-        `Cannot rewind an orchestration with an unreleased entity lock: '${instance.instanceId}'`,
-      );
+      throw new Error(`Cannot rewind an orchestration with an unreleased entity lock: '${instance.instanceId}'`);
     }
 
     const completedSubOrchestrationTaskIds = new Set<number>();

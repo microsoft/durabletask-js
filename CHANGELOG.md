@@ -2,10 +2,10 @@
 
 ### New
 
+- Add first-class worker-level orchestration and activity middleware with typed contexts, nonserialized host features, validation, and in-process host integration.
 - Implement entity support in the in-memory testing backend ([#341](https://github.com/microsoft/durabletask-js/pull/341))
 
 ### Fixes
-
 
 ## v0.4.0 (2026-07-31)
 
@@ -72,7 +72,7 @@
 - fix: clear customStatus on continue-as-new in InMemoryOrchestrationBackend ([#155](https://github.com/microsoft/durabletask-js/pull/155))
 - fix: propagate parent notification from composite tasks (WhenAllTask/WhenAnyTask) ([#150](https://github.com/microsoft/durabletask-js/pull/150))
 - fix: use deterministic time in createTimer instead of Date.now() ([#146](https://github.com/microsoft/durabletask-js/pull/146))
-- Fix WhenAllTask constructor resetting _completedTasks counter ([#143](https://github.com/microsoft/durabletask-js/pull/143))
+- Fix WhenAllTask constructor resetting \_completedTasks counter ([#143](https://github.com/microsoft/durabletask-js/pull/143))
 - Fix retry handler treating undefined/null/NaN/Infinity as retry signal ([#142](https://github.com/microsoft/durabletask-js/pull/142))
 - Release v0.3.0 ([#147](https://github.com/microsoft/durabletask-js/pull/147))
 

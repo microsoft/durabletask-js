@@ -20,10 +20,11 @@ import {
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 import * as pb from "../proto/orchestrator_service_pb";
 import * as pbh from "../utils/pb-helper.util";
+import { ActivityMiddleware, OrchestrationMiddleware } from "../worker/middleware";
 
 /**
  * Worker that processes orchestrations and activities from the in-memory backend.
- * 
+ *
  * This worker runs in the same process as the test and processes work items
  * synchronously in the Node.js event loop, avoiding the need for a separate
  * sidecar process.
@@ -34,6 +35,8 @@ export class TestOrchestrationWorker {
   private isRunning: boolean = false;
   private processingPromise: Promise<void> | null = null;
   private stopRequested: boolean = false;
+  private readonly orchestrationMiddleware: OrchestrationMiddleware[] = [];
+  private readonly activityMiddleware: ActivityMiddleware[] = [];
 
   constructor(backend: InMemoryOrchestrationBackend) {
     this.registry = new Registry();
@@ -101,6 +104,28 @@ export class TestOrchestrationWorker {
     }
     this.registry.addNamedEntity(name, factory);
     return name;
+  }
+
+  /**
+   * Adds orchestration middleware to this worker.
+   */
+  useOrchestrationMiddleware(middleware: OrchestrationMiddleware): this {
+    if (this.isRunning) {
+      throw new Error("Cannot add orchestration middleware while worker is running.");
+    }
+    this.orchestrationMiddleware.push(middleware);
+    return this;
+  }
+
+  /**
+   * Adds activity middleware to this worker.
+   */
+  useActivityMiddleware(middleware: ActivityMiddleware): this {
+    if (this.isRunning) {
+      throw new Error("Cannot add activity middleware while worker is running.");
+    }
+    this.activityMiddleware.push(middleware);
+    return this;
   }
 
   /**
@@ -178,7 +203,7 @@ export class TestOrchestrationWorker {
     const completionToken = instance.completionToken;
 
     try {
-      const executor = new OrchestrationExecutor(this.registry);
+      const executor = new OrchestrationExecutor(this.registry, undefined, this.orchestrationMiddleware);
       const result = await executor.execute(instanceId, instance.history, instance.pendingEvents, instance.executionId);
 
       this.backend.completeOrchestration(instanceId, completionToken, result.actions, result.customStatus);
@@ -200,11 +225,11 @@ export class TestOrchestrationWorker {
    * Processes a single activity work item.
    */
   private async processActivity(workItem: ActivityWorkItem): Promise<void> {
-    const { instanceId, name, taskId, input } = workItem;
+    const { instanceId, name, taskId, input, version, tags } = workItem;
 
     try {
-      const executor = new ActivityExecutor(this.registry);
-      const result = await executor.execute(instanceId, name, taskId, input);
+      const executor = new ActivityExecutor(this.registry, undefined, this.activityMiddleware);
+      const result = await executor.execute(instanceId, name, taskId, input, { version, tags });
       this.backend.completeActivity(instanceId, taskId, result);
     } catch (error: unknown) {
       const err = error instanceof Error ? error : new Error(String(error));
