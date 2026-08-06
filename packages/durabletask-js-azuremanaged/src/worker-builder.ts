@@ -29,6 +29,7 @@ export class DurableTaskAzureManagedWorkerBuilder {
   private _entities: { name?: string; factory: EntityFactory }[] = [];
   private _logger: Logger = new ConsoleLogger();
   private _shutdownTimeoutMs?: number;
+  private _startupTimeoutMs?: number;
   private _versioning?: VersioningOptions;
   private _workItemFilters?: WorkItemFilters | "auto";
 
@@ -237,6 +238,19 @@ export class DurableTaskAzureManagedWorkerBuilder {
   }
 
   /**
+   * Sets the startup timeout in milliseconds.
+   * This is the maximum time to establish the initial sidecar connection.
+   * Defaults to 30000 (30 seconds).
+   *
+   * @param timeoutMs The startup timeout in milliseconds.
+   * @returns This builder instance.
+   */
+  startupTimeout(timeoutMs: number): DurableTaskAzureManagedWorkerBuilder {
+    this._startupTimeoutMs = timeoutMs;
+    return this;
+  }
+
+  /**
    * Configures versioning options for the worker.
    * This allows filtering orchestrations by version using different match strategies.
    *
@@ -293,6 +307,7 @@ export class DurableTaskAzureManagedWorkerBuilder {
       metadataGenerator,
       logger: this._logger,
       shutdownTimeoutMs: this._shutdownTimeoutMs,
+      startupTimeoutMs: this._startupTimeoutMs,
       versioning: this._versioning,
       workItemFilters: this._workItemFilters,
     });
