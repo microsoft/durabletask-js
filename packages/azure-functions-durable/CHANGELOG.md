@@ -2,9 +2,12 @@
 
 ### New
 
-- Added a first-class `durable-functions/testing` entry point with one-shot activity,
-  orchestration, and entity helpers plus an interactive in-memory orchestration harness for events,
-  termination, suspension, resumption, and real-time durable timers.
+- Added a `durable-functions/testing` entry point with `runOrchestrator`, which runs an orchestrator
+  to a terminal state against inline activity implementations on the in-memory backend and always
+  releases its worker, and `createActivityContext` for invoking activity handlers directly.
+  Interactive scenarios (external events, termination, suspend/resume) and entity batches are
+  covered by driving the `@microsoft/durabletask-js` in-memory test stack with `wrapOrchestrator` /
+  `wrapEntity`; see the README.
 
 ### Fixes
 

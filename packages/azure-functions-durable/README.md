@@ -152,118 +152,101 @@ app.http("startHello", {
 
 ## Testing
 
-Import the first-class test helpers from `durable-functions/testing`. They create the compatibility
-wrappers and core in-memory components internally, deserialize outputs, and clean up workers after
-one-shot runs.
+`durable-functions/testing` provides one helper for the common case — running an orchestrator to
+completion against fake activities — plus a factory for the activity invocation context. Everything
+else is already covered by the in-memory test stack in `@microsoft/durabletask-js`.
 
-### Activities and one-shot orchestrations
+### Activities
+
+Activity handlers are ordinary Azure Functions handlers with no durable state, so call them directly
+and pass a context:
+
+```typescript
+import type { InvocationContext } from "@azure/functions";
+import { createActivityContext } from "durable-functions/testing";
+
+const sayHello = (name: string, context: InvocationContext) => `${context.functionName}: Hello, ${name}!`;
+
+expect(await sayHello("World", createActivityContext("sayHello"))).toBe("sayHello: Hello, World!");
+```
+
+### Orchestrations
+
+`runOrchestrator` registers the orchestrator and the supplied activities on an in-memory worker, runs
+the instance to a terminal state, and stops the worker before returning:
 
 ```typescript
 import type { OrchestrationContext } from "durable-functions";
-import { runActivity, runOrchestrator } from "durable-functions/testing";
+import { OrchestrationRuntimeStatus } from "durable-functions";
+import { runOrchestrator } from "durable-functions/testing";
 
 const helloOrchestrator = function* (context: OrchestrationContext) {
   const name = context.df.getInput<string>();
   return yield context.df.callActivity("sayHello", name);
 };
 
-const activityOutput = await runActivity(
-  (name: string, context) => `${context.functionName}: Hello, ${name}!`,
-  "World",
-  { functionName: "sayHello" },
-);
-
-const orchestrationResult = await runOrchestrator(helloOrchestrator, {
+const result = await runOrchestrator<string>(helloOrchestrator, {
   input: "World",
   activities: {
     sayHello: (name: unknown) => `Hello, ${String(name)}!`,
   },
 });
 
-expect(activityOutput).toBe("sayHello: Hello, World!");
-expect(orchestrationResult.status).toBe("Completed");
-expect(orchestrationResult.output).toBe("Hello, World!");
+expect(result.runtimeStatus).toBe(OrchestrationRuntimeStatus.Completed);
+expect(result.output).toBe("Hello, World!");
 ```
 
-Failed orchestrations return `status: "Failed"` with plain `failure` details instead of requiring
-manual parsing of core state.
+`runtimeStatus`, `output`, and `customStatus` are produced by the same mapping `client.getStatus()`
+applies at runtime, so a test asserts on the values a deployed client would observe. A failed run
+returns `OrchestrationRuntimeStatus.Failed` together with `failure` (`errorType`, `message`,
+`stackTrace`).
 
-`runOrchestrator` intentionally has no forced timeout. It returns only after the orchestration
-reaches a terminal state and worker cleanup finishes, so activity code cannot keep mutating test
-state after the helper returns. Arbitrary JavaScript promises cannot be forcibly cancelled: if an
-orchestrator or activity never settles, the helper also remains pending and the test runner's own
-timeout applies.
+`runOrchestrator` intentionally has no forced timeout. It returns only after the orchestration is
+terminal and the worker has drained, so activity code cannot keep mutating test state afterwards.
+Arbitrary JavaScript promises cannot be cancelled: if a handler never settles, the helper stays
+pending and the test runner's own timeout applies.
 
-### Interactive orchestration tests
+Durable timers run on **real wall-clock delays** — the in-memory backend has no virtual clock, so
+keep timer delays short in tests.
 
-Use a harness when a test needs to raise events, terminate, suspend, or resume an instance:
+### Interactive scenarios and entities
+
+External events, termination, suspend/resume, and entity batches are not wrapped. Drive the core
+in-memory stack directly and register Durable Functions handlers with `wrapOrchestrator` (or
+`wrapEntity`):
 
 ```typescript
-import type { OrchestrationContext } from "durable-functions";
-import { createOrchestrationHarness } from "durable-functions/testing";
+import {
+  InMemoryOrchestrationBackend,
+  TestOrchestrationClient,
+  TestOrchestrationWorker,
+} from "@microsoft/durabletask-js";
+import { toDurableOrchestrationStatus, wrapOrchestrator } from "durable-functions";
 
-const approvalOrchestrator = function* (context: OrchestrationContext) {
-  const approved = yield context.df.waitForExternalEvent<boolean>("approved");
-  return { approved };
-};
+const backend = new InMemoryOrchestrationBackend();
+const worker = new TestOrchestrationWorker(backend);
+const client = new TestOrchestrationClient(backend);
 
-const harness = createOrchestrationHarness();
-harness.registerOrchestrator("approval", approvalOrchestrator);
+worker.addNamedOrchestrator(
+  "approval",
+  wrapOrchestrator(function* (context) {
+    return { approved: yield context.df.waitForExternalEvent<boolean>("approved") };
+  }),
+);
+await worker.start();
 
 try {
-  const run = await harness.start("approval", { input: { orderId: "42" } });
-  await run.waitForStart();
-  await run.raiseEvent("approved", true);
+  const instanceId = await client.scheduleNewOrchestration("approval", undefined, "approval-1");
+  await client.waitForOrchestrationStart(instanceId, true, 10);
+  await client.raiseOrchestrationEvent(instanceId, "approved", true);
 
-  const result = await run.waitForCompletion();
-  expect(result.output).toEqual({ approved: true });
+  const state = await client.waitForOrchestrationCompletion(instanceId, true, 10);
+  expect(toDurableOrchestrationStatus(state!).output).toEqual({ approved: true });
 } finally {
-  await harness.dispose();
+  await worker.stop();
+  backend.reset();
 }
 ```
-
-Harness wait timeouts are observation-only: a timed-out `waitForStart()` or
-`waitForCompletion()` call leaves the explicitly owned harness running. `dispose()` waits for
-in-flight orchestrator and activity handlers to settle before it reports completion; if
-non-cooperative user code never settles, disposal also remains pending.
-
-Durable timers are supported with **real wall-clock delays**. The current core in-memory backend has
-no virtual clock or timer-advance API, so use short timer delays in tests. The harness does not add a
-synthetic fast-forward operation.
-
-Future `startAt` values are rejected because the current in-memory backend enqueues scheduled starts
-immediately instead of deferring their execution. Past `startAt` values are accepted and start
-immediately.
-
-### Entities
-
-`runEntity` executes a classic or core-native entity batch directly through the existing entity
-executor, preserving per-operation rollback semantics:
-
-```typescript
-import type { EntityHandler } from "durable-functions";
-import { runEntity } from "durable-functions/testing";
-
-const counterEntity: EntityHandler<number> = (context) => {
-  const state = context.df.getState(() => 0) ?? 0;
-  if (context.df.operationName === "add") {
-    context.df.setState(state + (context.df.getInput<number>() ?? 0));
-  } else if (context.df.operationName === "get") {
-    context.df.return(state);
-  }
-};
-
-const result = await runEntity(counterEntity, {
-  initialState: 0,
-  operations: [{ name: "add", input: 5 }, { name: "get" }],
-});
-
-expect(result.state).toBe(5);
-expect(result.results).toEqual([undefined, 5]);
-```
-
-This is a direct, host-free entity unit seam. End-to-end entity messaging through the
-orchestration harness is not supported by the current core in-memory backend.
 
 ### Client (starter) functions
 
