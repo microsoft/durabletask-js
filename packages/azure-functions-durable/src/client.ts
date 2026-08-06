@@ -73,6 +73,11 @@ export interface StartNewOptions {
   instanceId?: string;
   /** Orchestration version to assign (forwarded to the core scheduler). */
   version?: string;
+  /**
+   * Existing orchestration statuses that must produce a duplicate-ID error.
+   * The current shared protocol does not support an atomic no-op/IGNORE action.
+   */
+  dedupeStatuses?: readonly OrchestrationStatus[];
 }
 
 /**
@@ -213,8 +218,12 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    */
   async startNew(orchestratorName: string, options?: StartNewOptions): Promise<string> {
     const scheduleOptions =
-      options?.instanceId !== undefined || options?.version !== undefined
-        ? { instanceId: options?.instanceId, version: options?.version }
+      options?.instanceId !== undefined || options?.version !== undefined || options?.dedupeStatuses !== undefined
+        ? {
+            instanceId: options?.instanceId,
+            version: options?.version,
+            dedupeStatuses: options?.dedupeStatuses,
+          }
         : undefined;
     return this.scheduleNewOrchestration(orchestratorName, options?.input, scheduleOptions);
   }

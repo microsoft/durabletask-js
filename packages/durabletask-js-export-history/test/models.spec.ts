@@ -81,6 +81,7 @@ describe("Models", () => {
         OrchestrationStatus.COMPLETED,
         OrchestrationStatus.FAILED,
         OrchestrationStatus.TERMINATED,
+        OrchestrationStatus.CANCELED,
       ]);
     });
 

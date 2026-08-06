@@ -7,6 +7,8 @@ import { OrchestrationStatus as ClientOrchestrationStatus } from "../orchestrati
 import { ParentOrchestrationInstance } from "../types/parent-orchestration-instance.type";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 import { randomUUID } from "crypto";
+import { validateDedupeStatusesForReplacement } from "../orchestration/orchestration-id-reuse-policy";
+import { OrchestrationAlreadyExistsError } from "../orchestration/exception/orchestration-already-exists-error";
 
 /** Mints a fresh per-execution ID (DTFx `Guid.ToString("N")` idiom: 32 hex chars, no dashes). */
 function newExecutionId(): string {
@@ -37,6 +39,7 @@ export interface OrchestrationInstance {
  */
 export interface ActivityWorkItem {
   instanceId: string;
+  executionId: string;
   name: string;
   taskId: number;
   input?: string;
@@ -98,16 +101,23 @@ interface StateWaiter {
   resolve: (instance: OrchestrationInstance | undefined) => void;
   reject: (error: Error) => void;
   predicate: (instance: OrchestrationInstance) => boolean;
+  subOrchestrationWatcher?: SubOrchestrationWatcher;
+}
+
+interface SubOrchestrationWatcher {
+  parentInstanceId: string;
+  parentExecutionId: string;
+  taskId: number;
 }
 
 /**
  * In-memory backend for durable orchestrations suitable for testing.
- * 
+ *
  * This backend stores all orchestration state in memory and processes
  * work items synchronously within the same process. It is designed for
  * unit testing and integration testing scenarios where a sidecar process
  * or external storage is not desired.
- * 
+ *
  * Thread-safety: All state mutations are performed synchronously via
  * the event loop. The backend uses a simple work queue pattern to ensure
  * that orchestration and activity processing happens in a predictable order.
@@ -150,7 +160,7 @@ export class InMemoryOrchestrationBackend {
     parentInstance?: ParentOrchestrationInstance,
   ): string {
     if (this.instances.has(instanceId)) {
-      throw new Error(`Orchestration instance '${instanceId}' already exists`);
+      throw new OrchestrationAlreadyExistsError(`An orchestration with instance ID '${instanceId}' already exists`);
     }
 
     const now = new Date();
@@ -184,6 +194,70 @@ export class InMemoryOrchestrationBackend {
     this.enqueueOrchestration(instanceId);
 
     return instanceId;
+  }
+
+  /**
+   * Creates a client-scheduled orchestration using the same status-based reuse semantics as the .NET test host.
+   */
+  async createOrchestrationInstance(
+    instanceId: string,
+    name: string,
+    input?: string,
+    scheduledStartTime?: Date,
+    dedupeStatuses?: readonly ClientOrchestrationStatus[],
+  ): Promise<string> {
+    if (dedupeStatuses !== undefined) {
+      validateDedupeStatusesForReplacement(dedupeStatuses);
+    }
+
+    const existingInstance = this.instances.get(instanceId);
+    if (existingInstance) {
+      const existingStatus = this.toClientStatus(existingInstance.status);
+      if (dedupeStatuses?.includes(existingStatus) === true) {
+        throw this.newAlreadyExistsError(instanceId, existingStatus);
+      }
+
+      const existingExecutionId = existingInstance.executionId;
+      if (this.isRunningStatus(existingInstance.status)) {
+        const dedupeDescription =
+          dedupeStatuses === undefined
+            ? "undefined (all statuses reusable)"
+            : dedupeStatuses.length === 0
+              ? "[] (all statuses reusable)"
+              : `[${dedupeStatuses.join(", ")}]`;
+        const terminationReason =
+          `A new instance creation request has been issued for instance ${instanceId} which currently has status ` +
+          `${this.formatStatus(existingStatus)}. Since the dedupe statuses of the creation request, ` +
+          `${dedupeDescription}, do not contain the orchestration's status, the orchestration has been terminated ` +
+          "and a new instance with the same instance ID will be created.";
+
+        const encodedTerminationReason = JSON.stringify(terminationReason);
+        this.terminate(instanceId, encodedTerminationReason);
+        this.completeOrchestration(instanceId, existingInstance.completionToken, [
+          pbh.newCompleteOrchestrationAction(
+            -1,
+            pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED,
+            encodedTerminationReason,
+          ),
+        ]);
+        await this.waitForState(
+          instanceId,
+          (instance) => instance.executionId === existingExecutionId && this.isTerminalStatus(instance.status),
+          0,
+        );
+      }
+
+      const currentInstance = this.instances.get(instanceId);
+      if (currentInstance?.executionId === existingExecutionId) {
+        const currentStatus = this.toClientStatus(currentInstance.status);
+        if (dedupeStatuses?.includes(currentStatus) === true) {
+          throw this.newAlreadyExistsError(instanceId, currentStatus);
+        }
+        this.removeInstanceForReplacement(instanceId);
+      }
+    }
+
+    return this.createInstance(instanceId, name, input, scheduledStartTime);
   }
 
   /**
@@ -362,7 +436,7 @@ export class InMemoryOrchestrationBackend {
       const instanceId = this.orchestrationQueue.shift()!;
       this.orchestrationQueueSet.delete(instanceId);
       const instance = this.instances.get(instanceId);
-      
+
       if (instance && instance.pendingEvents.length > 0) {
         return instance;
       }
@@ -623,9 +697,7 @@ export class InMemoryOrchestrationBackend {
     // Continue-as-new resets status to PENDING and rewind resets it to RUNNING, so neither is
     // terminal here and neither gets a bookend.
     if (this.isTerminalStatus(instance.status)) {
-      instance.history.push(
-        pbh.newExecutionCompletedEvent(instance.status, instance.output, instance.failureDetails),
-      );
+      instance.history.push(pbh.newExecutionCompletedEvent(instance.status, instance.output, instance.failureDetails));
     }
 
     // Update completion token for next execution
@@ -638,15 +710,13 @@ export class InMemoryOrchestrationBackend {
   /**
    * Completes an activity execution.
    */
-  completeActivity(
-    instanceId: string,
-    taskId: number,
-    result?: string,
-    error?: Error,
-  ): void {
+  completeActivity(instanceId: string, executionId: string, taskId: number, result?: string, error?: Error): void {
     const instance = this.instances.get(instanceId);
     if (!instance) {
       return; // Instance may have been purged
+    }
+    if (instance.executionId !== executionId) {
+      return; // Completion belongs to a replaced or continued-as-new execution
     }
 
     let event: pb.HistoryEvent;
@@ -669,6 +739,15 @@ export class InMemoryOrchestrationBackend {
     predicate: (instance: OrchestrationInstance) => boolean,
     timeoutMs: number = 30000,
   ): Promise<OrchestrationInstance | undefined> {
+    return this.waitForStateInternal(instanceId, predicate, timeoutMs);
+  }
+
+  private async waitForStateInternal(
+    instanceId: string,
+    predicate: (instance: OrchestrationInstance) => boolean,
+    timeoutMs: number,
+    subOrchestrationWatcher?: SubOrchestrationWatcher,
+  ): Promise<OrchestrationInstance | undefined> {
     const instance = this.instances.get(instanceId);
     if (instance && predicate(instance)) {
       return instance;
@@ -676,7 +755,7 @@ export class InMemoryOrchestrationBackend {
 
     return new Promise((resolve, reject) => {
       // When timeoutMs is 0, no timeout is applied — the waiter will only be
-      // resolved by a matching state change or rejected by reset().
+      // resolved by a matching state change or rejected by lifecycle cleanup.
       // `waiter` is declared before the timer so the timeout callback can find it by
       // object identity; the waiter reads `timer` only when invoked, by which point
       // it has been assigned.
@@ -698,6 +777,7 @@ export class InMemoryOrchestrationBackend {
           reject(error);
         },
         predicate,
+        subOrchestrationWatcher,
       };
 
       if (timeoutMs > 0) {
@@ -777,6 +857,8 @@ export class InMemoryOrchestrationBackend {
         return ClientOrchestrationStatus.COMPLETED;
       case pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED:
         return ClientOrchestrationStatus.FAILED;
+      case pb.OrchestrationStatus.ORCHESTRATION_STATUS_CANCELED:
+        return ClientOrchestrationStatus.CANCELED;
       case pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED:
         return ClientOrchestrationStatus.TERMINATED;
       case pb.OrchestrationStatus.ORCHESTRATION_STATUS_SUSPENDED:
@@ -796,11 +878,121 @@ export class InMemoryOrchestrationBackend {
     }
   }
 
+  private removeInstanceForReplacement(instanceId: string): void {
+    const instance = this.instances.get(instanceId);
+    if (!instance) {
+      return;
+    }
+
+    this.cancelInstanceTimers(instanceId);
+    this.cancelSubOrchestrationWatchers(
+      instanceId,
+      instance.executionId,
+      new Error(`Parent orchestration instance '${instanceId}' was replaced by a new execution`),
+    );
+    this.rejectStateWaitersForReplacement(
+      instanceId,
+      new Error(`Orchestration instance '${instanceId}' was replaced by a new execution`),
+    );
+    this.instances.delete(instanceId);
+    this.orchestrationQueueSet.delete(instanceId);
+
+    const orchestrationQueueIndex = this.orchestrationQueue.indexOf(instanceId);
+    if (orchestrationQueueIndex >= 0) {
+      this.orchestrationQueue.splice(orchestrationQueueIndex, 1);
+    }
+
+    for (let i = this.activityQueue.length - 1; i >= 0; i--) {
+      if (this.activityQueue[i].instanceId === instanceId) {
+        this.activityQueue.splice(i, 1);
+      }
+    }
+  }
+
+  private rejectStateWaitersForReplacement(instanceId: string, error: Error): void {
+    const waiters = this.stateWaiters.get(instanceId);
+    if (!waiters) {
+      return;
+    }
+
+    this.stateWaiters.delete(instanceId);
+    for (const waiter of waiters) {
+      if (waiter.subOrchestrationWatcher) {
+        this.failSubOrchestrationWatcher(
+          waiter.subOrchestrationWatcher,
+          new Error(`Sub-orchestration instance '${instanceId}' was replaced by a new execution`),
+        );
+      }
+      waiter.reject(error);
+    }
+  }
+
+  private cancelSubOrchestrationWatchers(parentInstanceId: string, parentExecutionId: string, error: Error): void {
+    for (const [instanceId, waiters] of this.stateWaiters) {
+      const cancelledWaiters = waiters.filter(
+        (waiter) =>
+          waiter.subOrchestrationWatcher?.parentInstanceId === parentInstanceId &&
+          waiter.subOrchestrationWatcher.parentExecutionId === parentExecutionId,
+      );
+      if (cancelledWaiters.length === 0) {
+        continue;
+      }
+
+      const remainingWaiters = waiters.filter((waiter) => !cancelledWaiters.includes(waiter));
+      if (remainingWaiters.length === 0) {
+        this.stateWaiters.delete(instanceId);
+      } else {
+        this.stateWaiters.set(instanceId, remainingWaiters);
+      }
+      for (const waiter of cancelledWaiters) {
+        waiter.reject(error);
+      }
+    }
+  }
+
+  private failSubOrchestrationWatcher(watcher: SubOrchestrationWatcher, error: Error): void {
+    const parentInstance = this.instances.get(watcher.parentInstanceId);
+    if (
+      !parentInstance ||
+      parentInstance.executionId !== watcher.parentExecutionId ||
+      this.isTerminalStatus(parentInstance.status)
+    ) {
+      return;
+    }
+
+    parentInstance.pendingEvents.push(pbh.newSubOrchestrationFailedEvent(watcher.taskId, error));
+    parentInstance.lastUpdatedAt = new Date();
+    this.enqueueOrchestration(watcher.parentInstanceId);
+  }
+
+  private newAlreadyExistsError(
+    instanceId: string,
+    status: ClientOrchestrationStatus,
+  ): OrchestrationAlreadyExistsError {
+    return new OrchestrationAlreadyExistsError(
+      `An orchestration with instance ID '${instanceId}' and status '${this.formatStatus(status)}' already exists`,
+    );
+  }
+
+  private formatStatus(status: ClientOrchestrationStatus): string {
+    const name = ClientOrchestrationStatus[status].toLowerCase();
+    return name.charAt(0).toUpperCase() + name.slice(1);
+  }
+
+  private isRunningStatus(status: pb.OrchestrationStatus): boolean {
+    return (
+      status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING ||
+      status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_PENDING ||
+      status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_SUSPENDED
+    );
+  }
+
   private isTerminalStatus(status: pb.OrchestrationStatus): boolean {
     return (
       status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED ||
       status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED ||
-      status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED
+      status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED ||
+      status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_CANCELED
     );
   }
 
@@ -886,7 +1078,13 @@ export class InMemoryOrchestrationBackend {
       // because it sets currentUtcDateTime, and ExecutionStarted must come before
       // carryover events because it initializes the orchestrator generator.
       const orchestratorStarted = pbh.newOrchestratorStartedEvent(new Date());
-      const executionStarted = pbh.newExecutionStartedEvent(instance.name, instance.instanceId, newInput, undefined, instance.executionId);
+      const executionStarted = pbh.newExecutionStartedEvent(
+        instance.name,
+        instance.instanceId,
+        newInput,
+        undefined,
+        instance.executionId,
+      );
       instance.pendingEvents = [orchestratorStarted, executionStarted, ...carryoverEvents];
 
       this.enqueueOrchestration(instance.instanceId);
@@ -911,6 +1109,7 @@ export class InMemoryOrchestrationBackend {
     // Queue activity for execution
     this.activityQueue.push({
       instanceId: instance.instanceId,
+      executionId: instance.executionId,
       name: taskName,
       taskId,
       input,
@@ -935,12 +1134,17 @@ export class InMemoryOrchestrationBackend {
     // Schedule timer firing
     const now = new Date();
     const delay = Math.max(0, fireAt.getTime() - now.getTime());
+    const executionId = instance.executionId;
 
     const timerHandle = setTimeout(() => {
       this.pendingTimers.delete(timerHandle);
       this.removeInstanceTimer(instance.instanceId, timerHandle);
       const currentInstance = this.instances.get(instance.instanceId);
-      if (currentInstance && !this.isTerminalStatus(currentInstance.status)) {
+      if (
+        currentInstance &&
+        currentInstance.executionId === executionId &&
+        !this.isTerminalStatus(currentInstance.status)
+      ) {
         const timerFiredEvent = pbh.newTimerFiredEvent(timerId, fireAt);
         currentInstance.pendingEvents.push(timerFiredEvent);
         currentInstance.lastUpdatedAt = new Date();
@@ -976,7 +1180,7 @@ export class InMemoryOrchestrationBackend {
       });
 
       // Watch for sub-orchestration completion
-      this.watchSubOrchestration(instance.instanceId, subInstanceId, taskId);
+      this.watchSubOrchestration(instance.instanceId, instance.executionId, subInstanceId, taskId);
     } catch (error: unknown) {
       // Sub-orchestration creation failed
       const err = error instanceof Error ? error : new Error(String(error));
@@ -986,19 +1190,25 @@ export class InMemoryOrchestrationBackend {
     }
   }
 
-  private watchSubOrchestration(parentInstanceId: string, subInstanceId: string, taskId: number): void {
+  private watchSubOrchestration(
+    parentInstanceId: string,
+    parentExecutionId: string,
+    subInstanceId: string,
+    taskId: number,
+  ): void {
     // Use the stateWaiters mechanism instead of polling to avoid infinite loops
     // and unnecessary resource consumption
-    this.waitForState(
+    this.waitForStateInternal(
       subInstanceId,
       (inst) => this.isTerminalStatus(inst.status),
       0, // No timeout — sub-orchestration will eventually complete, fail, or be terminated
+      { parentInstanceId, parentExecutionId, taskId },
     )
       .then((subInstance) => {
         const parentInstance = this.instances.get(parentInstanceId);
 
         // If parent or sub no longer exists, nothing to do
-        if (!subInstance || !parentInstance) {
+        if (!subInstance || !parentInstance || parentInstance.executionId !== parentExecutionId) {
           return;
         }
 
@@ -1020,15 +1230,11 @@ export class InMemoryOrchestrationBackend {
         this.enqueueOrchestration(parentInstanceId);
       })
       .catch(() => {
-        // Reset — sub-orchestration watcher cancelled, nothing to do
+        // The watcher was cancelled by reset or parent/child replacement.
       });
   }
 
-  private prepareRewind(
-    instance: OrchestrationInstance,
-    reason?: string,
-    snapshot?: RewindSnapshot,
-  ): void {
+  private prepareRewind(instance: OrchestrationInstance, reason?: string, snapshot?: RewindSnapshot): void {
     // Reset instance state so it can be re-processed.
     instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING;
     instance.output = undefined;
@@ -1143,7 +1349,7 @@ export class InMemoryOrchestrationBackend {
           this.prepareRewind(subInstance, reason, snapshot);
         }
       }
-      this.watchSubOrchestration(instance.instanceId, subInstanceId, taskId);
+      this.watchSubOrchestration(instance.instanceId, instance.executionId, subInstanceId, taskId);
     }
 
     // Re-enqueue so the orchestration replays with the clean history. The executionRewound
@@ -1488,10 +1694,7 @@ export class InMemoryOrchestrationBackend {
     for (const event of history) {
       const lockRequested = event.getEntitylockrequested();
       if (lockRequested) {
-        remainingLockSets.set(
-          lockRequested.getCriticalsectionid(),
-          new Set(lockRequested.getLocksetList()),
-        );
+        remainingLockSets.set(lockRequested.getCriticalsectionid(), new Set(lockRequested.getLocksetList()));
         continue;
       }
 
@@ -1515,10 +1718,7 @@ export class InMemoryOrchestrationBackend {
     return remainingLockSets.size > 0;
   }
 
-  private validateRewindLockState(
-    instance: OrchestrationInstance,
-    snapshot: RewindSnapshot,
-  ): void {
+  private validateRewindLockState(instance: OrchestrationInstance, snapshot: RewindSnapshot): void {
     if (snapshot.has(instance.instanceId)) {
       return;
     }
@@ -1528,9 +1728,7 @@ export class InMemoryOrchestrationBackend {
     });
 
     if (this.hasUnreleasedEntityLock(instance.history)) {
-      throw new Error(
-        `Cannot rewind an orchestration with an unreleased entity lock: '${instance.instanceId}'`,
-      );
+      throw new Error(`Cannot rewind an orchestration with an unreleased entity lock: '${instance.instanceId}'`);
     }
 
     const completedSubOrchestrationTaskIds = new Set<number>();

@@ -200,15 +200,15 @@ export class TestOrchestrationWorker {
    * Processes a single activity work item.
    */
   private async processActivity(workItem: ActivityWorkItem): Promise<void> {
-    const { instanceId, name, taskId, input } = workItem;
+    const { instanceId, executionId, name, taskId, input } = workItem;
 
     try {
       const executor = new ActivityExecutor(this.registry);
       const result = await executor.execute(instanceId, name, taskId, input);
-      this.backend.completeActivity(instanceId, taskId, result);
+      this.backend.completeActivity(instanceId, executionId, taskId, result);
     } catch (error: unknown) {
       const err = error instanceof Error ? error : new Error(String(error));
-      this.backend.completeActivity(instanceId, taskId, undefined, err);
+      this.backend.completeActivity(instanceId, executionId, taskId, undefined, err);
     }
   }
 

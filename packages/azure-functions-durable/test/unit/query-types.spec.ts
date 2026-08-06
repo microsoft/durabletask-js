@@ -6,6 +6,7 @@ import { EntityStateResponse } from "../../src/entity-state-response";
 import {
   DurableOrchestrationStatus,
   OrchestrationRuntimeStatus,
+  fromOrchestrationRuntimeStatus,
   toDurableOrchestrationStatus,
   toOrchestrationRuntimeStatus,
 } from "../../src/orchestration-status";
@@ -25,6 +26,9 @@ describe("toOrchestrationRuntimeStatus", () => {
     expect(toOrchestrationRuntimeStatus(OrchestrationStatus.FAILED)).toBe(
       OrchestrationRuntimeStatus.Failed,
     );
+    expect(toOrchestrationRuntimeStatus(OrchestrationStatus.CANCELED)).toBe(
+      OrchestrationRuntimeStatus.Canceled,
+    );
     expect(toOrchestrationRuntimeStatus(OrchestrationStatus.TERMINATED)).toBe(
       OrchestrationRuntimeStatus.Terminated,
     );
@@ -33,6 +37,17 @@ describe("toOrchestrationRuntimeStatus", () => {
     );
     expect(toOrchestrationRuntimeStatus(OrchestrationStatus.SUSPENDED)).toBe(
       OrchestrationRuntimeStatus.Suspended,
+    );
+  });
+});
+
+describe("fromOrchestrationRuntimeStatus", () => {
+  it("preserves the distinction between canceled and terminated", () => {
+    expect(fromOrchestrationRuntimeStatus(OrchestrationRuntimeStatus.Canceled)).toBe(
+      OrchestrationStatus.CANCELED,
+    );
+    expect(fromOrchestrationRuntimeStatus(OrchestrationRuntimeStatus.Terminated)).toBe(
+      OrchestrationStatus.TERMINATED,
     );
   });
 });
