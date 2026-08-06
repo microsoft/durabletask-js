@@ -99,9 +99,11 @@ await client.scheduleNewOrchestration(helloCities, undefined, {
 });
 ```
 
-Omitting `dedupeStatuses` preserves the backend's default duplicate-ID behavior; passing `[]`
-makes every supported runtime status replaceable. `ValidDedupeStatuses` exports the seven
-supported statuses. The transient `CONTINUED_AS_NEW` status is not replaceable. A list containing
+For `TaskHubGrpcClient`, omitting `dedupeStatuses` preserves the backend's default duplicate-ID
+behavior; passing `[]` makes every supported runtime status replaceable. The in-memory
+`TestOrchestrationClient` mirrors the .NET shim, where omission also makes all statuses reusable.
+`ValidDedupeStatuses` exports the seven supported statuses. The transient `CONTINUED_AS_NEW`
+status is not replaceable. A list containing
 `TERMINATED` must also contain `RUNNING`, `PENDING`, and `SUSPENDED`, because replacing a running
 instance first terminates it. The current shared protocol does not define a no-op/`IGNORE` action:
 a matching dedupe status is an error, while a non-matching status is replaced.

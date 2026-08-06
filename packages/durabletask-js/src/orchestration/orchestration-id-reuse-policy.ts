@@ -15,12 +15,6 @@ export const ValidDedupeStatuses: readonly OrchestrationStatus[] = Object.freeze
   OrchestrationStatus.SUSPENDED,
 ]);
 
-const RUNNING_STATUSES: readonly OrchestrationStatus[] = [
-  OrchestrationStatus.RUNNING,
-  OrchestrationStatus.PENDING,
-  OrchestrationStatus.SUSPENDED,
-];
-
 /** @hidden Validates orchestration ID deduplication options. */
 export function validateDedupeStatuses(dedupeStatuses: readonly OrchestrationStatus[]): void {
   for (const status of dedupeStatuses) {
@@ -28,11 +22,17 @@ export function validateDedupeStatuses(dedupeStatuses: readonly OrchestrationSta
       throw new TypeError(`Invalid orchestration runtime status: '${status}' for deduplication.`);
     }
   }
+}
 
+/** @hidden Validates deduplication options for clients that terminate reusable running instances themselves. */
+export function validateDedupeStatusesForReplacement(dedupeStatuses: readonly OrchestrationStatus[]): void {
+  validateDedupeStatuses(dedupeStatuses);
   const dedupeStatusSet = new Set(dedupeStatuses);
   if (
     dedupeStatusSet.has(OrchestrationStatus.TERMINATED) &&
-    RUNNING_STATUSES.some((status) => !dedupeStatusSet.has(status))
+    [OrchestrationStatus.RUNNING, OrchestrationStatus.PENDING, OrchestrationStatus.SUSPENDED].some(
+      (status) => !dedupeStatusSet.has(status),
+    )
   ) {
     throw new TypeError(
       "Invalid dedupe statuses: cannot include 'Terminated' while also allowing reuse of running instances, " +

@@ -136,23 +136,22 @@ describe("TaskHubGrpcClient orchestration ID reuse policy", () => {
     expect(called).toBe(false);
   });
 
-  it("rejects terminated dedupe when a running status remains reusable", async () => {
-    let called = false;
-    mockStartInstance(client, () => {
-      called = true;
+  it("forwards terminated dedupe with a reusable running status to the sidecar", async () => {
+    let request: pb.CreateInstanceRequest | undefined;
+    mockStartInstance(client, (value) => {
+      request = value;
     });
 
-    await expect(
-      client.scheduleNewOrchestration("workflow", undefined, {
-        dedupeStatuses: [OrchestrationStatus.TERMINATED, OrchestrationStatus.RUNNING, OrchestrationStatus.PENDING],
-      }),
-    ).rejects.toThrow(
-      new TypeError(
-        "Invalid dedupe statuses: cannot include 'Terminated' while also allowing reuse of running instances, " +
-          "because the running instance would be terminated and then immediately conflict with the dedupe check.",
-      ),
-    );
-    expect(called).toBe(false);
+    await client.scheduleNewOrchestration("workflow", undefined, {
+      dedupeStatuses: [OrchestrationStatus.TERMINATED, OrchestrationStatus.RUNNING, OrchestrationStatus.PENDING],
+    });
+
+    expect(request?.getOrchestrationidreusepolicy()?.getReplaceablestatusList()).toEqual([
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED,
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_CANCELED,
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_SUSPENDED,
+    ]);
   });
 
   it.each([
@@ -166,6 +165,16 @@ describe("TaskHubGrpcClient orchestration ID reuse policy", () => {
     mockStartInstance(client, () => {}, error);
 
     await expect(client.scheduleNewOrchestration("workflow")).rejects.toBeInstanceOf(expectedError);
+  });
+
+  it("preserves a canceled scheduling ServiceError when no public cancellation error exists", async () => {
+    const error = Object.assign(new Error("schedule canceled"), {
+      code: grpc.status.CANCELLED,
+      details: "schedule canceled",
+    }) as grpc.ServiceError;
+    mockStartInstance(client, () => {}, error);
+
+    await expect(client.scheduleNewOrchestration("workflow")).rejects.toBe(error);
   });
 });
 
@@ -191,16 +200,20 @@ describe("TestOrchestrationClient orchestration ID reuse policy", () => {
     backend.reset();
   });
 
-  it("preserves the default duplicate-ID error behavior", async () => {
+  it("treats omitted dedupe statuses as all statuses reusable", async () => {
     await client.scheduleNewOrchestration(waitingOrchestrator, "original", {
       instanceId: "instance-1",
     });
+    await client.waitForOrchestrationStart("instance-1", false, 5);
+    const originalExecutionId = backend.getInstance("instance-1")?.executionId;
 
-    await expect(
-      client.scheduleNewOrchestration(waitingOrchestrator, "replacement", {
-        instanceId: "instance-1",
-      }),
-    ).rejects.toBeInstanceOf(OrchestrationAlreadyExistsError);
+    await client.scheduleNewOrchestration(waitingOrchestrator, "replacement", {
+      instanceId: "instance-1",
+    });
+
+    const replacement = backend.getInstance("instance-1");
+    expect(replacement?.executionId).not.toBe(originalExecutionId);
+    expect(replacement?.input).toBe(JSON.stringify("replacement"));
   });
 
   it("rejects reuse when the existing runtime status is selected for deduplication", async () => {
@@ -215,6 +228,20 @@ describe("TestOrchestrationClient orchestration ID reuse policy", () => {
         dedupeStatuses: [OrchestrationStatus.RUNNING],
       }),
     ).rejects.toBeInstanceOf(OrchestrationAlreadyExistsError);
+  });
+
+  it("rejects terminated dedupe when a running status remains reusable", async () => {
+    await expect(
+      client.scheduleNewOrchestration(waitingOrchestrator, undefined, {
+        instanceId: "instance-1",
+        dedupeStatuses: [OrchestrationStatus.TERMINATED, OrchestrationStatus.RUNNING, OrchestrationStatus.PENDING],
+      }),
+    ).rejects.toThrow(
+      new TypeError(
+        "Invalid dedupe statuses: cannot include 'Terminated' while also allowing reuse of running instances, " +
+          "because the running instance would be terminated and then immediately conflict with the dedupe check.",
+      ),
+    );
   });
 
   it("atomically replaces an existing instance whose runtime status is reusable", async () => {

@@ -273,6 +273,7 @@ export class TaskHubGrpcClient {
         if (grpcError.code === grpc.status.INVALID_ARGUMENT) {
           throw new TypeError(message, { cause: e });
         }
+        // The JS SDK has no named cancellation error contract, so preserve CANCELLED as a ServiceError.
       }
       throw e;
     } finally {

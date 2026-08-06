@@ -78,8 +78,9 @@ export interface StartOrchestrationOptions {
   /**
    * Existing orchestration statuses that must produce a duplicate-ID error.
    *
-   * An empty list makes every supported status replaceable. Omitting this property
-   * preserves the backend's default duplicate-ID behavior.
+   * An empty list makes every supported status replaceable. The gRPC client preserves
+   * the backend's default when this property is omitted; the in-memory test client
+   * mirrors the .NET shim by treating omission as all statuses reusable.
    */
   dedupeStatuses?: readonly OrchestrationStatus[];
 }

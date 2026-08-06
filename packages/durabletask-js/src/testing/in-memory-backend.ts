@@ -7,7 +7,7 @@ import { OrchestrationStatus as ClientOrchestrationStatus } from "../orchestrati
 import { ParentOrchestrationInstance } from "../types/parent-orchestration-instance.type";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 import { randomUUID } from "crypto";
-import { validateDedupeStatuses } from "../orchestration/orchestration-id-reuse-policy";
+import { validateDedupeStatusesForReplacement } from "../orchestration/orchestration-id-reuse-policy";
 import { OrchestrationAlreadyExistsError } from "../orchestration/exception/orchestration-already-exists-error";
 
 /** Mints a fresh per-execution ID (DTFx `Guid.ToString("N")` idiom: 32 hex chars, no dashes). */
@@ -207,20 +207,24 @@ export class InMemoryOrchestrationBackend {
     dedupeStatuses?: readonly ClientOrchestrationStatus[],
   ): Promise<string> {
     if (dedupeStatuses !== undefined) {
-      validateDedupeStatuses(dedupeStatuses);
+      validateDedupeStatusesForReplacement(dedupeStatuses);
     }
 
     const existingInstance = this.instances.get(instanceId);
     if (existingInstance) {
       const existingStatus = this.toClientStatus(existingInstance.status);
-      if (dedupeStatuses === undefined || dedupeStatuses.includes(existingStatus)) {
+      if (dedupeStatuses?.includes(existingStatus) === true) {
         throw this.newAlreadyExistsError(instanceId, existingStatus);
       }
 
       const existingExecutionId = existingInstance.executionId;
       if (this.isRunningStatus(existingInstance.status)) {
         const dedupeDescription =
-          dedupeStatuses.length === 0 ? "[] (all statuses reusable)" : `[${dedupeStatuses.join(", ")}]`;
+          dedupeStatuses === undefined
+            ? "undefined (all statuses reusable)"
+            : dedupeStatuses.length === 0
+              ? "[] (all statuses reusable)"
+              : `[${dedupeStatuses.join(", ")}]`;
         const terminationReason =
           `A new instance creation request has been issued for instance ${instanceId} which currently has status ` +
           `${this.formatStatus(existingStatus)}. Since the dedupe statuses of the creation request, ` +
@@ -246,7 +250,7 @@ export class InMemoryOrchestrationBackend {
       const currentInstance = this.instances.get(instanceId);
       if (currentInstance?.executionId === existingExecutionId) {
         const currentStatus = this.toClientStatus(currentInstance.status);
-        if (dedupeStatuses.includes(currentStatus)) {
+        if (dedupeStatuses?.includes(currentStatus) === true) {
           throw this.newAlreadyExistsError(instanceId, currentStatus);
         }
         this.removeInstanceForReplacement(instanceId);
