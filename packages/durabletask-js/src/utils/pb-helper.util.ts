@@ -22,7 +22,14 @@ export function newOrchestratorStartedEvent(timestamp?: Date | null): pb.History
   return event;
 }
 
-export function newExecutionStartedEvent(name: string, instanceId: string, encodedInput?: string, parentInstance?: { name: string; instanceId: string; taskScheduledId: number }, executionId?: string): pb.HistoryEvent {
+export function newExecutionStartedEvent(
+  name: string,
+  instanceId: string,
+  encodedInput?: string,
+  parentInstance?: { name: string; instanceId: string; taskScheduledId: number },
+  executionId?: string,
+  version?: string,
+): pb.HistoryEvent {
   const ts = new Timestamp();
 
   const orchestrationInstance = new pb.OrchestrationInstance();
@@ -39,6 +46,7 @@ export function newExecutionStartedEvent(name: string, instanceId: string, encod
   executionStartedEvent.setName(name);
   executionStartedEvent.setInput(getStringValue(encodedInput));
   executionStartedEvent.setOrchestrationinstance(orchestrationInstance);
+  executionStartedEvent.setVersion(getStringValueIfDefined(version));
 
   // Set parent instance info if provided (for sub-orchestrations)
   if (parentInstance) {
@@ -360,6 +368,16 @@ export function getStringValue(val?: string): StringValue | undefined {
   return stringValue;
 }
 
+function getStringValueIfDefined(val?: string): StringValue | undefined {
+  if (val === undefined) {
+    return;
+  }
+
+  const stringValue = new StringValue();
+  stringValue.setValue(val);
+  return stringValue;
+}
+
 /**
  * Populates a tag map with the provided tags.
  *
@@ -390,12 +408,14 @@ export function newCompleteOrchestrationAction(
   result?: string,
   failureDetails?: pb.TaskFailureDetails,
   carryoverEvents?: pb.HistoryEvent[] | null,
+  newVersion?: string,
 ): pb.OrchestratorAction {
   const completeOrchestrationAction = new pb.CompleteOrchestrationAction();
   completeOrchestrationAction.setOrchestrationstatus(status);
   completeOrchestrationAction.setResult(getStringValue(result));
   completeOrchestrationAction.setFailuredetails(failureDetails);
   completeOrchestrationAction.setCarryovereventsList(carryoverEvents || []);
+  completeOrchestrationAction.setNewversion(getStringValueIfDefined(newVersion));
 
   const action = new pb.OrchestratorAction();
   action.setId(id);
@@ -679,4 +699,3 @@ function wrapEntityMessageAction(
   action.setSendentitymessage(sendEntityMessage);
   return action;
 }
-

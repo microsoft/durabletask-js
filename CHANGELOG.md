@@ -2,10 +2,10 @@
 
 ### New
 
+- Add an optional `newVersion` parameter to `OrchestrationContext.continueAsNew()` for version migrations.
 - Implement entity support in the in-memory testing backend ([#341](https://github.com/microsoft/durabletask-js/pull/341))
 
 ### Fixes
-
 
 ## v0.4.0 (2026-07-31)
 
