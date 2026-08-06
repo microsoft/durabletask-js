@@ -4,6 +4,7 @@ name: 🧪 DTS Emulator E2E Tests
 # Tests are split across parallel jobs with separate task hubs for isolation.
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
