@@ -14,10 +14,25 @@ import {
   DurableTaskAzureManagedWorkerBuilder,
 } from "@microsoft/durabletask-js-azuremanaged";
 
+const connectionString = process.env.DTS_CONNECTION_STRING;
 const endpoint = process.env.ENDPOINT || "localhost:8080";
 const taskHub = process.env.TASKHUB || "default";
 
+function createClient(): TaskHubGrpcClient {
+  return connectionString
+    ? new DurableTaskAzureManagedClientBuilder().connectionString(connectionString).build()
+    : new DurableTaskAzureManagedClientBuilder().endpoint(endpoint, taskHub, null).build();
+}
+
+function createWorker(): TaskHubGrpcWorker {
+  return connectionString
+    ? new DurableTaskAzureManagedWorkerBuilder().connectionString(connectionString).build()
+    : new DurableTaskAzureManagedWorkerBuilder().endpoint(endpoint, taskHub, null).build();
+}
+
 describe("Orchestration ID reuse policy E2E", () => {
+  jest.setTimeout(120000);
+
   let client: TaskHubGrpcClient;
   let worker: TaskHubGrpcWorker;
 
@@ -32,8 +47,8 @@ describe("Orchestration ID reuse policy E2E", () => {
   };
 
   beforeEach(async () => {
-    client = new DurableTaskAzureManagedClientBuilder().endpoint(endpoint, taskHub, null).build();
-    worker = new DurableTaskAzureManagedWorkerBuilder().endpoint(endpoint, taskHub, null).build();
+    client = createClient();
+    worker = createWorker();
     worker.addOrchestrator(reusableOrchestrator);
     await worker.start();
   });
