@@ -28,6 +28,7 @@ import { convertProtoHistoryEvent } from "../utils/history-event-converter";
 import { Logger, ConsoleLogger } from "../types/logger.type";
 import { StartOrchestrationOptions } from "../task/options";
 import { toProtobufOrchestrationIdReusePolicy } from "../orchestration/orchestration-id-reuse-policy";
+import { OrchestrationAlreadyExistsError } from "../orchestration/exception/orchestration-already-exists-error";
 import { mapToRecord } from "../utils/tags.util";
 import { populateTagsMap } from "../utils/pb-helper.util";
 import { EntityInstanceId } from "../entities/entity-instance-id";
@@ -212,10 +213,10 @@ export class TaskHubGrpcClient {
       typeof instanceIdOrOptions === "string" || instanceIdOrOptions === undefined
         ? undefined
         : instanceIdOrOptions.version;
-    const orchestrationIdReusePolicy =
+    const dedupeStatuses =
       typeof instanceIdOrOptions === "string" || instanceIdOrOptions === undefined
         ? undefined
-        : instanceIdOrOptions.orchestrationIdReusePolicy;
+        : instanceIdOrOptions.dedupeStatuses;
 
     // Use provided version, or fall back to client's default version
     const effectiveVersion = version ?? this._defaultVersion;
@@ -239,8 +240,8 @@ export class TaskHubGrpcClient {
       req.setVersion(v);
     }
 
-    if (orchestrationIdReusePolicy) {
-      req.setOrchestrationidreusepolicy(toProtobufOrchestrationIdReusePolicy(orchestrationIdReusePolicy));
+    if (dedupeStatuses !== undefined) {
+      req.setOrchestrationidreusepolicy(toProtobufOrchestrationIdReusePolicy(dedupeStatuses));
     }
 
     populateTagsMap(req.getTagsMap(), tags);
@@ -263,6 +264,16 @@ export class TaskHubGrpcClient {
       return res.getInstanceid();
     } catch (e: unknown) {
       setSpanError(span, e);
+      if (e instanceof Error && "code" in e) {
+        const grpcError = e as grpc.ServiceError;
+        const message = grpcError.details || grpcError.message;
+        if (grpcError.code === grpc.status.ALREADY_EXISTS) {
+          throw new OrchestrationAlreadyExistsError(message, { cause: e });
+        }
+        if (grpcError.code === grpc.status.INVALID_ARGUMENT) {
+          throw new TypeError(message, { cause: e });
+        }
+      }
       throw e;
     } finally {
       endSpan(span);
@@ -584,7 +595,11 @@ export class TaskHubGrpcClient {
           throw new Error(`An orchestration with the instanceId '${instanceId}' was not found.`, { cause: e });
         }
         if (grpcError.code === grpc.status.FAILED_PRECONDITION) {
-          throw new Error(grpcError.details || `Cannot rewind orchestration '${instanceId}': it is in a state that does not allow rewinding.`, { cause: e });
+          throw new Error(
+            grpcError.details ||
+              `Cannot rewind orchestration '${instanceId}': it is in a state that does not allow rewinding.`,
+            { cause: e },
+          );
         }
         if (grpcError.code === grpc.status.UNIMPLEMENTED) {
           throw new Error(grpcError.details || `The rewind operation is not supported by the backend.`, { cause: e });
@@ -711,7 +726,12 @@ export class TaskHubGrpcClient {
       req.setRecursive(options?.recursive ?? false);
       const timeout = purgeInstanceCriteria.getTimeout();
 
-      ClientLogs.purgingInstances(this._logger, createdTimeFrom, createdTimeTo, runtimeStatusList.map(String).join(", "));
+      ClientLogs.purgingInstances(
+        this._logger,
+        createdTimeFrom,
+        createdTimeTo,
+        runtimeStatusList.map(String).join(", "),
+      );
 
       const callPromise = callWithMetadata<pb.PurgeInstancesRequest, pb.PurgeInstancesResponse>(
         this._stub.purgeInstances.bind(this._stub),
@@ -826,7 +846,10 @@ export class TaskHubGrpcClient {
         const states: OrchestrationState[] = [];
         const orchestrationStateList = response.getOrchestrationstateList();
         for (const state of orchestrationStateList) {
-          const orchestrationState = this._createOrchestrationStateFromProto(state, filter?.fetchInputsAndOutputs ?? false);
+          const orchestrationState = this._createOrchestrationStateFromProto(
+            state,
+            filter?.fetchInputsAndOutputs ?? false,
+          );
           if (orchestrationState) {
             states.push(orchestrationState);
           }
@@ -979,7 +1002,11 @@ export class TaskHubGrpcClient {
         } else if (err.code === grpc.status.CANCELLED) {
           reject(new Error(`The getOrchestrationHistory operation was canceled.`));
         } else if (err.code === grpc.status.INTERNAL) {
-          reject(new Error(`An error occurred while retrieving the history for orchestration with instanceId '${instanceId}'.`));
+          reject(
+            new Error(
+              `An error occurred while retrieving the history for orchestration with instanceId '${instanceId}'.`,
+            ),
+          );
         } else {
           reject(err);
         }
@@ -1242,10 +1269,20 @@ export class TaskHubGrpcClient {
         return createEntityMetadata<T>(entityId, lastModifiedTime, backlogQueueSize, lockedBy, state);
       } catch {
         // Return metadata without state if parsing fails
-        return createEntityMetadataWithoutState(entityId, lastModifiedTime, backlogQueueSize, lockedBy) as EntityMetadata<T>;
+        return createEntityMetadataWithoutState(
+          entityId,
+          lastModifiedTime,
+          backlogQueueSize,
+          lockedBy,
+        ) as EntityMetadata<T>;
       }
     } else {
-      return createEntityMetadataWithoutState(entityId, lastModifiedTime, backlogQueueSize, lockedBy) as EntityMetadata<T>;
+      return createEntityMetadataWithoutState(
+        entityId,
+        lastModifiedTime,
+        backlogQueueSize,
+        lockedBy,
+      ) as EntityMetadata<T>;
     }
   }
 

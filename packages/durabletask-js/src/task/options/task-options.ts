@@ -3,7 +3,7 @@
 
 import { RetryPolicy } from "../retry/retry-policy";
 import { AsyncRetryHandler, RetryHandler } from "../retry/retry-handler";
-import { OrchestrationIdReusePolicy } from "../../orchestration/orchestration-id-reuse-policy";
+import { OrchestrationStatus } from "../../orchestration/enum/orchestration-status.enum";
 
 /**
  * Union type representing the available retry strategies for a task.
@@ -76,10 +76,12 @@ export interface StartOrchestrationOptions {
    */
   version?: string;
   /**
-   * Controls whether an existing orchestration with the same instance ID is
-   * deduplicated or atomically replaced based on its runtime status.
+   * Existing orchestration statuses that must produce a duplicate-ID error.
+   *
+   * An empty list makes every supported status replaceable. Omitting this property
+   * preserves the backend's default duplicate-ID behavior.
    */
-  orchestrationIdReusePolicy?: OrchestrationIdReusePolicy;
+  dedupeStatuses?: readonly OrchestrationStatus[];
 }
 
 /**

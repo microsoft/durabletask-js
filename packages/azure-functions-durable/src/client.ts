@@ -6,7 +6,6 @@ import { status as grpcStatus } from "@grpc/grpc-js";
 import {
   EntityInstanceId,
   OrchestrationQuery,
-  OrchestrationIdReusePolicy,
   OrchestrationState,
   OrchestrationStatus,
   PurgeInstanceCriteria,
@@ -75,10 +74,10 @@ export interface StartNewOptions {
   /** Orchestration version to assign (forwarded to the core scheduler). */
   version?: string;
   /**
-   * Controls duplicate-ID errors and atomic replacement by existing runtime status.
+   * Existing orchestration statuses that must produce a duplicate-ID error.
    * The current shared protocol does not support an atomic no-op/IGNORE action.
    */
-  orchestrationIdReusePolicy?: OrchestrationIdReusePolicy;
+  dedupeStatuses?: readonly OrchestrationStatus[];
 }
 
 /**
@@ -219,13 +218,11 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    */
   async startNew(orchestratorName: string, options?: StartNewOptions): Promise<string> {
     const scheduleOptions =
-      options?.instanceId !== undefined ||
-      options?.version !== undefined ||
-      options?.orchestrationIdReusePolicy !== undefined
+      options?.instanceId !== undefined || options?.version !== undefined || options?.dedupeStatuses !== undefined
         ? {
             instanceId: options?.instanceId,
             version: options?.version,
-            orchestrationIdReusePolicy: options?.orchestrationIdReusePolicy,
+            dedupeStatuses: options?.dedupeStatuses,
           }
         : undefined;
     return this.scheduleNewOrchestration(orchestratorName, options?.input, scheduleOptions);

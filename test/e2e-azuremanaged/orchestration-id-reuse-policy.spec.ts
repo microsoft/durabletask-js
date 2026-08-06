@@ -1,0 +1,94 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
+import {
+  OrchestrationAlreadyExistsError,
+  OrchestrationContext,
+  OrchestrationStatus,
+  TaskHubGrpcClient,
+  TaskHubGrpcWorker,
+  TOrchestrator,
+} from "@microsoft/durabletask-js";
+import {
+  DurableTaskAzureManagedClientBuilder,
+  DurableTaskAzureManagedWorkerBuilder,
+} from "@microsoft/durabletask-js-azuremanaged";
+
+const endpoint = process.env.ENDPOINT || "localhost:8080";
+const taskHub = process.env.TASKHUB || "default";
+
+describe("Orchestration ID reuse policy E2E", () => {
+  let client: TaskHubGrpcClient;
+  let worker: TaskHubGrpcWorker;
+
+  const reusableOrchestrator: TOrchestrator = async function* (
+    ctx: OrchestrationContext,
+    input: { value: string; wait: boolean },
+  ): any {
+    if (input.wait) {
+      yield ctx.waitForExternalEvent("finish");
+    }
+    return input.value;
+  };
+
+  beforeEach(async () => {
+    client = new DurableTaskAzureManagedClientBuilder().endpoint(endpoint, taskHub, null).build();
+    worker = new DurableTaskAzureManagedWorkerBuilder().endpoint(endpoint, taskHub, null).build();
+    worker.addOrchestrator(reusableOrchestrator);
+    await worker.start();
+  });
+
+  afterEach(async () => {
+    await worker.stop();
+    await client.stop();
+  });
+
+  it("rejects a duplicate whose running status is selected for deduplication", async () => {
+    const instanceId = `reuse-dedupe-${Date.now()}`;
+    await client.scheduleNewOrchestration(reusableOrchestrator, { value: "original", wait: true }, { instanceId });
+    await client.waitForOrchestrationStart(instanceId, false, 30);
+
+    await expect(
+      client.scheduleNewOrchestration(
+        reusableOrchestrator,
+        { value: "replacement", wait: false },
+        { instanceId, dedupeStatuses: [OrchestrationStatus.RUNNING] },
+      ),
+    ).rejects.toBeInstanceOf(OrchestrationAlreadyExistsError);
+
+    const state = await client.getOrchestrationState(instanceId, true);
+    expect(state?.serializedInput).toBe(JSON.stringify({ value: "original", wait: true }));
+    expect(state?.runtimeStatus).toBe(OrchestrationStatus.RUNNING);
+  }, 60000);
+
+  it("replaces a duplicate whose running status is reusable", async () => {
+    const instanceId = `reuse-replace-${Date.now()}`;
+    await client.scheduleNewOrchestration(reusableOrchestrator, { value: "original", wait: true }, { instanceId });
+    await client.waitForOrchestrationStart(instanceId, false, 30);
+
+    await client.scheduleNewOrchestration(
+      reusableOrchestrator,
+      { value: "replacement", wait: false },
+      { instanceId, dedupeStatuses: [] },
+    );
+
+    const state = await client.waitForOrchestrationCompletion(instanceId, true, 30);
+    expect(state?.serializedInput).toBe(JSON.stringify({ value: "replacement", wait: false }));
+    expect(state?.serializedOutput).toBe(JSON.stringify("replacement"));
+    expect(state?.runtimeStatus).toBe(OrchestrationStatus.COMPLETED);
+  }, 60000);
+
+  it("preserves backend default duplicate behavior when dedupe statuses are undefined", async () => {
+    const instanceId = `reuse-default-${Date.now()}`;
+    await client.scheduleNewOrchestration(reusableOrchestrator, { value: "original", wait: true }, { instanceId });
+    await client.waitForOrchestrationStart(instanceId, false, 30);
+
+    await expect(
+      client.scheduleNewOrchestration(
+        reusableOrchestrator,
+        { value: "replacement", wait: false },
+        { instanceId, dedupeStatuses: undefined },
+      ),
+    ).rejects.toBeInstanceOf(OrchestrationAlreadyExistsError);
+  }, 60000);
+});

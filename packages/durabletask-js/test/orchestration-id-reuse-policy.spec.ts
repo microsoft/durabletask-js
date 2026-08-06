@@ -6,12 +6,13 @@ import {
   ActivityContext,
   InMemoryOrchestrationBackend,
   OrchestrationContext,
-  OrchestrationIdReusePolicy,
+  OrchestrationAlreadyExistsError,
   OrchestrationStatus,
   TaskHubGrpcClient,
   TestOrchestrationClient,
   TestOrchestrationWorker,
   TOrchestrator,
+  ValidDedupeStatuses,
 } from "../src";
 import * as pb from "../src/proto/orchestrator_service_pb";
 import * as pbh from "../src/utils/pb-helper.util";
@@ -30,6 +31,7 @@ function deferred<T = void>(): {
 function mockStartInstance(
   client: TaskHubGrpcClient,
   captureRequest: (request: pb.CreateInstanceRequest) => void,
+  error?: grpc.ServiceError,
 ): void {
   const stub = (client as unknown as { _stub: Record<string, unknown> })._stub;
   stub.startInstance = (
@@ -40,7 +42,7 @@ function mockStartInstance(
     captureRequest(request);
     const response = new pb.CreateInstanceResponse();
     response.setInstanceid(request.getInstanceid());
-    callback(null, response);
+    callback(error ?? null, response);
     return {} as grpc.ClientUnaryCall;
   };
 }
@@ -72,20 +74,16 @@ describe("TaskHubGrpcClient orchestration ID reuse policy", () => {
     mockStartInstance(client, (value) => {
       request = value;
     });
-    const reusePolicy: OrchestrationIdReusePolicy = {
-      dedupeStatuses: [OrchestrationStatus.COMPLETED, OrchestrationStatus.FAILED],
-    };
-
     await client.scheduleNewOrchestration("workflow", undefined, {
       instanceId: "instance-1",
-      orchestrationIdReusePolicy: reusePolicy,
+      dedupeStatuses: [OrchestrationStatus.COMPLETED, OrchestrationStatus.FAILED],
     });
 
     expect(request?.getOrchestrationidreusepolicy()?.getReplaceablestatusList()).toEqual([
-      pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING,
-      pb.OrchestrationStatus.ORCHESTRATION_STATUS_CANCELED,
       pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED,
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_CANCELED,
       pb.OrchestrationStatus.ORCHESTRATION_STATUS_PENDING,
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING,
       pb.OrchestrationStatus.ORCHESTRATION_STATUS_SUSPENDED,
     ]);
   });
@@ -98,18 +96,76 @@ describe("TaskHubGrpcClient orchestration ID reuse policy", () => {
 
     await client.scheduleNewOrchestration("workflow", undefined, {
       instanceId: "instance-1",
-      orchestrationIdReusePolicy: { dedupeStatuses: [] },
+      dedupeStatuses: [],
     });
 
     expect(request?.getOrchestrationidreusepolicy()?.getReplaceablestatusList()).toEqual([
-      pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING,
       pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED,
       pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
-      pb.OrchestrationStatus.ORCHESTRATION_STATUS_CANCELED,
       pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED,
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_CANCELED,
       pb.OrchestrationStatus.ORCHESTRATION_STATUS_PENDING,
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING,
       pb.OrchestrationStatus.ORCHESTRATION_STATUS_SUSPENDED,
     ]);
+  });
+
+  it("exports the same valid dedupe statuses as the .NET SDK", () => {
+    expect(ValidDedupeStatuses).toEqual([
+      OrchestrationStatus.COMPLETED,
+      OrchestrationStatus.FAILED,
+      OrchestrationStatus.TERMINATED,
+      OrchestrationStatus.CANCELED,
+      OrchestrationStatus.PENDING,
+      OrchestrationStatus.RUNNING,
+      OrchestrationStatus.SUSPENDED,
+    ]);
+  });
+
+  it("rejects an invalid dedupe status before calling the sidecar", async () => {
+    let called = false;
+    mockStartInstance(client, () => {
+      called = true;
+    });
+
+    await expect(
+      client.scheduleNewOrchestration("workflow", undefined, {
+        dedupeStatuses: [999 as OrchestrationStatus],
+      }),
+    ).rejects.toThrow(new TypeError("Invalid orchestration runtime status: '999' for deduplication."));
+    expect(called).toBe(false);
+  });
+
+  it("rejects terminated dedupe when a running status remains reusable", async () => {
+    let called = false;
+    mockStartInstance(client, () => {
+      called = true;
+    });
+
+    await expect(
+      client.scheduleNewOrchestration("workflow", undefined, {
+        dedupeStatuses: [OrchestrationStatus.TERMINATED, OrchestrationStatus.RUNNING, OrchestrationStatus.PENDING],
+      }),
+    ).rejects.toThrow(
+      new TypeError(
+        "Invalid dedupe statuses: cannot include 'Terminated' while also allowing reuse of running instances, " +
+          "because the running instance would be terminated and then immediately conflict with the dedupe check.",
+      ),
+    );
+    expect(called).toBe(false);
+  });
+
+  it.each([
+    [grpc.status.ALREADY_EXISTS, OrchestrationAlreadyExistsError],
+    [grpc.status.INVALID_ARGUMENT, TypeError],
+  ])("maps gRPC status %s to the public error contract", async (code, expectedError) => {
+    const error = Object.assign(new Error("sidecar rejected start"), {
+      code,
+      details: "sidecar rejected start",
+    }) as grpc.ServiceError;
+    mockStartInstance(client, () => {}, error);
+
+    await expect(client.scheduleNewOrchestration("workflow")).rejects.toBeInstanceOf(expectedError);
   });
 });
 
@@ -144,7 +200,7 @@ describe("TestOrchestrationClient orchestration ID reuse policy", () => {
       client.scheduleNewOrchestration(waitingOrchestrator, "replacement", {
         instanceId: "instance-1",
       }),
-    ).rejects.toThrow("already exists");
+    ).rejects.toBeInstanceOf(OrchestrationAlreadyExistsError);
   });
 
   it("rejects reuse when the existing runtime status is selected for deduplication", async () => {
@@ -156,11 +212,9 @@ describe("TestOrchestrationClient orchestration ID reuse policy", () => {
     await expect(
       client.scheduleNewOrchestration(waitingOrchestrator, "replacement", {
         instanceId: "instance-1",
-        orchestrationIdReusePolicy: {
-          dedupeStatuses: [OrchestrationStatus.RUNNING],
-        },
+        dedupeStatuses: [OrchestrationStatus.RUNNING],
       }),
-    ).rejects.toThrow("already exists");
+    ).rejects.toBeInstanceOf(OrchestrationAlreadyExistsError);
   });
 
   it("atomically replaces an existing instance whose runtime status is reusable", async () => {
@@ -172,15 +226,12 @@ describe("TestOrchestrationClient orchestration ID reuse policy", () => {
 
     await client.scheduleNewOrchestration(waitingOrchestrator, "replacement", {
       instanceId: "instance-1",
-      orchestrationIdReusePolicy: {
-        dedupeStatuses: [
-          OrchestrationStatus.COMPLETED,
-          OrchestrationStatus.FAILED,
-          OrchestrationStatus.TERMINATED,
-          OrchestrationStatus.PENDING,
-          OrchestrationStatus.SUSPENDED,
-        ],
-      },
+      dedupeStatuses: [
+        OrchestrationStatus.COMPLETED,
+        OrchestrationStatus.FAILED,
+        OrchestrationStatus.PENDING,
+        OrchestrationStatus.SUSPENDED,
+      ],
     });
 
     const replacement = backend.getInstance("instance-1");
@@ -189,20 +240,21 @@ describe("TestOrchestrationClient orchestration ID reuse policy", () => {
     expect(replacement?.status).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_PENDING);
   });
 
-  it("rejects waiters that were registered for the replaced execution", async () => {
+  it("terminates the old execution before creating its replacement", async () => {
     await client.scheduleNewOrchestration(waitingOrchestrator, "original", {
       instanceId: "instance-1",
     });
     await client.waitForOrchestrationStart("instance-1", false, 5);
     const originalCompletion = client.waitForOrchestrationCompletion("instance-1", true, 5);
-    const originalCompletionAssertion = expect(originalCompletion).rejects.toThrow("was replaced by a new execution");
 
-    await client.scheduleNewOrchestration(waitingOrchestrator, "replacement", {
+    const replacement = client.scheduleNewOrchestration(waitingOrchestrator, "replacement", {
       instanceId: "instance-1",
-      orchestrationIdReusePolicy: { dedupeStatuses: [] },
+      dedupeStatuses: [],
     });
 
-    await originalCompletionAssertion;
+    const originalState = await originalCompletion;
+    expect(originalState?.runtimeStatus).toBe(OrchestrationStatus.TERMINATED);
+    await replacement;
   });
 
   it("maps the canceled protobuf status to the public canceled status", () => {
@@ -276,11 +328,19 @@ describe("TestOrchestrationClient replacement generation fences", () => {
     await client.scheduleNewOrchestration(orchestrator, "original", { instanceId: "activity-race" });
     await originalActivityStarted.promise;
 
-    await client.scheduleNewOrchestration(orchestrator, "replacement", {
+    const replacement = client.scheduleNewOrchestration(orchestrator, "replacement", {
       instanceId: "activity-race",
-      orchestrationIdReusePolicy: { dedupeStatuses: [] },
+      dedupeStatuses: [],
     });
+
+    const replacementProgress = await Promise.race([
+      replacement.then(() => "replaced"),
+      new Promise<string>((resolve) => setTimeout(() => resolve("blocked"), 100)),
+    ]);
     releaseOriginalActivity.resolve();
+
+    expect(replacementProgress).toBe("replaced");
+    await replacement;
 
     const state = await client.waitForOrchestrationCompletion("activity-race", true, 5);
     expect(state?.serializedOutput).toBe(JSON.stringify("replacement"));
@@ -308,7 +368,7 @@ describe("TestOrchestrationClient replacement generation fences", () => {
 
     await client.scheduleNewOrchestration(parent, "replacement", {
       instanceId: "parent-race",
-      orchestrationIdReusePolicy: { dedupeStatuses: [] },
+      dedupeStatuses: [],
     });
     const replacementChildId = await replacementChildStarted.promise;
 
@@ -347,13 +407,11 @@ describe("TestOrchestrationClient replacement generation fences", () => {
 
     await client.scheduleNewOrchestration(child, undefined, {
       instanceId: "replaced-child",
-      orchestrationIdReusePolicy: { dedupeStatuses: [] },
+      dedupeStatuses: [],
     });
 
     const state = await client.waitForOrchestrationCompletion("current-parent", true, 5);
-    expect(JSON.parse(state?.serializedOutput ?? "")).toContain(
-      "Sub-orchestration instance 'replaced-child' was replaced by a new execution",
-    );
+    expect(JSON.parse(state?.serializedOutput ?? "")).toContain("Sub-orchestration failed");
   });
 
   it("removes child watchers owned by a replaced parent execution", async () => {
@@ -383,7 +441,7 @@ describe("TestOrchestrationClient replacement generation fences", () => {
 
     await client.scheduleNewOrchestration(parent, "replacement", {
       instanceId: "replaced-parent",
-      orchestrationIdReusePolicy: { dedupeStatuses: [] },
+      dedupeStatuses: [],
     });
 
     expect(stateWaiters.has("orphaned-child")).toBe(false);

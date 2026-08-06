@@ -4,7 +4,6 @@
 import { HttpRequest } from "@azure/functions";
 import { status as grpcStatus } from "@grpc/grpc-js";
 import {
-  OrchestrationIdReusePolicy,
   OrchestrationState,
   OrchestrationStatus,
   PurgeInstanceCriteria,
@@ -386,23 +385,21 @@ describe("DurableFunctionsClient", () => {
       }
     });
 
-    it("startNew forwards the orchestration ID reuse policy to the core scheduler", async () => {
+    it("startNew forwards dedupe statuses to the core scheduler", async () => {
       const client = new DurableFunctionsClient(CLIENT_CONFIG);
       try {
         const schedule = jest.spyOn(client, "scheduleNewOrchestration").mockResolvedValue("inst-9");
-        const orchestrationIdReusePolicy: OrchestrationIdReusePolicy = {
-          dedupeStatuses: [OrchestrationStatus.RUNNING],
-        };
+        const dedupeStatuses = [OrchestrationStatus.RUNNING];
 
         await client.startNew("MyOrch", {
           instanceId: "inst-9",
-          orchestrationIdReusePolicy,
+          dedupeStatuses,
         });
 
         expect(schedule).toHaveBeenCalledWith("MyOrch", undefined, {
           instanceId: "inst-9",
           version: undefined,
-          orchestrationIdReusePolicy,
+          dedupeStatuses,
         });
       } finally {
         await client.stop();
@@ -427,7 +424,10 @@ describe("DurableFunctionsClient", () => {
         jest
           .spyOn(client, "terminateOrchestration")
           .mockRejectedValue(
-            grpcError(grpcStatus.NOT_FOUND, "5 NOT_FOUND: No instance with ID 'inst-1' was found. (Parameter 'instanceId')"),
+            grpcError(
+              grpcStatus.NOT_FOUND,
+              "5 NOT_FOUND: No instance with ID 'inst-1' was found. (Parameter 'instanceId')",
+            ),
           );
         // terminate surfaces NOT_FOUND(5) for a genuinely missing instance (terminal instances get
         // FAILED_PRECONDITION instead), so the mapper consults getStatus: no state -> not-found message.
@@ -567,7 +567,9 @@ describe("DurableFunctionsClient", () => {
           .spyOn(client, "resumeOrchestration")
           .mockRejectedValue(grpcError(grpcStatus.UNKNOWN, "2 UNKNOWN: Exception was thrown by handler"));
         jest.spyOn(client, "getOrchestrationState").mockResolvedValue(makeStateWith(OrchestrationStatus.RUNNING));
-        await expect(client.resume("inst-1")).rejects.toThrow("Cannot resume orchestration instance in the Running state.");
+        await expect(client.resume("inst-1")).rejects.toThrow(
+          "Cannot resume orchestration instance in the Running state.",
+        );
       } finally {
         await client.stop();
       }

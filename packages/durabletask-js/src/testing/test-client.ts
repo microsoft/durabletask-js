@@ -62,21 +62,14 @@ export class TestOrchestrationClient {
       typeof instanceIdOrOptions === "string" || instanceIdOrOptions === undefined
         ? startAt
         : instanceIdOrOptions.startAt;
-    const orchestrationIdReusePolicy =
+    const dedupeStatuses =
       typeof instanceIdOrOptions === "string" || instanceIdOrOptions === undefined
         ? undefined
-        : instanceIdOrOptions.orchestrationIdReusePolicy;
+        : instanceIdOrOptions.dedupeStatuses;
     const id = instanceId ?? randomUUID();
     const encodedInput = input !== undefined ? JSON.stringify(input) : undefined;
 
-    this.backend.createInstance(
-      id,
-      name,
-      encodedInput,
-      scheduledStartAt,
-      undefined,
-      orchestrationIdReusePolicy,
-    );
+    await this.backend.createOrchestrationInstance(id, name, encodedInput, scheduledStartAt, dedupeStatuses);
     return id;
   }
 
@@ -192,11 +185,7 @@ export class TestOrchestrationClient {
    * @param input Optional operation input. Serialized as JSON.
    */
   async signalEntity(id: EntityInstanceId, operationName: string, input?: unknown): Promise<void> {
-    this.backend.signalEntity(
-      id.toString(),
-      operationName,
-      input === undefined ? undefined : JSON.stringify(input),
-    );
+    this.backend.signalEntity(id.toString(), operationName, input === undefined ? undefined : JSON.stringify(input));
   }
 
   /**
@@ -221,9 +210,7 @@ export class TestOrchestrationClient {
       lockedBy: entity.lockedBy,
       includesState: includeState,
       state:
-        includeState && entity.serializedState !== undefined
-          ? (JSON.parse(entity.serializedState) as T)
-          : undefined,
+        includeState && entity.serializedState !== undefined ? (JSON.parse(entity.serializedState) as T) : undefined,
     };
   }
 

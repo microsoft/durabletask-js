@@ -3,8 +3,9 @@
 ### New
 
 - Implement entity support in the in-memory testing backend ([#341](https://github.com/microsoft/durabletask-js/pull/341))
-- Add orchestration instance ID reuse policies with status-based duplicate rejection and atomic
-  replacement. The current shared protocol does not support an atomic no-op/`IGNORE` action.
+- Add the top-level `StartOrchestrationOptions.dedupeStatuses` option, `ValidDedupeStatuses`, and
+  `OrchestrationAlreadyExistsError`, aligned with the .NET status-based duplicate rejection and
+  atomic replacement contract. The shared protocol does not support atomic no-op/`IGNORE`.
 - Add the `CANCELED` member to the public `OrchestrationStatus` enum.
 
 ### Fixes
@@ -74,7 +75,7 @@
 - fix: clear customStatus on continue-as-new in InMemoryOrchestrationBackend ([#155](https://github.com/microsoft/durabletask-js/pull/155))
 - fix: propagate parent notification from composite tasks (WhenAllTask/WhenAnyTask) ([#150](https://github.com/microsoft/durabletask-js/pull/150))
 - fix: use deterministic time in createTimer instead of Date.now() ([#146](https://github.com/microsoft/durabletask-js/pull/146))
-- Fix WhenAllTask constructor resetting _completedTasks counter ([#143](https://github.com/microsoft/durabletask-js/pull/143))
+- Fix WhenAllTask constructor resetting \_completedTasks counter ([#143](https://github.com/microsoft/durabletask-js/pull/143))
 - Fix retry handler treating undefined/null/NaN/Infinity as retry signal ([#142](https://github.com/microsoft/durabletask-js/pull/142))
 - Release v0.3.0 ([#147](https://github.com/microsoft/durabletask-js/pull/147))
 
