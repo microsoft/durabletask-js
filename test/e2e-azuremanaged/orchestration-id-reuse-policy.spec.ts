@@ -93,6 +93,37 @@ describe("Orchestration ID reuse policy E2E", () => {
     expect(state?.runtimeStatus).toBe(OrchestrationStatus.COMPLETED);
   }, 60000);
 
+  it("surfaces the backend rejection for terminated dedupe with reusable suspended instances", async () => {
+    const instanceId = `reuse-suspended-${Date.now()}`;
+    await client.scheduleNewOrchestration(reusableOrchestrator, { value: "original", wait: true }, { instanceId });
+    await client.waitForOrchestrationStart(instanceId, false, 30);
+    await client.suspendOrchestration(instanceId);
+
+    let suspendedState = await client.getOrchestrationState(instanceId);
+    for (let attempt = 0; attempt < 30 && suspendedState?.runtimeStatus !== OrchestrationStatus.SUSPENDED; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      suspendedState = await client.getOrchestrationState(instanceId);
+    }
+    expect(suspendedState?.runtimeStatus).toBe(OrchestrationStatus.SUSPENDED);
+
+    await expect(
+      client.scheduleNewOrchestration(
+        reusableOrchestrator,
+        { value: "replacement", wait: false },
+        {
+          instanceId,
+          dedupeStatuses: [OrchestrationStatus.TERMINATED, OrchestrationStatus.RUNNING, OrchestrationStatus.PENDING],
+        },
+      ),
+    ).rejects.toThrow(
+      "Invalid reusable statuses: cannot exclude 'Terminated' while also allowing reuse of running instances",
+    );
+
+    const state = await client.getOrchestrationState(instanceId, true);
+    expect(state?.serializedInput).toBe(JSON.stringify({ value: "original", wait: true }));
+    expect(state?.runtimeStatus).toBe(OrchestrationStatus.SUSPENDED);
+  }, 120000);
+
   it("preserves backend default duplicate behavior when dedupe statuses are undefined", async () => {
     const instanceId = `reuse-default-${Date.now()}`;
     await client.scheduleNewOrchestration(reusableOrchestrator, { value: "original", wait: true }, { instanceId });

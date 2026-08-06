@@ -103,10 +103,11 @@ For `TaskHubGrpcClient`, omitting `dedupeStatuses` preserves the backend's defau
 behavior; passing `[]` makes every supported runtime status replaceable. The in-memory
 `TestOrchestrationClient` mirrors the .NET shim, where omission also makes all statuses reusable.
 `ValidDedupeStatuses` exports the seven supported statuses. The transient `CONTINUED_AS_NEW`
-status is not replaceable. A list containing
-`TERMINATED` must also contain `RUNNING`, `PENDING`, and `SUSPENDED`, because replacing a running
-instance first terminates it. The current shared protocol does not define a no-op/`IGNORE` action:
-a matching dedupe status is an error, while a non-matching status is replaced.
+status is not replaceable. A list containing `TERMINATED` must also contain `RUNNING`, `PENDING`,
+and `SUSPENDED`, because replacing a running instance first terminates it. The production client
+forwards this validation to the backend and maps its `INVALID_ARGUMENT` response to `TypeError`;
+the in-memory client validates it directly. The current shared protocol does not define a
+no-op/`IGNORE` action: a matching dedupe status is an error, while a non-matching status is replaced.
 
 ## Supported patterns
 
