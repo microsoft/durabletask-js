@@ -5,6 +5,7 @@ import * as pb from "../proto/orchestrator_service_pb";
 import * as pbh from "../utils/pb-helper.util";
 import { OrchestrationStatus as ClientOrchestrationStatus } from "../orchestration/enum/orchestration-status.enum";
 import { ParentOrchestrationInstance } from "../types/parent-orchestration-instance.type";
+import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 import { randomUUID } from "crypto";
 import { mapToRecord } from "../utils/tags.util";
 
@@ -46,6 +47,54 @@ export interface ActivityWorkItem {
 }
 
 /**
+ * Internal entity state stored by the in-memory backend.
+ */
+export interface EntityState {
+  instanceId: string;
+  serializedState?: string;
+  lastModifiedAt: Date;
+  /** Orchestration instance currently holding the lock, if any. */
+  lockedBy?: string;
+  /** Execution of the orchestration that owns the current critical section. */
+  lockOwnerExecutionId?: string;
+  /** Critical section ID used to correlate the matching unlock action. */
+  lockCriticalSectionId?: string;
+  /** Operations queued but not yet dispatched to a worker. */
+  pendingOperations: pb.HistoryEvent[];
+  /** Operations handed to a worker and awaiting a batch result. */
+  dispatchedOperations: pb.HistoryEvent[];
+  completionToken: number;
+}
+
+/**
+ * Pending lock request from an orchestration that could not be granted immediately.
+ */
+interface PendingLockRequest {
+  criticalSectionId: string;
+  parentInstanceId: string;
+  parentExecutionId: string;
+  lockSet: string[];
+  sequenceNumber: number;
+}
+
+interface RewindSnapshotEntry {
+  executionId: string;
+  completionToken: number;
+}
+
+type RewindSnapshot = Map<string, RewindSnapshotEntry>;
+
+/**
+ * Entity work item that needs to be executed.
+ */
+export interface EntityWorkItem {
+  instanceId: string;
+  entityState?: string;
+  operations: pb.HistoryEvent[];
+  completionToken: number;
+}
+
+/**
  * Promise resolver for waiting on orchestration state changes.
  */
 interface StateWaiter {
@@ -71,10 +120,18 @@ export class InMemoryOrchestrationBackend {
   private readonly orchestrationQueue: string[] = [];
   private readonly orchestrationQueueSet: Set<string> = new Set();
   private readonly activityQueue: ActivityWorkItem[] = [];
+  private readonly entities: Map<string, EntityState> = new Map();
+  private readonly entityQueue: string[] = [];
+  private readonly entityQueueSet: Set<string> = new Set();
+  private readonly entityInFlight: Set<string> = new Set();
+  private readonly entityOperationSequence: WeakMap<pb.HistoryEvent, number> = new WeakMap();
+  private pendingLockRequests: PendingLockRequest[] = [];
   private readonly stateWaiters: Map<string, StateWaiter[]> = new Map();
   private readonly pendingTimers: Set<ReturnType<typeof setTimeout>> = new Set();
   private readonly instanceTimers: Map<string, Set<ReturnType<typeof setTimeout>>> = new Map();
+  private readonly rewindSnapshots: Map<string, RewindSnapshot> = new Map();
   private nextCompletionToken: number = 1;
+  private nextEntityMessageSequence: number = 1;
   private readonly maxHistorySize: number;
 
   /**
@@ -257,6 +314,8 @@ export class InMemoryOrchestrationBackend {
       return false;
     }
 
+    this.cleanupLocksForExecution(instance.instanceId, instance.executionId);
+    this.clearRewindSnapshot(instanceId);
     this.instances.delete(instanceId);
     this.orchestrationQueueSet.delete(instanceId);
     const queueIndex = this.orchestrationQueue.indexOf(instanceId);
@@ -292,7 +351,9 @@ export class InMemoryOrchestrationBackend {
       throw new Error(`Orchestration instance '${instanceId}' is not in a failed state`);
     }
 
-    this.prepareRewind(instance, reason);
+    const snapshot: RewindSnapshot = new Map();
+    this.validateRewindLockState(instance, snapshot);
+    this.prepareRewind(instance, reason, snapshot);
     this.notifyWaiters(instanceId);
   }
 
@@ -317,6 +378,193 @@ export class InMemoryOrchestrationBackend {
    */
   getNextActivityWorkItem(): ActivityWorkItem | undefined {
     return this.activityQueue.shift();
+  }
+
+  /**
+   * Gets the next entity work item to process, if any.
+   *
+   * Drains all operations queued for the entity into a single batch and marks the
+   * entity in-flight so it is not dispatched again until the batch completes.
+   */
+  getNextEntityWorkItem(): EntityWorkItem | undefined {
+    const skipped: string[] = [];
+    let workItem: EntityWorkItem | undefined;
+
+    while (this.entityQueue.length > 0) {
+      const entityId = this.entityQueue.shift()!;
+      this.entityQueueSet.delete(entityId);
+
+      const entity = this.entities.get(entityId);
+      if (!entity || entity.pendingOperations.length === 0) {
+        continue;
+      }
+
+      // Already executing a batch; re-queue so it is picked up after completion.
+      if (this.entityInFlight.has(entityId)) {
+        skipped.push(entityId);
+        continue;
+      }
+
+      const dispatchableOperations: pb.HistoryEvent[] = [];
+      const blockedOperations: pb.HistoryEvent[] = [];
+      for (const operation of entity.pendingOperations) {
+        if (this.canDispatchEntityOperation(entity, operation)) {
+          dispatchableOperations.push(operation);
+        } else {
+          blockedOperations.push(operation);
+        }
+      }
+
+      if (dispatchableOperations.length === 0) {
+        continue;
+      }
+
+      this.entityInFlight.add(entityId);
+      entity.dispatchedOperations = dispatchableOperations;
+      entity.pendingOperations = blockedOperations;
+
+      workItem = {
+        instanceId: entity.instanceId,
+        entityState: entity.serializedState,
+        operations: entity.dispatchedOperations,
+        completionToken: entity.completionToken,
+      };
+      break;
+    }
+
+    for (const entityId of skipped) {
+      this.enqueueEntity(entityId);
+    }
+
+    return workItem;
+  }
+
+  /**
+   * Completes an entity batch execution: persists the new state, delivers operation
+   * results back to calling orchestrations, and applies entity side-effect actions.
+   */
+  completeEntityTask(instanceId: string, completionToken: number, result: pb.EntityBatchResult): void {
+    const entity = this.entities.get(instanceId);
+    if (!entity || entity.completionToken !== completionToken) {
+      return; // Entity was reset/purged, or this is a stale completion
+    }
+
+    const dispatched = entity.dispatchedOperations;
+
+    entity.serializedState = result.getEntitystate()?.getValue() ?? undefined;
+    entity.lastModifiedAt = new Date();
+    entity.dispatchedOperations = [];
+    entity.completionToken = this.nextCompletionToken++;
+    this.entityInFlight.delete(instanceId);
+
+    // Deliver results to callers. Results are index-aligned with the dispatched
+    // operations because the executor pushes exactly one result per operation.
+    const results = result.getResultsList();
+    for (let i = 0; i < dispatched.length; i++) {
+      this.deliverEntityOperationResult(dispatched[i], results[i]);
+    }
+
+    for (const action of result.getActionsList()) {
+      this.processEntityAction(action);
+    }
+
+    // An entity that was busy when a lock was requested may now be available.
+    this.tryGrantPendingLocks();
+
+    // A batch may have produced signals for this same entity, or the entity may have
+    // been signalled while its batch was running.
+    if (entity.pendingOperations.some((operation) => this.canDispatchEntityOperation(entity, operation))) {
+      this.enqueueEntity(instanceId);
+    }
+  }
+
+  /**
+   * Delivers a single entity operation result back to the orchestration that called it.
+   * Signals are fire-and-forget and produce no response.
+   */
+  private deliverEntityOperationResult(operation: pb.HistoryEvent, result?: pb.OperationResult): void {
+    const called = operation.getEntityoperationcalled();
+    if (!called || !result) {
+      return;
+    }
+
+    const parentInstanceId = called.getParentinstanceid()?.getValue();
+    if (!parentInstanceId) {
+      return;
+    }
+
+    const parent = this.instances.get(parentInstanceId);
+    if (!parent || parent.executionId !== called.getParentexecutionid()?.getValue()) {
+      return;
+    }
+
+    const event = new pb.HistoryEvent();
+    event.setEventid(-1);
+    event.setTimestamp(pbh.newTimestamp(new Date()));
+
+    const success = result.getSuccess();
+    const failure = result.getFailure();
+
+    if (success) {
+      const completed = new pb.EntityOperationCompletedEvent();
+      completed.setRequestid(called.getRequestid());
+      const output = success.getResult();
+      if (output) {
+        completed.setOutput(output);
+      }
+      event.setEntityoperationcompleted(completed);
+    } else if (failure) {
+      const failed = new pb.EntityOperationFailedEvent();
+      failed.setRequestid(called.getRequestid());
+      const details = failure.getFailuredetails();
+      if (details) {
+        failed.setFailuredetails(details);
+      }
+      event.setEntityoperationfailed(failed);
+    } else {
+      return;
+    }
+
+    parent.pendingEvents.push(event);
+    parent.lastUpdatedAt = new Date();
+    this.enqueueOrchestration(parentInstanceId);
+  }
+
+  /**
+   * Applies a side-effect action produced by an entity operation.
+   */
+  private processEntityAction(action: pb.OperationAction): void {
+    const sendSignal = action.getSendsignal();
+    if (sendSignal) {
+      this.signalEntityInternal(sendSignal.getInstanceid(), sendSignal.getName(), sendSignal.getInput()?.getValue());
+      return;
+    }
+
+    const startNew = action.getStartneworchestration();
+    if (startNew) {
+      const instanceId = startNew.getInstanceid() || randomUUID().replace(/-/g, "");
+      if (!this.instances.has(instanceId)) {
+        this.createInstance(instanceId, startNew.getName(), startNew.getInput()?.getValue());
+      }
+    }
+  }
+
+  /**
+   * Signals an entity from outside an orchestration (client-initiated, fire-and-forget).
+   *
+   * @param entityId The entity instance ID, in `@name@key` form.
+   * @param operation The operation name to invoke.
+   * @param input Optional serialized operation input.
+   */
+  signalEntity(entityId: string, operation: string, input?: string): void {
+    this.signalEntityInternal(entityId, operation, input);
+  }
+
+  /**
+   * Gets the current state of an entity, if it exists. Intended for test assertions.
+   */
+  getEntity(instanceId: string): EntityState | undefined {
+    return this.entities.get(instanceId);
   }
 
   /**
@@ -481,7 +729,7 @@ export class InMemoryOrchestrationBackend {
    * Checks if there are any pending work items.
    */
   hasPendingWork(): boolean {
-    return this.orchestrationQueue.length > 0 || this.activityQueue.length > 0;
+    return this.orchestrationQueue.length > 0 || this.activityQueue.length > 0 || this.entityQueue.length > 0;
   }
 
   /**
@@ -492,6 +740,12 @@ export class InMemoryOrchestrationBackend {
     this.orchestrationQueue.length = 0;
     this.orchestrationQueueSet.clear();
     this.activityQueue.length = 0;
+    this.entities.clear();
+    this.entityQueue.length = 0;
+    this.entityQueueSet.clear();
+    this.entityInFlight.clear();
+    this.pendingLockRequests = [];
+    this.nextEntityMessageSequence = 1;
     for (const waiters of this.stateWaiters.values()) {
       for (const waiter of waiters) {
         waiter.reject(new Error("Backend was reset"));
@@ -503,6 +757,7 @@ export class InMemoryOrchestrationBackend {
     }
     this.pendingTimers.clear();
     this.instanceTimers.clear();
+    this.rewindSnapshots.clear();
   }
 
   /**
@@ -564,6 +819,9 @@ export class InMemoryOrchestrationBackend {
       case pb.OrchestratorAction.OrchestratoractiontypeCase.SENDEVENT:
         this.processSendEventAction(action.getSendevent()!);
         break;
+      case pb.OrchestratorAction.OrchestratoractiontypeCase.SENDENTITYMESSAGE:
+        this.processSendEntityMessageAction(instance, action);
+        break;
       case pb.OrchestratorAction.OrchestratoractiontypeCase.REWINDORCHESTRATION:
         this.processRewindOrchestrationAction(instance, action.getRewindorchestration()!);
         break;
@@ -580,6 +838,11 @@ export class InMemoryOrchestrationBackend {
     completeAction: pb.CompleteOrchestrationAction,
   ): void {
     const status = completeAction.getOrchestrationstatus();
+    if (this.isTerminalStatus(status) || status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW) {
+      this.cleanupLocksForExecution(instance.instanceId, instance.executionId);
+      this.clearRewindSnapshot(instance.instanceId);
+    }
+
     instance.status = status;
     instance.output = completeAction.getResult()?.getValue();
     // Use an explicit presence check: a protobuf singular message accessor may materialize an
@@ -767,7 +1030,7 @@ export class InMemoryOrchestrationBackend {
       });
   }
 
-  private prepareRewind(instance: OrchestrationInstance, reason?: string): void {
+  private prepareRewind(instance: OrchestrationInstance, reason?: string, snapshot?: RewindSnapshot): void {
     // Reset instance state so it can be re-processed.
     instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING;
     instance.output = undefined;
@@ -783,6 +1046,14 @@ export class InMemoryOrchestrationBackend {
 
     // Refresh the completion token and enqueue.
     instance.completionToken = this.nextCompletionToken++;
+    if (snapshot) {
+      const expected = snapshot.get(instance.instanceId);
+      if (!expected) {
+        throw new Error(`Cannot prepare unvalidated orchestration '${instance.instanceId}' for rewind`);
+      }
+      expected.completionToken = instance.completionToken;
+      this.rewindSnapshots.set(instance.instanceId, snapshot);
+    }
     this.enqueueOrchestration(instance.instanceId);
   }
 
@@ -790,10 +1061,33 @@ export class InMemoryOrchestrationBackend {
     instance: OrchestrationInstance,
     rewindAction: pb.RewindOrchestrationAction,
   ): void {
+    const snapshot = this.rewindSnapshots.get(instance.instanceId);
+    const expectedInstance = snapshot?.get(instance.instanceId);
+    if (
+      !snapshot ||
+      !expectedInstance ||
+      expectedInstance.executionId !== instance.executionId ||
+      expectedInstance.completionToken !== instance.completionToken
+    ) {
+      throw new Error(`Cannot apply stale rewind for orchestration '${instance.instanceId}'`);
+    }
+
     const newHistory = rewindAction.getNewhistoryList();
+    const executionId = newHistory
+      .find((event) => event.hasExecutionstarted())
+      ?.getExecutionstarted()
+      ?.getOrchestrationinstance()
+      ?.getExecutionid()
+      ?.getValue();
+    if (!executionId) {
+      throw new Error(
+        `Cannot apply rewind for orchestration '${instance.instanceId}': the rewritten history has no execution ID`,
+      );
+    }
 
     // Replace the history with the SDK-computed clean version.
     instance.history = newHistory;
+    instance.executionId = executionId;
     instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING;
     instance.output = undefined;
     instance.failureDetails = undefined;
@@ -843,7 +1137,13 @@ export class InMemoryOrchestrationBackend {
           taskScheduledId: taskId,
         });
       } else if (subInstance.status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED) {
-        this.prepareRewind(subInstance, reason);
+        const expectedSubInstance = snapshot.get(subInstanceId);
+        if (
+          expectedSubInstance?.executionId === subInstance.executionId &&
+          expectedSubInstance.completionToken === subInstance.completionToken
+        ) {
+          this.prepareRewind(subInstance, reason, snapshot);
+        }
       }
       this.watchSubOrchestration(instance.instanceId, subInstanceId, taskId);
     }
@@ -855,7 +1155,409 @@ export class InMemoryOrchestrationBackend {
     // executionCompleted is no longer in the history.
     instance.pendingEvents = [pbh.newOrchestratorStartedEvent(new Date())];
     instance.completionToken = this.nextCompletionToken++;
+    this.clearRewindSnapshot(instance.instanceId);
     this.enqueueOrchestration(instance.instanceId);
+  }
+
+  /**
+   * Handles an entity message emitted by an orchestration.
+   *
+   * Mirrors the Python in-memory backend: each outbound message is echoed into the
+   * orchestration history (so replay validation sees the confirmation) and then routed
+   * to the target entity or the lock manager.
+   */
+  private processSendEntityMessageAction(instance: OrchestrationInstance, action: pb.OrchestratorAction): void {
+    const entityMessage = action.getSendentitymessage()!;
+    const actionId = action.getId();
+    const messageTypeCase = pb.SendEntityMessageAction.EntitymessagetypeCase;
+
+    switch (entityMessage.getEntitymessagetypeCase()) {
+      case messageTypeCase.ENTITYOPERATIONSIGNALED: {
+        const signaled = entityMessage.getEntityoperationsignaled()!;
+        this.appendEntityHistoryEvent(instance, actionId, (e) => e.setEntityoperationsignaled(signaled));
+
+        const targetId = signaled.getTargetinstanceid()?.getValue();
+        if (targetId) {
+          const queued = new pb.HistoryEvent();
+          queued.setEventid(-1);
+          queued.setTimestamp(pbh.newTimestamp(new Date()));
+          queued.setEntityoperationsignaled(signaled);
+          this.queueEntityOperation(targetId, queued);
+        }
+        break;
+      }
+      case messageTypeCase.ENTITYOPERATIONCALLED: {
+        const called = entityMessage.getEntityoperationcalled()!;
+        this.appendEntityHistoryEvent(instance, actionId, (e) => e.setEntityoperationcalled(called));
+
+        if (instance.status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_PENDING) {
+          instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING;
+        }
+
+        const targetId = called.getTargetinstanceid()?.getValue();
+        if (targetId) {
+          const queued = new pb.HistoryEvent();
+          queued.setEventid(-1);
+          queued.setTimestamp(pbh.newTimestamp(new Date()));
+          queued.setEntityoperationcalled(called);
+          this.queueEntityOperation(targetId, queued);
+        }
+        break;
+      }
+      case messageTypeCase.ENTITYLOCKREQUESTED: {
+        const lockRequested = entityMessage.getEntitylockrequested()!;
+        this.appendEntityHistoryEvent(instance, actionId, (e) => e.setEntitylockrequested(lockRequested));
+
+        if (instance.status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_PENDING) {
+          instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING;
+        }
+
+        const parentId = lockRequested.getParentinstanceid()?.getValue();
+        if (parentId) {
+          this.tryGrantLock({
+            criticalSectionId: lockRequested.getCriticalsectionid(),
+            parentInstanceId: parentId,
+            parentExecutionId: instance.executionId,
+            lockSet: lockRequested.getLocksetList().slice(),
+            sequenceNumber: this.nextEntityMessageSequence++,
+          });
+        }
+        break;
+      }
+      case messageTypeCase.ENTITYUNLOCKSENT: {
+        const unlock = entityMessage.getEntityunlocksent()!;
+        this.appendEntityHistoryEvent(instance, actionId, (e) => e.setEntityunlocksent(unlock));
+
+        const targetId = unlock.getTargetinstanceid()?.getValue();
+        const parentId = unlock.getParentinstanceid()?.getValue();
+        if (targetId) {
+          const entity = this.entities.get(targetId);
+          if (
+            entity &&
+            entity.lockCriticalSectionId === unlock.getCriticalsectionid() &&
+            entity.lockedBy === parentId &&
+            entity.lockOwnerExecutionId === instance.executionId
+          ) {
+            entity.lockedBy = undefined;
+            entity.lockOwnerExecutionId = undefined;
+            entity.lockCriticalSectionId = undefined;
+            if (entity.pendingOperations.length > 0) {
+              this.enqueueEntity(targetId);
+            }
+          }
+        }
+
+        this.tryGrantPendingLocks();
+        break;
+      }
+      default:
+        throw new Error(
+          `Unknown entity message type '${entityMessage.getEntitymessagetypeCase()}' for orchestration ` +
+            `'${instance.instanceId}'. This likely means the in-memory backend needs to be updated to handle ` +
+            `a newly introduced entity message type.`,
+        );
+    }
+  }
+
+  /**
+   * Appends the confirmation event for an outbound entity message to the orchestration history.
+   * The event ID must be the originating action ID so replay validation can match it.
+   */
+  private appendEntityHistoryEvent(
+    instance: OrchestrationInstance,
+    actionId: number,
+    populate: (event: pb.HistoryEvent) => void,
+  ): void {
+    const event = new pb.HistoryEvent();
+    event.setEventid(actionId);
+    event.setTimestamp(pbh.newTimestamp(new Date()));
+    populate(event);
+    instance.history.push(event);
+  }
+
+  /**
+   * Gets (or lazily creates) the state record for an entity.
+   */
+  private getOrCreateEntity(entityId: string): EntityState {
+    let entity = this.entities.get(entityId);
+    if (!entity) {
+      entity = {
+        instanceId: entityId,
+        lastModifiedAt: new Date(),
+        pendingOperations: [],
+        dispatchedOperations: [],
+        completionToken: this.nextCompletionToken++,
+      };
+      this.entities.set(entityId, entity);
+    }
+    return entity;
+  }
+
+  private queueEntityOperation(entityId: string, event: pb.HistoryEvent): void {
+    const entity = this.getOrCreateEntity(entityId);
+    this.entityOperationSequence.set(event, this.nextEntityMessageSequence++);
+    entity.pendingOperations.push(event);
+    this.enqueueEntity(entityId);
+  }
+
+  private enqueueEntity(entityId: string): void {
+    if (!this.entityQueueSet.has(entityId)) {
+      this.entityQueue.push(entityId);
+      this.entityQueueSet.add(entityId);
+    }
+  }
+
+  private canDispatchEntityOperation(entity: EntityState, operation: pb.HistoryEvent): boolean {
+    if (entity.lockedBy !== undefined) {
+      const called = operation.getEntityoperationcalled();
+      return (
+        called?.getParentinstanceid()?.getValue() === entity.lockedBy &&
+        called?.getParentexecutionid()?.getValue() === entity.lockOwnerExecutionId
+      );
+    }
+
+    const lockBarrier = this.getNextLockBarrier(entity.instanceId);
+    if (lockBarrier === undefined) {
+      return true;
+    }
+
+    const operationSequence = this.entityOperationSequence.get(operation);
+    return operationSequence !== undefined && operationSequence < lockBarrier;
+  }
+
+  private getNextLockBarrier(entityId: string): number | undefined {
+    let barrier: number | undefined;
+    for (const pending of this.pendingLockRequests) {
+      if (pending.lockSet.includes(entityId) && (barrier === undefined || pending.sequenceNumber < barrier)) {
+        barrier = pending.sequenceNumber;
+      }
+    }
+    return barrier;
+  }
+
+  private operationPrecedesLock(operation: pb.HistoryEvent, pending: PendingLockRequest): boolean {
+    const operationSequence = this.entityOperationSequence.get(operation);
+    return operationSequence === undefined || operationSequence < pending.sequenceNumber;
+  }
+
+  /**
+   * Signals an entity as a side effect of another entity's operation.
+   */
+  private signalEntityInternal(entityId: string, operation: string, input?: string): void {
+    const signaled = new pb.EntityOperationSignaledEvent();
+    signaled.setRequestid(randomUUID().replace(/-/g, ""));
+    signaled.setOperation(operation);
+    if (input !== undefined) {
+      const value = new StringValue();
+      value.setValue(input);
+      signaled.setInput(value);
+    }
+    const target = new StringValue();
+    target.setValue(entityId);
+    signaled.setTargetinstanceid(target);
+
+    const event = new pb.HistoryEvent();
+    event.setEventid(-1);
+    event.setTimestamp(pbh.newTimestamp(new Date()));
+    event.setEntityoperationsignaled(signaled);
+
+    this.queueEntityOperation(entityId, event);
+  }
+
+  private canGrantLock(pending: PendingLockRequest): boolean {
+    return !pending.lockSet.some((entityId) => {
+      const entity = this.entities.get(entityId);
+      return (
+        entity?.lockedBy !== undefined ||
+        this.entityInFlight.has(entityId) ||
+        entity?.pendingOperations.some((operation) => this.operationPrecedesLock(operation, pending))
+      );
+    });
+  }
+
+  private hasEarlierOverlappingLockRequest(pending: PendingLockRequest): boolean {
+    const lockSet = new Set(pending.lockSet);
+    return this.pendingLockRequests.some(
+      (earlier) =>
+        earlier.sequenceNumber < pending.sequenceNumber &&
+        this.getActiveLockRequestParent(earlier) !== undefined &&
+        earlier.lockSet.some((entityId) => lockSet.has(entityId)),
+    );
+  }
+
+  private getActiveLockRequestParent(pending: PendingLockRequest): OrchestrationInstance | undefined {
+    const parent = this.instances.get(pending.parentInstanceId);
+    if (!parent || parent.executionId !== pending.parentExecutionId || this.isTerminalStatus(parent.status)) {
+      return undefined;
+    }
+    return parent;
+  }
+
+  /**
+   * Grants a lock to every entity in the lock set and notifies the parent orchestration.
+   * Assumes availability was already verified via {@link canGrantLock}.
+   */
+  private grantLock(pending: PendingLockRequest, parent: OrchestrationInstance): void {
+    for (const entityId of pending.lockSet) {
+      const entity = this.getOrCreateEntity(entityId);
+      entity.lockedBy = pending.parentInstanceId;
+      entity.lockOwnerExecutionId = pending.parentExecutionId;
+      entity.lockCriticalSectionId = pending.criticalSectionId;
+    }
+
+    const granted = new pb.EntityLockGrantedEvent();
+    granted.setCriticalsectionid(pending.criticalSectionId);
+
+    const event = new pb.HistoryEvent();
+    event.setEventid(-1);
+    event.setTimestamp(pbh.newTimestamp(new Date()));
+    event.setEntitylockgranted(granted);
+
+    parent.pendingEvents.push(event);
+    parent.lastUpdatedAt = new Date();
+    this.enqueueOrchestration(pending.parentInstanceId);
+  }
+
+  private tryGrantLock(pending: PendingLockRequest): void {
+    const parent = this.getActiveLockRequestParent(pending);
+    if (!parent) {
+      return;
+    }
+
+    if (this.hasEarlierOverlappingLockRequest(pending) || !this.canGrantLock(pending)) {
+      this.pendingLockRequests.push(pending);
+      return;
+    }
+    this.grantLock(pending, parent);
+  }
+
+  private tryGrantPendingLocks(): void {
+    const stillPending: PendingLockRequest[] = [];
+    for (const pending of this.pendingLockRequests) {
+      const parent = this.getActiveLockRequestParent(pending);
+      if (!parent) {
+        this.enqueuePendingEntityOperations(pending.lockSet);
+        continue;
+      }
+
+      if (!this.hasEarlierOverlappingLockRequest(pending) && this.canGrantLock(pending)) {
+        this.grantLock(pending, parent);
+      } else {
+        stillPending.push(pending);
+      }
+    }
+    this.pendingLockRequests = stillPending;
+  }
+
+  private cleanupLocksForExecution(instanceId: string, executionId: string): void {
+    const retainedLockRequests: PendingLockRequest[] = [];
+    for (const pending of this.pendingLockRequests) {
+      if (pending.parentInstanceId === instanceId && pending.parentExecutionId === executionId) {
+        this.enqueuePendingEntityOperations(pending.lockSet);
+      } else {
+        retainedLockRequests.push(pending);
+      }
+    }
+    this.pendingLockRequests = retainedLockRequests;
+
+    for (const [entityId, entity] of this.entities) {
+      if (entity.lockedBy !== instanceId || entity.lockOwnerExecutionId !== executionId) {
+        continue;
+      }
+
+      entity.lockedBy = undefined;
+      entity.lockOwnerExecutionId = undefined;
+      entity.lockCriticalSectionId = undefined;
+      if (entity.pendingOperations.length > 0) {
+        this.enqueueEntity(entityId);
+      }
+    }
+
+    this.tryGrantPendingLocks();
+  }
+
+  private enqueuePendingEntityOperations(entityIds: string[]): void {
+    for (const entityId of entityIds) {
+      if ((this.entities.get(entityId)?.pendingOperations.length ?? 0) > 0) {
+        this.enqueueEntity(entityId);
+      }
+    }
+  }
+
+  private hasUnreleasedEntityLock(history: pb.HistoryEvent[]): boolean {
+    const remainingLockSets = new Map<string, Set<string>>();
+
+    for (const event of history) {
+      const lockRequested = event.getEntitylockrequested();
+      if (lockRequested) {
+        remainingLockSets.set(lockRequested.getCriticalsectionid(), new Set(lockRequested.getLocksetList()));
+        continue;
+      }
+
+      const unlock = event.getEntityunlocksent();
+      const targetId = unlock?.getTargetinstanceid()?.getValue();
+      if (!unlock || !targetId) {
+        continue;
+      }
+
+      const remaining = remainingLockSets.get(unlock.getCriticalsectionid());
+      if (!remaining) {
+        continue;
+      }
+
+      remaining.delete(targetId);
+      if (remaining.size === 0) {
+        remainingLockSets.delete(unlock.getCriticalsectionid());
+      }
+    }
+
+    return remainingLockSets.size > 0;
+  }
+
+  private validateRewindLockState(instance: OrchestrationInstance, snapshot: RewindSnapshot): void {
+    if (snapshot.has(instance.instanceId)) {
+      return;
+    }
+    snapshot.set(instance.instanceId, {
+      executionId: instance.executionId,
+      completionToken: instance.completionToken,
+    });
+
+    if (this.hasUnreleasedEntityLock(instance.history)) {
+      throw new Error(`Cannot rewind an orchestration with an unreleased entity lock: '${instance.instanceId}'`);
+    }
+
+    const completedSubOrchestrationTaskIds = new Set<number>();
+    const createdSubOrchestrations = new Map<number, string>();
+    for (const event of instance.history) {
+      const created = event.getSuborchestrationinstancecreated();
+      if (created) {
+        createdSubOrchestrations.set(event.getEventid(), created.getInstanceid());
+        continue;
+      }
+
+      const completed = event.getSuborchestrationinstancecompleted();
+      if (completed) {
+        completedSubOrchestrationTaskIds.add(completed.getTaskscheduledid());
+      }
+    }
+
+    for (const [taskId, subInstanceId] of createdSubOrchestrations) {
+      if (completedSubOrchestrationTaskIds.has(taskId)) {
+        continue;
+      }
+
+      const subInstance = this.instances.get(subInstanceId);
+      if (subInstance?.status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED) {
+        this.validateRewindLockState(subInstance, snapshot);
+      }
+    }
+  }
+
+  private clearRewindSnapshot(instanceId: string): void {
+    const snapshot = this.rewindSnapshots.get(instanceId);
+    this.rewindSnapshots.delete(instanceId);
+    snapshot?.delete(instanceId);
   }
 
   private processSendEventAction(sendEvent: pb.SendEventAction): void {

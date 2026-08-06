@@ -3,6 +3,7 @@
 ### New
 
 - Add first-class worker-level orchestration and activity middleware with typed contexts, nonserialized host features, validation, and in-process host integration.
+- Implement entity support in the in-memory testing backend ([#341](https://github.com/microsoft/durabletask-js/pull/341))
 
 ### Fixes
 
