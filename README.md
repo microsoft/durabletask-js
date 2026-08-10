@@ -81,9 +81,11 @@ const state = await client.waitForOrchestrationCompletion(id, true, 60);
 console.log(`Result: ${state?.serializedOutput}`);
 ```
 
-`await worker.start()` resolves only after the initial sidecar handshake succeeds and the
-work-item stream is established. Startup times out after 30 seconds by default; use
-the worker builder's `.startupTimeout(milliseconds)` method to configure it.
+`await worker.start()` resolves only after startup metadata is generated, the initial sidecar
+handshake succeeds, and the work-item stream is created with its handlers attached. Metadata
+generation and the handshake have a 30-second startup budget by default; use the worker builder's
+`.startupTimeout(milliseconds)` method to configure it. If the sidecar is not ready in time,
+`start()` rejects; callers that require indefinite startup recovery should retry `start()`.
 
 You can find more samples in the [examples/azure-managed](./examples/azure-managed) directory.
 
@@ -180,10 +182,7 @@ Long-running orchestrations can restart with fresh history and optionally move t
 orchestration version:
 
 ```typescript
-const eternalOrchestrator: TOrchestrator = async function* (
-  ctx: OrchestrationContext,
-  iteration: number,
-): any {
+const eternalOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, iteration: number): any {
   yield ctx.callActivity(processIteration, iteration);
   ctx.continueAsNew(iteration + 1, true, "2.0.0");
 };

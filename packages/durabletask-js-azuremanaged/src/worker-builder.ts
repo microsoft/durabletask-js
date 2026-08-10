@@ -239,7 +239,8 @@ export class DurableTaskAzureManagedWorkerBuilder {
 
   /**
    * Sets the startup timeout in milliseconds.
-   * This is the maximum time to establish the initial sidecar connection.
+   * This is the maximum time for startup metadata generation and the sidecar hello handshake
+   * before the initial work-item stream is created.
    * Defaults to 30000 (30 seconds).
    *
    * @param timeoutMs The startup timeout in milliseconds.

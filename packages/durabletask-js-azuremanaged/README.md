@@ -53,9 +53,11 @@ const worker = createAzureManagedWorkerBuilder("https://myservice.durabletask.io
 await worker.start();
 ```
 
-`start()` resolves after the initial sidecar handshake and work-item stream are established.
-The startup timeout defaults to 30 seconds and can be configured with
-`.startupTimeout(milliseconds)` on the worker builder.
+`start()` resolves after startup metadata is generated, the initial sidecar handshake succeeds,
+and the work-item stream is created with its handlers attached. Metadata generation and the
+handshake have a 30-second startup budget by default, configurable with
+`.startupTimeout(milliseconds)`. If the sidecar is not ready in time, `start()` rejects; retry it
+from the caller when the deployment requires indefinite startup recovery.
 
 ## Supported Authentication Types
 

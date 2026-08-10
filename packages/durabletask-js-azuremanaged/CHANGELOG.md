@@ -1,10 +1,17 @@
 ## Upcoming
 
+### Breaking Changes
+
+- Workers built by `DurableTaskAzureManagedWorkerBuilder` now reject `start()` when the sidecar
+  cannot be reached within the configured startup timeout. Previously, `start()` resolved before
+  connecting and retried forever in the background. Use `.startupTimeout(...)` to allow more time,
+  or retry `start()` from the caller as described in the core package changelog.
+
 ### New
 
 ### Fixes
 
-- Add `startupTimeout()` to configure the core worker's sidecar connection startup timeout.
+- Add `startupTimeout()` to configure the core worker's metadata and hello-handshake startup budget.
 
 ## v0.4.0 (2026-07-31)
 

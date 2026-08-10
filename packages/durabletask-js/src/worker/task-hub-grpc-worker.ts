@@ -65,7 +65,7 @@ export interface TaskHubGrpcWorkerOptions {
   /** Optional timeout in milliseconds for graceful shutdown. Defaults to 30000. */
   shutdownTimeoutMs?: number;
   /**
-   * Optional timeout in milliseconds for initial metadata generation and the sidecar hello handshake.
+   * Optional timeout in milliseconds for startup metadata generation and the sidecar hello handshake.
    * Defaults to 30000.
    */
   startupTimeoutMs?: number;
@@ -420,9 +420,11 @@ export class TaskHubGrpcWorker {
    * In node.js we don't require a new thread as we have a main event loop
    * Therefore, we open the stream and simply listen through the eventemitter behind the scenes
    *
-   * @remarks Resolves after the sidecar hello handshake succeeds and the initial
-   * work-item stream is established. Later stream failures reconnect automatically.
-   * @throws {@link TimeoutError} if the hello handshake exceeds `startupTimeoutMs`.
+   * @remarks Resolves after startup metadata is generated, the sidecar hello handshake
+   * succeeds, and the initial work-item stream is created with its handlers attached.
+   * Later stream failures reconnect automatically.
+   * @throws {@link TimeoutError} if metadata generation or the hello handshake exceeds
+   * the `startupTimeoutMs` startup budget before the initial work-item stream is established.
    */
   async start(): Promise<void> {
     if (this._isRunning) {

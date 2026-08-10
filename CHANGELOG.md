@@ -1,5 +1,23 @@
 ## Upcoming
 
+### Breaking Changes
+
+- `TaskHubGrpcWorker.start()` now rejects when the sidecar cannot be reached within
+  `startupTimeoutMs` (30 seconds by default). Previously, `start()` resolved before connecting and
+  retried forever in the background. Deployments where the worker may start before its sidecar
+  should either increase `startupTimeoutMs` or retry `start()` from the caller:
+
+  ```typescript
+  for (;;) {
+    try {
+      await worker.start();
+      break;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+  ```
+
 ### New
 
 - Add an optional `newVersion` parameter to `OrchestrationContext.continueAsNew()` for version migrations.
@@ -13,7 +31,8 @@
 
 ### Fixes
 
-- Make `TaskHubGrpcWorker.start()` wait for its initial work-item stream and time out unresponsive sidecar startup connections.
+- Make `TaskHubGrpcWorker.start()` wait until the sidecar hello handshake succeeds and the initial
+  work-item stream is created with its handlers attached.
 
 ## v0.4.0 (2026-07-31)
 
