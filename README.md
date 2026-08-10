@@ -170,6 +170,25 @@ const purchaseOrderWorkflow: TOrchestrator = async function* (ctx: Orchestration
 
 You can find the full sample at [examples/hello-world/human_interaction.ts](./examples/hello-world/human_interaction.ts).
 
+### Continue as new
+
+Long-running orchestrations can restart with fresh history and optionally move to a new
+orchestration version:
+
+```typescript
+const eternalOrchestrator: TOrchestrator = async function* (
+  ctx: OrchestrationContext,
+  iteration: number,
+): any {
+  yield ctx.callActivity(processIteration, iteration);
+  ctx.continueAsNew(iteration + 1, true, "2.0.0");
+};
+```
+
+The second argument controls whether unprocessed external events carry over. The optional third
+argument becomes the restarted orchestration's `ctx.version`; omit it to retain the existing
+continue-as-new behavior.
+
 ### Durable entities
 
 Durable entities provide a way to manage small pieces of state with a simple object-oriented programming model:

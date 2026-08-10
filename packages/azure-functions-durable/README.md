@@ -37,6 +37,10 @@ changed:
   and throws when the instance is missing. `showInput` suppresses only the top-level input,
   `showHistory` populates `history`, and `showHistoryOutput` toggles the per-entry input/result
   payloads; `history` entries are core `HistoryEvent`s (v3 types `history` as `Array<unknown>`).
+  **`client.startNew()` supports the `version` option.**
+- **`context.df.continueAsNew(input, saveEvents, newVersion)` can migrate versions.** The optional
+  third argument assigns the restarted orchestration's version; existing one- and two-argument
+  calls keep their current behavior.
   **`client.startNew()` supports the `version` and top-level `dedupeStatuses` options.** Dedupe
   statuses select duplicate errors; other supported statuses are atomically replaced. The current
   shared protocol does not expose an atomic no-op/`IGNORE` action.

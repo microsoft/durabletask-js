@@ -127,9 +127,13 @@ export class DurableOrchestrationContext {
     return this._ctx.waitForExternalEvent(name) as Task<T>;
   }
 
-  /** Restarts the orchestration with a new input. */
-  continueAsNew(input: unknown, saveEvents = true): void {
-    this._ctx.continueAsNew(input, saveEvents);
+  /** Restarts the orchestration with a new input and optionally a new version. */
+  continueAsNew(input: unknown, saveEvents = true, newVersion?: string): void {
+    if (newVersion === undefined) {
+      this._ctx.continueAsNew(input, saveEvents);
+    } else {
+      this._ctx.continueAsNew(input, saveEvents, newVersion);
+    }
   }
 
   /** Sets the orchestration's custom status payload. */

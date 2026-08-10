@@ -2,6 +2,7 @@
 
 ### New
 
+- Add optional orchestration version migration support to `context.df.continueAsNew()`.
 - Added a `durable-functions/testing` entry point with `runOrchestrator`, which runs an orchestrator
   to a terminal state against inline activity implementations on the in-memory backend and always
   releases its worker, and `createActivityContext` for invoking activity handlers directly.

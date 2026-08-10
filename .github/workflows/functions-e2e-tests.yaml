@@ -64,8 +64,14 @@ jobs:
       - name: "🏗️ Build in-repo durable-functions (+ core) for file: linking"
         run: npm run build -w durable-functions
 
+      # Core Tools is pinned to an exact version rather than the floating `@4`
+      # range: its postinstall downloads a platform zip from cdn.functions.azure.com
+      # and hard-fails (process.exit(1)) on any non-200, so a bad upstream publish
+      # breaks this job for every PR. `@4` floated onto 4.13.2, whose linux-x64 zip
+      # 404s on the CDN. Bump this pin deliberately once a newer version is
+      # confirmed to install.
       - name: 🔧 Install Azurite and Azure Functions Core Tools
-        run: npm install -g azurite azure-functions-core-tools@4
+        run: npm install -g azurite azure-functions-core-tools@4.12.1
 
       # --skipApiVersionCheck: the preview extension bundle's Azure Storage SDK
       # targets a newer REST API version than current Azurite accepts; without the

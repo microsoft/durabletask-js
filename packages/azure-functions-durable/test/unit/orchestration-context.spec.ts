@@ -151,6 +151,15 @@ describe("DurableOrchestrationContext", () => {
     expect(entities.signalEntity).toHaveBeenCalledWith(entityId, "reset", undefined);
   });
 
+  it("forwards a new version when continuing as new", () => {
+    const { ctx, raw } = createFakeCoreContext();
+    const df = new DurableOrchestrationContext(ctx, undefined);
+
+    df.continueAsNew("next", false, "2.0.0");
+
+    expect(raw.continueAsNew).toHaveBeenCalledWith("next", false, "2.0.0");
+  });
+
   it("schedules callHttp as the built-in poll sub-orchestration with the built request payload", () => {
     const { ctx, raw } = createFakeCoreContext();
     const df = new DurableOrchestrationContext(ctx, undefined);

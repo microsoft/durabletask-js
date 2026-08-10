@@ -1010,6 +1010,7 @@ describe("Orchestration Executor", () => {
       );
       expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify(2));
       expect(completeAction?.getCarryovereventsList()?.length).toEqual(saveEvent ? 3 : 0);
+      expect(completeAction?.getNewversion()).toBeUndefined();
 
       for (let i = 0; i < (completeAction?.getCarryovereventsList()?.length ?? 0); i++) {
         const event = completeAction?.getCarryovereventsList()[i];
@@ -1022,6 +1023,29 @@ describe("Orchestration Executor", () => {
         expect(event?.getEventraised()?.getInput()?.getValue()).toEqual(JSON.stringify(42 + i));
       }
     }
+  });
+
+  it("should set the new version on a continue-as-new action", async () => {
+    const orchestrator: TOrchestrator = async (ctx: OrchestrationContext, input: number) => {
+      ctx.continueAsNew(input + 1, false, "2.0.0");
+    };
+
+    const registry = new Registry();
+    const orchestratorName = registry.addOrchestrator(orchestrator);
+    const newEvents = [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent(orchestratorName, TEST_INSTANCE_ID, "1"),
+    ];
+
+    const executor = new OrchestrationExecutor(registry, testLogger);
+    const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
+
+    const completeAction = getAndValidateSingleCompleteOrchestrationAction(result);
+    expect(completeAction?.getOrchestrationstatus()).toEqual(
+      pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW,
+    );
+    expect(completeAction?.getResult()?.getValue()).toEqual(JSON.stringify(2));
+    expect(completeAction?.getNewversion()?.getValue()).toEqual("2.0.0");
   });
 
   it("should test that a fan-out pattern correctly schedules N tasks", async () => {
