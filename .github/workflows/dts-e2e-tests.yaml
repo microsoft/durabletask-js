@@ -4,6 +4,7 @@ name: 🧪 DTS Emulator E2E Tests
 # Tests are split across parallel jobs with separate task hubs for isolation.
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -24,7 +25,7 @@ jobs:
           - name: "entity"
             pattern: "test/e2e-azuremanaged/entity.spec.ts"
           - name: "orchestration"
-            pattern: "test/e2e-azuremanaged/orchestration.spec.ts"
+            pattern: "test/e2e-azuremanaged/orchestration.spec.ts test/e2e-azuremanaged/orchestration-id-reuse-policy.spec.ts"
           - name: "query-restart"
             pattern: "test/e2e-azuremanaged/query-apis.spec.ts test/e2e-azuremanaged/restart.spec.ts"
           - name: "retry-history-rewind"

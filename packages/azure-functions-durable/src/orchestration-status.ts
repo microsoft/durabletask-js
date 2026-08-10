@@ -69,6 +69,8 @@ export function toOrchestrationRuntimeStatus(status: OrchestrationStatus): Orche
       return OrchestrationRuntimeStatus.ContinuedAsNew;
     case OrchestrationStatus.FAILED:
       return OrchestrationRuntimeStatus.Failed;
+    case OrchestrationStatus.CANCELED:
+      return OrchestrationRuntimeStatus.Canceled;
     case OrchestrationStatus.TERMINATED:
       return OrchestrationRuntimeStatus.Terminated;
     case OrchestrationStatus.PENDING:
@@ -91,8 +93,9 @@ export function fromOrchestrationRuntimeStatus(status: OrchestrationRuntimeStatu
       return OrchestrationStatus.CONTINUED_AS_NEW;
     case OrchestrationRuntimeStatus.Failed:
       return OrchestrationStatus.FAILED;
-    case OrchestrationRuntimeStatus.Terminated:
     case OrchestrationRuntimeStatus.Canceled:
+      return OrchestrationStatus.CANCELED;
+    case OrchestrationRuntimeStatus.Terminated:
       return OrchestrationStatus.TERMINATED;
     case OrchestrationRuntimeStatus.Suspended:
       return OrchestrationStatus.SUSPENDED;

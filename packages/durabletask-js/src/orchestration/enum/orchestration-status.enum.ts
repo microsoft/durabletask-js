@@ -7,7 +7,6 @@ import * as pb from "../../proto/orchestrator_service_pb";
 const protoToClient = new Map<pb.OrchestrationStatus, OrchestrationStatus>();
 const clientToProto = new Map<OrchestrationStatus, pb.OrchestrationStatus>();
 
-
 export function fromProtobuf(val: pb.OrchestrationStatus): OrchestrationStatus {
   const result = protoToClient.get(val);
   if (result === undefined) {
@@ -28,6 +27,7 @@ export enum OrchestrationStatus {
   RUNNING = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING,
   COMPLETED = pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED,
   FAILED = pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+  CANCELED = pb.OrchestrationStatus.ORCHESTRATION_STATUS_CANCELED,
   TERMINATED = pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED,
   CONTINUED_AS_NEW = pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW,
   PENDING = pb.OrchestrationStatus.ORCHESTRATION_STATUS_PENDING,
@@ -46,7 +46,7 @@ for (const [name, value] of Object.entries(OrchestrationStatus)) {
     if (protoValue !== numValue) {
       throw new Error(
         `Enum drift detected: OrchestrationStatus.${name} (${numValue}) does not match ` +
-        `pb.OrchestrationStatus.${expectedProtoKey} (${protoValue}).`,
+          `pb.OrchestrationStatus.${expectedProtoKey} (${protoValue}).`,
       );
     }
     protoToClient.set(numValue as pb.OrchestrationStatus, numValue as OrchestrationStatus);

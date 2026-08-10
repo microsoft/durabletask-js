@@ -149,6 +149,7 @@ export function createExportInstanceHistoryActivity(
         OrchestrationStatus.COMPLETED,
         OrchestrationStatus.FAILED,
         OrchestrationStatus.TERMINATED,
+        OrchestrationStatus.CANCELED,
       ];
       if (!terminalStatuses.includes(metadata.runtimeStatus)) {
         return {

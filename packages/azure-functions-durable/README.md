@@ -41,6 +41,9 @@ changed:
 - **`context.df.continueAsNew(input, saveEvents, newVersion)` can migrate versions.** The optional
   third argument assigns the restarted orchestration's version; existing one- and two-argument
   calls keep their current behavior.
+  **`client.startNew()` supports the `version` and top-level `dedupeStatuses` options.** Dedupe
+  statuses select duplicate errors; other supported statuses are atomically replaced. The current
+  shared protocol does not expose an atomic no-op/`IGNORE` action.
 - **Entity locking / critical sections moved to the core context.** v3's `context.df.lock(...)` /
   `context.df.isLocked()` and the `DurableLock` / `LockState` / `LockingRulesViolationError` exports
   are removed. Locks live on the core-native `context.entities` surface, which the classic

@@ -9,6 +9,8 @@
   Interactive scenarios (external events, termination, suspend/resume) and entity batches are
   covered by driving the `@microsoft/durabletask-js` in-memory test stack with `wrapOrchestrator` /
   `wrapEntity`; see the README.
+- Forward the top-level `dedupeStatuses` duplicate rejection and atomic replacement option through
+  `DurableFunctionsClient.startNew()`; the shared protocol does not support atomic no-op/`IGNORE`.
 
 ### Fixes
 

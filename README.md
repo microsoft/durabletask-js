@@ -27,9 +27,9 @@ const entityResponseBytes = await worker.processEntityBatchRequest(entityBatchRe
 
 The following npm packages are available for download.
 
-| Name | Latest version | Description |
-| - | - | - |
-| Core SDK | [![npm version](https://img.shields.io/npm/v/@microsoft/durabletask-js)](https://www.npmjs.com/package/@microsoft/durabletask-js) | Core Durable Task SDK for JavaScript/TypeScript. |
+| Name             | Latest version                                                                                                                                              | Description                                                                                                                                                                     |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Core SDK         | [![npm version](https://img.shields.io/npm/v/@microsoft/durabletask-js)](https://www.npmjs.com/package/@microsoft/durabletask-js)                           | Core Durable Task SDK for JavaScript/TypeScript.                                                                                                                                |
 | AzureManaged SDK | [![npm version](https://img.shields.io/npm/v/@microsoft/durabletask-js-azuremanaged)](https://www.npmjs.com/package/@microsoft/durabletask-js-azuremanaged) | Azure-managed [Durable Task Scheduler](https://learn.microsoft.com/azure/azure-functions/durable/durable-functions-task-scheduler) support for the Durable Task JavaScript SDK. |
 
 ## Prerequisites
@@ -50,15 +50,8 @@ npm install @microsoft/durabletask-js @microsoft/durabletask-js-azuremanaged
 You can then use the following code to define a simple "Hello, cities" durable orchestration.
 
 ```typescript
-import {
-  ActivityContext,
-  OrchestrationContext,
-  TOrchestrator,
-} from "@microsoft/durabletask-js";
-import {
-  createAzureManagedClient,
-  createAzureManagedWorkerBuilder,
-} from "@microsoft/durabletask-js-azuremanaged";
+import { ActivityContext, OrchestrationContext, TOrchestrator } from "@microsoft/durabletask-js";
+import { createAzureManagedClient, createAzureManagedWorkerBuilder } from "@microsoft/durabletask-js-azuremanaged";
 
 // Define an activity function
 const sayHello = async (_: ActivityContext, name: string): Promise<string> => {
@@ -89,6 +82,32 @@ console.log(`Result: ${state?.serializedOutput}`);
 ```
 
 You can find more samples in the [examples/azure-managed](./examples/azure-managed) directory.
+
+### Reusing orchestration instance IDs
+
+Set the top-level `dedupeStatuses` start option when an instance ID may be reused. The list
+contains the existing runtime statuses that must continue to produce an
+`OrchestrationAlreadyExistsError`;
+instances in every other supported runtime status are atomically replaced:
+
+```typescript
+import { OrchestrationStatus } from "@microsoft/durabletask-js";
+
+await client.scheduleNewOrchestration(helloCities, undefined, {
+  instanceId: "daily-greeting",
+  dedupeStatuses: [OrchestrationStatus.RUNNING, OrchestrationStatus.PENDING],
+});
+```
+
+For `TaskHubGrpcClient`, omitting `dedupeStatuses` preserves the backend's default duplicate-ID
+behavior; passing `[]` makes every supported runtime status replaceable. The in-memory
+`TestOrchestrationClient` mirrors the .NET shim, where omission also makes all statuses reusable.
+`ValidDedupeStatuses` exports the seven supported statuses. The transient `CONTINUED_AS_NEW`
+status is not replaceable. A list containing `TERMINATED` must also contain `RUNNING`, `PENDING`,
+and `SUSPENDED`, because replacing a running instance first terminates it. The production client
+forwards this validation to the backend and maps its `INVALID_ARGUMENT` response to `TypeError`;
+the in-memory client validates it directly. The current shared protocol does not define a
+no-op/`IGNORE` action: a matching dedupe status is an error, while a non-matching status is replaced.
 
 ## Supported patterns
 
@@ -125,10 +144,7 @@ An orchestration can wait for external events, such as a human approval, with op
 ```typescript
 import { whenAny } from "@microsoft/durabletask-js";
 
-const purchaseOrderWorkflow: TOrchestrator = async function* (
-  ctx: OrchestrationContext,
-  order: Order,
-): any {
+const purchaseOrderWorkflow: TOrchestrator = async function* (ctx: OrchestrationContext, order: Order): any {
   // Orders under $1000 are auto-approved
   if (order.cost < 1000) {
     return "Auto-approved";

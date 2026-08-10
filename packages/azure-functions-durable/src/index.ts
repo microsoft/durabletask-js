@@ -13,6 +13,7 @@ export {
   DurableFunctionsClientConfig,
   DurableFunctionsClientInput,
   DurableOrchestrationClient,
+  StartNewOptions,
   TaskHubOptions,
   getGrpcHostAddress,
 } from "./client";
@@ -22,6 +23,11 @@ export { createAzureFunctionsMetadataGenerator } from "./metadata";
 export { DurableFunctionsWorker } from "./worker";
 export { DurableBindingMetadata, addDurableGrpcMetadata } from "./durable-grpc";
 export { RetryOptions } from "./retry-options";
+export {
+  OrchestrationAlreadyExistsError,
+  StartOrchestrationOptions,
+  ValidDedupeStatuses,
+} from "@microsoft/durabletask-js";
 // Re-exported core error so callers can `instanceof`-guard caught orchestration failures, matching
 // the classic durable-functions v3 top-level `TaskFailedError` export. (`DurableError` /
 // `AggregatedError` were never v3 top-level exports; the core engine surfaces `TaskFailedError` and
