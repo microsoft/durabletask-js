@@ -46,6 +46,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   _pendingEvents: Record<string, CompletableTask<any>[]>;
   _newInput?: any;
   _saveEvents: boolean;
+  _newVersion?: string;
   _customStatus?: string;
   _entityFeature: RuntimeOrchestrationEntityFeature;
 
@@ -70,6 +71,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     this._pendingEvents = {};
     this._newInput = undefined;
     this._saveEvents = false;
+    this._newVersion = undefined;
     this._customStatus = undefined;
     this._entityFeature = new RuntimeOrchestrationEntityFeature(this);
   }
@@ -258,7 +260,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     this._pendingActions[action.getId()] = action;
   }
 
-  setContinuedAsNew(newInput: any, saveEvents: boolean) {
+  setContinuedAsNew(newInput: any, saveEvents: boolean, newVersion?: string) {
     if (this._isComplete) {
       return;
     }
@@ -267,6 +269,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     this._completionStatus = pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW;
     this._newInput = newInput;
     this._saveEvents = saveEvents;
+    this._newVersion = newVersion;
   }
 
   getActions(): pb.OrchestratorAction[] {
@@ -292,6 +295,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
         this._newInput !== undefined ? JSON.stringify(this._newInput) : undefined,
         undefined,
         carryoverEvents,
+        this._newVersion,
       );
 
       // Include fire-and-forget actions (sendEvent, signalEntity, etc.) that were
@@ -462,14 +466,15 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   }
 
   /**
-   * Orchestrations can be continued as new. This API allows an  orchestration to restart itself from scratch, optionally with a new input.
+   * Restarts the orchestration with fresh history, optionally carrying over unprocessed events
+   * and assigning a new orchestration version.
    */
-  continueAsNew(newInput: any, saveEvents: boolean = false) {
+  continueAsNew(newInput: any, saveEvents: boolean = false, newVersion?: string) {
     if (this._isComplete) {
       return;
     }
 
-    this.setContinuedAsNew(newInput, saveEvents);
+    this.setContinuedAsNew(newInput, saveEvents, newVersion);
   }
 
   /**

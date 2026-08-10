@@ -3,7 +3,14 @@
 ### New
 
 - Add first-class worker-level orchestration and activity middleware with typed contexts, nonserialized host features, validation, and in-process host integration.
+- Add an optional `newVersion` parameter to `OrchestrationContext.continueAsNew()` for version migrations.
 - Implement entity support in the in-memory testing backend ([#341](https://github.com/microsoft/durabletask-js/pull/341))
+- Add the top-level `StartOrchestrationOptions.dedupeStatuses` option, `ValidDedupeStatuses`, and
+  `OrchestrationAlreadyExistsError`, aligned with the .NET status-based duplicate rejection and
+  atomic replacement contract. The gRPC client defers omitted policies to its backend, while the
+  in-memory test client mirrors the .NET shim by treating omission as all statuses reusable. The
+  shared protocol does not support atomic no-op/`IGNORE`.
+- Add the `CANCELED` member to the public `OrchestrationStatus` enum.
 
 ### Fixes
 

@@ -151,6 +151,32 @@ console.log(`Result: ${state?.serializedOutput}`);
 
 You can find more samples in the [examples/azure-managed](./examples/azure-managed) directory.
 
+### Reusing orchestration instance IDs
+
+Set the top-level `dedupeStatuses` start option when an instance ID may be reused. The list
+contains the existing runtime statuses that must continue to produce an
+`OrchestrationAlreadyExistsError`;
+instances in every other supported runtime status are atomically replaced:
+
+```typescript
+import { OrchestrationStatus } from "@microsoft/durabletask-js";
+
+await client.scheduleNewOrchestration(helloCities, undefined, {
+  instanceId: "daily-greeting",
+  dedupeStatuses: [OrchestrationStatus.RUNNING, OrchestrationStatus.PENDING],
+});
+```
+
+For `TaskHubGrpcClient`, omitting `dedupeStatuses` preserves the backend's default duplicate-ID
+behavior; passing `[]` makes every supported runtime status replaceable. The in-memory
+`TestOrchestrationClient` mirrors the .NET shim, where omission also makes all statuses reusable.
+`ValidDedupeStatuses` exports the seven supported statuses. The transient `CONTINUED_AS_NEW`
+status is not replaceable. A list containing `TERMINATED` must also contain `RUNNING`, `PENDING`,
+and `SUSPENDED`, because replacing a running instance first terminates it. The production client
+forwards this validation to the backend and maps its `INVALID_ARGUMENT` response to `TypeError`;
+the in-memory client validates it directly. The current shared protocol does not define a
+no-op/`IGNORE` action: a matching dedupe status is an error, while a non-matching status is replaced.
+
 ## Supported patterns
 
 The following orchestration patterns are supported.
@@ -211,6 +237,22 @@ const purchaseOrderWorkflow: TOrchestrator = async function* (ctx: Orchestration
 ```
 
 You can find the full sample at [examples/hello-world/human_interaction.ts](./examples/hello-world/human_interaction.ts).
+
+### Continue as new
+
+Long-running orchestrations can restart with fresh history and optionally move to a new
+orchestration version:
+
+```typescript
+const eternalOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, iteration: number): any {
+  yield ctx.callActivity(processIteration, iteration);
+  ctx.continueAsNew(iteration + 1, true, "2.0.0");
+};
+```
+
+The second argument controls whether unprocessed external events carry over. The optional third
+argument becomes the restarted orchestration's `ctx.version`; omit it to retain the existing
+continue-as-new behavior.
 
 ### Durable entities
 

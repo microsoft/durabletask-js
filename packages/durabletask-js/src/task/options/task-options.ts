@@ -3,6 +3,7 @@
 
 import { RetryPolicy } from "../retry/retry-policy";
 import { AsyncRetryHandler, RetryHandler } from "../retry/retry-handler";
+import { OrchestrationStatus } from "../../orchestration/enum/orchestration-status.enum";
 
 /**
  * Union type representing the available retry strategies for a task.
@@ -74,6 +75,14 @@ export interface StartOrchestrationOptions {
    * via the OrchestrationContext.version property.
    */
   version?: string;
+  /**
+   * Existing orchestration statuses that must produce a duplicate-ID error.
+   *
+   * An empty list makes every supported status replaceable. The gRPC client preserves
+   * the backend's default when this property is omitted; the in-memory test client
+   * mirrors the .NET shim by treating omission as all statuses reusable.
+   */
+  dedupeStatuses?: readonly OrchestrationStatus[];
 }
 
 /**

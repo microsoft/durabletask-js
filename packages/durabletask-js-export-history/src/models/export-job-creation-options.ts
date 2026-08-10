@@ -85,10 +85,7 @@ export function createExportJobCreationOptions(
       );
     }
     if (!options.completedTimeTo) {
-      throw new ExportJobClientValidationError(
-        "CompletedTimeTo is required for Batch export mode.",
-        "completedTimeTo",
-      );
+      throw new ExportJobClientValidationError("CompletedTimeTo is required for Batch export mode.", "completedTimeTo");
     }
     if (options.completedTimeTo <= options.completedTimeFrom) {
       throw new ExportJobClientValidationError(
@@ -129,6 +126,7 @@ export function createExportJobCreationOptions(
     OrchestrationStatus.COMPLETED,
     OrchestrationStatus.FAILED,
     OrchestrationStatus.TERMINATED,
+    OrchestrationStatus.CANCELED,
   ];
   if (
     options.runtimeStatus &&
@@ -136,24 +134,19 @@ export function createExportJobCreationOptions(
     options.runtimeStatus.some((s) => !terminalStatuses.includes(s))
   ) {
     throw new ExportJobClientValidationError(
-      "Export supports terminal orchestration statuses only. Valid statuses are: Completed, Failed, and Terminated.",
+      "Export supports terminal orchestration statuses only. Valid statuses are: Completed, Failed, Terminated, and Canceled.",
       "runtimeStatus",
     );
   }
 
   // Default runtimeStatus to all terminal statuses if not provided
   const runtimeStatus =
-    options.runtimeStatus && options.runtimeStatus.length > 0
-      ? options.runtimeStatus
-      : terminalStatuses;
+    options.runtimeStatus && options.runtimeStatus.length > 0 ? options.runtimeStatus : terminalStatuses;
 
   // Validate maxParallelExports range
   const validatedMaxParallelExports = options.maxParallelExports ?? DEFAULT_MAX_PARALLEL_EXPORTS;
   if (validatedMaxParallelExports <= 0) {
-    throw new ExportJobClientValidationError(
-      "MaxParallelExports must be greater than 0.",
-      "maxParallelExports",
-    );
+    throw new ExportJobClientValidationError("MaxParallelExports must be greater than 0.", "maxParallelExports");
   }
 
   return {

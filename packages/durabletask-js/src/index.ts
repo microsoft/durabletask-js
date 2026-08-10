@@ -39,6 +39,8 @@ export {
   TERMINATE_OPTIONS_SYMBOL,
 } from "./orchestration/orchestration-terminate-options";
 export { OrchestrationStatus } from "./orchestration/enum/orchestration-status.enum";
+export { ValidDedupeStatuses } from "./orchestration/orchestration-id-reuse-policy";
+export { OrchestrationAlreadyExistsError } from "./orchestration/exception/orchestration-already-exists-error";
 export { OrchestrationState } from "./orchestration/orchestration-state";
 
 // Query types

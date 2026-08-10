@@ -2,12 +2,15 @@
 
 ### New
 
+- Add optional orchestration version migration support to `context.df.continueAsNew()`.
 - Added a `durable-functions/testing` entry point with `runOrchestrator`, which runs an orchestrator
   to a terminal state against inline activity implementations on the in-memory backend and always
   releases its worker, and `createActivityContext` for invoking activity handlers directly.
   Interactive scenarios (external events, termination, suspend/resume) and entity batches are
   covered by driving the `@microsoft/durabletask-js` in-memory test stack with `wrapOrchestrator` /
   `wrapEntity`; see the README.
+- Forward the top-level `dedupeStatuses` duplicate rejection and atomic replacement option through
+  `DurableFunctionsClient.startNew()`; the shared protocol does not support atomic no-op/`IGNORE`.
 
 ### Fixes
 

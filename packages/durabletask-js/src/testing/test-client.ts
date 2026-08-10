@@ -11,10 +11,11 @@ import { EntityInstanceId } from "../entities/entity-instance-id";
 import { EntityMetadata } from "../entities/entity-metadata";
 import { InMemoryOrchestrationBackend, OrchestrationInstance } from "./in-memory-backend";
 import * as pb from "../proto/orchestrator_service_pb";
+import { StartOrchestrationOptions } from "../task/options";
 
 /**
  * Client for scheduling and managing orchestrations in the in-memory backend.
- * 
+ *
  * This client provides a similar API to TaskHubGrpcClient but operates
  * entirely in-memory for testing purposes.
  */
@@ -23,18 +24,52 @@ export class TestOrchestrationClient {
 
   /**
    * Schedules a new orchestration.
+   *
+   * The in-memory backend does not model orchestration versions or tags, so passing
+   * either option throws instead of silently diverging from TaskHubGrpcClient.
    */
   async scheduleNewOrchestration(
     orchestrator: TOrchestrator | string,
     input?: TInput,
     instanceId?: string,
     startAt?: Date,
+  ): Promise<string>;
+  async scheduleNewOrchestration(
+    orchestrator: TOrchestrator | string,
+    input?: TInput,
+    options?: StartOrchestrationOptions,
+  ): Promise<string>;
+  async scheduleNewOrchestration(
+    orchestrator: TOrchestrator | string,
+    input?: TInput,
+    instanceIdOrOptions?: string | StartOrchestrationOptions,
+    startAt?: Date,
   ): Promise<string> {
     const name = typeof orchestrator === "string" ? orchestrator : getName(orchestrator);
+    if (typeof instanceIdOrOptions === "object") {
+      if (instanceIdOrOptions.tags !== undefined) {
+        throw new Error("TestOrchestrationClient does not support the 'tags' option");
+      }
+      if (instanceIdOrOptions.version !== undefined) {
+        throw new Error("TestOrchestrationClient does not support the 'version' option");
+      }
+    }
+    const instanceId =
+      typeof instanceIdOrOptions === "string" || instanceIdOrOptions === undefined
+        ? instanceIdOrOptions
+        : instanceIdOrOptions.instanceId;
+    const scheduledStartAt =
+      typeof instanceIdOrOptions === "string" || instanceIdOrOptions === undefined
+        ? startAt
+        : instanceIdOrOptions.startAt;
+    const dedupeStatuses =
+      typeof instanceIdOrOptions === "string" || instanceIdOrOptions === undefined
+        ? undefined
+        : instanceIdOrOptions.dedupeStatuses;
     const id = instanceId ?? randomUUID();
     const encodedInput = input !== undefined ? JSON.stringify(input) : undefined;
 
-    this.backend.createInstance(id, name, encodedInput, startAt);
+    await this.backend.createOrchestrationInstance(id, name, encodedInput, scheduledStartAt, dedupeStatuses);
     return id;
   }
 
@@ -150,11 +185,7 @@ export class TestOrchestrationClient {
    * @param input Optional operation input. Serialized as JSON.
    */
   async signalEntity(id: EntityInstanceId, operationName: string, input?: unknown): Promise<void> {
-    this.backend.signalEntity(
-      id.toString(),
-      operationName,
-      input === undefined ? undefined : JSON.stringify(input),
-    );
+    this.backend.signalEntity(id.toString(), operationName, input === undefined ? undefined : JSON.stringify(input));
   }
 
   /**
@@ -179,9 +210,7 @@ export class TestOrchestrationClient {
       lockedBy: entity.lockedBy,
       includesState: includeState,
       state:
-        includeState && entity.serializedState !== undefined
-          ? (JSON.parse(entity.serializedState) as T)
-          : undefined,
+        includeState && entity.serializedState !== undefined ? (JSON.parse(entity.serializedState) as T) : undefined,
     };
   }
 
@@ -196,7 +225,8 @@ export class TestOrchestrationClient {
     return (
       status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED ||
       status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED ||
-      status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED
+      status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED ||
+      status === pb.OrchestrationStatus.ORCHESTRATION_STATUS_CANCELED
     );
   }
 

@@ -163,8 +163,9 @@ export abstract class OrchestrationContext {
    *
    * @param newInput {any} The new input to use for the new orchestration instance.
    * @param saveEvents {boolean} A flag indicating whether to add any unprocessed external events in the new orchestration history.
+   * @param newVersion {string} The optional version to use for the new orchestration instance.
    */
-  abstract continueAsNew(newInput: any, saveEvents: boolean): void;
+  abstract continueAsNew(newInput: any, saveEvents: boolean, newVersion?: string): void;
 
   /**
    * Sets a custom status value for the current orchestration instance.
