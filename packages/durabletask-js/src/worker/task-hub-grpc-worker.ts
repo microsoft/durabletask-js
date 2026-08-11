@@ -239,15 +239,25 @@ export class TaskHubGrpcWorker {
       this._stub = null;
     }
 
-    await this._backoff.wait(lifecycle.abortController.signal);
-    this._ensureLifecycleActive(lifecycle);
+    let newClient: GrpcClient;
+    while (true) {
+      await this._backoff.wait(lifecycle.abortController.signal);
+      this._ensureLifecycleActive(lifecycle);
 
-    const newClient = new GrpcClient(
-      this._hostAddress,
-      this._grpcChannelOptions,
-      this._tls,
-      this._grpcChannelCredentials,
-    );
+      try {
+        newClient = new GrpcClient(
+          this._hostAddress,
+          this._grpcChannelOptions,
+          this._tls,
+          this._grpcChannelCredentials,
+        );
+        break;
+      } catch (err) {
+        this._ensureLifecycleActive(lifecycle);
+        WorkerLogs.workerError(this._logger, err instanceof Error ? err : new Error(String(err)));
+        WorkerLogs.connectionRetry(this._logger, this._backoff.peekNextDelay());
+      }
+    }
     this._stub = newClient.stub;
 
     await this._runWorker(newClient, true, lifecycle);

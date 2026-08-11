@@ -388,6 +388,51 @@ describe("TaskHubGrpcWorker startup", () => {
     expect((worker as any)._responseStream).toBe(restarted.stream);
   });
 
+  it("continues reconnecting when a replacement client cannot be constructed", async () => {
+    jest.useFakeTimers();
+    const first = createMockStub((...args: any[]) => {
+      getHelloCallback(args)(null, new Empty());
+      return { cancel: jest.fn() } as any;
+    });
+    const recovered = createMockStub((...args: any[]) => {
+      getHelloCallback(args)(null, new Empty());
+      return { cancel: jest.fn() } as any;
+    });
+    const generateClient = jest
+      .spyOn(GrpcClient.prototype as any, "_generateClient")
+      .mockReturnValueOnce(first.stub)
+      .mockImplementationOnce(() => {
+        throw new Error("client construction failed");
+      })
+      .mockReturnValueOnce(recovered.stub);
+    const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+
+    await worker.start();
+    first.stream.emit("error", new Error("14 UNAVAILABLE"));
+
+    await jest.runOnlyPendingTimersAsync();
+    const trackedWhileRetryPending = (worker as any)._lifecycle.connectionTasks.size;
+
+    await jest.runOnlyPendingTimersAsync();
+    const recoveredStream = (worker as any)._responseStream;
+    const recoveredStub = (worker as any)._stub;
+
+    const stopPromise = worker.stop();
+    await jest.runAllTimersAsync();
+    await stopPromise;
+
+    expect(trackedWhileRetryPending).toBe(1);
+    expect(generateClient).toHaveBeenCalledTimes(3);
+    expect(recovered.getWorkItems).toHaveBeenCalledTimes(1);
+    expect(recoveredStream).toBe(recovered.stream);
+    expect(recoveredStub).toBe(recovered.stub);
+    expect(first.close).toHaveBeenCalledTimes(1);
+    expect(recovered.stream.cancel).toHaveBeenCalledTimes(1);
+    expect(recovered.close).toHaveBeenCalledTimes(1);
+    expect((worker as any)._isRunning).toBe(false);
+    expect((worker as any)._lifecycle).toBeNull();
+  });
+
   it("keeps stream recovery active after startup", async () => {
     const { stub, stream } = createMockStub((...args: any[]) => {
       getHelloCallback(args)(null, new Empty());
