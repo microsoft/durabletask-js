@@ -250,7 +250,7 @@ export class TaskHubGrpcWorker {
     );
     this._stub = newClient.stub;
 
-    await this.internalRunWorker(newClient, true, lifecycle);
+    await this._runWorker(newClient, true, lifecycle);
   }
 
   /**
@@ -433,8 +433,11 @@ export class TaskHubGrpcWorker {
     this._isRunning = true;
     this._lifecycle = lifecycle;
     this._stub = client.stub;
-    const startupTask = this._trackConnectionTask(lifecycle, this.internalRunWorker(client, false, lifecycle));
+    await this._runOwnedWorker(client, false, lifecycle);
+  }
 
+  private async _runOwnedWorker(client: GrpcClient, isRetry: boolean, lifecycle: WorkerLifecycle): Promise<void> {
+    const startupTask = this._trackConnectionTask(lifecycle, this._runWorker(client, isRetry, lifecycle));
     try {
       await startupTask;
       this._ensureLifecycleActive(lifecycle);
@@ -458,8 +461,20 @@ export class TaskHubGrpcWorker {
     }
   }
 
-  async internalRunWorker(client: GrpcClient, isRetry: boolean = false, lifecycle?: WorkerLifecycle): Promise<void> {
-    const activeLifecycle = lifecycle ?? this._lifecycle ?? this._createLifecycle();
+  async internalRunWorker(client: GrpcClient, isRetry: boolean = false): Promise<void> {
+    if (this._isRunning || this._lifecycle) {
+      throw new Error("The worker is already running.");
+    }
+
+    const lifecycle = this._createLifecycle();
+    this._isRunning = true;
+    this._lifecycle = lifecycle;
+    this._stub = client.stub;
+    await this._runOwnedWorker(client, isRetry, lifecycle);
+  }
+
+  private async _runWorker(client: GrpcClient, isRetry: boolean, lifecycle: WorkerLifecycle): Promise<void> {
+    const activeLifecycle = lifecycle;
     const deadline = Date.now() + this._startupTimeoutMs;
     const waitForStartup = <T>(promise: Promise<T>, timeoutMessage: string): Promise<T> =>
       this._waitForStartupStage(activeLifecycle, promise, deadline, timeoutMessage);

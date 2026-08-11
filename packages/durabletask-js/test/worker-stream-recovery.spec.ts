@@ -75,19 +75,14 @@ describe("Worker Stream Recovery", () => {
   it("should not retry when the worker is being stopped", async () => {
     const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
     const { client, mockStream } = createMockClient();
-    const lifecycle = {
-      abortController: new AbortController(),
-      connectionTasks: new Set<Promise<void>>(),
-      stopping: false,
-    };
 
     const retryMock = jest.fn().mockResolvedValue(undefined);
     (worker as any)._createNewClientAndRetry = retryMock;
 
-    await worker.internalRunWorker(client, false, lifecycle);
+    await worker.internalRunWorker(client);
 
     // Signal that the worker is shutting down
-    lifecycle.abortController.abort();
+    (worker as any)._lifecycle.abortController.abort();
 
     mockStream.emit("error", new Error("1 CANCELLED"));
     await flushAsync();
@@ -159,14 +154,9 @@ describe("Worker Stream Recovery", () => {
   it("should only close the stub that owns a failed stream", async () => {
     const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
     const { client, mockStream, close } = createMockClient();
-    const lifecycle = {
-      abortController: new AbortController(),
-      connectionTasks: new Set<Promise<void>>(),
-      stopping: false,
-    };
     const replacementClose = jest.fn();
 
-    await worker.internalRunWorker(client, false, lifecycle);
+    await worker.internalRunWorker(client);
     (worker as any)._stub = { close: replacementClose };
 
     try {
@@ -175,7 +165,7 @@ describe("Worker Stream Recovery", () => {
       expect(close).toHaveBeenCalledTimes(1);
       expect(replacementClose).not.toHaveBeenCalled();
     } finally {
-      lifecycle.abortController.abort();
+      (worker as any)._lifecycle.abortController.abort();
       await flushAsync();
     }
   });

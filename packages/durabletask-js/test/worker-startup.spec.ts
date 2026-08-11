@@ -348,6 +348,46 @@ describe("TaskHubGrpcWorker startup", () => {
     expect(generateClient).toHaveBeenCalledTimes(2);
   });
 
+  it("adopts a direct internal run so it cannot race a later start", async () => {
+    jest.useFakeTimers();
+    const direct = createMockStub((...args: any[]) => {
+      getHelloCallback(args)(null, new Empty());
+      return { cancel: jest.fn() } as any;
+    });
+    const restarted = createMockStub((...args: any[]) => {
+      getHelloCallback(args)(null, new Empty());
+      return { cancel: jest.fn() } as any;
+    });
+    const generateClient = jest.spyOn(GrpcClient.prototype as any, "_generateClient").mockReturnValue(restarted.stub);
+    const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+    const directClient = { stub: direct.stub } as unknown as GrpcClient;
+
+    await worker.internalRunWorker(directClient);
+
+    expect((worker as any)._isRunning).toBe(true);
+    expect((worker as any)._lifecycle).not.toBeNull();
+    expect((worker as any)._stub).toBe(direct.stub);
+    await expect(worker.start()).rejects.toThrow("The worker is already running.");
+    expect(generateClient).not.toHaveBeenCalled();
+
+    const stopPromise = worker.stop();
+    await jest.runAllTimersAsync();
+    await stopPromise;
+
+    expect(direct.stream.cancel).toHaveBeenCalled();
+    expect(direct.close).toHaveBeenCalled();
+    expect((worker as any)._isRunning).toBe(false);
+    expect((worker as any)._lifecycle).toBeNull();
+
+    await worker.start();
+    direct.stream.emit("error", new Error("stale direct-run stream error"));
+    await flushPromises();
+
+    expect(generateClient).toHaveBeenCalledTimes(1);
+    expect((worker as any)._stub).toBe(restarted.stub);
+    expect((worker as any)._responseStream).toBe(restarted.stream);
+  });
+
   it("keeps stream recovery active after startup", async () => {
     const { stub, stream } = createMockStub((...args: any[]) => {
       getHelloCallback(args)(null, new Empty());
