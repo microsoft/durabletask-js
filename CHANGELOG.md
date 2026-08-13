@@ -13,8 +13,8 @@
 
 ### Fixes
 
-- Bound each worker sidecar hello attempt to 30 seconds while preserving background connection
-  retries, and make worker shutdown cancel and drain the connection loop.
+- Bound each worker sidecar hello attempt to 30 seconds, retry failed connections, and cancel
+  pending hello calls and reconnect delays when the worker stops.
 
 ## v0.4.0 (2026-07-31)
 

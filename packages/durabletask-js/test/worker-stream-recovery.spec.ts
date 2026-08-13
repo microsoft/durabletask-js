@@ -1,114 +1,208 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+/**
+ * Tests that the TaskHubGrpcWorker correctly recovers when the gRPC work-item
+ * stream emits an "error" event without a subsequent "end" event.
+ *
+ * This validates the fix for a bug where the stream "error" handler only logged
+ * the error but did not clean up the stream or retry the connection — causing
+ * the worker to silently stop processing work items after transport-level
+ * failures (e.g., UNAVAILABLE, network disconnections).
+ */
+
 import { EventEmitter } from "events";
-import * as grpc from "@grpc/grpc-js";
-import { Empty } from "google-protobuf/google/protobuf/empty_pb";
-import { GrpcClient } from "../src/client/client-grpc";
-import * as stubs from "../src/proto/orchestrator_service_grpc_pb";
-import { NoOpLogger } from "../src/types/logger.type";
 import { TaskHubGrpcWorker } from "../src/worker/task-hub-grpc-worker";
+import { NoOpLogger } from "../src/types/logger.type";
+import { GrpcClient } from "../src/client/client-grpc";
 
-type MockStream = EventEmitter & {
-  cancel: jest.Mock;
-  destroy: jest.Mock;
-};
-
-function createMockStream(): MockStream {
-  const stream = new EventEmitter() as MockStream;
-  stream.cancel = jest.fn();
-  stream.destroy = jest.fn();
-  return stream;
-}
-
-function createMockClient(stream: MockStream = createMockStream()): {
+/**
+ * Creates a mock GrpcClient whose `hello` call succeeds immediately
+ * and whose `getWorkItems` returns a controllable EventEmitter stream.
+ */
+function createMockClient(): {
   client: GrpcClient;
-  stream: MockStream;
-  stub: stubs.TaskHubSidecarServiceClient;
-  getWorkItems: jest.Mock;
-  close: jest.Mock;
+  mockStream: EventEmitter & { destroy: jest.Mock; cancel: jest.Mock };
 } {
-  const getWorkItems = jest.fn().mockReturnValue(stream);
-  const close = jest.fn();
-  const stub = {
-    hello: (
-      _request: Empty,
-      _metadata: grpc.Metadata,
-      _options: grpc.CallOptions,
-      callback: (error: grpc.ServiceError | null, response: Empty) => void,
-    ) => {
-      callback(null, new Empty());
-      return { cancel: jest.fn() } as unknown as grpc.ClientUnaryCall;
-    },
-    getWorkItems,
-    close,
-  } as unknown as stubs.TaskHubSidecarServiceClient;
-
-  return {
-    client: { stub } as unknown as GrpcClient,
-    stream,
-    stub,
-    getWorkItems,
-    close,
+  const mockStream = new EventEmitter() as EventEmitter & {
+    destroy: jest.Mock;
+    cancel: jest.Mock;
   };
+  mockStream.destroy = jest.fn();
+  mockStream.cancel = jest.fn();
+
+  const stub = {
+    hello: (_req: any, _metadata: any, _options: any, callback: (err: any, res: any) => void) => {
+      callback(null, {});
+      return {} as any;
+    },
+    getWorkItems: jest.fn().mockReturnValue(mockStream),
+  };
+
+  const client = { stub } as unknown as GrpcClient;
+  return { client, mockStream };
 }
 
-async function flushPromises(): Promise<void> {
-  for (let i = 0; i < 10; i++) {
-    await Promise.resolve();
-  }
+/** Flush the microtask / next-tick queue so async event handlers complete. */
+function flushAsync(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
 }
 
-describe("Worker stream recovery", () => {
-  beforeEach(() => {
-    jest.useFakeTimers();
-  });
-
-  afterEach(() => {
-    jest.useRealTimers();
-    jest.restoreAllMocks();
-  });
-
-  it("replaces a failed stream within the owned connection loop", async () => {
-    const initial = createMockClient();
-    const replacement = createMockClient();
-    jest.spyOn(GrpcClient.prototype as any, "_generateClient").mockReturnValue(replacement.stub);
+describe("Worker Stream Recovery", () => {
+  it("should retry connection after a stream error event", async () => {
     const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+    const { client, mockStream } = createMockClient();
 
-    await worker.internalRunWorker(initial.client);
-    await flushPromises();
-    initial.stream.emit("error", new Error("14 UNAVAILABLE"));
-    expect(() => initial.stream.emit("error", new Error("duplicate error"))).not.toThrow();
-    await flushPromises();
+    // Prevent actual reconnection — just record that it was attempted
+    const retryMock = jest.fn().mockResolvedValue(undefined);
+    (worker as any)._createNewClientAndRetry = retryMock;
 
-    expect(initial.stream.destroy).toHaveBeenCalledTimes(1);
-    expect(initial.close).toHaveBeenCalledTimes(1);
+    // Start the worker's internal run (sets up stream event handlers)
+    await worker.internalRunWorker(client);
 
-    await jest.advanceTimersByTimeAsync(2000);
-    await flushPromises();
+    // Simulate a transport-level error with no subsequent "end" event
+    mockStream.emit("error", new Error("14 UNAVAILABLE: Connection lost"));
+    await flushAsync();
 
-    expect(replacement.getWorkItems).toHaveBeenCalledTimes(1);
-    expect((worker as any)._lifecycle.responseStream).toBe(replacement.stream);
-
-    await worker.stop();
+    // The worker must clean up the stream and attempt to reconnect
+    expect(mockStream.destroy).toHaveBeenCalled();
+    expect(retryMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not reconnect or react to stale stream errors after stop", async () => {
-    const initial = createMockClient();
-    const generateClient = jest.spyOn(GrpcClient.prototype as any, "_generateClient");
+  it("should not retry when the worker is being stopped", async () => {
     const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+    const { client, mockStream } = createMockClient();
 
-    await worker.internalRunWorker(initial.client);
-    await flushPromises();
-    await worker.stop();
+    const retryMock = jest.fn().mockResolvedValue(undefined);
+    (worker as any)._createNewClientAndRetry = retryMock;
 
-    expect(initial.stream.cancel).toHaveBeenCalledTimes(1);
-    expect(initial.stream.destroy).toHaveBeenCalledTimes(1);
-    expect(initial.close).toHaveBeenCalledTimes(1);
-    expect(generateClient).not.toHaveBeenCalled();
-    expect(() => initial.stream.emit("error", new Error("stale error"))).not.toThrow();
+    await worker.internalRunWorker(client);
 
-    await jest.advanceTimersByTimeAsync(30000);
-    expect(generateClient).not.toHaveBeenCalled();
+    // Signal that the worker is shutting down
+    (worker as any)._stopWorker = true;
+
+    mockStream.emit("error", new Error("1 CANCELLED"));
+    await flushAsync();
+
+    // During shutdown, errors are silently ignored — no retry
+    expect(retryMock).not.toHaveBeenCalled();
+    expect(mockStream.destroy).not.toHaveBeenCalled();
+  });
+
+  it("should remove all stream listeners during error recovery", async () => {
+    const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+    const { client, mockStream } = createMockClient();
+
+    const retryMock = jest.fn().mockResolvedValue(undefined);
+    (worker as any)._createNewClientAndRetry = retryMock;
+
+    await worker.internalRunWorker(client);
+
+    // Capture listener counts before error
+    const dataListenersBefore = mockStream.listenerCount("data");
+    expect(dataListenersBefore).toBeGreaterThan(0);
+
+    mockStream.emit("error", new Error("14 UNAVAILABLE: Connection lost"));
+    await flushAsync();
+
+    // After recovery, all original listeners should be removed
+    // (only a no-op error guard remains)
+    expect(mockStream.listenerCount("data")).toBe(0);
+    expect(mockStream.listenerCount("end")).toBe(0);
+  });
+
+  it("should not crash if a stale error event fires after recovery cleanup", async () => {
+    const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+    const { client, mockStream } = createMockClient();
+
+    const retryMock = jest.fn().mockResolvedValue(undefined);
+    (worker as any)._createNewClientAndRetry = retryMock;
+
+    await worker.internalRunWorker(client);
+
+    // First error triggers recovery
+    mockStream.emit("error", new Error("14 UNAVAILABLE: Connection lost"));
+    await flushAsync();
+
+    // A stale/duplicate error event must not throw (no-op handler remains)
+    expect(() => {
+      mockStream.emit("error", new Error("Stale error after cleanup"));
+    }).not.toThrow();
+  });
+
+  it("should recover via the end handler when end fires without error", async () => {
+    const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+    const { client, mockStream } = createMockClient();
+
+    const retryMock = jest.fn().mockResolvedValue(undefined);
+    (worker as any)._createNewClientAndRetry = retryMock;
+
+    await worker.internalRunWorker(client);
+
+    // Simulate a clean stream end (no error)
+    mockStream.emit("end");
+    await flushAsync();
+
+    // The "end" handler should also trigger recovery
+    expect(mockStream.destroy).toHaveBeenCalled();
+    expect(retryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("should not crash if _createNewClientAndRetry rejects during error recovery", async () => {
+    const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+    const { client, mockStream } = createMockClient();
+
+    // Simulate a retry that throws — must not become an unhandled rejection
+    const retryMock = jest.fn().mockRejectedValue(new Error("Retry failed"));
+    (worker as any)._createNewClientAndRetry = retryMock;
+
+    await worker.internalRunWorker(client);
+
+    // Should not throw or cause unhandled promise rejection
+    mockStream.emit("error", new Error("14 UNAVAILABLE: Connection lost"));
+    await flushAsync();
+
+    expect(retryMock).toHaveBeenCalledTimes(1);
+    expect(mockStream.destroy).toHaveBeenCalled();
+  });
+
+  it("should not crash if _createNewClientAndRetry rejects during end recovery", async () => {
+    const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+    const { client, mockStream } = createMockClient();
+
+    // Simulate a retry that throws — must not become an unhandled rejection
+    const retryMock = jest.fn().mockRejectedValue(new Error("Retry failed"));
+    (worker as any)._createNewClientAndRetry = retryMock;
+
+    await worker.internalRunWorker(client);
+
+    // Should not throw or cause unhandled promise rejection
+    mockStream.emit("end");
+    await flushAsync();
+
+    expect(retryMock).toHaveBeenCalledTimes(1);
+    expect(mockStream.destroy).toHaveBeenCalled();
+  });
+
+  it("should also add no-op error guard in end handler to prevent crashes after cleanup", async () => {
+    const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+    const { client, mockStream } = createMockClient();
+
+    const retryMock = jest.fn().mockResolvedValue(undefined);
+    (worker as any)._createNewClientAndRetry = retryMock;
+
+    await worker.internalRunWorker(client);
+
+    // End fires → cleanup removes all listeners
+    mockStream.emit("end");
+    await flushAsync();
+
+    // A stale error after end cleanup must not crash
+    expect(() => {
+      mockStream.emit("error", new Error("Stale error after end cleanup"));
+    }).not.toThrow();
+
+    // The no-op guard should remain
+    expect(mockStream.listenerCount("error")).toBe(1);
   });
 });
