@@ -90,15 +90,4 @@ describe("DurableTaskAzureManagedWorkerBuilder", () => {
       expect(result).toBe(builder);
     });
   });
-
-  describe("startupTimeout", () => {
-    it("configures the core worker startup timeout", () => {
-      const worker = new DurableTaskAzureManagedWorkerBuilder()
-        .endpoint(ENDPOINT, TASKHUB, null)
-        .startupTimeout(1234)
-        .build();
-
-      expect((worker as any)._startupTimeoutMs).toBe(1234);
-    });
-  });
 });

@@ -6,10 +6,9 @@
  *
  * This test verifies the full recovery flow:
  *   1. Start a worker when the DTS emulator is NOT running
- *   2. Verify initial startup fails within the configured timeout
- *   3. Start the Docker emulator and start the worker successfully
- *   4. Stop and restart the emulator
- *   5. Verify the running worker reconnects and can process orchestrations
+ *   2. Verify the worker retries (via structured log capture)
+ *   3. Start the Docker emulator
+ *   4. Verify the worker reconnects and can process orchestrations
  *
  * Environment variables:
  *   - ENDPOINT: The endpoint for the DTS emulator (default: localhost:8080)
@@ -84,9 +83,10 @@ function stopEmulator(): void {
 }
 
 function startEmulator(): void {
-  execSync(`docker run --name ${EMULATOR_CONTAINER} -d --rm -p ${EMULATOR_PORT}:8080 ${EMULATOR_IMAGE}`, {
-    stdio: "ignore",
-  });
+  execSync(
+    `docker run --name ${EMULATOR_CONTAINER} -d --rm -p ${EMULATOR_PORT}:8080 ${EMULATOR_IMAGE}`,
+    { stdio: "ignore" },
+  );
 }
 
 /** Poll until a condition is true or timeout. */
@@ -99,25 +99,10 @@ async function waitFor(predicate: () => boolean, timeoutMs: number, intervalMs =
   return predicate();
 }
 
-async function startWorkerWithRetry(worker: { start(): Promise<void> }, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  let lastError: unknown;
-  do {
-    try {
-      await worker.start();
-      return;
-    } catch (error) {
-      lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-  } while (Date.now() < deadline);
-
-  throw lastError;
-}
-
 // Log event IDs from packages/durabletask-js/src/worker/logs.ts
 const EVENT_WORKER_CONNECTED = 700;
 const EVENT_STREAM_RETRY = 703;
+const EVENT_CONNECTION_RETRY = 705;
 
 describe("Worker Stream Recovery E2E", () => {
   const skipReason = !isDockerAvailable() ? "Docker not available" : null;
@@ -133,7 +118,7 @@ describe("Worker Stream Recovery E2E", () => {
     stopEmulator();
   });
 
-  it("should fail initial startup when the sidecar is down, then recover a post-start disconnection", async () => {
+  it("should retry when sidecar is down, then reconnect and complete an orchestration when sidecar starts", async () => {
     if (skipReason) {
       console.log(`Skipping stream recovery e2e test: ${skipReason}`);
       return;
@@ -145,7 +130,6 @@ describe("Worker Stream Recovery E2E", () => {
     const worker = new DurableTaskAzureManagedWorkerBuilder()
       .endpoint(endpoint, taskHub, null)
       .logger(logger)
-      .startupTimeout(5000)
       .build();
 
     const orchestrator: TOrchestrator = async function recoveryOrchestrator(_: OrchestrationContext) {
@@ -153,29 +137,32 @@ describe("Worker Stream Recovery E2E", () => {
     };
     worker.addOrchestrator(orchestrator);
 
-    await expect(worker.start()).rejects.toThrow();
-    expect(logger.getByEventId(EVENT_WORKER_CONNECTED)).toHaveLength(0);
+    // start() should not throw even though the sidecar is unreachable
+    await worker.start();
 
-    // ── Phase 2: Start the emulator and retry startup ───────────────────
+    // ── Phase 2: Verify retries are happening ───────────────────────────
+    const sawRetries = await waitFor(() => {
+      const retryEvents = logger.getByEventId(EVENT_STREAM_RETRY);
+      const connRetryEvents = logger.getByEventId(EVENT_CONNECTION_RETRY);
+      return retryEvents.length + connRetryEvents.length >= 2;
+    }, 15000);
+
+    expect(sawRetries).toBe(true);
+
+    // ── Phase 3: Start the emulator ─────────────────────────────────────
     startEmulator();
-    await startWorkerWithRetry(worker, 30000);
-    expect(logger.getByEventId(EVENT_WORKER_CONNECTED)).toHaveLength(1);
 
-    // ── Phase 3: Disconnect the successfully started worker ─────────────
-    logger.clear();
-    stopEmulator();
-
-    const sawRetry = await waitFor(() => logger.getByEventId(EVENT_STREAM_RETRY).length > 0, 15000);
-    expect(sawRetry).toBe(true);
-
-    // ── Phase 4: Restart the emulator and wait for reconnection ─────────
-    startEmulator();
-    const sawConnected = await waitFor(() => logger.getByEventId(EVENT_WORKER_CONNECTED).length > 0, 30000);
+    // ── Phase 4: Wait for the worker to reconnect ───────────────────────
+    const sawConnected = await waitFor(() => {
+      return logger.getByEventId(EVENT_WORKER_CONNECTED).length > 0;
+    }, 30000);
 
     expect(sawConnected).toBe(true);
 
-    // ── Phase 5: Run an orchestration to prove recovery is functional ───
-    const client = new DurableTaskAzureManagedClientBuilder().endpoint(endpoint, taskHub, null).build();
+    // ── Phase 5: Run an orchestration to prove the worker is functional ─
+    const client = new DurableTaskAzureManagedClientBuilder()
+      .endpoint(endpoint, taskHub, null)
+      .build();
 
     const id = await client.scheduleNewOrchestration(orchestrator);
     const state = await client.waitForOrchestrationCompletion(id, undefined, 30);
@@ -187,5 +174,5 @@ describe("Worker Stream Recovery E2E", () => {
     // ── Cleanup ─────────────────────────────────────────────────────────
     await worker.stop();
     await client.stop();
-  }, 120000);
+  }, 90000);
 });
