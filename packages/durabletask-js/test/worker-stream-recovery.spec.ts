@@ -69,7 +69,7 @@ describe("Worker stream recovery", () => {
     jest.restoreAllMocks();
   });
 
-  it("replaces a failed stream within the owned connection loop", async () => {
+  it.each(["error", "end"] as const)("replaces a stream after %s", async (event) => {
     const initial = createMockClient();
     const replacement = createMockClient();
     jest.spyOn(GrpcClient.prototype as any, "_generateClient").mockReturnValue(replacement.stub);
@@ -77,7 +77,7 @@ describe("Worker stream recovery", () => {
 
     await worker.internalRunWorker(initial.client);
     await flushPromises();
-    initial.stream.emit("error", new Error("14 UNAVAILABLE"));
+    initial.stream.emit(event, ...(event === "error" ? [new Error("14 UNAVAILABLE")] : []));
     expect(() => initial.stream.emit("error", new Error("duplicate error"))).not.toThrow();
     await flushPromises();
 

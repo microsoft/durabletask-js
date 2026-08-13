@@ -74,6 +74,7 @@ export interface TaskHubGrpcWorkerOptions {
 }
 
 export class TaskHubGrpcWorker {
+  private _responseStream: grpc.ClientReadableStream<pb.WorkItem> | null;
   private _registry: Registry;
   private _hostAddress?: string;
   private _tls?: boolean;
@@ -82,7 +83,6 @@ export class TaskHubGrpcWorker {
   private _metadataGenerator?: MetadataGenerator;
   private _isRunning: boolean;
   private _stub: stubs.TaskHubSidecarServiceClient | null;
-  private _responseStream: grpc.ClientReadableStream<pb.WorkItem> | null;
   private _logger: Logger;
   private _pendingWorkItems: Set<Promise<void>>;
   private _shutdownTimeoutMs: number;
@@ -169,9 +169,9 @@ export class TaskHubGrpcWorker {
     this._grpcChannelOptions = resolvedOptions;
     this._grpcChannelCredentials = resolvedCredentials;
     this._metadataGenerator = resolvedMetadataGenerator;
+    this._responseStream = null;
     this._isRunning = false;
     this._stub = null;
-    this._responseStream = null;
     this._logger = resolvedLogger ?? new ConsoleLogger();
     this._pendingWorkItems = new Set();
     this._shutdownTimeoutMs = resolvedShutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
@@ -377,12 +377,12 @@ export class TaskHubGrpcWorker {
       throw new Error("The worker is already running.");
     }
 
+    const abortController = new AbortController();
+    this._abortController = abortController;
     this._isRunning = true;
-    this._abortController = new AbortController();
     this._backoff.reset();
-    const signal = this._abortController.signal;
-    this._runPromise = this._runConnectionLoop(signal, initialClient).catch((err) => {
-      if (!signal.aborted) {
+    this._runPromise = this._runConnectionLoop(abortController.signal, initialClient).catch((err) => {
+      if (!abortController.signal.aborted) {
         WorkerLogs.workerError(this._logger, err instanceof Error ? err : new Error(String(err)));
       }
     });
@@ -400,28 +400,22 @@ export class TaskHubGrpcWorker {
           nextClient ??
           new GrpcClient(this._hostAddress, this._grpcChannelOptions, this._tls, this._grpcChannelCredentials);
         nextClient = undefined;
-        const activeStub = client.stub;
-        stub = activeStub;
-        this._stub = activeStub;
+        stub = client.stub;
+        this._stub = stub;
 
         const helloMetadata = await this._getMetadata();
-        if (signal.aborted) {
-          break;
-        }
-        await this._waitForHello(activeStub, helloMetadata, signal);
+        await this._waitForHello(stub, helloMetadata, signal);
 
         const metadata = await this._getMetadata();
         if (signal.aborted) {
           break;
         }
         const request = this._buildGetWorkItemsRequest();
-        stream = activeStub.getWorkItems(request, metadata);
+        stream = stub.getWorkItems(request, metadata);
         this._responseStream = stream;
 
+        // Wait for a work item to be received
         stream.on("data", (workItem: pb.WorkItem) => {
-          if (signal.aborted) {
-            return;
-          }
           const completionToken = workItem.getCompletiontoken();
           if (workItem.hasOrchestratorrequest()) {
             WorkerLogs.workItemReceived(
@@ -429,18 +423,18 @@ export class TaskHubGrpcWorker {
               "Orchestrator Request",
               workItem?.getOrchestratorrequest()?.getInstanceid(),
             );
-            this._executeOrchestrator(workItem.getOrchestratorrequest() as any, completionToken, activeStub);
+            this._executeOrchestrator(workItem.getOrchestratorrequest() as any, completionToken, client.stub);
           } else if (workItem.hasActivityrequest()) {
             WorkerLogs.workItemReceived(this._logger, "Activity Request");
-            this._executeActivity(workItem.getActivityrequest() as any, completionToken, activeStub);
+            this._executeActivity(workItem.getActivityrequest() as any, completionToken, client.stub);
           } else if (workItem.hasEntityrequest()) {
             const entityRequest = workItem.getEntityrequest() as pb.EntityBatchRequest;
             WorkerLogs.entityRequestReceived(this._logger, entityRequest.getInstanceid(), "Entity Request");
-            this._executeEntity(entityRequest, completionToken, activeStub);
+            this._executeEntity(entityRequest, completionToken, client.stub);
           } else if (workItem.hasEntityrequestv2()) {
             const entityRequestV2 = workItem.getEntityrequestv2() as pb.EntityRequest;
             WorkerLogs.entityRequestReceived(this._logger, entityRequestV2.getInstanceid(), "Entity Request V2");
-            this._executeEntityV2(entityRequestV2, completionToken, activeStub);
+            this._executeEntityV2(entityRequestV2, completionToken, client.stub);
           } else if (workItem.hasHealthping()) {
             // Health ping - no-op, just a keep-alive message from the server
           } else {
@@ -451,7 +445,14 @@ export class TaskHubGrpcWorker {
         this._backoff.reset();
         WorkerLogs.workerConnected(this._logger, this._hostAddress ?? "localhost:4001");
 
-        const streamError = await this._waitForStreamEnd(stream, signal);
+        let onAbort!: () => void;
+        const streamError = await new Promise<Error | undefined>((resolve) => {
+          onAbort = () => resolve(undefined);
+          signal.addEventListener("abort", onAbort, { once: true });
+          stream!.once("end", () => resolve(undefined));
+          // Keep handling duplicate errors until the loop disposes the stream.
+          stream!.on("error", resolve);
+        }).finally(() => signal.removeEventListener("abort", onAbort));
         if (signal.aborted) {
           WorkerLogs.streamEnded(this._logger);
           break;
@@ -469,9 +470,14 @@ export class TaskHubGrpcWorker {
         WorkerLogs.connectionRetry(this._logger, this._backoff.peekNextDelay());
       } finally {
         if (stream) {
-          this._disposeResponseStream(stream);
+          stream.removeAllListeners();
+          stream.on("error", () => {});
+          stream.destroy();
+          if (this._responseStream === stream) {
+            this._responseStream = null;
+          }
         }
-        if (stub && !signal.aborted) {
+        if (stub) {
           stub.close();
           if (this._stub === stub) {
             this._stub = null;
@@ -499,57 +505,11 @@ export class TaskHubGrpcWorker {
     signal: AbortSignal,
   ): Promise<void> {
     if (signal.aborted) {
-      throw this._getAbortError(signal);
+      throw signal.reason;
     }
 
-    let call: grpc.ClientUnaryCall | undefined;
-    let removeAbortListener: (() => void) | undefined;
-
-    try {
-      await new Promise<void>((resolve, reject) => {
-        let settled = false;
-        const finish = (error?: Error) => {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          removeAbortListener?.();
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
-        };
-        const onAbort = () => finish(this._getAbortError(signal));
-        removeAbortListener = () => signal.removeEventListener("abort", onAbort);
-        signal.addEventListener("abort", onAbort, { once: true });
-
-        try {
-          call = stub.hello(new Empty(), metadata, { deadline: new Date(Date.now() + HELLO_TIMEOUT_MS) }, (error) =>
-            finish(error ?? undefined),
-          );
-          this._helloCall = call;
-        } catch (err) {
-          finish(err instanceof Error ? err : new Error(String(err)));
-        }
-      });
-    } finally {
-      removeAbortListener?.();
-      if (this._helloCall === call) {
-        this._helloCall = null;
-      }
-    }
-  }
-
-  private _waitForStreamEnd(
-    stream: grpc.ClientReadableStream<pb.WorkItem>,
-    signal: AbortSignal,
-  ): Promise<Error | undefined> {
-    if (signal.aborted) {
-      return Promise.resolve(undefined);
-    }
-
-    return new Promise((resolve) => {
+    await new Promise<void>((resolve, reject) => {
+      let call: grpc.ClientUnaryCall | undefined;
       let settled = false;
       const finish = (error?: Error) => {
         if (settled) {
@@ -557,29 +517,30 @@ export class TaskHubGrpcWorker {
         }
         settled = true;
         signal.removeEventListener("abort", onAbort);
-        resolve(error);
+        if (this._helloCall === call) {
+          this._helloCall = null;
+        }
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
       };
-      const onAbort = () => finish();
-
+      const onAbort = () =>
+        finish(signal.reason instanceof Error ? signal.reason : new Error("The worker was stopped."));
       signal.addEventListener("abort", onAbort, { once: true });
-      stream.once("end", () => finish());
-      // Keep handling duplicate errors until the loop disposes the stream.
-      stream.on("error", (error: Error) => finish(error));
+
+      try {
+        call = stub.hello(new Empty(), metadata, { deadline: new Date(Date.now() + HELLO_TIMEOUT_MS) }, (error) =>
+          finish(error ?? undefined),
+        );
+        if (!settled) {
+          this._helloCall = call;
+        }
+      } catch (err) {
+        finish(err instanceof Error ? err : new Error(String(err)));
+      }
     });
-  }
-
-  private _getAbortError(signal: AbortSignal): Error {
-    const reason = signal.reason;
-    return reason instanceof Error ? reason : new Error("The worker was stopped.");
-  }
-
-  private _disposeResponseStream(stream: grpc.ClientReadableStream<pb.WorkItem>): void {
-    stream.removeAllListeners();
-    stream.on("error", () => {});
-    stream.destroy();
-    if (this._responseStream === stream) {
-      this._responseStream = null;
-    }
   }
 
   /**
@@ -589,13 +550,15 @@ export class TaskHubGrpcWorker {
   async stop(): Promise<void> {
     const abortController = this._abortController;
     const runPromise = this._runPromise;
-    if (!this._isRunning || !abortController || !runPromise || abortController.signal.aborted) {
+    if (!this._isRunning || !abortController || !runPromise) {
       throw new Error("The worker is not running.");
     }
 
+    const helloCall = this._helloCall;
+    const responseStream = this._responseStream;
     abortController.abort(new Error("The worker was stopped."));
-    this._helloCall?.cancel();
-    this._responseStream?.cancel();
+    helloCall?.cancel();
+    responseStream?.cancel();
     await runPromise;
 
     // Wait for pending work items to complete with timeout
@@ -614,12 +577,16 @@ export class TaskHubGrpcWorker {
       }
     }
 
-    this._stub?.close();
+    if (this._stub) {
+      // Close the gRPC client - this is a synchronous operation
+      this._stub.close();
+    }
+
+    this._stub = null;
+    this._responseStream = null;
+    this._helloCall = null;
     this._abortController = null;
     this._runPromise = null;
-    this._helloCall = null;
-    this._responseStream = null;
-    this._stub = null;
     this._isRunning = false;
   }
 
