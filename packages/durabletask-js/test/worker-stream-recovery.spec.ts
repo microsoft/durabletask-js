@@ -88,7 +88,7 @@ describe("Worker stream recovery", () => {
     await flushPromises();
 
     expect(replacement.getWorkItems).toHaveBeenCalledTimes(1);
-    expect((worker as any)._lifecycle.responseStream).toBe(replacement.stream);
+    expect((worker as any)._responseStream).toBe(replacement.stream);
 
     await worker.stop();
   });

@@ -21,7 +21,6 @@ import { EntityFactory } from "../entities/task-entity";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 import { Logger, ConsoleLogger } from "../types/logger.type";
 import { ExponentialBackoff, withTimeout } from "../utils/backoff.util";
-import { TimeoutError } from "../exception/timeout-error";
 import { VersioningOptions, VersionMatchStrategy, VersionFailureStrategy } from "./versioning-options";
 import { WorkItemFilters, generateWorkItemFiltersFromRegistry, toGrpcWorkItemFilters } from "./work-item-filters";
 import { compareVersions } from "../utils/versioning.util";
@@ -43,14 +42,6 @@ import {
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30000;
 /** Timeout applied to each sidecar hello attempt. */
 const HELLO_TIMEOUT_MS = 30000;
-
-interface WorkerLifecycle {
-  readonly abortController: AbortController;
-  runPromise: Promise<void>;
-  stub: stubs.TaskHubSidecarServiceClient | null;
-  helloCall: grpc.ClientUnaryCall | null;
-  responseStream: grpc.ClientReadableStream<pb.WorkItem> | null;
-}
 
 /**
  * Options for creating a TaskHubGrpcWorker.
@@ -90,12 +81,17 @@ export class TaskHubGrpcWorker {
   private _grpcChannelCredentials?: grpc.ChannelCredentials;
   private _metadataGenerator?: MetadataGenerator;
   private _isRunning: boolean;
+  private _stub: stubs.TaskHubSidecarServiceClient | null;
+  private _responseStream: grpc.ClientReadableStream<pb.WorkItem> | null;
   private _logger: Logger;
   private _pendingWorkItems: Set<Promise<void>>;
   private _shutdownTimeoutMs: number;
+  private _backoff: ExponentialBackoff;
   private _versioning?: VersioningOptions;
   private _workItemFilters?: WorkItemFilters | "auto";
-  private _lifecycle: WorkerLifecycle | null;
+  private _abortController: AbortController | null;
+  private _runPromise: Promise<void> | null;
+  private _helloCall: grpc.ClientUnaryCall | null;
 
   /**
    * Creates a new TaskHubGrpcWorker instance.
@@ -174,12 +170,21 @@ export class TaskHubGrpcWorker {
     this._grpcChannelCredentials = resolvedCredentials;
     this._metadataGenerator = resolvedMetadataGenerator;
     this._isRunning = false;
+    this._stub = null;
+    this._responseStream = null;
     this._logger = resolvedLogger ?? new ConsoleLogger();
     this._pendingWorkItems = new Set();
     this._shutdownTimeoutMs = resolvedShutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
+    this._backoff = new ExponentialBackoff({
+      initialDelayMs: 1000,
+      maxDelayMs: 30000,
+      multiplier: 2,
+    });
     this._versioning = resolvedVersioning;
     this._workItemFilters = resolvedWorkItemFilters;
-    this._lifecycle = null;
+    this._abortController = null;
+    this._runPromise = null;
+    this._helloCall = null;
   }
 
   /**
@@ -368,33 +373,22 @@ export class TaskHubGrpcWorker {
   }
 
   private _startConnectionLoop(initialClient?: GrpcClient): void {
-    if (this._isRunning || this._lifecycle) {
+    if (this._isRunning) {
       throw new Error("The worker is already running.");
     }
 
-    const lifecycle: WorkerLifecycle = {
-      abortController: new AbortController(),
-      runPromise: Promise.resolve(),
-      stub: null,
-      helloCall: null,
-      responseStream: null,
-    };
     this._isRunning = true;
-    this._lifecycle = lifecycle;
-    lifecycle.runPromise = this._runConnectionLoop(lifecycle, initialClient).catch((err) => {
-      if (!lifecycle.abortController.signal.aborted) {
+    this._abortController = new AbortController();
+    this._backoff.reset();
+    const signal = this._abortController.signal;
+    this._runPromise = this._runConnectionLoop(signal, initialClient).catch((err) => {
+      if (!signal.aborted) {
         WorkerLogs.workerError(this._logger, err instanceof Error ? err : new Error(String(err)));
       }
     });
   }
 
-  private async _runConnectionLoop(lifecycle: WorkerLifecycle, initialClient?: GrpcClient): Promise<void> {
-    const signal = lifecycle.abortController.signal;
-    const backoff = new ExponentialBackoff({
-      initialDelayMs: 1000,
-      maxDelayMs: 30000,
-      multiplier: 2,
-    });
+  private async _runConnectionLoop(signal: AbortSignal, initialClient?: GrpcClient): Promise<void> {
     let nextClient = initialClient;
 
     while (!signal.aborted) {
@@ -406,22 +400,58 @@ export class TaskHubGrpcWorker {
           nextClient ??
           new GrpcClient(this._hostAddress, this._grpcChannelOptions, this._tls, this._grpcChannelCredentials);
         nextClient = undefined;
-        stub = client.stub;
-        lifecycle.stub = stub;
+        const activeStub = client.stub;
+        stub = activeStub;
+        this._stub = activeStub;
 
-        const helloMetadata = await this._waitForAbortable(this._getMetadata(), lifecycle);
-        await this._waitForHello(stub, helloMetadata, lifecycle);
+        const helloMetadata = await this._getMetadata();
+        if (signal.aborted) {
+          break;
+        }
+        await this._waitForHello(activeStub, helloMetadata, signal);
 
-        const metadata = await this._waitForAbortable(this._getMetadata(), lifecycle);
+        const metadata = await this._getMetadata();
+        if (signal.aborted) {
+          break;
+        }
         const request = this._buildGetWorkItemsRequest();
-        stream = stub.getWorkItems(request, metadata);
-        lifecycle.responseStream = stream;
-        this._listenForWorkItems(stream, stub);
+        stream = activeStub.getWorkItems(request, metadata);
+        this._responseStream = stream;
 
-        backoff.reset();
+        stream.on("data", (workItem: pb.WorkItem) => {
+          if (signal.aborted) {
+            return;
+          }
+          const completionToken = workItem.getCompletiontoken();
+          if (workItem.hasOrchestratorrequest()) {
+            WorkerLogs.workItemReceived(
+              this._logger,
+              "Orchestrator Request",
+              workItem?.getOrchestratorrequest()?.getInstanceid(),
+            );
+            this._executeOrchestrator(workItem.getOrchestratorrequest() as any, completionToken, activeStub);
+          } else if (workItem.hasActivityrequest()) {
+            WorkerLogs.workItemReceived(this._logger, "Activity Request");
+            this._executeActivity(workItem.getActivityrequest() as any, completionToken, activeStub);
+          } else if (workItem.hasEntityrequest()) {
+            const entityRequest = workItem.getEntityrequest() as pb.EntityBatchRequest;
+            WorkerLogs.entityRequestReceived(this._logger, entityRequest.getInstanceid(), "Entity Request");
+            this._executeEntity(entityRequest, completionToken, activeStub);
+          } else if (workItem.hasEntityrequestv2()) {
+            const entityRequestV2 = workItem.getEntityrequestv2() as pb.EntityRequest;
+            WorkerLogs.entityRequestReceived(this._logger, entityRequestV2.getInstanceid(), "Entity Request V2");
+            this._executeEntityV2(entityRequestV2, completionToken, activeStub);
+          } else if (workItem.hasHealthping()) {
+            // Health ping - no-op, just a keep-alive message from the server
+          } else {
+            WorkerLogs.unknownWorkItem(this._logger);
+          }
+        });
+
+        this._backoff.reset();
         WorkerLogs.workerConnected(this._logger, this._hostAddress ?? "localhost:4001");
 
-        const streamError = await this._waitForStreamEnd(stream, lifecycle);
+        const streamError = await this._waitForStreamEnd(stream, signal);
         if (signal.aborted) {
           WorkerLogs.streamEnded(this._logger);
           break;
@@ -429,22 +459,22 @@ export class TaskHubGrpcWorker {
         if (streamError) {
           WorkerLogs.streamErrorInfo(this._logger, streamError);
         }
-        WorkerLogs.streamRetry(this._logger, backoff.peekNextDelay());
+        WorkerLogs.streamRetry(this._logger, this._backoff.peekNextDelay());
       } catch (err) {
         if (signal.aborted) {
           break;
         }
         const error = err instanceof Error ? err : new Error(String(err));
         WorkerLogs.streamError(this._logger, error);
-        WorkerLogs.connectionRetry(this._logger, backoff.peekNextDelay());
+        WorkerLogs.connectionRetry(this._logger, this._backoff.peekNextDelay());
       } finally {
         if (stream) {
-          this._disposeResponseStream(stream, lifecycle);
+          this._disposeResponseStream(stream);
         }
         if (stub && !signal.aborted) {
           stub.close();
-          if (lifecycle.stub === stub) {
-            lifecycle.stub = null;
+          if (this._stub === stub) {
+            this._stub = null;
           }
         }
       }
@@ -454,7 +484,7 @@ export class TaskHubGrpcWorker {
       }
 
       try {
-        await backoff.wait(signal);
+        await this._backoff.wait(signal);
       } catch (err) {
         if (!signal.aborted) {
           throw err;
@@ -463,50 +493,16 @@ export class TaskHubGrpcWorker {
     }
   }
 
-  private _listenForWorkItems(
-    stream: grpc.ClientReadableStream<pb.WorkItem>,
-    stub: stubs.TaskHubSidecarServiceClient,
-  ): void {
-    stream.on("data", (workItem: pb.WorkItem) => {
-      const completionToken = workItem.getCompletiontoken();
-      if (workItem.hasOrchestratorrequest()) {
-        WorkerLogs.workItemReceived(
-          this._logger,
-          "Orchestrator Request",
-          workItem?.getOrchestratorrequest()?.getInstanceid(),
-        );
-        this._executeOrchestrator(workItem.getOrchestratorrequest() as any, completionToken, stub);
-      } else if (workItem.hasActivityrequest()) {
-        WorkerLogs.workItemReceived(this._logger, "Activity Request");
-        this._executeActivity(workItem.getActivityrequest() as any, completionToken, stub);
-      } else if (workItem.hasEntityrequest()) {
-        const entityRequest = workItem.getEntityrequest() as pb.EntityBatchRequest;
-        WorkerLogs.entityRequestReceived(this._logger, entityRequest.getInstanceid(), "Entity Request");
-        this._executeEntity(entityRequest, completionToken, stub);
-      } else if (workItem.hasEntityrequestv2()) {
-        const entityRequestV2 = workItem.getEntityrequestv2() as pb.EntityRequest;
-        WorkerLogs.entityRequestReceived(this._logger, entityRequestV2.getInstanceid(), "Entity Request V2");
-        this._executeEntityV2(entityRequestV2, completionToken, stub);
-      } else if (workItem.hasHealthping()) {
-        // Health ping - no-op, just a keep-alive message from the server
-      } else {
-        WorkerLogs.unknownWorkItem(this._logger);
-      }
-    });
-  }
-
   private async _waitForHello(
     stub: stubs.TaskHubSidecarServiceClient,
     metadata: grpc.Metadata,
-    lifecycle: WorkerLifecycle,
+    signal: AbortSignal,
   ): Promise<void> {
-    const signal = lifecycle.abortController.signal;
     if (signal.aborted) {
-      throw this._getLifecycleAbortError(lifecycle);
+      throw this._getAbortError(signal);
     }
 
     let call: grpc.ClientUnaryCall | undefined;
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     let removeAbortListener: (() => void) | undefined;
 
     try {
@@ -517,9 +513,6 @@ export class TaskHubGrpcWorker {
             return;
           }
           settled = true;
-          if (timeoutId !== undefined) {
-            clearTimeout(timeoutId);
-          }
           removeAbortListener?.();
           if (error) {
             reject(error);
@@ -527,59 +520,31 @@ export class TaskHubGrpcWorker {
             resolve();
           }
         };
-        const onAbort = () => finish(this._getLifecycleAbortError(lifecycle));
+        const onAbort = () => finish(this._getAbortError(signal));
         removeAbortListener = () => signal.removeEventListener("abort", onAbort);
         signal.addEventListener("abort", onAbort, { once: true });
-
-        timeoutId = setTimeout(() => {
-          finish(new TimeoutError(`Sidecar hello did not respond within ${HELLO_TIMEOUT_MS}ms.`));
-          call?.cancel();
-        }, HELLO_TIMEOUT_MS);
 
         try {
           call = stub.hello(new Empty(), metadata, { deadline: new Date(Date.now() + HELLO_TIMEOUT_MS) }, (error) =>
             finish(error ?? undefined),
           );
-          lifecycle.helloCall = call;
+          this._helloCall = call;
         } catch (err) {
           finish(err instanceof Error ? err : new Error(String(err)));
         }
       });
     } finally {
-      if (timeoutId !== undefined) {
-        clearTimeout(timeoutId);
-      }
       removeAbortListener?.();
-      if (lifecycle.helloCall === call) {
-        lifecycle.helloCall = null;
+      if (this._helloCall === call) {
+        this._helloCall = null;
       }
-    }
-  }
-
-  private async _waitForAbortable<T>(promise: Promise<T>, lifecycle: WorkerLifecycle): Promise<T> {
-    const signal = lifecycle.abortController.signal;
-    if (signal.aborted) {
-      throw this._getLifecycleAbortError(lifecycle);
-    }
-
-    let onAbort!: () => void;
-    const aborted = new Promise<never>((_, reject) => {
-      onAbort = () => reject(this._getLifecycleAbortError(lifecycle));
-      signal.addEventListener("abort", onAbort, { once: true });
-    });
-
-    try {
-      return await Promise.race([promise, aborted]);
-    } finally {
-      signal.removeEventListener("abort", onAbort);
     }
   }
 
   private _waitForStreamEnd(
     stream: grpc.ClientReadableStream<pb.WorkItem>,
-    lifecycle: WorkerLifecycle,
+    signal: AbortSignal,
   ): Promise<Error | undefined> {
-    const signal = lifecycle.abortController.signal;
     if (signal.aborted) {
       return Promise.resolve(undefined);
     }
@@ -603,17 +568,17 @@ export class TaskHubGrpcWorker {
     });
   }
 
-  private _getLifecycleAbortError(lifecycle: WorkerLifecycle): Error {
-    const reason = lifecycle.abortController.signal.reason;
+  private _getAbortError(signal: AbortSignal): Error {
+    const reason = signal.reason;
     return reason instanceof Error ? reason : new Error("The worker was stopped.");
   }
 
-  private _disposeResponseStream(stream: grpc.ClientReadableStream<pb.WorkItem>, lifecycle: WorkerLifecycle): void {
+  private _disposeResponseStream(stream: grpc.ClientReadableStream<pb.WorkItem>): void {
     stream.removeAllListeners();
     stream.on("error", () => {});
     stream.destroy();
-    if (lifecycle.responseStream === stream) {
-      lifecycle.responseStream = null;
+    if (this._responseStream === stream) {
+      this._responseStream = null;
     }
   }
 
@@ -622,15 +587,16 @@ export class TaskHubGrpcWorker {
    * Uses a configurable timeout (default 30s) to wait for in-flight work.
    */
   async stop(): Promise<void> {
-    const lifecycle = this._lifecycle;
-    if (!this._isRunning || !lifecycle) {
+    const abortController = this._abortController;
+    const runPromise = this._runPromise;
+    if (!this._isRunning || !abortController || !runPromise || abortController.signal.aborted) {
       throw new Error("The worker is not running.");
     }
 
-    lifecycle.abortController.abort(new Error("The worker was stopped."));
-    lifecycle.helloCall?.cancel();
-    lifecycle.responseStream?.cancel();
-    await lifecycle.runPromise;
+    abortController.abort(new Error("The worker was stopped."));
+    this._helloCall?.cancel();
+    this._responseStream?.cancel();
+    await runPromise;
 
     // Wait for pending work items to complete with timeout
     if (this._pendingWorkItems.size > 0) {
@@ -648,16 +614,13 @@ export class TaskHubGrpcWorker {
       }
     }
 
-    if (lifecycle.stub) {
-      // Close the gRPC client - this is a synchronous operation
-      lifecycle.stub.close();
-      lifecycle.stub = null;
-    }
-
-    if (this._lifecycle === lifecycle) {
-      this._lifecycle = null;
-      this._isRunning = false;
-    }
+    this._stub?.close();
+    this._abortController = null;
+    this._runPromise = null;
+    this._helloCall = null;
+    this._responseStream = null;
+    this._stub = null;
+    this._isRunning = false;
   }
 
   /**

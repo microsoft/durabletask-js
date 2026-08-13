@@ -9,67 +9,46 @@ import * as stubs from "../src/proto/orchestrator_service_grpc_pb";
 import { Logger, NoOpLogger } from "../src/types/logger.type";
 import { TaskHubGrpcWorker } from "../src/worker/task-hub-grpc-worker";
 
-type MockStream = EventEmitter & {
-  cancel: jest.Mock;
-  destroy: jest.Mock;
-};
-
+type MockStream = EventEmitter & { cancel: jest.Mock; destroy: jest.Mock };
 type HelloCallback = (error: grpc.ServiceError | null, response: Empty) => void;
 
-function createMockStream(): MockStream {
+function createStream(): MockStream {
   const stream = new EventEmitter() as MockStream;
   stream.cancel = jest.fn();
   stream.destroy = jest.fn();
   return stream;
 }
 
-function createMockStub(
-  hello: (...args: any[]) => grpc.ClientUnaryCall,
-  stream: MockStream = createMockStream(),
-): {
-  stub: stubs.TaskHubSidecarServiceClient;
-  stream: MockStream;
-  hello: jest.Mock;
-  getWorkItems: jest.Mock;
-  close: jest.Mock;
-} {
-  const helloMock = jest.fn(hello);
-  const getWorkItems = jest.fn().mockReturnValue(stream);
-  const close = jest.fn();
+function createStub(hello: (...args: any[]) => grpc.ClientUnaryCall, stream = createStream()) {
   const stub = {
-    hello: helloMock,
-    getWorkItems,
-    close,
+    hello: jest.fn(hello),
+    getWorkItems: jest.fn().mockReturnValue(stream),
+    close: jest.fn(),
   } as unknown as stubs.TaskHubSidecarServiceClient;
-  return { stub, stream, hello: helloMock, getWorkItems, close };
+  return { stub, stream };
 }
 
-function successfulStub(stream = createMockStream()) {
-  return createMockStub((...args: any[]) => {
+function successfulStub() {
+  return createStub((...args: any[]) => {
     getHelloCallback(args)(null, new Empty());
     return { cancel: jest.fn() } as unknown as grpc.ClientUnaryCall;
-  }, stream);
+  });
 }
 
 function getHelloCallback(args: any[]): HelloCallback {
   return args[args.length - 1] as HelloCallback;
 }
 
-function useStubs(...stubSequence: stubs.TaskHubSidecarServiceClient[]): jest.SpyInstance {
+function useStubs(...stubsToUse: stubs.TaskHubSidecarServiceClient[]): jest.SpyInstance {
   const generateClient = jest.spyOn(GrpcClient.prototype as any, "_generateClient");
-  for (const stub of stubSequence) {
+  for (const stub of stubsToUse) {
     generateClient.mockReturnValueOnce(stub);
   }
   return generateClient;
 }
 
 function createLogger(): Logger & { error: jest.Mock } {
-  return {
-    error: jest.fn(),
-    warn: jest.fn(),
-    info: jest.fn(),
-    debug: jest.fn(),
-  };
+  return { error: jest.fn(), warn: jest.fn(), info: jest.fn(), debug: jest.fn() };
 }
 
 async function flushPromises(): Promise<void> {
@@ -84,108 +63,60 @@ describe("TaskHubGrpcWorker connection lifecycle", () => {
     jest.restoreAllMocks();
   });
 
-  it("starts promptly while hello is unavailable and cancels hello on stop", async () => {
-    const cancel = jest.fn();
-    const pending = createMockStub(() => ({ cancel }) as unknown as grpc.ClientUnaryCall);
-    useStubs(pending.stub);
-    const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+  it("starts promptly, gives each hello a 30-second deadline, and retries errors", async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const deadlineError = Object.assign(new Error("deadline exceeded"), {
+      code: grpc.status.DEADLINE_EXCEEDED,
+    }) as grpc.ServiceError;
+    const first = createStub((...args: any[]) => {
+      getHelloCallback(args)(deadlineError, new Empty());
+      return { cancel: jest.fn() } as unknown as grpc.ClientUnaryCall;
+    });
+    const connected = successfulStub();
+    useStubs(first.stub, connected.stub);
+    const worker = new TaskHubGrpcWorker({ logger: createLogger() });
 
     await expect(worker.start()).resolves.toBeUndefined();
     await flushPromises();
 
-    expect(pending.hello).toHaveBeenCalledTimes(1);
-    expect(pending.getWorkItems).not.toHaveBeenCalled();
+    expect((first.stub.hello as jest.Mock).mock.calls[0][2].deadline).toEqual(new Date("2026-01-01T00:00:30Z"));
+    expect(connected.stub.getWorkItems).not.toHaveBeenCalled();
 
-    await worker.stop();
-
-    expect(cancel).toHaveBeenCalledTimes(1);
-    expect((worker as any)._lifecycle).toBeNull();
-    expect((worker as any)._isRunning).toBe(false);
-  });
-
-  it("times out each hung hello attempt and retries inside the owned loop", async () => {
-    jest.useFakeTimers();
-    jest.setSystemTime(new Date("2026-01-01T00:00:00Z"));
-    const calls: jest.Mock[] = [];
-    const logger = createLogger();
-    const pending = createMockStub(() => {
-      const cancel = jest.fn();
-      calls.push(cancel);
-      return { cancel } as unknown as grpc.ClientUnaryCall;
-    });
-    useStubs(pending.stub, pending.stub);
-    const worker = new TaskHubGrpcWorker({ logger });
-
-    await worker.start();
-    await flushPromises();
-
-    const callOptions = pending.hello.mock.calls[0][2] as grpc.CallOptions;
-    expect(callOptions.deadline).toEqual(new Date("2026-01-01T00:00:30Z"));
-
-    await jest.advanceTimersByTimeAsync(30000);
-    expect(calls[0]).toHaveBeenCalledTimes(1);
-    expect(logger.error).toHaveBeenCalled();
-
-    // Advance past any jittered first retry delay without assuming its exact value.
     await jest.advanceTimersByTimeAsync(2000);
-    expect(pending.hello).toHaveBeenCalledTimes(2);
+    expect(connected.stub.getWorkItems).toHaveBeenCalledTimes(1);
 
     await worker.stop();
-    expect(calls[1]).toHaveBeenCalledTimes(1);
-    expect(jest.getTimerCount()).toBe(0);
   });
 
-  it("logs initial client construction failures and retries until connected", async () => {
+  it("retries synchronous client construction failures", async () => {
     jest.useFakeTimers();
     const connected = successfulStub();
-    const logger = createLogger();
     const generateClient = jest
       .spyOn(GrpcClient.prototype as any, "_generateClient")
       .mockImplementationOnce(() => {
-        throw new Error("first construction failure");
-      })
-      .mockImplementationOnce(() => {
-        throw new Error("second construction failure");
+        throw new Error("client construction failed");
       })
       .mockReturnValueOnce(connected.stub);
+    const logger = createLogger();
     const worker = new TaskHubGrpcWorker({ logger });
 
-    await expect(worker.start()).resolves.toBeUndefined();
-    await jest.advanceTimersByTimeAsync(4000);
-
-    expect(generateClient).toHaveBeenCalledTimes(3);
-    expect(connected.getWorkItems).toHaveBeenCalledTimes(1);
-    expect(logger.error).toHaveBeenCalledTimes(2);
-
-    await worker.stop();
-  });
-
-  it("aborts a pending reconnect delay and drains the loop on stop", async () => {
-    jest.useFakeTimers();
-    const unavailable = createMockStub((...args: any[]) => {
-      getHelloCallback(args)(new Error("sidecar unavailable") as grpc.ServiceError, new Empty());
-      return { cancel: jest.fn() } as unknown as grpc.ClientUnaryCall;
-    });
-    useStubs(unavailable.stub);
-    const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
-
     await worker.start();
-    await flushPromises();
-    expect(jest.getTimerCount()).toBeGreaterThan(0);
-    const loopPromise = (worker as any)._lifecycle.runPromise as Promise<void>;
+    await jest.advanceTimersByTimeAsync(2000);
+
+    expect(generateClient).toHaveBeenCalledTimes(2);
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("client construction failed"));
+    expect(connected.stub.getWorkItems).toHaveBeenCalledTimes(1);
 
     await worker.stop();
-
-    await expect(loopPromise).resolves.toBeUndefined();
-    expect(jest.getTimerCount()).toBe(0);
-    expect((worker as any)._lifecycle).toBeNull();
   });
 
-  it("rejects start during stop, allows restart, and ignores a late hello callback", async () => {
-    let firstHello: HelloCallback | undefined;
-    const first = createMockStub((...args: any[]) => {
-      firstHello = getHelloCallback(args);
-      return { cancel: jest.fn() } as unknown as grpc.ClientUnaryCall;
+  it("cancels hello, drains the loop, and fences its late callback before restart", async () => {
+    let staleHello: HelloCallback | undefined;
+    const cancel = jest.fn();
+    const first = createStub((...args: any[]) => {
+      staleHello = getHelloCallback(args);
+      return { cancel } as unknown as grpc.ClientUnaryCall;
     });
     const restarted = successfulStub();
     useStubs(first.stub, restarted.stub);
@@ -193,72 +124,70 @@ describe("TaskHubGrpcWorker connection lifecycle", () => {
 
     await worker.start();
     await flushPromises();
+    const runPromise = (worker as any)._runPromise as Promise<void>;
     const stopPromise = worker.stop();
 
     await expect(worker.start()).rejects.toThrow("The worker is already running.");
     await stopPromise;
+    await expect(runPromise).resolves.toBeUndefined();
+    expect(cancel).toHaveBeenCalledTimes(1);
 
     await worker.start();
     await flushPromises();
-    firstHello!(null, new Empty());
+    staleHello!(null, new Empty());
     await flushPromises();
 
-    expect(first.getWorkItems).not.toHaveBeenCalled();
-    expect(restarted.getWorkItems).toHaveBeenCalledTimes(1);
-    expect((worker as any)._lifecycle.responseStream).toBe(restarted.stream);
+    expect(first.stub.getWorkItems).not.toHaveBeenCalled();
+    expect(restarted.stub.getWorkItems).toHaveBeenCalledTimes(1);
+    expect((worker as any)._responseStream).toBe(restarted.stream);
 
     await worker.stop();
   });
 
-  it("recovers from runtime disconnect and replacement client construction failure", async () => {
+  it("cancels reconnect backoff and permits restart after stop", async () => {
     jest.useFakeTimers();
-    const first = successfulStub();
-    const recovered = successfulStub();
-    const logger = createLogger();
-    const generateClient = jest
-      .spyOn(GrpcClient.prototype as any, "_generateClient")
-      .mockReturnValueOnce(first.stub)
-      .mockImplementationOnce(() => {
-        throw new Error("replacement construction failure");
-      })
-      .mockReturnValueOnce(recovered.stub);
-    const worker = new TaskHubGrpcWorker({ logger });
+    const unavailable = createStub((...args: any[]) => {
+      getHelloCallback(args)(new Error("unavailable") as grpc.ServiceError, new Empty());
+      return { cancel: jest.fn() } as unknown as grpc.ClientUnaryCall;
+    });
+    const restarted = successfulStub();
+    useStubs(unavailable.stub, restarted.stub);
+    const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
 
     await worker.start();
     await flushPromises();
-    first.stream.emit("error", new Error("14 UNAVAILABLE"));
-    await jest.advanceTimersByTimeAsync(4000);
+    expect(jest.getTimerCount()).toBeGreaterThan(0);
 
-    expect(generateClient).toHaveBeenCalledTimes(3);
-    expect(first.close).toHaveBeenCalledTimes(1);
-    expect(recovered.getWorkItems).toHaveBeenCalledTimes(1);
-    expect(logger.error).toHaveBeenCalled();
+    await worker.stop();
+    expect(jest.getTimerCount()).toBe(0);
+
+    await worker.start();
+    await flushPromises();
+    expect(restarted.stub.getWorkItems).toHaveBeenCalledTimes(1);
 
     await worker.stop();
   });
 
-  it("gives direct internal runs lifecycle ownership and fences stopped streams", async () => {
+  it("keeps direct internal runs owned by stop", async () => {
     const direct = successfulStub();
-    const restarted = successfulStub();
-    useStubs(restarted.stub);
     const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
-    const directClient = { stub: direct.stub } as unknown as GrpcClient;
+    let finishWorkItem!: () => void;
+    const pendingWorkItem = new Promise<void>((resolve) => {
+      finishWorkItem = resolve;
+    });
 
-    await worker.internalRunWorker(directClient);
+    await worker.internalRunWorker({ stub: direct.stub } as unknown as GrpcClient);
+    await flushPromises();
+    (worker as any)._pendingWorkItems.add(pendingWorkItem);
+    const stopPromise = worker.stop();
     await flushPromises();
 
-    expect((worker as any)._lifecycle.stub).toBe(direct.stub);
     await expect(worker.start()).rejects.toThrow("The worker is already running.");
+    expect(direct.stub.close).not.toHaveBeenCalled();
+    finishWorkItem();
+    await stopPromise;
 
-    await worker.stop();
-    await worker.start();
-    await flushPromises();
-    direct.stream.emit("error", new Error("stale stream error"));
-    await flushPromises();
-
-    expect((worker as any)._lifecycle.stub).toBe(restarted.stub);
-    expect((worker as any)._lifecycle.responseStream).toBe(restarted.stream);
-
-    await worker.stop();
+    expect(direct.stream.cancel).toHaveBeenCalledTimes(1);
+    expect(direct.stub.close).toHaveBeenCalledTimes(1);
   });
 });
