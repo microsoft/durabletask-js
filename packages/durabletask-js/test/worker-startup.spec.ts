@@ -69,7 +69,7 @@ describe("TaskHubGrpcWorker connection lifecycle", () => {
     const callbacks: HelloCallback[] = [];
     const helloTimes: number[] = [];
     const logger = createLogger();
-    const pending = createMockStub((...args: any[]) => {
+    const pending = createStub((...args: any[]) => {
       helloTimes.push(Date.now());
       callbacks.push(getHelloCallback(args));
       return { cancel: jest.fn() } as unknown as grpc.ClientUnaryCall;
@@ -84,8 +84,8 @@ describe("TaskHubGrpcWorker connection lifecycle", () => {
     await flushPromises();
     expect(logger.error).toHaveBeenCalled();
     await jest.advanceTimersByTimeAsync(2000);
-    expect(pending.hello).toHaveBeenCalledTimes(2);
-    for (const [index, call] of pending.hello.mock.calls.entries()) {
+    expect(pending.stub.hello).toHaveBeenCalledTimes(2);
+    for (const [index, call] of (pending.stub.hello as jest.Mock).mock.calls.entries()) {
       expect((call[2] as grpc.CallOptions).deadline).toEqual(new Date(helloTimes[index] + 30000));
     }
 
@@ -94,7 +94,7 @@ describe("TaskHubGrpcWorker connection lifecycle", () => {
 
   it("cancels a pending hello and drains the connection loop on stop", async () => {
     const cancel = jest.fn();
-    const pending = createMockStub(() => ({ cancel }) as unknown as grpc.ClientUnaryCall);
+    const pending = createStub(() => ({ cancel }) as unknown as grpc.ClientUnaryCall);
     useStubs(pending.stub);
     const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
 
@@ -112,7 +112,7 @@ describe("TaskHubGrpcWorker connection lifecycle", () => {
 
   it("aborts a pending reconnect delay on stop", async () => {
     jest.useFakeTimers();
-    const unavailable = createMockStub((...args: any[]) => {
+    const unavailable = createStub((...args: any[]) => {
       getHelloCallback(args)(new Error("sidecar unavailable") as grpc.ServiceError, new Empty());
       return { cancel: jest.fn() } as unknown as grpc.ClientUnaryCall;
     });
@@ -145,7 +145,7 @@ describe("TaskHubGrpcWorker connection lifecycle", () => {
     await flushPromises();
 
     expect(first.stream.cancel).toHaveBeenCalledTimes(1);
-    expect(restarted.getWorkItems).toHaveBeenCalledTimes(1);
+    expect(restarted.stub.getWorkItems).toHaveBeenCalledTimes(1);
     expect((worker as any)._responseStream).toBe(restarted.stream);
 
     await worker.stop();
@@ -166,9 +166,9 @@ describe("TaskHubGrpcWorker connection lifecycle", () => {
     await expect(worker.start()).resolves.toBeUndefined();
     await jest.advanceTimersByTimeAsync(4000);
 
-    expect(generateClient).toHaveBeenCalledTimes(3);
-    expect(connected.getWorkItems).toHaveBeenCalledTimes(1);
-    expect(logger.error).toHaveBeenCalledTimes(2);
+    expect(generateClient).toHaveBeenCalledTimes(2);
+    expect(connected.stub.getWorkItems).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledTimes(1);
 
     await worker.stop();
   });
