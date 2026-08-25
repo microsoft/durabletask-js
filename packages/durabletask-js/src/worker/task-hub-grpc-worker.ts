@@ -232,7 +232,7 @@ export class TaskHubGrpcWorker {
     this._stub = newClient.stub;
 
     // Do not await - run in background
-    this.internalRunWorker(newClient, true, signal).catch((err) => {
+    this.internalRunWorker(newClient, signal).catch((err) => {
       if (!signal?.aborted && !this._stopWorker) {
         WorkerLogs.workerError(this._logger, err);
       }
@@ -416,7 +416,7 @@ export class TaskHubGrpcWorker {
     this._stub = client.stub;
 
     // Run in background but catch any unhandled errors to prevent unhandled rejections
-    this.internalRunWorker(client, false, abortController.signal).catch((err) => {
+    this.internalRunWorker(client, abortController.signal).catch((err) => {
       // Only log if the worker wasn't stopped intentionally
       if (!abortController.signal.aborted) {
         WorkerLogs.workerError(this._logger, err);
@@ -426,7 +426,7 @@ export class TaskHubGrpcWorker {
     this._isRunning = true;
   }
 
-  async internalRunWorker(client: GrpcClient, _isRetry: boolean = false, signal?: AbortSignal): Promise<void> {
+  async internalRunWorker(client: GrpcClient, signal?: AbortSignal): Promise<void> {
     try {
       // send a "Hello" message to the sidecar to ensure that it's listening
       const helloMetadata = await this._getMetadata();
