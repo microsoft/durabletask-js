@@ -30,6 +30,9 @@ jobs:
             pattern: "test/e2e-azuremanaged/query-apis.spec.ts test/e2e-azuremanaged/restart.spec.ts"
           - name: "retry-history-rewind"
             pattern: "test/e2e-azuremanaged/retry-handler.spec.ts test/e2e-azuremanaged/retry-advanced.spec.ts test/e2e-azuremanaged/history.spec.ts test/e2e-azuremanaged/rewind.spec.ts"
+          - name: "worker-recovery"
+            pattern: "test/e2e-azuremanaged/worker-stream-recovery.spec.ts"
+            manages-emulator: true
     name: "e2e (${{ matrix.test-group.name }}, node ${{ matrix.node-version }})"
     env:
       EMULATOR_VERSION: "latest"
@@ -43,10 +46,12 @@ jobs:
         run: docker pull mcr.microsoft.com/dts/dts-emulator:$EMULATOR_VERSION
 
       - name: 🚀 Run Docker container
+        if: ${{ !matrix.test-group.manages-emulator }}
         run: |
           docker run --name dtsemulator -d -p 8080:8080 mcr.microsoft.com/dts/dts-emulator:$EMULATOR_VERSION
 
       - name: ⏳ Wait for container to be ready
+        if: ${{ !matrix.test-group.manages-emulator }}
         run: sleep 10
 
       - name: 🔧 Set environment variables
