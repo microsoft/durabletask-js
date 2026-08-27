@@ -466,7 +466,7 @@ describe("getEntities query normalization", () => {
     client: InstanceType<typeof TaskHubGrpcClient>,
     captureRequest: (req: pb.QueryEntitiesRequest) => void,
   ): void {
-    getStub(client).queryEntities = (req: pb.QueryEntitiesRequest, _metadata: any, callback: any) => {
+    getStub(client).queryEntities = (req: pb.QueryEntitiesRequest, _metadata: any, _options: any, callback: any) => {
       captureRequest(req);
       const res = new pb.QueryEntitiesResponse();
       callback(null, res);

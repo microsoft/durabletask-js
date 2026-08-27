@@ -90,7 +90,6 @@ export class TaskHubGrpcWorker {
   private _versioning?: VersioningOptions;
   private _workItemFilters?: WorkItemFilters | "auto";
   private _abortController: AbortController | null;
-  private _helloCall: grpc.ClientUnaryCall | null;
 
   /**
    * Creates a new TaskHubGrpcWorker instance.
@@ -183,7 +182,6 @@ export class TaskHubGrpcWorker {
     this._versioning = resolvedVersioning;
     this._workItemFilters = resolvedWorkItemFilters;
     this._abortController = null;
-    this._helloCall = null;
   }
 
   /**
@@ -429,46 +427,13 @@ export class TaskHubGrpcWorker {
   async internalRunWorker(client: GrpcClient, signal?: AbortSignal): Promise<void> {
     try {
       // send a "Hello" message to the sidecar to ensure that it's listening
-      const helloMetadata = await this._getMetadata();
-      if (signal?.aborted) {
-        return;
-      }
-      await new Promise<void>((resolve, reject) => {
-        let helloCall: grpc.ClientUnaryCall | undefined = undefined;
-        let settled = false;
-        const finish = (err?: Error) => {
-          if (settled) return;
-          settled = true;
-          signal?.removeEventListener("abort", onAbort);
-          if (this._helloCall === helloCall) {
-            this._helloCall = null;
-          }
-          if (err) {
-            reject(err);
-          } else {
-            resolve();
-          }
-        };
-        const onAbort = () => {
-          helloCall?.cancel();
-          finish(signal?.reason);
-        };
-        signal?.addEventListener("abort", onAbort, { once: true });
-        try {
-          helloCall = client.stub.hello(
-            new Empty(),
-            helloMetadata,
-            { deadline: new Date(Date.now() + HELLO_TIMEOUT_MS) },
-            (err) => finish(err ?? undefined),
-          );
-          if (!settled) {
-            this._helloCall = helloCall;
-          }
-        } catch (err) {
-          const normalizedError = err instanceof Error ? err : new Error(String(err));
-          finish(normalizedError);
-        }
-      });
+      await callWithMetadata(
+        client.stub.hello.bind(client.stub),
+        new Empty(),
+        this._metadataGenerator,
+        { deadline: new Date(Date.now() + HELLO_TIMEOUT_MS) },
+        signal,
+      );
 
       // Reset backoff on successful connection
       this._backoff.reset();
@@ -576,15 +541,9 @@ export class TaskHubGrpcWorker {
       throw new Error("The worker is not running.");
     }
 
-    const abortController = this._abortController;
-    const helloCall = this._helloCall;
     const responseStream = this._responseStream;
     this._stopWorker = true;
-    abortController?.abort();
-    if (this._helloCall === helloCall) {
-      helloCall?.cancel();
-      this._helloCall = null;
-    }
+    this._abortController?.abort();
 
     // Cancel stream first while error handlers are still attached
     // This allows the error handler to suppress CANCELLED errors
@@ -638,9 +597,7 @@ export class TaskHubGrpcWorker {
       this._stub.close();
     }
     this._isRunning = false;
-    if (this._abortController === abortController) {
-      this._abortController = null;
-    }
+    this._abortController = null;
 
     // Brief pause to allow gRPC cleanup
     // https://github.com/grpc/grpc-node/issues/1563#issuecomment-829483711

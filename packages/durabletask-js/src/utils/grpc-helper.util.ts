@@ -14,28 +14,57 @@ export type MetadataGenerator = () => Promise<grpc.Metadata>;
  * @param method The gRPC method to call (must be bound to the stub).
  * @param req The request object.
  * @param metadataGenerator Optional function to generate metadata for the call.
+ * @param options Optional gRPC call options.
+ * @param signal Optional signal that cancels the call.
  * @returns A promise that resolves with the response or rejects with an error.
  */
-export function callWithMetadata<TReq, TRes>(
+export async function callWithMetadata<TReq, TRes>(
   method: (
     req: TReq,
     metadata: grpc.Metadata,
+    options: Partial<grpc.CallOptions>,
     callback: (error: grpc.ServiceError | null, response: TRes) => void,
   ) => grpc.ClientUnaryCall,
   req: TReq,
   metadataGenerator?: MetadataGenerator,
+  options: Partial<grpc.CallOptions> = {},
+  signal?: AbortSignal,
 ): Promise<TRes> {
-  return new Promise((resolve, reject) => {
-    const executeCall = async () => {
-      const metadata = metadataGenerator ? await metadataGenerator() : new grpc.Metadata();
-      method(req, metadata, (error, response) => {
-        if (error) {
-          reject(error);
-        } else {
-          resolve(response);
-        }
-      });
+  const metadata = metadataGenerator ? await metadataGenerator() : new grpc.Metadata();
+  if (signal?.aborted) {
+    throw signal.reason;
+  }
+
+  return new Promise<TRes>((resolve, reject) => {
+    let call: grpc.ClientUnaryCall | undefined;
+    let aborted = false;
+    let settled = false;
+    const finish = (settle: () => void) => {
+      if (settled) {
+        return false;
+      }
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
+      settle();
+      return true;
     };
-    executeCall().catch(reject);
+    const onAbort = () => {
+      aborted = true;
+      if (finish(() => reject(signal!.reason))) {
+        call?.cancel();
+      }
+    };
+
+    signal?.addEventListener("abort", onAbort, { once: true });
+    try {
+      call = method(req, metadata, options, (error, response) => {
+        finish(() => (error ? reject(error) : resolve(response)));
+      });
+      if (aborted) {
+        call.cancel();
+      }
+    } catch (error) {
+      finish(() => reject(error));
+    }
   });
 }
