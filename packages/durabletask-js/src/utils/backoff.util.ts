@@ -143,7 +143,6 @@ export class ExponentialBackoff {
     await new Promise<void>((resolve, reject) => {
       const onAbort = () => {
         clearTimeout(timeoutId);
-        signal?.removeEventListener("abort", onAbort);
         reject(signal?.reason);
       };
       const timeoutId = setTimeout(() => {
