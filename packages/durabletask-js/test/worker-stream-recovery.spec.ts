@@ -32,7 +32,7 @@ function createMockClient(): {
   mockStream.cancel = jest.fn();
 
   const stub = {
-    hello: (_req: any, _metadata: any, callback: (err: any, res: any) => void) => {
+    hello: (_req: any, _metadata: any, _options: any, callback: (err: any, res: any) => void) => {
       callback(null, {});
       return {} as any;
     },

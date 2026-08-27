@@ -130,18 +130,31 @@ export class ExponentialBackoff {
    * Waits for the current backoff delay, then increments the attempt count
    * and calculates the next delay.
    *
-   * @returns Promise that resolves after the delay.
+   * @param signal Optional signal that cancels the pending delay.
+   * @returns Promise that resolves after the delay or rejects when aborted.
    */
-  async wait(): Promise<void> {
+  async wait(signal?: AbortSignal): Promise<void> {
     const delay = this._calculateDelayWithJitter();
 
-    await new Promise<void>((resolve) => setTimeout(resolve, delay));
+    if (signal?.aborted) {
+      throw signal.reason;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = () => {
+        clearTimeout(timeoutId);
+        reject(signal?.reason);
+      };
+      const timeoutId = setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, delay);
+
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
 
     this._attemptCount++;
-    this._currentDelayMs = Math.min(
-      this._currentDelayMs * this._multiplier,
-      this._maxDelayMs,
-    );
+    this._currentDelayMs = Math.min(this._currentDelayMs * this._multiplier, this._maxDelayMs);
   }
 
   /**

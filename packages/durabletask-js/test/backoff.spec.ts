@@ -81,6 +81,29 @@ describe("ExponentialBackoff", () => {
       await backoff.wait();
       expect(backoff.currentDelayMs).toBe(100); // 50 * 10 = 500, capped at 100
     });
+
+    it("should abort without advancing the backoff state", async () => {
+      jest.useFakeTimers();
+      const backoff = new ExponentialBackoff({
+        initialDelayMs: 1000,
+        multiplier: 2,
+        jitterFactor: 0,
+      });
+      const controller = new AbortController();
+      const abortError = new Error("stopped");
+
+      try {
+        const waitPromise = backoff.wait(controller.signal);
+        controller.abort(abortError);
+
+        await expect(waitPromise).rejects.toBe(abortError);
+        expect(backoff.attemptCount).toBe(0);
+        expect(backoff.currentDelayMs).toBe(1000);
+        expect(jest.getTimerCount()).toBe(0);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
   });
 
   describe("reset", () => {

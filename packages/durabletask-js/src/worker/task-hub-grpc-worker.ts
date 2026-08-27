@@ -40,6 +40,7 @@ import {
 
 /** Default timeout in milliseconds for graceful shutdown. */
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30000;
+const HELLO_TIMEOUT_MS = 30000;
 
 /**
  * Options for creating a TaskHubGrpcWorker.
@@ -88,6 +89,7 @@ export class TaskHubGrpcWorker {
   private _backoff: ExponentialBackoff;
   private _versioning?: VersioningOptions;
   private _workItemFilters?: WorkItemFilters | "auto";
+  private _abortController: AbortController | null;
 
   /**
    * Creates a new TaskHubGrpcWorker instance.
@@ -179,6 +181,7 @@ export class TaskHubGrpcWorker {
     });
     this._versioning = resolvedVersioning;
     this._workItemFilters = resolvedWorkItemFilters;
+    this._abortController = null;
   }
 
   /**
@@ -195,13 +198,28 @@ export class TaskHubGrpcWorker {
    * Creates a new gRPC client and retries the worker.
    * Properly closes the old client to prevent connection leaks.
    */
-  private async _createNewClientAndRetry(): Promise<void> {
+  private async _createNewClientAndRetry(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) {
+      return;
+    }
+
     // Close the old stub to prevent connection leaks
     if (this._stub) {
       this._stub.close();
     }
 
-    await this._backoff.wait();
+    try {
+      await this._backoff.wait(signal);
+    } catch (err) {
+      if (signal?.aborted) {
+        return;
+      }
+      throw err;
+    }
+
+    if (signal?.aborted) {
+      return;
+    }
 
     const newClient = new GrpcClient(
       this._hostAddress,
@@ -212,8 +230,8 @@ export class TaskHubGrpcWorker {
     this._stub = newClient.stub;
 
     // Do not await - run in background
-    this.internalRunWorker(newClient, true).catch((err) => {
-      if (!this._stopWorker) {
+    this.internalRunWorker(newClient, signal).catch((err) => {
+      if (!signal?.aborted && !this._stopWorker) {
         WorkerLogs.workerError(this._logger, err);
       }
     });
@@ -388,13 +406,17 @@ export class TaskHubGrpcWorker {
       throw new Error("The worker is already running.");
     }
 
+    this._stopWorker = false;
+    this._backoff.reset();
+    const abortController = new AbortController();
+    this._abortController = abortController;
     const client = new GrpcClient(this._hostAddress, this._grpcChannelOptions, this._tls, this._grpcChannelCredentials);
     this._stub = client.stub;
 
     // Run in background but catch any unhandled errors to prevent unhandled rejections
-    this.internalRunWorker(client).catch((err) => {
+    this.internalRunWorker(client, abortController.signal).catch((err) => {
       // Only log if the worker wasn't stopped intentionally
-      if (!this._stopWorker) {
+      if (!abortController.signal.aborted) {
         WorkerLogs.workerError(this._logger, err);
       }
     });
@@ -402,16 +424,25 @@ export class TaskHubGrpcWorker {
     this._isRunning = true;
   }
 
-  async internalRunWorker(client: GrpcClient, isRetry: boolean = false): Promise<void> {
+  async internalRunWorker(client: GrpcClient, signal?: AbortSignal): Promise<void> {
     try {
       // send a "Hello" message to the sidecar to ensure that it's listening
-      await callWithMetadata(client.stub.hello.bind(client.stub), new Empty(), this._metadataGenerator);
+      await callWithMetadata(
+        (request, metadata, callback) =>
+          client.stub.hello(request, metadata, { deadline: new Date(Date.now() + HELLO_TIMEOUT_MS) }, callback),
+        new Empty(),
+        this._metadataGenerator,
+        signal,
+      );
 
       // Reset backoff on successful connection
       this._backoff.reset();
 
       // Stream work items from the sidecar (pass metadata for insecure connections)
       const metadata = await this._getMetadata();
+      if (signal?.aborted) {
+        return;
+      }
       const request = this._buildGetWorkItemsRequest();
 
       const stream = client.stub.getWorkItems(request, metadata);
@@ -449,7 +480,7 @@ export class TaskHubGrpcWorker {
 
       // Wait for the stream to end or error
       stream.on("end", () => {
-        if (this._stopWorker) {
+        if (signal?.aborted || this._stopWorker) {
           WorkerLogs.streamEnded(this._logger);
           stream.removeAllListeners();
           stream.destroy();
@@ -460,8 +491,8 @@ export class TaskHubGrpcWorker {
         stream.on("error", () => {}); // Prevent unhandled "error" after cleanup
         stream.destroy();
         WorkerLogs.streamRetry(this._logger, this._backoff.peekNextDelay());
-        this._createNewClientAndRetry().catch((retryErr) => {
-          if (!this._stopWorker) {
+        this._createNewClientAndRetry(signal).catch((retryErr) => {
+          if (!signal?.aborted && !this._stopWorker) {
             WorkerLogs.workerError(this._logger, retryErr instanceof Error ? retryErr : new Error(String(retryErr)));
           }
         });
@@ -469,7 +500,7 @@ export class TaskHubGrpcWorker {
 
       stream.on("error", (err: Error) => {
         // Ignore cancellation errors when the worker is being stopped intentionally
-        if (this._stopWorker) {
+        if (signal?.aborted || this._stopWorker) {
           return;
         }
         WorkerLogs.streamErrorInfo(this._logger, err);
@@ -482,24 +513,21 @@ export class TaskHubGrpcWorker {
         stream.on("error", () => {}); // Prevent unhandled "error" after cleanup
         stream.destroy();
         WorkerLogs.streamRetry(this._logger, this._backoff.peekNextDelay());
-        this._createNewClientAndRetry().catch((retryErr) => {
-          if (!this._stopWorker) {
+        this._createNewClientAndRetry(signal).catch((retryErr) => {
+          if (!signal?.aborted && !this._stopWorker) {
             WorkerLogs.workerError(this._logger, retryErr instanceof Error ? retryErr : new Error(String(retryErr)));
           }
         });
       });
     } catch (err) {
-      if (this._stopWorker) {
+      if (signal?.aborted || this._stopWorker) {
         // ignoring the error because the worker has been stopped
         return;
       }
       const error = err instanceof Error ? err : new Error(String(err));
       WorkerLogs.streamError(this._logger, error);
-      if (!isRetry) {
-        throw error;
-      }
       WorkerLogs.connectionRetry(this._logger, this._backoff.peekNextDelay());
-      await this._createNewClientAndRetry();
+      await this._createNewClientAndRetry(signal);
       return;
     }
   }
@@ -513,19 +541,21 @@ export class TaskHubGrpcWorker {
       throw new Error("The worker is not running.");
     }
 
+    const responseStream = this._responseStream;
     this._stopWorker = true;
+    this._abortController?.abort();
 
     // Cancel stream first while error handlers are still attached
     // This allows the error handler to suppress CANCELLED errors
-    this._responseStream?.cancel();
+    responseStream?.cancel();
 
     // Wait for the stream to react to cancellation using events rather than a fixed delay.
     // This avoids race conditions caused by relying on timing alone.
-    if (this._responseStream) {
+    if (responseStream) {
       try {
         await withTimeout(
           new Promise<void>((resolve) => {
-            const stream = this._responseStream!;
+            const stream = responseStream;
             // Any of these events indicates the stream has processed cancellation / is closing.
             stream.once("end", resolve);
             stream.once("close", resolve);
@@ -540,8 +570,11 @@ export class TaskHubGrpcWorker {
     }
 
     // Now safe to remove listeners and destroy
-    this._responseStream?.removeAllListeners();
-    this._responseStream?.destroy();
+    responseStream?.removeAllListeners();
+    responseStream?.destroy();
+    if (this._responseStream === responseStream) {
+      this._responseStream = null;
+    }
 
     // Wait for pending work items to complete with timeout
     if (this._pendingWorkItems.size > 0) {
@@ -564,6 +597,7 @@ export class TaskHubGrpcWorker {
       this._stub.close();
     }
     this._isRunning = false;
+    this._abortController = null;
 
     // Brief pause to allow gRPC cleanup
     // https://github.com/grpc/grpc-node/issues/1563#issuecomment-829483711

@@ -13,6 +13,9 @@
 
 ### Fixes
 
+- Bound each worker sidecar hello attempt to 30 seconds, retry failed connections, and cancel
+  pending hello calls and reconnect delays when the worker stops.
+
 ## v0.4.0 (2026-07-31)
 
 ### Changes
