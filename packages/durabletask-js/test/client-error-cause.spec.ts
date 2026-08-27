@@ -33,7 +33,7 @@ describe("TaskHubGrpcClient error cause preservation", () => {
     it("should preserve error cause for NOT_FOUND gRPC errors", async () => {
       const grpcError = createGrpcError(grpc.status.NOT_FOUND, "Instance not found");
 
-      getStub(client).rewindInstance = (_req: any, _metadata: any, _options: any, callback: any) => {
+      getStub(client).rewindInstance = (_req: any, _metadata: any, callback: any) => {
         callback(grpcError, null);
         return {} as grpc.ClientUnaryCall;
       };
@@ -56,7 +56,7 @@ describe("TaskHubGrpcClient error cause preservation", () => {
         "Orchestration is running",
       );
 
-      getStub(client).rewindInstance = (_req: any, _metadata: any, _options: any, callback: any) => {
+      getStub(client).rewindInstance = (_req: any, _metadata: any, callback: any) => {
         callback(grpcError, null);
         return {} as grpc.ClientUnaryCall;
       };
@@ -75,7 +75,7 @@ describe("TaskHubGrpcClient error cause preservation", () => {
     it("should preserve error cause for UNIMPLEMENTED gRPC errors", async () => {
       const grpcError = createGrpcError(grpc.status.UNIMPLEMENTED, "");
 
-      getStub(client).rewindInstance = (_req: any, _metadata: any, _options: any, callback: any) => {
+      getStub(client).rewindInstance = (_req: any, _metadata: any, callback: any) => {
         callback(grpcError, null);
         return {} as grpc.ClientUnaryCall;
       };
@@ -94,7 +94,7 @@ describe("TaskHubGrpcClient error cause preservation", () => {
     it("should preserve error cause for CANCELLED gRPC errors", async () => {
       const grpcError = createGrpcError(grpc.status.CANCELLED, "Cancelled");
 
-      getStub(client).rewindInstance = (_req: any, _metadata: any, _options: any, callback: any) => {
+      getStub(client).rewindInstance = (_req: any, _metadata: any, callback: any) => {
         callback(grpcError, null);
         return {} as grpc.ClientUnaryCall;
       };
@@ -113,7 +113,7 @@ describe("TaskHubGrpcClient error cause preservation", () => {
     it("should rethrow unrecognized gRPC errors without wrapping", async () => {
       const grpcError = createGrpcError(grpc.status.INTERNAL, "Internal server error");
 
-      getStub(client).rewindInstance = (_req: any, _metadata: any, _options: any, callback: any) => {
+      getStub(client).rewindInstance = (_req: any, _metadata: any, callback: any) => {
         callback(grpcError, null);
         return {} as grpc.ClientUnaryCall;
       };
@@ -132,7 +132,7 @@ describe("TaskHubGrpcClient error cause preservation", () => {
     it("should preserve error cause for NOT_FOUND gRPC errors", async () => {
       const grpcError = createGrpcError(grpc.status.NOT_FOUND, "Instance not found");
 
-      getStub(client).restartInstance = (_req: any, _metadata: any, _options: any, callback: any) => {
+      getStub(client).restartInstance = (_req: any, _metadata: any, callback: any) => {
         callback(grpcError, null);
         return {} as grpc.ClientUnaryCall;
       };
@@ -155,7 +155,7 @@ describe("TaskHubGrpcClient error cause preservation", () => {
         "Orchestration is still running",
       );
 
-      getStub(client).restartInstance = (_req: any, _metadata: any, _options: any, callback: any) => {
+      getStub(client).restartInstance = (_req: any, _metadata: any, callback: any) => {
         callback(grpcError, null);
         return {} as grpc.ClientUnaryCall;
       };
@@ -175,7 +175,7 @@ describe("TaskHubGrpcClient error cause preservation", () => {
     it("should preserve error cause for CANCELLED gRPC errors", async () => {
       const grpcError = createGrpcError(grpc.status.CANCELLED, "Cancelled");
 
-      getStub(client).restartInstance = (_req: any, _metadata: any, _options: any, callback: any) => {
+      getStub(client).restartInstance = (_req: any, _metadata: any, callback: any) => {
         callback(grpcError, null);
         return {} as grpc.ClientUnaryCall;
       };
@@ -194,7 +194,7 @@ describe("TaskHubGrpcClient error cause preservation", () => {
     it("should rethrow unrecognized gRPC errors without wrapping", async () => {
       const grpcError = createGrpcError(grpc.status.INTERNAL, "Internal server error");
 
-      getStub(client).restartInstance = (_req: any, _metadata: any, _options: any, callback: any) => {
+      getStub(client).restartInstance = (_req: any, _metadata: any, callback: any) => {
         callback(grpcError, null);
         return {} as grpc.ClientUnaryCall;
       };

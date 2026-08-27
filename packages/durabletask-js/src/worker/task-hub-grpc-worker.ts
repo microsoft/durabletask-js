@@ -428,10 +428,10 @@ export class TaskHubGrpcWorker {
     try {
       // send a "Hello" message to the sidecar to ensure that it's listening
       await callWithMetadata(
-        client.stub.hello.bind(client.stub),
+        (request, metadata, callback) =>
+          client.stub.hello(request, metadata, { deadline: new Date(Date.now() + HELLO_TIMEOUT_MS) }, callback),
         new Empty(),
         this._metadataGenerator,
-        { deadline: new Date(Date.now() + HELLO_TIMEOUT_MS) },
         signal,
       );
 

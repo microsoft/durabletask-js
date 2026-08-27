@@ -37,7 +37,6 @@ function mockStartInstance(
   stub.startInstance = (
     request: pb.CreateInstanceRequest,
     _metadata: grpc.Metadata,
-    _options: Partial<grpc.CallOptions>,
     callback: (error: grpc.ServiceError | null, response: pb.CreateInstanceResponse) => void,
   ) => {
     captureRequest(request);
