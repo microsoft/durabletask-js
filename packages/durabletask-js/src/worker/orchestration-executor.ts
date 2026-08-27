@@ -31,6 +31,13 @@ import {
   EntityOperationFailedException,
   createTaskFailureDetails,
 } from "../entities/entity-operation-failed-exception";
+import { mapToRecord } from "../utils/tags.util";
+import {
+  DefaultOrchestrationMiddlewareContext,
+  MiddlewareFeatures,
+  OrchestrationMiddleware,
+  runOrchestrationMiddleware,
+} from "./middleware";
 
 /**
  * Result of orchestration execution containing actions and optional custom status.
@@ -47,14 +54,16 @@ export class OrchestrationExecutor {
   private _suspendedEvents: pb.HistoryEvent[];
   private _logger: Logger;
   private _orchestratorName: string;
+  private _middleware: readonly OrchestrationMiddleware[];
 
-  constructor(registry: Registry, logger?: Logger) {
+  constructor(registry: Registry, logger?: Logger, middleware: readonly OrchestrationMiddleware[] = []) {
     this._registry = registry;
     this._generator = undefined;
     this._isSuspended = false;
     this._suspendedEvents = [];
     this._logger = logger ?? new ConsoleLogger();
     this._orchestratorName = "(unknown)";
+    this._middleware = [...middleware];
   }
 
   async execute(
@@ -62,6 +71,7 @@ export class OrchestrationExecutor {
     oldEvents: pb.HistoryEvent[],
     newEvents: pb.HistoryEvent[],
     executionId?: string,
+    features: MiddlewareFeatures = new MiddlewareFeatures(),
   ): Promise<OrchestrationExecutionResult> {
     if (!newEvents?.length) {
       throw new OrchestrationStateError("The new history event list must have at least one event in it");
@@ -92,22 +102,80 @@ export class OrchestrationExecutor {
       ctx._executionId = executionId;
     }
 
+    const allEvents = [...oldEvents, ...newEvents];
+    const executionStarted = allEvents.find((event) => event.hasExecutionstarted())?.getExecutionstarted();
+    const initialOrchestratorStarted = allEvents.find((event) => event.hasOrchestratorstarted());
+    const rawInput = isEmpty(executionStarted?.getInput()) ? undefined : executionStarted?.getInput()?.getValue();
+    const parentInstance = executionStarted?.getParentinstance();
+    const parentOrchestrationInstance = parentInstance?.getOrchestrationinstance();
+    ctx._version = executionStarted?.getVersion()?.getValue() ?? "";
+    ctx._parent = parentInstance
+      ? {
+          name: parentInstance.getName()?.getValue() ?? "",
+          instanceId: parentOrchestrationInstance?.getInstanceid() ?? "",
+          taskScheduledId: parentInstance.getTaskscheduledid(),
+        }
+      : undefined;
+    ctx._isReplaying = oldEvents.length > 0;
+    ctx._currentUtcDatetime = initialOrchestratorStarted?.getTimestamp()?.toDate() ?? ctx._currentUtcDatetime;
+    this._orchestratorName = executionStarted?.getName() ?? "(unknown)";
+
     try {
-      // Rebuild the local state by replaying the history events into the orchestrator function
-      WorkerLogs.orchestrationRebuilding(this._logger, instanceId, oldEvents.length);
-      ctx._isReplaying = true;
+      const middlewareContext = new DefaultOrchestrationMiddlewareContext(
+        this._orchestratorName,
+        instanceId,
+        ctx._version || undefined,
+        ctx._parent,
+        mapToRecord(executionStarted?.getTagsMap()),
+        parseJsonField(executionStarted?.getInput()),
+        rawInput,
+        oldEvents.length > 0,
+        ctx,
+        features,
+      );
 
-      for (const oldEvent of oldEvents) {
-        await this.processEvent(ctx, oldEvent);
-      }
+      try {
+        let signalSuspended!: () => void;
+        const suspended = new Promise<void>((resolve) => {
+          signalSuspended = resolve;
+        });
+        await runOrchestrationMiddleware(
+          middlewareContext,
+          this._middleware,
+          async () => {
+            try {
+              // Rebuild the local state by replaying the history events into the orchestrator function
+              WorkerLogs.orchestrationRebuilding(this._logger, instanceId, oldEvents.length);
+              ctx._isReplaying = true;
 
-      // Get new actions by executing newly received events into the orchestrator function
-      const summary = getNewEventSummary(newEvents);
-      WorkerLogs.orchestrationProcessing(this._logger, instanceId, newEvents.length, summary);
-      ctx._isReplaying = false;
+              for (const oldEvent of oldEvents) {
+                await this.processEvent(ctx, oldEvent);
+              }
 
-      for (const newEvent of newEvents) {
-        await this.processEvent(ctx, newEvent);
+              // Get new actions by executing newly received events into the orchestrator function
+              const summary = getNewEventSummary(newEvents);
+              WorkerLogs.orchestrationProcessing(this._logger, instanceId, newEvents.length, summary);
+              ctx._isReplaying = false;
+
+              for (const newEvent of newEvents) {
+                await this.processEvent(ctx, newEvent);
+              }
+            } catch (e: unknown) {
+              ctx.setFailed(e instanceof Error ? e : new Error(String(e)));
+            }
+
+            middlewareContext.setExecutionResult(ctx._result, ctx._failure);
+            if (!ctx._isComplete) {
+              signalSuspended();
+              await new Promise<void>(() => {});
+            }
+          },
+          suspended,
+        );
+      } catch (e: unknown) {
+        const error = e instanceof Error ? e : new Error(String(e));
+        ctx.setFailed(error);
+        middlewareContext.setExecutionResult(undefined, error);
       }
     } catch (e: unknown) {
       ctx.setFailed(e instanceof Error ? e : new Error(String(e)));
@@ -250,9 +318,7 @@ export class OrchestrationExecutor {
   private async handleExecutionStarted(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
     // TODO: Check if we already started the orchestration
     const executionStartedEvent = event.getExecutionstarted();
-    const fn = this._registry.getOrchestrator(
-      executionStartedEvent ? executionStartedEvent.getName() : undefined,
-    );
+    const fn = this._registry.getOrchestrator(executionStartedEvent ? executionStartedEvent.getName() : undefined);
 
     if (!fn) {
       throw new OrchestratorNotRegisteredError(executionStartedEvent?.getName());
@@ -419,9 +485,7 @@ export class OrchestrationExecutor {
     } else if (!isCreateSubOrchestrationAction) {
       const expectedMethodName = getName(ctx.callSubOrchestrator);
       throw getWrongActionTypeError(taskId, expectedMethodName, action);
-    } else if (
-      action.getCreatesuborchestration()?.getName() != event.getSuborchestrationinstancecreated()?.getName()
-    ) {
+    } else if (action.getCreatesuborchestration()?.getName() != event.getSuborchestrationinstancecreated()?.getName()) {
       throw getWrongActionNameError(
         taskId,
         getName(ctx.callSubOrchestrator),
@@ -431,7 +495,10 @@ export class OrchestrationExecutor {
     }
   }
 
-  private async handleSubOrchestrationCompleted(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+  private async handleSubOrchestrationCompleted(
+    ctx: RuntimeOrchestrationContext,
+    event: pb.HistoryEvent,
+  ): Promise<void> {
     const completedEvent = event.getSuborchestrationinstancecompleted();
     const taskId = completedEvent ? completedEvent.getTaskscheduledid() : undefined;
     const result = completedEvent?.getResult();
@@ -445,7 +512,13 @@ export class OrchestrationExecutor {
       ? subOrchestrationInstanceFailedEvent.getTaskscheduledid()
       : undefined;
     const failureDetails = subOrchestrationInstanceFailedEvent?.getFailuredetails();
-    await this.handleFailedTask(ctx, taskId, failureDetails, "subOrchestrationInstanceFailed", "Sub-orchestration task");
+    await this.handleFailedTask(
+      ctx,
+      taskId,
+      failureDetails,
+      "subOrchestrationInstanceFailed",
+      "Sub-orchestration task",
+    );
   }
 
   private async handleEventRaised(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
@@ -751,17 +824,15 @@ export class OrchestrationExecutor {
     );
   }
 
-  private async handleEntityOperationCompleted(ctx: RuntimeOrchestrationContext, event: pb.HistoryEvent): Promise<void> {
+  private async handleEntityOperationCompleted(
+    ctx: RuntimeOrchestrationContext,
+    event: pb.HistoryEvent,
+  ): Promise<void> {
     const completedEvent = event.getEntityoperationcompleted();
     const requestId = completedEvent?.getRequestid();
 
     if (!requestId) {
-      WorkerLogs.entityEventIgnored(
-        this._logger,
-        ctx._instanceId,
-        "EntityOperationCompletedEvent",
-        "no requestId",
-      );
+      WorkerLogs.entityEventIgnored(this._logger, ctx._instanceId, "EntityOperationCompletedEvent", "no requestId");
       return;
     }
 
@@ -798,12 +869,7 @@ export class OrchestrationExecutor {
     const requestId = failedEvent?.getRequestid();
 
     if (!requestId) {
-      WorkerLogs.entityEventIgnored(
-        this._logger,
-        ctx._instanceId,
-        "EntityOperationFailedEvent",
-        "no requestId",
-      );
+      WorkerLogs.entityEventIgnored(this._logger, ctx._instanceId, "EntityOperationFailedEvent", "no requestId");
       return;
     }
 
@@ -828,12 +894,10 @@ export class OrchestrationExecutor {
     // If in a critical section, recover the lock for this entity
     ctx._entityFeature.recoverLockAfterCall(pendingCall.entityId);
 
-    const failureDetails =
-      createTaskFailureDetails(failedEvent?.getFailuredetails()) ??
-      {
-        errorType: "UnknownError",
-        errorMessage: `Entity operation '${pendingCall.operationName}' failed with unknown error`,
-      };
+    const failureDetails = createTaskFailureDetails(failedEvent?.getFailuredetails()) ?? {
+      errorType: "UnknownError",
+      errorMessage: `Entity operation '${pendingCall.operationName}' failed with unknown error`,
+    };
     const exception = new EntityOperationFailedException(
       pendingCall.entityId,
       pendingCall.operationName,
@@ -849,12 +913,7 @@ export class OrchestrationExecutor {
     const criticalSectionId = lockGrantedEvent?.getCriticalsectionid();
 
     if (!criticalSectionId) {
-      WorkerLogs.entityEventIgnored(
-        this._logger,
-        ctx._instanceId,
-        "EntityLockGrantedEvent",
-        "no criticalSectionId",
-      );
+      WorkerLogs.entityEventIgnored(this._logger, ctx._instanceId, "EntityLockGrantedEvent", "no criticalSectionId");
       return;
     }
 
@@ -973,14 +1032,10 @@ export class OrchestrationExecutor {
     // No retry - fail the task
     delete ctx._pendingTasks[taskId];
 
-    task.fail(
-      `${taskLabel} #${taskId} failed: ${errorMessage}`,
-      failureDetails,
-    );
+    task.fail(`${taskLabel} #${taskId} failed: ${errorMessage}`, failureDetails);
 
     await ctx.resume();
   }
-
 
   /**
    * Checks if a failed task supports retry and handles the retry if applicable.

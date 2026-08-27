@@ -2,7 +2,13 @@
 // Licensed under the MIT License.
 
 import { DurableTaskAzureManagedWorkerBuilder, createAzureManagedWorkerBuilder } from "../../src/worker-builder";
-import { TaskEntity, ITaskEntity, TaskEntityOperation } from "@microsoft/durabletask-js";
+import {
+  ActivityMiddleware,
+  OrchestrationMiddleware,
+  TaskEntity,
+  ITaskEntity,
+  TaskEntityOperation,
+} from "@microsoft/durabletask-js";
 
 // Simple test entity for registration testing
 class CounterEntity extends TaskEntity<number> {
@@ -78,6 +84,22 @@ describe("DurableTaskAzureManagedWorkerBuilder", () => {
         .build();
 
       expect(worker).toBeDefined();
+    });
+
+    describe("middleware", () => {
+      it("supports orchestration and activity middleware registration through the builder", () => {
+        const orchestrationMiddleware: OrchestrationMiddleware = async (context, next) => next(context);
+        const activityMiddleware: ActivityMiddleware = async (context, next) => next(context);
+        const builder = new DurableTaskAzureManagedWorkerBuilder();
+
+        const result = builder
+          .endpoint(ENDPOINT, TASKHUB, null)
+          .useOrchestrationMiddleware(orchestrationMiddleware)
+          .useActivityMiddleware(activityMiddleware);
+
+        expect(result).toBe(builder);
+        expect(result.build()).toBeDefined();
+      });
     });
   });
 

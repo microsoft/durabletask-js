@@ -21,11 +21,7 @@ import { Task } from "../task/task";
 import { StopIterationError } from "./exception/stop-iteration-error";
 import { mapToRecord } from "../utils/tags.util";
 
-import {
-  OrchestrationEntityFeature,
-  CriticalSectionInfo,
-  LockHandle,
-} from "../entities/orchestration-entity-feature";
+import { OrchestrationEntityFeature, CriticalSectionInfo, LockHandle } from "../entities/orchestration-entity-feature";
 import { EntityInstanceId } from "../entities/entity-instance-id";
 import { SignalEntityOptions, CallEntityOptions } from "../entities/signal-entity-options";
 
@@ -35,6 +31,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   _isReplaying: boolean;
   _isComplete: boolean;
   _result: any;
+  _failure?: Error;
   _pendingActions: Record<number, pb.OrchestratorAction>;
   _pendingTasks: Record<number, CompletableTask<any>>;
   _sequenceNumber: number;
@@ -60,6 +57,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     this._isReplaying = true;
     this._isComplete = false;
     this._result = undefined;
+    this._failure = undefined;
     this._pendingActions = {};
     this._pendingTasks = {};
     this._sequenceNumber = 0;
@@ -223,6 +221,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     // must be preserved and returned alongside the complete action
 
     this._result = result;
+    this._failure = undefined;
 
     let resultJson;
 
@@ -248,6 +247,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
 
     this._isComplete = true;
     this._completionStatus = pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED;
+    this._failure = e;
     // Note: Do NOT clear pending actions here - fire-and-forget actions like sendEvent
     // must be preserved and returned alongside the complete action
 
@@ -333,15 +333,11 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     } else if (fireAt instanceof Date) {
       fireAtDate = fireAt;
     } else {
-      throw new Error(
-        `createTimer requires a finite number (seconds) or a valid Date, but received ${String(fireAt)}`,
-      );
+      throw new Error(`createTimer requires a finite number (seconds) or a valid Date, but received ${String(fireAt)}`);
     }
 
     if (Number.isNaN(fireAtDate.getTime())) {
-      throw new Error(
-        "createTimer received or produced an invalid Date (NaN timestamp)",
-      );
+      throw new Error("createTimer received or produced an invalid Date (NaN timestamp)");
     }
 
     const action = ph.newCreateTimerAction(id, fireAtDate);
@@ -419,7 +415,14 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     }
 
     const encodedInput = input !== undefined ? JSON.stringify(input) : undefined;
-    const action = ph.newCreateSubOrchestrationAction(id, name, instanceId, encodedInput, options?.tags, options?.version);
+    const action = ph.newCreateSubOrchestrationAction(
+      id,
+      name,
+      instanceId,
+      encodedInput,
+      options?.tags,
+      options?.version,
+    );
     this._pendingActions[action.getId()] = action;
 
     const task = this.createRetryTaskOrDefault<TOutput>(action, id, options, "subOrchestration");
@@ -490,10 +493,9 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     try {
       this._customStatus = JSON.stringify(customStatus);
     } catch (e) {
-      throw new Error(
-        `Custom status value is not JSON-serializable: ${e instanceof Error ? e.message : String(e)}`,
-        { cause: e },
-      );
+      throw new Error(`Custom status value is not JSON-serializable: ${e instanceof Error ? e.message : String(e)}`, {
+        cause: e,
+      });
     }
   }
 
@@ -645,15 +647,10 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     action: pb.OrchestratorAction,
     id: number,
     options: TaskOptions | SubOrchestrationOptions | undefined,
-    taskType: RetryTaskType
+    taskType: RetryTaskType,
   ): CompletableTask<TOutput> {
     if (options?.retry && isRetryPolicy(options.retry)) {
-      const retryableTask = new RetryableTask<TOutput>(
-        options.retry,
-        action,
-        this._currentUtcDatetime,
-        taskType,
-      );
+      const retryableTask = new RetryableTask<TOutput>(options.retry, action, this._currentUtcDatetime, taskType);
       this._pendingTasks[id] = retryableTask;
       return retryableTask;
     }
@@ -662,13 +659,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
       // Normalize to AsyncRetryHandler — wraps sync handlers via Promise.resolve,
       // and is a no-op for handlers that already return a Promise.
       const handler = toAsyncRetryHandler(options.retry);
-      const retryHandlerTask = new RetryHandlerTask<TOutput>(
-        handler,
-        this,
-        action,
-        this._currentUtcDatetime,
-        taskType,
-      );
+      const retryHandlerTask = new RetryHandlerTask<TOutput>(handler, this, action, this._currentUtcDatetime, taskType);
       this._pendingTasks[id] = retryHandlerTask;
       return retryHandlerTask;
     }
@@ -749,10 +740,7 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
    * Tracks pending lock acquisitions by criticalSectionId.
    * Used to correlate EntityLockGranted events with the original lock request.
    */
-  readonly pendingLockRequests: Map<
-    string,
-    { task: CompletableTask<LockHandle>; lockSet: EntityInstanceId[] }
-  >;
+  readonly pendingLockRequests: Map<string, { task: CompletableTask<LockHandle>; lockSet: EntityInstanceId[] }>;
 
   /**
    * Current critical section state. Null if not in a critical section.
@@ -815,25 +803,19 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
     if (this.criticalSection) {
       // Check if lock acquisition is still pending
       if (this.lockAcquisitionPending) {
-        throw new Error(
-          "Must await the completion of the lock request prior to calling any entity.",
-        );
+        throw new Error("Must await the completion of the lock request prior to calling any entity.");
       }
 
       const entityIdStr = id.toString();
       if (!this.criticalSection.availableEntities.has(entityIdStr)) {
         // Check if this entity is even in the lock set
-        const isLocked = this.criticalSection.lockedEntities.some(
-          (e) => e.toString() === entityIdStr,
-        );
+        const isLocked = this.criticalSection.lockedEntities.some((e) => e.toString() === entityIdStr);
         if (isLocked) {
           throw new Error(
             "Must not call an entity from a critical section while a prior call to the same entity is still pending.",
           );
         } else {
-          throw new Error(
-            "Must not call an entity from a critical section if it is not one of the locked entities.",
-          );
+          throw new Error("Must not call an entity from a critical section if it is not one of the locked entities.");
         }
       }
       // Mark entity as unavailable until call completes
@@ -890,18 +872,11 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
    * This creates a SendEntityMessageAction with an EntityOperationSignaledEvent.
    * The orchestration does not wait for the entity to process the operation.
    */
-  signalEntity(
-    id: EntityInstanceId,
-    operationName: string,
-    input?: unknown,
-    options?: SignalEntityOptions,
-  ): void {
+  signalEntity(id: EntityInstanceId, operationName: string, input?: unknown, options?: SignalEntityOptions): void {
     // Validate: cannot signal a locked entity from within a critical section
     if (this.criticalSection) {
       const entityIdStr = id.toString();
-      const isLocked = this.criticalSection.lockedEntities.some(
-        (e) => e.toString() === entityIdStr,
-      );
+      const isLocked = this.criticalSection.lockedEntities.some((e) => e.toString() === entityIdStr);
       if (isLocked) {
         throw new Error("Must not signal a locked entity from a critical section.");
       }
@@ -957,10 +932,7 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
     const uniqueEntities: EntityInstanceId[] = [];
     for (const entity of sortedEntities) {
       const entityStr = entity.toString();
-      if (
-        uniqueEntities.length === 0 ||
-        uniqueEntities[uniqueEntities.length - 1].toString() !== entityStr
-      ) {
+      if (uniqueEntities.length === 0 || uniqueEntities[uniqueEntities.length - 1].toString() !== entityStr) {
         uniqueEntities.push(entity);
       }
     }
@@ -970,12 +942,7 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
     const lockSet = uniqueEntities.map((e) => e.toString());
     const parentInstanceId = this.context.instanceId;
 
-    const action = ph.newSendEntityMessageLockAction(
-      actionId,
-      criticalSectionId,
-      lockSet,
-      parentInstanceId,
-    );
+    const action = ph.newSendEntityMessageLockAction(actionId, criticalSectionId, lockSet, parentInstanceId);
 
     this.context._pendingActions[action.getId()] = action;
 
@@ -1009,9 +976,7 @@ class RuntimeOrchestrationEntityFeature implements OrchestrationEntityFeature {
 
       // Now that lock is granted, populate availableEntities and clear pending flag
       if (this.criticalSection) {
-        this.criticalSection.availableEntities = new Set(
-          pendingRequest.lockSet.map((e) => e.toString()),
-        );
+        this.criticalSection.availableEntities = new Set(pendingRequest.lockSet.map((e) => e.toString()));
       }
       this.lockAcquisitionPending = false;
 

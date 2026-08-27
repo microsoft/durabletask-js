@@ -3,15 +3,19 @@
 
 import {
   OrchestrationContext,
+  ActivityContext,
+  MiddlewareFeatures,
   TaskEntity,
   TaskHubGrpcWorker,
   TOrchestrator,
   VersionFailureStrategy,
   VersionMatchStrategy,
+  createMiddlewareFeature,
 } from "../src";
 import * as pb from "../src/proto/orchestrator_service_pb";
 import { newExecutionStartedEvent, newOrchestratorStartedEvent } from "../src/utils/pb-helper.util";
 import { NoOpLogger } from "../src/types/logger.type";
+import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 
 const TEST_INSTANCE_ID = "functions-grpc-instance";
 
@@ -46,6 +50,61 @@ describe("Functions gRPC support surface", () => {
     const completed = response.getActionsList()[0].getCompleteorchestration();
     expect(completed?.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
     expect(completed?.getResult()?.getValue()).toBe('"done"');
+  });
+
+  it("passes host features through a single orchestration request", async () => {
+    const featureKey = createMiddlewareFeature<{ invocationId: string }>("invocation");
+    const features = new MiddlewareFeatures().set(featureKey, { invocationId: "host-123" });
+    const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+    worker.useOrchestrationMiddleware(async (context, next) => {
+      expect(context.features.get(featureKey)?.invocationId).toBe("host-123");
+      await next(context);
+    });
+    const orchestrator: TOrchestrator = async () => "done";
+    const name = worker.addOrchestrator(orchestrator);
+    const request = new pb.OrchestratorRequest();
+    request.setInstanceid(TEST_INSTANCE_ID);
+    request.setNeweventsList([newOrchestratorStartedEvent(), newExecutionStartedEvent(name, TEST_INSTANCE_ID)]);
+
+    const response = await worker.processOrchestratorRequest(request.serializeBinary(), features);
+
+    expect(pb.OrchestratorResponse.deserializeBinary(response).getActionsList()).toHaveLength(1);
+  });
+
+  it("processes activity middleware with host features without the gRPC worker loop", async () => {
+    const featureKey = createMiddlewareFeature<{ invocationId: string }>("invocation");
+    const features = new MiddlewareFeatures().set(featureKey, { invocationId: "host-456" });
+    const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+    worker.useActivityMiddleware(async (context, next) => {
+      expect(context.features.get(featureKey)?.invocationId).toBe("host-456");
+      await next(context);
+    });
+    worker.addNamedActivity("activity", (_context: ActivityContext, input: unknown) => input);
+    const request = new pb.ActivityRequest();
+    request.setName("activity");
+    request.setTaskid(1);
+    const orchestrationInstance = new pb.OrchestrationInstance();
+    orchestrationInstance.setInstanceid(TEST_INSTANCE_ID);
+    request.setOrchestrationinstance(orchestrationInstance);
+    const input = new StringValue();
+    input.setValue('"input"');
+    request.setInput(input);
+
+    const response = await worker.processActivityRequest(request.serializeBinary(), features);
+
+    expect(pb.ActivityResponse.deserializeBinary(response).getResult()?.getValue()).toBe('"input"');
+  });
+
+  it("locks middleware registration while the worker is running", () => {
+    const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+    (worker as any)._isRunning = true;
+
+    expect(() => worker.useOrchestrationMiddleware(async (context, next) => next(context))).toThrow(
+      "Cannot add orchestration middleware while worker is running.",
+    );
+    expect(() => worker.useActivityMiddleware(async (context, next) => next(context))).toThrow(
+      "Cannot add activity middleware while worker is running.",
+    );
   });
 
   it("throws a distinct abandon error when versioning rejects a mismatched orchestration work item", async () => {

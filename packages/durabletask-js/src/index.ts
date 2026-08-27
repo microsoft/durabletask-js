@@ -6,6 +6,17 @@ export { TaskHubGrpcClient, TaskHubGrpcClientOptions, MetadataGenerator } from "
 export { TaskHubGrpcWorker, TaskHubGrpcWorkerOptions } from "./worker/task-hub-grpc-worker";
 export { VersioningOptions, VersionMatchStrategy, VersionFailureStrategy } from "./worker/versioning-options";
 export {
+  ActivityMiddleware,
+  ActivityMiddlewareContext,
+  ActivityMiddlewareNext,
+  MiddlewareFeature,
+  MiddlewareFeatures,
+  OrchestrationMiddleware,
+  OrchestrationMiddlewareContext,
+  OrchestrationMiddlewareNext,
+  createMiddlewareFeature,
+} from "./worker/middleware";
+export {
   WorkItemFilters,
   OrchestrationWorkItemFilter,
   ActivityWorkItemFilter,

@@ -37,6 +37,8 @@ import {
   setSpanOk,
   endSpan,
 } from "../tracing";
+import { ActivityMiddleware, MiddlewareFeatures, OrchestrationMiddleware } from "./middleware";
+import { mapToRecord } from "../utils/tags.util";
 
 /** Default timeout in milliseconds for graceful shutdown. */
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30000;
@@ -88,6 +90,8 @@ export class TaskHubGrpcWorker {
   private _backoff: ExponentialBackoff;
   private _versioning?: VersioningOptions;
   private _workItemFilters?: WorkItemFilters | "auto";
+  private _orchestrationMiddleware: OrchestrationMiddleware[];
+  private _activityMiddleware: ActivityMiddleware[];
 
   /**
    * Creates a new TaskHubGrpcWorker instance.
@@ -179,6 +183,8 @@ export class TaskHubGrpcWorker {
     });
     this._versioning = resolvedVersioning;
     this._workItemFilters = resolvedWorkItemFilters;
+    this._orchestrationMiddleware = [];
+    this._activityMiddleware = [];
   }
 
   /**
@@ -278,6 +284,34 @@ export class TaskHubGrpcWorker {
   }
 
   /**
+   * Adds orchestration middleware to this worker.
+   *
+   * The first registered middleware is the outermost middleware.
+   */
+  useOrchestrationMiddleware(middleware: OrchestrationMiddleware): this {
+    if (this._isRunning) {
+      throw new Error("Cannot add orchestration middleware while worker is running.");
+    }
+
+    this._orchestrationMiddleware.push(middleware);
+    return this;
+  }
+
+  /**
+   * Adds activity middleware to this worker.
+   *
+   * The first registered middleware is the outermost middleware.
+   */
+  useActivityMiddleware(middleware: ActivityMiddleware): this {
+    if (this._isRunning) {
+      throw new Error("Cannot add activity middleware while worker is running.");
+    }
+
+    this._activityMiddleware.push(middleware);
+    return this;
+  }
+
+  /**
    * Registers an entity with the worker.
    *
    * @param factory - Factory function that creates entity instances.
@@ -327,10 +361,13 @@ export class TaskHubGrpcWorker {
    * loop, capturing the response in-process rather than completing it over gRPC.
    * Host integrations own any transport-specific encoding (for example base64).
    */
-  async processOrchestratorRequest(request: Uint8Array): Promise<Uint8Array> {
+  async processOrchestratorRequest(
+    request: Uint8Array,
+    features: MiddlewareFeatures = new MiddlewareFeatures(),
+  ): Promise<Uint8Array> {
     const req = pb.OrchestratorRequest.deserializeBinary(request);
     const stub = new CapturingSidecarStub();
-    await this._executeOrchestratorInternal(req, "", stub as unknown as stubs.TaskHubSidecarServiceClient);
+    await this._executeOrchestratorInternal(req, "", stub as unknown as stubs.TaskHubSidecarServiceClient, features);
 
     if (!stub.orchestratorResponse) {
       if (stub.abandoned) {
@@ -351,6 +388,29 @@ export class TaskHubGrpcWorker {
     }
 
     return stub.orchestratorResponse.serializeBinary();
+  }
+
+  /**
+   * Processes a single serialized TaskHubSidecarService ActivityRequest and returns
+   * the serialized ActivityResponse.
+   *
+   * @remarks
+   * Host integrations can pass per-invocation features without serializing them into
+   * the durable task request or history.
+   */
+  async processActivityRequest(
+    request: Uint8Array,
+    features: MiddlewareFeatures = new MiddlewareFeatures(),
+  ): Promise<Uint8Array> {
+    const req = pb.ActivityRequest.deserializeBinary(request);
+    const stub = new CapturingSidecarStub();
+    await this._executeActivityInternal(req, "", stub as unknown as stubs.TaskHubSidecarServiceClient, features);
+
+    if (!stub.activityResponse) {
+      throw new Error("Activity execution did not produce a response.");
+    }
+
+    return stub.activityResponse.serializeBinary();
   }
 
   /**
@@ -706,6 +766,7 @@ export class TaskHubGrpcWorker {
     req: pb.OrchestratorRequest,
     completionToken: string,
     stub: stubs.TaskHubSidecarServiceClient,
+    features: MiddlewareFeatures = new MiddlewareFeatures(),
   ): Promise<void> {
     const instanceId = req.getInstanceid();
 
@@ -809,12 +870,13 @@ export class TaskHubGrpcWorker {
     let res;
 
     try {
-      const executor = new OrchestrationExecutor(this._registry, this._logger);
+      const executor = new OrchestrationExecutor(this._registry, this._logger, this._orchestrationMiddleware);
       const result = await executor.execute(
         req.getInstanceid(),
         req.getPasteventsList(),
         req.getNeweventsList(),
         req.getExecutionid()?.getValue(),
+        features,
       );
 
       // Process actions to inject trace context into scheduled tasks, sub-orchestrations, etc.
@@ -902,6 +964,7 @@ export class TaskHubGrpcWorker {
     req: pb.ActivityRequest,
     completionToken: string,
     stub: stubs.TaskHubSidecarServiceClient,
+    features: MiddlewareFeatures = new MiddlewareFeatures(),
   ): Promise<void> {
     const instanceId = req.getOrchestrationinstance()?.getInstanceid();
 
@@ -915,12 +978,17 @@ export class TaskHubGrpcWorker {
     const activitySpan = startSpanForTaskExecution(req);
 
     try {
-      const executor = new ActivityExecutor(this._registry, this._logger);
+      const executor = new ActivityExecutor(this._registry, this._logger, this._activityMiddleware);
       const result = await executor.execute(
         instanceId,
         req.getName(),
         req.getTaskid(),
         req.getInput()?.getValue() ?? "",
+        {
+          version: req.getVersion()?.getValue() || undefined,
+          tags: mapToRecord(req.getTagsMap()),
+          features,
+        },
       );
 
       const s = new StringValue();
@@ -1248,6 +1316,7 @@ export class TaskHubGrpcWorker {
  */
 class CapturingSidecarStub {
   orchestratorResponse?: pb.OrchestratorResponse;
+  activityResponse?: pb.ActivityResponse;
   entityResult?: pb.EntityBatchResult;
   /** Set when the execution path abandons the work item (e.g. a version mismatch) rather than completing it. */
   abandoned = false;
@@ -1267,6 +1336,15 @@ class CapturingSidecarStub {
     callback: (error: grpc.ServiceError | null, response: Empty) => void,
   ): void {
     this.entityResult = request;
+    callback(null, new Empty());
+  }
+
+  completeActivityTask(
+    request: pb.ActivityResponse,
+    _metadata: grpc.Metadata,
+    callback: (error: grpc.ServiceError | null, response: Empty) => void,
+  ): void {
+    this.activityResponse = request;
     callback(null, new Empty());
   }
 

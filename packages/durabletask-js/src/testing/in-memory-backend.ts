@@ -7,6 +7,7 @@ import { OrchestrationStatus as ClientOrchestrationStatus } from "../orchestrati
 import { ParentOrchestrationInstance } from "../types/parent-orchestration-instance.type";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 import { randomUUID } from "crypto";
+import { mapToRecord } from "../utils/tags.util";
 import { validateDedupeStatusesForReplacement } from "../orchestration/orchestration-id-reuse-policy";
 import { OrchestrationAlreadyExistsError } from "../orchestration/exception/orchestration-already-exists-error";
 
@@ -43,6 +44,8 @@ export interface ActivityWorkItem {
   name: string;
   taskId: number;
   input?: string;
+  version?: string;
+  tags?: Record<string, string>;
   completionToken: number;
 }
 
@@ -1054,9 +1057,7 @@ export class InMemoryOrchestrationBackend {
         ?.getExecutionstarted()
         ?.getVersion()
         ?.getValue();
-      const newVersion = completeAction.hasNewversion()
-        ? completeAction.getNewversion()?.getValue()
-        : currentVersion;
+      const newVersion = completeAction.hasNewversion() ? completeAction.getNewversion()?.getValue() : currentVersion;
       const carryoverEvents = completeAction.getCarryovereventsList();
 
       // Cancel timers still pending from the previous iteration. Their timer IDs are
@@ -1092,7 +1093,7 @@ export class InMemoryOrchestrationBackend {
         newInput,
         undefined,
         instance.executionId,
-        newVersion
+        newVersion,
       );
       instance.pendingEvents = [orchestratorStarted, executionStarted, ...carryoverEvents];
 
@@ -1105,6 +1106,8 @@ export class InMemoryOrchestrationBackend {
     const taskId = action.getId();
     const taskName = scheduleTask.getName();
     const input = scheduleTask.getInput()?.getValue();
+    const version = scheduleTask.getVersion()?.getValue() || undefined;
+    const tags = mapToRecord(scheduleTask.getTagsMap());
 
     // Add TaskScheduled event to history
     const event = pbh.newTaskScheduledEvent(taskId, taskName, input);
@@ -1122,6 +1125,8 @@ export class InMemoryOrchestrationBackend {
       name: taskName,
       taskId,
       input,
+      version,
+      tags,
       completionToken: instance.completionToken,
     });
   }
