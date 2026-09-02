@@ -53,6 +53,24 @@ const worker = createAzureManagedWorkerBuilder("https://myservice.durabletask.io
 await worker.start();
 ```
 
+### Worker Concurrency
+
+Use `.concurrency()` to set independent limits for full work-item lifecycles:
+
+```typescript
+const worker = createAzureManagedWorkerBuilder(connectionString)
+  .concurrency({
+    maximumConcurrentOrchestrationWorkItems: 10,
+    maximumConcurrentActivityWorkItems: 20,
+    maximumConcurrentEntityWorkItems: 5,
+  })
+  .build();
+```
+
+Omitted limits default to 100 times Node.js's available logical processor count. A limit of
+`0` disables that kind. Entity V1 and V2 batches share the entity limit. The worker sends all
+three values to DTS and independently enforces them with bounded local backpressure.
+
 ## Supported Authentication Types
 
 The connection string `Authentication` parameter supports the following values:

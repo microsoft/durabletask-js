@@ -25,6 +25,8 @@ import { VersioningOptions, VersionMatchStrategy, VersionFailureStrategy } from 
 import { WorkItemFilters, generateWorkItemFiltersFromRegistry, toGrpcWorkItemFilters } from "./work-item-filters";
 import { compareVersions } from "../utils/versioning.util";
 import * as WorkerLogs from "./logs";
+import { ConcurrencyOptions, ResolvedConcurrencyOptions, resolveConcurrencyOptions } from "./concurrency-options";
+import { BoundedWorkItemScheduler, ScheduledWorkItem } from "./bounded-work-item-scheduler";
 import {
   DurableTaskAttributes,
   startSpanForOrchestrationExecution,
@@ -45,7 +47,17 @@ const DEFAULT_SILENT_DISCONNECT_TIMEOUT_MS = 120000;
 const DEFAULT_CHANNEL_RECREATE_FAILURE_THRESHOLD = 5;
 const DEFERRED_STUB_CLOSE_DELAY_MS = 30000;
 const MAX_TIMER_DELAY_MS = 2_147_483_646;
+const MAX_PROTOCOL_CONCURRENCY = 2_147_483_647;
 const HELLO_TIMEOUT_MS = 30000;
+const MAX_PENDING_ABANDONS_PER_KIND = 16;
+
+type WorkItemKind = "activity" | "orchestration" | "entity";
+
+interface ScheduledWorkerWorkItem extends ScheduledWorkItem {
+  kind: WorkItemKind;
+  completionToken: string;
+  stub: stubs.TaskHubSidecarServiceClient;
+}
 
 type WorkItemStreamResult = {
   outcome: "shutdown" | "silentDisconnect" | "gracefulDrain";
@@ -95,6 +107,8 @@ export interface TaskHubGrpcWorkerOptions {
    * activities, and entities.
    */
   workItemFilters?: WorkItemFilters | "auto";
+  /** Per-work-item concurrency limits and protocol hints. */
+  concurrency?: ConcurrencyOptions;
 }
 
 export class TaskHubGrpcWorker {
@@ -117,6 +131,9 @@ export class TaskHubGrpcWorker {
   private _backoff: ExponentialBackoff;
   private _versioning?: VersioningOptions;
   private _workItemFilters?: WorkItemFilters | "auto";
+  private _concurrency: ResolvedConcurrencyOptions;
+  private _schedulers: Record<WorkItemKind, BoundedWorkItemScheduler<ScheduledWorkerWorkItem>>;
+  private _pendingAbandons: Record<WorkItemKind, Set<Promise<void>>>;
   private _abortController: AbortController | null;
   private _workerLoopPromise: Promise<void> | null;
   private _deferredStubCloseTimers: Map<stubs.TaskHubSidecarServiceClient, ReturnType<typeof setTimeout>>;
@@ -170,6 +187,7 @@ export class TaskHubGrpcWorker {
     let resolvedChannelRecreateFailureThreshold: number | undefined;
     let resolvedVersioning: VersioningOptions | undefined;
     let resolvedWorkItemFilters: WorkItemFilters | "auto" | undefined;
+    let resolvedConcurrency: ConcurrencyOptions | undefined;
 
     if (typeof hostAddressOrOptions === "object" && hostAddressOrOptions !== null) {
       // Options object constructor
@@ -184,6 +202,7 @@ export class TaskHubGrpcWorker {
       resolvedChannelRecreateFailureThreshold = hostAddressOrOptions.channelRecreateFailureThreshold;
       resolvedVersioning = hostAddressOrOptions.versioning;
       resolvedWorkItemFilters = hostAddressOrOptions.workItemFilters;
+      resolvedConcurrency = hostAddressOrOptions.concurrency;
     } else {
       // Deprecated positional parameters constructor
       resolvedHostAddress = hostAddressOrOptions;
@@ -230,6 +249,13 @@ export class TaskHubGrpcWorker {
     });
     this._versioning = resolvedVersioning;
     this._workItemFilters = resolvedWorkItemFilters;
+    this._concurrency = resolveConcurrencyOptions(resolvedConcurrency);
+    this._schedulers = this._createSchedulers();
+    this._pendingAbandons = {
+      activity: new Set(),
+      orchestration: new Set(),
+      entity: new Set(),
+    };
     this._abortController = null;
     this._workerLoopPromise = null;
     this._deferredStubCloseTimers = new Map();
@@ -413,8 +439,17 @@ export class TaskHubGrpcWorker {
     if (this._isRunning) {
       throw new Error("The worker is already running.");
     }
+    if (this._pendingWorkItems.size > 0) {
+      throw new Error("The worker cannot restart until pending work items from the previous run have completed.");
+    }
 
     this._stopWorker = false;
+    this._schedulers = this._createSchedulers();
+    this._pendingAbandons = {
+      activity: new Set(),
+      orchestration: new Set(),
+      entity: new Set(),
+    };
     this._backoff.reset();
     const abortController = new AbortController();
     this._abortController = abortController;
@@ -675,20 +710,144 @@ export class TaskHubGrpcWorker {
         "Orchestrator Request",
         workItem.getOrchestratorrequest()?.getInstanceid(),
       );
-      this._executeOrchestrator(workItem.getOrchestratorrequest() as pb.OrchestratorRequest, completionToken, stub);
+      const request = workItem.getOrchestratorrequest() as pb.OrchestratorRequest;
+      this._scheduleWorkItem({
+        kind: "orchestration",
+        completionToken,
+        stub,
+        execute: () => this._executeOrchestratorInternal(request, completionToken, stub),
+        onError: (error) => {
+          WorkerLogs.executionError(this._logger, request.getInstanceid() || "(unknown)", error);
+        },
+      });
     } else if (workItem.hasActivityrequest()) {
       WorkerLogs.workItemReceived(this._logger, "Activity Request");
-      this._executeActivity(workItem.getActivityrequest() as pb.ActivityRequest, completionToken, stub);
+      const request = workItem.getActivityrequest() as pb.ActivityRequest;
+      this._scheduleWorkItem({
+        kind: "activity",
+        completionToken,
+        stub,
+        execute: () => this._executeActivityInternal(request, completionToken, stub),
+        onError: (error) => {
+          WorkerLogs.workerError(this._logger, error);
+        },
+      });
     } else if (workItem.hasEntityrequest()) {
       const entityRequest = workItem.getEntityrequest() as pb.EntityBatchRequest;
       WorkerLogs.entityRequestReceived(this._logger, entityRequest.getInstanceid(), "Entity Request");
-      this._executeEntity(entityRequest, completionToken, stub);
+      this._scheduleWorkItem({
+        kind: "entity",
+        completionToken,
+        stub,
+        execute: () => this._executeEntityInternal(entityRequest, completionToken, stub),
+        onError: (error) => {
+          WorkerLogs.workerError(this._logger, error);
+        },
+      });
     } else if (workItem.hasEntityrequestv2()) {
       const entityRequestV2 = workItem.getEntityrequestv2() as pb.EntityRequest;
       WorkerLogs.entityRequestReceived(this._logger, entityRequestV2.getInstanceid(), "Entity Request V2");
-      this._executeEntityV2(entityRequestV2, completionToken, stub);
+      this._scheduleWorkItem({
+        kind: "entity",
+        completionToken,
+        stub,
+        execute: () => this._executeEntityV2Internal(entityRequestV2, completionToken, stub),
+        onError: (error) => {
+          WorkerLogs.workerError(this._logger, error);
+        },
+      });
     } else if (!workItem.hasHealthping()) {
       WorkerLogs.unknownWorkItem(this._logger);
+    }
+  }
+
+  private _createSchedulers(): Record<WorkItemKind, BoundedWorkItemScheduler<ScheduledWorkerWorkItem>> {
+    const create = (limit: number) =>
+      new BoundedWorkItemScheduler<ScheduledWorkerWorkItem>(limit, (promise, onError) => {
+        this._trackPendingWorkItem(promise, onError);
+      });
+    return {
+      activity: create(this._concurrency.maximumConcurrentActivityWorkItems),
+      orchestration: create(this._concurrency.maximumConcurrentOrchestrationWorkItems),
+      entity: create(this._concurrency.maximumConcurrentEntityWorkItems),
+    };
+  }
+
+  private _scheduleWorkItem(item: ScheduledWorkerWorkItem): void {
+    if (!this._schedulers[item.kind].schedule(item)) {
+      this._rejectWorkItem(item, this._concurrencyLimit(item.kind) === 0 ? "disabled" : "capacity");
+    }
+  }
+
+  private _concurrencyLimit(kind: WorkItemKind): number {
+    switch (kind) {
+      case "activity":
+        return this._concurrency.maximumConcurrentActivityWorkItems;
+      case "orchestration":
+        return this._concurrency.maximumConcurrentOrchestrationWorkItems;
+      case "entity":
+        return this._concurrency.maximumConcurrentEntityWorkItems;
+    }
+  }
+
+  private _stopSchedulers(): void {
+    for (const kind of ["activity", "orchestration", "entity"] as const) {
+      for (const item of this._schedulers[kind].stop()) {
+        this._rejectWorkItem(item, "shutdown");
+      }
+    }
+  }
+
+  private _rejectWorkItem(item: ScheduledWorkerWorkItem, reason: "capacity" | "disabled" | "shutdown"): void {
+    const pending = this._pendingAbandons[item.kind];
+    if (pending.size >= MAX_PENDING_ABANDONS_PER_KIND) {
+      WorkerLogs.workerError(
+        this._logger,
+        new Error(
+          `Dropping unexpected ${item.kind} work item (${reason}) because ` +
+            `${MAX_PENDING_ABANDONS_PER_KIND} abandon calls are already pending.`,
+        ),
+      );
+      return;
+    }
+
+    const abandon = this._abandonWorkItem(item.kind, item.completionToken, item.stub);
+    const handledPromise = this._trackPendingWorkItem(
+      abandon,
+      (error) => {
+        WorkerLogs.workerError(
+          this._logger,
+          new Error(`Failed to abandon throttled ${item.kind} work item (${reason})`, { cause: error }),
+        );
+      },
+      () => pending.delete(handledPromise),
+    );
+    pending.add(handledPromise);
+  }
+
+  private async _abandonWorkItem(
+    kind: WorkItemKind,
+    completionToken: string,
+    stub: stubs.TaskHubSidecarServiceClient,
+  ): Promise<void> {
+    switch (kind) {
+      case "activity": {
+        const request = new pb.AbandonActivityTaskRequest();
+        request.setCompletiontoken(completionToken);
+        await callWithMetadata(stub.abandonTaskActivityWorkItem.bind(stub), request, this._metadataGenerator);
+        return;
+      }
+      case "orchestration": {
+        const request = new pb.AbandonOrchestrationTaskRequest();
+        request.setCompletiontoken(completionToken);
+        await callWithMetadata(stub.abandonTaskOrchestratorWorkItem.bind(stub), request, this._metadataGenerator);
+        return;
+      }
+      case "entity": {
+        const request = new pb.AbandonEntityTaskRequest();
+        request.setCompletiontoken(completionToken);
+        await callWithMetadata(stub.abandonTaskEntityWorkItem.bind(stub), request, this._metadataGenerator);
+      }
     }
   }
 
@@ -708,6 +867,7 @@ export class TaskHubGrpcWorker {
 
     const responseStream = this._responseStream;
     this._stopWorker = true;
+    this._stopSchedulers();
     this._abortController?.abort();
     this._clearSilentDisconnectTimer();
 
@@ -781,6 +941,15 @@ export class TaskHubGrpcWorker {
    */
   private _buildGetWorkItemsRequest(): pb.GetWorkItemsRequest {
     const request = new pb.GetWorkItemsRequest();
+    request.setMaxconcurrentactivityworkitems(
+      Math.min(this._concurrency.maximumConcurrentActivityWorkItems, MAX_PROTOCOL_CONCURRENCY),
+    );
+    request.setMaxconcurrentorchestrationworkitems(
+      Math.min(this._concurrency.maximumConcurrentOrchestrationWorkItems, MAX_PROTOCOL_CONCURRENCY),
+    );
+    request.setMaxconcurrententityworkitems(
+      Math.min(this._concurrency.maximumConcurrentEntityWorkItems, MAX_PROTOCOL_CONCURRENCY),
+    );
 
     if (this._workItemFilters !== undefined) {
       const filters =
@@ -875,7 +1044,11 @@ export class TaskHubGrpcWorker {
     return undefined;
   }
 
-  private _trackPendingWorkItem(workPromise: Promise<void>, onError: (error: Error) => void): void {
+  private _trackPendingWorkItem(
+    workPromise: Promise<void>,
+    onError: (error: Error) => void,
+    onFinally?: () => void,
+  ): Promise<void> {
     const handledPromise = workPromise
       .catch((e: unknown) => {
         const error = e instanceof Error ? e : new Error(String(e));
@@ -883,9 +1056,11 @@ export class TaskHubGrpcWorker {
       })
       .finally(() => {
         this._pendingWorkItems.delete(handledPromise);
+        onFinally?.();
       });
 
     this._pendingWorkItems.add(handledPromise);
+    return handledPromise;
   }
 
   /**

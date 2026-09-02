@@ -2,6 +2,9 @@
 
 ### New
 
+- Add `ConcurrencyOptions` to configure independent orchestration, activity, and entity
+  work-item limits on `TaskHubGrpcWorker`. The worker sends all three protocol hints and
+  enforces full work-item lifecycles locally with bounded per-kind backpressure.
 - Add an optional `newVersion` parameter to `OrchestrationContext.continueAsNew()` for version migrations.
 - Implement entity support in the in-memory testing backend ([#341](https://github.com/microsoft/durabletask-js/pull/341))
 - Add the top-level `StartOrchestrationOptions.dedupeStatuses` option, `ValidDedupeStatuses`, and
