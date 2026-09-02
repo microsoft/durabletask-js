@@ -199,6 +199,51 @@ describe("TaskHubGrpcWorker startup", () => {
     await stopWorker(worker);
   });
 
+  it("isolates every recreated client from grpc-js's global subchannel pool", async () => {
+    jest.spyOn(Math, "random").mockReturnValue(0);
+    const streams: MockStream[] = [];
+    const stubsCreated: MockStub[] = [];
+    const originalOptions = { "grpc.keepalive_time_ms": 1234 };
+    const clientOptions: grpc.ChannelOptions[] = [];
+    const constructorSpy = jest.spyOn(GrpcClient.prototype as any, "_generateChannelOptions");
+    constructorSpy.mockImplementation((options: unknown) => {
+      const channelOptions = options as grpc.ChannelOptions;
+      clientOptions.push({ ...channelOptions });
+      return {
+        "grpc.max_receive_message_length": -1,
+        "grpc.max_send_message_length": -1,
+        "grpc.primary_user_agent": "durabletask-js",
+        ...channelOptions,
+      };
+    });
+    useNewStubPerClient(streams, stubsCreated);
+    const worker = new TaskHubGrpcWorker({
+      logger: new NoOpLogger(),
+      options: originalOptions,
+      channelRecreateFailureThreshold: 1,
+    });
+
+    await worker.start();
+    await flushPromises();
+    await failStream(streams[0]);
+    await failStream(streams[1]);
+
+    expect(clientOptions).toEqual([
+      { "grpc.keepalive_time_ms": 1234 },
+      {
+        "grpc.keepalive_time_ms": 1234,
+        "grpc.use_local_subchannel_pool": 1,
+      },
+      {
+        "grpc.keepalive_time_ms": 1234,
+        "grpc.use_local_subchannel_pool": 1,
+      },
+    ]);
+    expect(originalOptions).toEqual({ "grpc.keepalive_time_ms": 1234 });
+
+    await stopWorker(worker);
+  });
+
   it("closes deferred gRPC clients during shutdown", async () => {
     jest.spyOn(Math, "random").mockReturnValue(0);
     const streams: MockStream[] = [];

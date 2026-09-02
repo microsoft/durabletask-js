@@ -75,6 +75,9 @@ export interface TaskHubGrpcWorkerOptions {
    * Health pings reset this deadline. Defaults to 120000 (2 minutes).
    * Non-positive values disable detection; oversized finite values are clamped to the
    * largest safe Node.js timer delay.
+   *
+   * Set this to 0 when connecting to a sidecar that does not emit health-ping work items;
+   * otherwise an idle but healthy stream will be treated as silent.
    */
   silentDisconnectTimeoutMs?: number;
   /**
@@ -512,9 +515,13 @@ export class TaskHubGrpcWorker {
           WorkerLogs.channelRecreating(this._logger, consecutiveChannelFailures);
           const previousStub = client.stub;
           try {
+            const recreatedChannelOptions = {
+              ...this._grpcChannelOptions,
+              "grpc.use_local_subchannel_pool": 1,
+            };
             client = new GrpcClient(
               this._hostAddress,
-              this._grpcChannelOptions,
+              recreatedChannelOptions,
               this._tls,
               this._grpcChannelCredentials,
             );

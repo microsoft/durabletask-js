@@ -242,6 +242,7 @@ export class DurableTaskAzureManagedWorkerBuilder {
    * Sets the maximum time between work-item stream messages before reconnecting.
    * Health pings reset this deadline. Defaults to 120000 (2 minutes).
    * Non-positive values disable detection.
+   * Set this to 0 when connecting to a sidecar that does not emit health-ping work items.
    *
    * @param timeoutMs The silent disconnect timeout in milliseconds.
    * @returns This builder instance.
