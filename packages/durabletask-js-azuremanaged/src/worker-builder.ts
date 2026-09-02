@@ -29,6 +29,7 @@ export class DurableTaskAzureManagedWorkerBuilder {
   private _entities: { name?: string; factory: EntityFactory }[] = [];
   private _logger: Logger = new ConsoleLogger();
   private _shutdownTimeoutMs?: number;
+  private _silentDisconnectTimeoutMs?: number;
   private _versioning?: VersioningOptions;
   private _workItemFilters?: WorkItemFilters | "auto";
 
@@ -237,6 +238,18 @@ export class DurableTaskAzureManagedWorkerBuilder {
   }
 
   /**
+   * Sets the maximum time between work-item stream messages before reconnecting.
+   * Health pings reset this deadline. Defaults to 120000 (2 minutes).
+   *
+   * @param timeoutMs The silent disconnect timeout in milliseconds.
+   * @returns This builder instance.
+   */
+  silentDisconnectTimeout(timeoutMs: number): DurableTaskAzureManagedWorkerBuilder {
+    this._silentDisconnectTimeoutMs = timeoutMs;
+    return this;
+  }
+
+  /**
    * Configures versioning options for the worker.
    * This allows filtering orchestrations by version using different match strategies.
    *
@@ -293,6 +306,7 @@ export class DurableTaskAzureManagedWorkerBuilder {
       metadataGenerator,
       logger: this._logger,
       shutdownTimeoutMs: this._shutdownTimeoutMs,
+      silentDisconnectTimeoutMs: this._silentDisconnectTimeoutMs,
       versioning: this._versioning,
       workItemFilters: this._workItemFilters,
     });

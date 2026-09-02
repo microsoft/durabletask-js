@@ -2,6 +2,9 @@
 
 ### New
 
+- Add `DurableTaskAzureManagedWorkerBuilder.silentDisconnectTimeout()` to configure the
+  core worker's work-item stream watchdog.
+
 ### Fixes
 
 ## v0.4.0 (2026-07-31)

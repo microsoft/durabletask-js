@@ -90,4 +90,15 @@ describe("DurableTaskAzureManagedWorkerBuilder", () => {
       expect(result).toBe(builder);
     });
   });
+
+  describe("silentDisconnectTimeout", () => {
+    it("forwards the configured timeout to the core worker", () => {
+      const builder = new DurableTaskAzureManagedWorkerBuilder().endpoint(ENDPOINT, TASKHUB, null);
+
+      expect(builder.silentDisconnectTimeout(5000)).toBe(builder);
+      const worker = builder.build();
+
+      expect((worker as any)._silentDisconnectTimeoutMs).toBe(5000);
+    });
+  });
 });
