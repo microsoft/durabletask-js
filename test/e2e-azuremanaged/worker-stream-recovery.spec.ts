@@ -31,6 +31,10 @@ const taskHub = process.env.TASKHUB || "default";
 const EMULATOR_CONTAINER = "dts-emulator-stream-recovery-test";
 const EMULATOR_IMAGE = "mcr.microsoft.com/dts/dts-emulator:latest";
 const EMULATOR_PORT = endpoint.split(":")[1] || "8080";
+const WATCHDOG_TIMEOUT_MS = 3000;
+const WATCHDOG_EVENT_TIMEOUT_MS = 15000;
+const DISABLED_WATCHDOG_PAUSE_MS = 6000;
+const WORKER_CONNECTION_TIMEOUT_MS = 30000;
 
 /** Structured logger that captures log events for assertion. */
 class CapturingLogger implements StructuredLogger {
@@ -73,6 +77,11 @@ function isDockerAvailable(): boolean {
 
 function stopEmulator(): void {
   try {
+    unpauseEmulator();
+  } catch {
+    // Container didn't exist or wasn't paused — fine
+  }
+  try {
     execSync(`docker rm -f ${EMULATOR_CONTAINER}`, { stdio: "ignore" });
   } catch {
     // Container didn't exist — fine
@@ -83,6 +92,22 @@ function startEmulator(): void {
   execSync(`docker run --name ${EMULATOR_CONTAINER} -d --rm -p ${EMULATOR_PORT}:8080 ${EMULATOR_IMAGE}`, {
     stdio: "ignore",
   });
+}
+
+function pauseEmulator(): void {
+  execSync(`docker pause ${EMULATOR_CONTAINER}`, { stdio: "ignore" });
+}
+
+function unpauseEmulator(): void {
+  execSync(`docker unpause ${EMULATOR_CONTAINER}`, { stdio: "ignore" });
+}
+
+function isEmulatorPaused(): boolean {
+  return execSync(`docker inspect --format={{.State.Paused}} ${EMULATOR_CONTAINER}`)
+    .toString()
+    .trim()
+    .toLowerCase()
+    .startsWith("true");
 }
 
 /** Poll until a condition is true or timeout. */
@@ -97,8 +122,13 @@ async function waitFor(predicate: () => boolean, timeoutMs: number, intervalMs =
 
 // Log event IDs from packages/durabletask-js/src/worker/logs.ts
 const EVENT_WORKER_CONNECTED = 700;
+const EVENT_STREAM_ENDED = 702;
 const EVENT_STREAM_RETRY = 703;
+const EVENT_STREAM_ERROR = 704;
 const EVENT_CONNECTION_RETRY = 709;
+const EVENT_STREAM_ERROR_INFO = 736;
+const EVENT_STREAM_TIMEOUT = 738;
+const EVENT_CHANNEL_RECREATED = 740;
 
 describe("Worker Stream Recovery E2E", () => {
   const skipReason = !isDockerAvailable() ? "Docker not available" : null;
@@ -222,6 +252,187 @@ describe("Worker Stream Recovery E2E", () => {
         await worker.stop();
       }
       await client?.stop();
+    }
+  }, 90000);
+
+  it("recovers a paused established stream through the watchdog and channel recreation", async () => {
+    if (skipReason) {
+      console.log(`Skipping paused stream watchdog e2e test: ${skipReason}`);
+      return;
+    }
+
+    const logger = new CapturingLogger();
+    const orchestrator: TOrchestrator = async function pausedStreamWatchdogOrchestrator(_: OrchestrationContext) {
+      return "paused-stream-watchdog-recovery";
+    };
+    const worker = new DurableTaskAzureManagedWorkerBuilder()
+      .endpoint(endpoint, taskHub, null)
+      .logger(logger)
+      .silentDisconnectTimeout(WATCHDOG_TIMEOUT_MS)
+      .channelRecreateFailureThreshold(1)
+      .build();
+    worker.addOrchestrator(orchestrator);
+
+    let workerRunning = false;
+    let emulatorPaused = false;
+    let client: ReturnType<DurableTaskAzureManagedClientBuilder["build"]> | undefined;
+
+    try {
+      startEmulator();
+      await worker.start();
+      workerRunning = true;
+
+      const initiallyConnected = await waitFor(
+        () => logger.getByEventId(EVENT_WORKER_CONNECTED).length > 0,
+        WORKER_CONNECTION_TIMEOUT_MS,
+      );
+      expect(initiallyConnected).toBe(true);
+
+      logger.clear();
+      pauseEmulator();
+      emulatorPaused = true;
+
+      const watchdogRecreatedChannel = await waitFor(
+        () =>
+          logger.getByEventId(EVENT_STREAM_TIMEOUT).length > 0 &&
+          logger.getByEventId(EVENT_CHANNEL_RECREATED).length > 0,
+        WATCHDOG_EVENT_TIMEOUT_MS,
+        100,
+      );
+      expect(watchdogRecreatedChannel).toBe(true);
+      expect(isEmulatorPaused()).toBe(true);
+
+      const timeoutIndex = logger.events.findIndex((event) => event.eventId === EVENT_STREAM_TIMEOUT);
+      const recreationIndex = logger.events.findIndex((event) => event.eventId === EVENT_CHANNEL_RECREATED);
+      const precedingEventIds = logger.events.slice(0, timeoutIndex).map((event) => event.eventId);
+
+      expect(timeoutIndex).toBeGreaterThanOrEqual(0);
+      expect(recreationIndex).toBeGreaterThan(timeoutIndex);
+      expect(precedingEventIds).not.toContain(EVENT_STREAM_ENDED);
+      expect(precedingEventIds).not.toContain(EVENT_STREAM_ERROR);
+      expect(precedingEventIds).not.toContain(EVENT_STREAM_ERROR_INFO);
+      expect(logger.getByEventId(EVENT_WORKER_CONNECTED)).toHaveLength(0);
+
+      unpauseEmulator();
+      emulatorPaused = false;
+
+      const replacementConnected = await waitFor(
+        () => logger.getByEventId(EVENT_WORKER_CONNECTED).length > 0,
+        WORKER_CONNECTION_TIMEOUT_MS,
+      );
+      expect(replacementConnected).toBe(true);
+
+      client = new DurableTaskAzureManagedClientBuilder().endpoint(endpoint, taskHub, null).build();
+      const id = await client.scheduleNewOrchestration(orchestrator);
+      const state = await client.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toBe(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.serializedOutput).toBe(JSON.stringify("paused-stream-watchdog-recovery"));
+    } finally {
+      if (emulatorPaused) {
+        try {
+          unpauseEmulator();
+        } catch {
+          // Cleanup continues with forced container removal
+        }
+      }
+      try {
+        if (workerRunning) {
+          await worker.stop();
+        }
+      } finally {
+        try {
+          await client?.stop();
+        } finally {
+          stopEmulator();
+        }
+      }
+    }
+  }, 90000);
+
+  it("leaves a paused established stream connected when the watchdog is disabled", async () => {
+    if (skipReason) {
+      console.log(`Skipping disabled paused stream watchdog e2e test: ${skipReason}`);
+      return;
+    }
+
+    expect(DISABLED_WATCHDOG_PAUSE_MS).toBeGreaterThan(WATCHDOG_TIMEOUT_MS);
+
+    const logger = new CapturingLogger();
+    const orchestrator: TOrchestrator = async function pausedStreamWithoutWatchdogOrchestrator(
+      _: OrchestrationContext,
+    ) {
+      return "paused-stream-without-watchdog";
+    };
+    const worker = new DurableTaskAzureManagedWorkerBuilder()
+      .endpoint(endpoint, taskHub, null)
+      .logger(logger)
+      .silentDisconnectTimeout(0)
+      .channelRecreateFailureThreshold(1)
+      .build();
+    worker.addOrchestrator(orchestrator);
+
+    let workerRunning = false;
+    let emulatorPaused = false;
+    let client: ReturnType<DurableTaskAzureManagedClientBuilder["build"]> | undefined;
+
+    try {
+      startEmulator();
+      await worker.start();
+      workerRunning = true;
+
+      const initiallyConnected = await waitFor(
+        () => logger.getByEventId(EVENT_WORKER_CONNECTED).length > 0,
+        WORKER_CONNECTION_TIMEOUT_MS,
+      );
+      expect(initiallyConnected).toBe(true);
+
+      logger.clear();
+      pauseEmulator();
+      emulatorPaused = true;
+
+      await new Promise((resolve) => setTimeout(resolve, DISABLED_WATCHDOG_PAUSE_MS));
+
+      expect(isEmulatorPaused()).toBe(true);
+      expect(logger.getByEventId(EVENT_STREAM_TIMEOUT)).toHaveLength(0);
+      expect(logger.getByEventId(EVENT_STREAM_RETRY)).toHaveLength(0);
+      expect(logger.getByEventId(EVENT_CONNECTION_RETRY)).toHaveLength(0);
+      expect(logger.getByEventId(EVENT_CHANNEL_RECREATED)).toHaveLength(0);
+
+      unpauseEmulator();
+      emulatorPaused = false;
+
+      client = new DurableTaskAzureManagedClientBuilder().endpoint(endpoint, taskHub, null).build();
+      const id = await client.scheduleNewOrchestration(orchestrator);
+      const state = await client.waitForOrchestrationCompletion(id, undefined, 30);
+
+      expect(state).toBeDefined();
+      expect(state?.runtimeStatus).toBe(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.serializedOutput).toBe(JSON.stringify("paused-stream-without-watchdog"));
+      expect(logger.getByEventId(EVENT_WORKER_CONNECTED)).toHaveLength(0);
+      expect(logger.getByEventId(EVENT_STREAM_RETRY)).toHaveLength(0);
+      expect(logger.getByEventId(EVENT_CONNECTION_RETRY)).toHaveLength(0);
+      expect(logger.getByEventId(EVENT_CHANNEL_RECREATED)).toHaveLength(0);
+    } finally {
+      if (emulatorPaused) {
+        try {
+          unpauseEmulator();
+        } catch {
+          // Cleanup continues with forced container removal
+        }
+      }
+      try {
+        if (workerRunning) {
+          await worker.stop();
+        }
+      } finally {
+        try {
+          await client?.stop();
+        } finally {
+          stopEmulator();
+        }
+      }
     }
   }, 90000);
 });
