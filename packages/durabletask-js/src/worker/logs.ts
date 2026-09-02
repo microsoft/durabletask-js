@@ -77,6 +77,9 @@ const CATEGORY_ENTITIES = "Microsoft.DurableTask.Worker.Entities";
 /** @internal */ export const EVENT_ACTIVITY_RESPONSE_ERROR = 735;
 /** @internal */ export const EVENT_STREAM_ERROR_INFO = 736;
 /** @internal */ export const EVENT_RETRY_HANDLER_EXCEPTION = 737;
+/** @internal */ export const EVENT_STREAM_TIMEOUT = 738;
+/** @internal */ export const EVENT_CHANNEL_RECREATING = 739;
+/** @internal */ export const EVENT_CHANNEL_RECREATED = 740;
 
 // ── Entity-specific Event IDs (800+ range) ──────────────────────────────────
 
@@ -239,6 +242,30 @@ export function streamEnded(logger: Logger): void {
     eventId: EVENT_STREAM_ENDED,
     category: CATEGORY_WORKER,
   }, "Stream ended");
+}
+
+export function streamTimeout(logger: Logger, timeoutMs: number): void {
+  emitLog(logger, "warn", {
+    eventId: EVENT_STREAM_TIMEOUT,
+    category: CATEGORY_WORKER,
+    properties: { timeoutMs },
+  }, `Channel to backend has stopped receiving traffic for ${timeoutMs}ms and will reconnect.`);
+}
+
+export function channelRecreating(logger: Logger, failureCount: number): void {
+  emitLog(logger, "warn", {
+    eventId: EVENT_CHANNEL_RECREATING,
+    category: CATEGORY_WORKER,
+    properties: { failureCount },
+  }, `Recreating gRPC channel to backend after ${failureCount} consecutive transport failures.`);
+}
+
+export function channelRecreated(logger: Logger, hostAddress: string): void {
+  emitLog(logger, "info", {
+    eventId: EVENT_CHANNEL_RECREATED,
+    category: CATEGORY_WORKER,
+    properties: { hostAddress },
+  }, `gRPC channel to backend has been recreated for ${hostAddress}.`);
 }
 
 export function streamRetry(logger: Logger, delayMs: number): void {

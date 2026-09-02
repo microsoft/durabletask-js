@@ -15,8 +15,9 @@
 
 - Bound each worker sidecar hello attempt to 30 seconds, retry failed connections, and cancel
   pending hello calls and reconnect delays when the worker stops.
-- Reconnect worker work-item streams after 120 seconds without a message or health ping, with
-  `silentDisconnectTimeoutMs` available to configure the silence window.
+- Align worker stream recovery with the .NET SDK: reconnect after 120 seconds without a message
+  or health ping, reset retry state only after the first message, use full-jitter backoff, reuse
+  channels until five likely-poisoned failures, and defer disposal of replaced channels.
 
 ## v0.4.0 (2026-07-31)
 

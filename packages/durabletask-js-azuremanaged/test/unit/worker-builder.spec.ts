@@ -101,4 +101,15 @@ describe("DurableTaskAzureManagedWorkerBuilder", () => {
       expect((worker as any)._silentDisconnectTimeoutMs).toBe(5000);
     });
   });
+
+  describe("channelRecreateFailureThreshold", () => {
+    it("forwards the configured threshold to the core worker", () => {
+      const builder = new DurableTaskAzureManagedWorkerBuilder().endpoint(ENDPOINT, TASKHUB, null);
+
+      expect(builder.channelRecreateFailureThreshold(3)).toBe(builder);
+      const worker = builder.build();
+
+      expect((worker as any)._channelRecreateFailureThreshold).toBe(3);
+    });
+  });
 });

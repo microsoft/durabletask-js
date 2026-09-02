@@ -104,6 +104,26 @@ describe("ExponentialBackoff", () => {
         jest.useRealTimers();
       }
     });
+
+    it("reports the exact jittered delay used for the wait", async () => {
+      jest.useFakeTimers();
+      jest.spyOn(Math, "random").mockReturnValue(0.25);
+      const backoff = new ExponentialBackoff({
+        initialDelayMs: 1000,
+        jitterStrategy: "full",
+      });
+      const delays: number[] = [];
+
+      try {
+        const waitPromise = backoff.wait(undefined, (delayMs) => delays.push(delayMs));
+        await jest.advanceTimersByTimeAsync(250);
+        await waitPromise;
+
+        expect(delays).toEqual([250]);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
   });
 
   describe("reset", () => {
@@ -144,6 +164,19 @@ describe("ExponentialBackoff", () => {
   });
 
   describe("jitter", () => {
+    it("supports full jitter from zero to the exponential upper bound", () => {
+      const random = jest.spyOn(Math, "random").mockReturnValue(0.25);
+      const backoff = new ExponentialBackoff({
+        initialDelayMs: 1000,
+        maxDelayMs: 30000,
+        jitterStrategy: "full",
+      });
+
+      expect(backoff.peekNextDelay()).toBe(250);
+
+      random.mockRestore();
+    });
+
     it("should apply jitter within expected range", () => {
       const backoff = new ExponentialBackoff({
         initialDelayMs: 100,

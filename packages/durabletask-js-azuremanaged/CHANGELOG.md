@@ -4,6 +4,8 @@
 
 - Add `DurableTaskAzureManagedWorkerBuilder.silentDisconnectTimeout()` to configure the
   core worker's work-item stream watchdog.
+- Add `DurableTaskAzureManagedWorkerBuilder.channelRecreateFailureThreshold()` to control when
+  consecutive likely-poisoned failures recreate the gRPC channel.
 
 ### Fixes
 
