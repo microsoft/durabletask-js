@@ -2,6 +2,12 @@
 
 ### New
 
+- Add `DurableTaskAzureManagedWorkerBuilder.silentDisconnectTimeout()` to configure the
+  core worker's work-item stream watchdog. Set it to `0` for sidecars that do not emit
+  health-ping work items, including the current durabletask-go sidecar.
+- Add `DurableTaskAzureManagedWorkerBuilder.channelRecreateFailureThreshold()` to control when
+  consecutive likely-poisoned failures recreate the gRPC channel.
+
 ### Fixes
 
 ## v0.4.0 (2026-07-31)

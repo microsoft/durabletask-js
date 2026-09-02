@@ -34,6 +34,13 @@ export interface BackoffOptions {
    * @default 0.1
    */
   jitterFactor?: number;
+
+  /**
+   * Jitter distribution. "symmetric" preserves the default range around the delay;
+   * "full" selects uniformly from zero through the exponential upper bound.
+   * @default "symmetric"
+   */
+  jitterStrategy?: "symmetric" | "full";
 }
 
 /**
@@ -45,6 +52,7 @@ export const DEFAULT_BACKOFF_OPTIONS: Required<BackoffOptions> = {
   multiplier: 2,
   maxAttempts: -1,
   jitterFactor: 0.1,
+  jitterStrategy: "symmetric",
 };
 
 /**
@@ -72,6 +80,7 @@ export class ExponentialBackoff {
   private readonly _multiplier: number;
   private readonly _maxAttempts: number;
   private readonly _jitterFactor: number;
+  private readonly _jitterStrategy: "symmetric" | "full";
 
   private _currentDelayMs: number;
   private _attemptCount: number;
@@ -84,6 +93,7 @@ export class ExponentialBackoff {
     this._multiplier = opts.multiplier;
     this._maxAttempts = opts.maxAttempts;
     this._jitterFactor = opts.jitterFactor;
+    this._jitterStrategy = opts.jitterStrategy;
 
     this._currentDelayMs = this._initialDelayMs;
     this._attemptCount = 0;
@@ -117,6 +127,9 @@ export class ExponentialBackoff {
    * Calculates the next delay with optional jitter.
    */
   private _calculateDelayWithJitter(): number {
+    if (this._jitterStrategy === "full") {
+      return Math.floor(Math.random() * this._currentDelayMs);
+    }
     if (this._jitterFactor <= 0) {
       return this._currentDelayMs;
     }
@@ -131,14 +144,16 @@ export class ExponentialBackoff {
    * and calculates the next delay.
    *
    * @param signal Optional signal that cancels the pending delay.
+   * @param onDelay Optional callback invoked with the jittered delay before waiting.
    * @returns Promise that resolves after the delay or rejects when aborted.
    */
-  async wait(signal?: AbortSignal): Promise<void> {
+  async wait(signal?: AbortSignal, onDelay?: (delayMs: number) => void): Promise<void> {
     const delay = this._calculateDelayWithJitter();
 
     if (signal?.aborted) {
       throw signal.reason;
     }
+    onDelay?.(delay);
 
     await new Promise<void>((resolve, reject) => {
       const onAbort = () => {

@@ -31,6 +31,9 @@ const taskHub = process.env.TASKHUB || "default";
 const EMULATOR_CONTAINER = "dts-emulator-stream-recovery-test";
 const EMULATOR_IMAGE = "mcr.microsoft.com/dts/dts-emulator:latest";
 const EMULATOR_PORT = endpoint.split(":")[1] || "8080";
+const WATCHDOG_TIMEOUT_MS = 10000;
+const WATCHDOG_EVENT_TIMEOUT_MS = 30000;
+const DISABLED_WATCHDOG_PAUSE_MS = WATCHDOG_TIMEOUT_MS + 5000;
 
 /** Structured logger that captures log events for assertion. */
 class CapturingLogger implements StructuredLogger {
@@ -73,6 +76,11 @@ function isDockerAvailable(): boolean {
 
 function stopEmulator(): void {
   try {
+    unpauseEmulator();
+  } catch {
+    // Container may not exist or may already be running.
+  }
+  try {
     execSync(`docker rm -f ${EMULATOR_CONTAINER}`, { stdio: "ignore" });
   } catch {
     // Container didn't exist — fine
@@ -83,6 +91,22 @@ function startEmulator(): void {
   execSync(`docker run --name ${EMULATOR_CONTAINER} -d --rm -p ${EMULATOR_PORT}:8080 ${EMULATOR_IMAGE}`, {
     stdio: "ignore",
   });
+}
+
+function pauseEmulator(): void {
+  execSync(`docker pause ${EMULATOR_CONTAINER}`, { stdio: "ignore" });
+}
+
+function unpauseEmulator(): void {
+  execSync(`docker unpause ${EMULATOR_CONTAINER}`, { stdio: "ignore" });
+}
+
+function isEmulatorPaused(): boolean {
+  return (
+    execSync(`docker inspect --format "{{.State.Paused}}" ${EMULATOR_CONTAINER}`, {
+      encoding: "utf8",
+    }).trim() === "true"
+  );
 }
 
 /** Poll until a condition is true or timeout. */
@@ -97,8 +121,14 @@ async function waitFor(predicate: () => boolean, timeoutMs: number, intervalMs =
 
 // Log event IDs from packages/durabletask-js/src/worker/logs.ts
 const EVENT_WORKER_CONNECTED = 700;
+const EVENT_STREAM_ENDED = 702;
 const EVENT_STREAM_RETRY = 703;
+const EVENT_STREAM_ERROR = 704;
 const EVENT_CONNECTION_RETRY = 709;
+const EVENT_STREAM_ERROR_INFO = 736;
+const EVENT_STREAM_TIMEOUT = 738;
+const EVENT_CHANNEL_RECREATING = 739;
+const EVENT_CHANNEL_RECREATED = 740;
 
 describe("Worker Stream Recovery E2E", () => {
   const skipReason = !isDockerAvailable() ? "Docker not available" : null;
@@ -224,4 +254,168 @@ describe("Worker Stream Recovery E2E", () => {
       await client?.stop();
     }
   }, 90000);
+
+  it("should reconnect a paused established stream and complete new work", async () => {
+    if (skipReason) {
+      console.log(`Skipping stream recovery e2e test: ${skipReason}`);
+      return;
+    }
+
+    startEmulator();
+    const logger = new CapturingLogger();
+    const worker = new DurableTaskAzureManagedWorkerBuilder()
+      .endpoint(endpoint, taskHub, null)
+      .logger(logger)
+      .silentDisconnectTimeout(WATCHDOG_TIMEOUT_MS)
+      .channelRecreateFailureThreshold(1)
+      .build();
+    const client = new DurableTaskAzureManagedClientBuilder().endpoint(endpoint, taskHub, null).build();
+    const orchestrator: TOrchestrator = async function pausedStreamOrchestrator(_: OrchestrationContext) {
+      return "paused-stream-recovery-success";
+    };
+    worker.addOrchestrator(orchestrator);
+
+    let workerRunning = false;
+    let emulatorPaused = false;
+    let instanceId: string | undefined;
+    try {
+      await worker.start();
+      workerRunning = true;
+      expect(await waitFor(() => logger.getByEventId(EVENT_WORKER_CONNECTED).length === 1, 30000, 100)).toBe(true);
+
+      logger.clear();
+      pauseEmulator();
+      emulatorPaused = true;
+
+      expect(
+        await waitFor(() => logger.getByEventId(EVENT_STREAM_TIMEOUT).length === 1, WATCHDOG_EVENT_TIMEOUT_MS, 100),
+      ).toBe(true);
+      expect(logger.getByEventId(EVENT_CHANNEL_RECREATING)).toHaveLength(1);
+      expect(logger.getByEventId(EVENT_CHANNEL_RECREATED)).toHaveLength(1);
+      expect(isEmulatorPaused()).toBe(true);
+
+      const timeoutIndex = logger.events.findIndex((event) => event.eventId === EVENT_STREAM_TIMEOUT);
+      const recreatingIndex = logger.events.findIndex((event) => event.eventId === EVENT_CHANNEL_RECREATING);
+      const recreatedIndex = logger.events.findIndex((event) => event.eventId === EVENT_CHANNEL_RECREATED);
+      expect(timeoutIndex).toBeGreaterThanOrEqual(0);
+      expect(recreatingIndex).toBeGreaterThan(timeoutIndex);
+      expect(recreatedIndex).toBeGreaterThan(recreatingIndex);
+      expect(
+        logger.events
+          .slice(0, timeoutIndex)
+          .filter(
+            (event) =>
+              event.eventId === EVENT_STREAM_ENDED ||
+              event.eventId === EVENT_STREAM_ERROR ||
+              event.eventId === EVENT_STREAM_ERROR_INFO,
+          ),
+      ).toHaveLength(0);
+
+      unpauseEmulator();
+      emulatorPaused = false;
+      expect(await waitFor(() => logger.getByEventId(EVENT_WORKER_CONNECTED).length === 1, 30000, 100)).toBe(true);
+
+      instanceId = await client.scheduleNewOrchestration(orchestrator);
+      const state = await client.waitForOrchestrationCompletion(instanceId, undefined, 30);
+
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.serializedOutput).toEqual(JSON.stringify("paused-stream-recovery-success"));
+      expect((await client.purgeOrchestration(instanceId))?.deletedInstanceCount).toBe(1);
+      instanceId = undefined;
+    } finally {
+      if (emulatorPaused) {
+        try {
+          unpauseEmulator();
+        } catch {
+          // Best-effort so worker and container cleanup can continue.
+        }
+      }
+      if (instanceId) {
+        try {
+          await client.terminateOrchestration(instanceId, "test cleanup");
+        } catch {
+          // The instance may already be terminal.
+        }
+      }
+      if (workerRunning) {
+        await worker.stop();
+      }
+      await client.stop();
+      stopEmulator();
+    }
+  }, 120000);
+
+  it("should leave a paused stream alone when the watchdog is disabled", async () => {
+    if (skipReason) {
+      console.log(`Skipping stream recovery e2e test: ${skipReason}`);
+      return;
+    }
+
+    startEmulator();
+    const logger = new CapturingLogger();
+    const worker = new DurableTaskAzureManagedWorkerBuilder()
+      .endpoint(endpoint, taskHub, null)
+      .logger(logger)
+      .silentDisconnectTimeout(0)
+      .channelRecreateFailureThreshold(1)
+      .build();
+    const client = new DurableTaskAzureManagedClientBuilder().endpoint(endpoint, taskHub, null).build();
+    const orchestrator: TOrchestrator = async function disabledWatchdogOrchestrator(_: OrchestrationContext) {
+      return "disabled-watchdog-success";
+    };
+    worker.addOrchestrator(orchestrator);
+
+    let workerRunning = false;
+    let emulatorPaused = false;
+    let instanceId: string | undefined;
+    try {
+      await worker.start();
+      workerRunning = true;
+      expect(await waitFor(() => logger.getByEventId(EVENT_WORKER_CONNECTED).length === 1, 30000, 100)).toBe(true);
+
+      logger.clear();
+      pauseEmulator();
+      emulatorPaused = true;
+      await new Promise((resolve) => setTimeout(resolve, DISABLED_WATCHDOG_PAUSE_MS));
+
+      expect(isEmulatorPaused()).toBe(true);
+      expect(logger.getByEventId(EVENT_STREAM_TIMEOUT)).toHaveLength(0);
+      expect(logger.getByEventId(EVENT_STREAM_RETRY)).toHaveLength(0);
+      expect(logger.getByEventId(EVENT_CONNECTION_RETRY)).toHaveLength(0);
+      expect(logger.getByEventId(EVENT_CHANNEL_RECREATING)).toHaveLength(0);
+      expect(logger.getByEventId(EVENT_CHANNEL_RECREATED)).toHaveLength(0);
+      expect(logger.getByEventId(EVENT_WORKER_CONNECTED)).toHaveLength(0);
+
+      unpauseEmulator();
+      emulatorPaused = false;
+      instanceId = await client.scheduleNewOrchestration(orchestrator);
+      const state = await client.waitForOrchestrationCompletion(instanceId, undefined, 30);
+
+      expect(state?.runtimeStatus).toEqual(OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+      expect(state?.serializedOutput).toEqual(JSON.stringify("disabled-watchdog-success"));
+      expect(logger.getByEventId(EVENT_WORKER_CONNECTED)).toHaveLength(0);
+      expect((await client.purgeOrchestration(instanceId))?.deletedInstanceCount).toBe(1);
+      instanceId = undefined;
+    } finally {
+      if (emulatorPaused) {
+        try {
+          unpauseEmulator();
+        } catch {
+          // Best-effort so worker and container cleanup can continue.
+        }
+      }
+      if (instanceId) {
+        try {
+          await client.terminateOrchestration(instanceId, "test cleanup");
+        } catch {
+          // The instance may already be terminal.
+        }
+      }
+      if (workerRunning) {
+        await worker.stop();
+      }
+      await client.stop();
+      stopEmulator();
+    }
+  }, 120000);
 });

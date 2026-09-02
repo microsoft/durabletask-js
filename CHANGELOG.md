@@ -15,6 +15,11 @@
 
 - Bound each worker sidecar hello attempt to 30 seconds, retry failed connections, and cancel
   pending hello calls and reconnect delays when the worker stops.
+- Align worker stream recovery with the .NET SDK: reconnect after 120 seconds without a message
+  or health ping, reset retry state only after the first message, use full-jitter backoff, reuse
+  channels until five likely-poisoned failures, isolate recreated grpc-js transports, and defer
+  disposal of replaced channels. Sidecars that do not send health-ping work items, including the
+  current durabletask-go sidecar, should set `silentDisconnectTimeoutMs` to `0`.
 
 ## v0.4.0 (2026-07-31)
 
