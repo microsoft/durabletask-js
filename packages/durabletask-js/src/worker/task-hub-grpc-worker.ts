@@ -40,6 +40,9 @@ import {
 
 /** Default timeout in milliseconds for graceful shutdown. */
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30000;
+/** Default maximum silence between work-item stream messages. */
+const DEFAULT_SILENT_DISCONNECT_TIMEOUT_MS = 120000;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const HELLO_TIMEOUT_MS = 30000;
 
 /**
@@ -60,6 +63,12 @@ export interface TaskHubGrpcWorkerOptions {
   logger?: Logger;
   /** Optional timeout in milliseconds for graceful shutdown. Defaults to 30000. */
   shutdownTimeoutMs?: number;
+  /**
+   * Maximum time in milliseconds between work-item stream messages before reconnecting.
+   * Health pings reset this deadline. Defaults to 120000 (2 minutes).
+   * Must be a positive finite number no greater than 2147483647.
+   */
+  silentDisconnectTimeoutMs?: number;
   /** Optional versioning options for filtering orchestrations by version. */
   versioning?: VersioningOptions;
   /**
@@ -86,6 +95,8 @@ export class TaskHubGrpcWorker {
   private _logger: Logger;
   private _pendingWorkItems: Set<Promise<void>>;
   private _shutdownTimeoutMs: number;
+  private _silentDisconnectTimeoutMs: number;
+  private _silentDisconnectTimer: ReturnType<typeof setTimeout> | null;
   private _backoff: ExponentialBackoff;
   private _versioning?: VersioningOptions;
   private _workItemFilters?: WorkItemFilters | "auto";
@@ -136,6 +147,7 @@ export class TaskHubGrpcWorker {
     let resolvedMetadataGenerator: MetadataGenerator | undefined;
     let resolvedLogger: Logger | undefined;
     let resolvedShutdownTimeoutMs: number | undefined;
+    let resolvedSilentDisconnectTimeoutMs: number | undefined;
     let resolvedVersioning: VersioningOptions | undefined;
     let resolvedWorkItemFilters: WorkItemFilters | "auto" | undefined;
 
@@ -148,6 +160,7 @@ export class TaskHubGrpcWorker {
       resolvedMetadataGenerator = hostAddressOrOptions.metadataGenerator;
       resolvedLogger = hostAddressOrOptions.logger;
       resolvedShutdownTimeoutMs = hostAddressOrOptions.shutdownTimeoutMs;
+      resolvedSilentDisconnectTimeoutMs = hostAddressOrOptions.silentDisconnectTimeoutMs;
       resolvedVersioning = hostAddressOrOptions.versioning;
       resolvedWorkItemFilters = hostAddressOrOptions.workItemFilters;
     } else {
@@ -174,6 +187,19 @@ export class TaskHubGrpcWorker {
     this._logger = resolvedLogger ?? new ConsoleLogger();
     this._pendingWorkItems = new Set();
     this._shutdownTimeoutMs = resolvedShutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
+    const silentDisconnectTimeoutMs = resolvedSilentDisconnectTimeoutMs ?? DEFAULT_SILENT_DISCONNECT_TIMEOUT_MS;
+    if (!Number.isFinite(silentDisconnectTimeoutMs) || silentDisconnectTimeoutMs <= 0) {
+      throw new RangeError(
+        `silentDisconnectTimeoutMs must be a positive finite number, got ${silentDisconnectTimeoutMs}`,
+      );
+    }
+    if (silentDisconnectTimeoutMs > MAX_TIMER_DELAY_MS) {
+      throw new RangeError(
+        `silentDisconnectTimeoutMs must be no greater than ${MAX_TIMER_DELAY_MS}, got ${silentDisconnectTimeoutMs}`,
+      );
+    }
+    this._silentDisconnectTimeoutMs = silentDisconnectTimeoutMs;
+    this._silentDisconnectTimer = null;
     this._backoff = new ExponentialBackoff({
       initialDelayMs: 1000,
       maxDelayMs: 30000,
@@ -450,8 +476,62 @@ export class TaskHubGrpcWorker {
 
       WorkerLogs.workerConnected(this._logger, this._hostAddress ?? "localhost:4001");
 
+      let silentDisconnectTimer: ReturnType<typeof setTimeout> | undefined;
+      let streamTerminated = false;
+      const clearSilentDisconnectTimer = () => {
+        if (silentDisconnectTimer !== undefined) {
+          clearTimeout(silentDisconnectTimer);
+          if (this._silentDisconnectTimer === silentDisconnectTimer) {
+            this._silentDisconnectTimer = null;
+          }
+          silentDisconnectTimer = undefined;
+        }
+      };
+      const terminateStream = (reconnect: boolean, cancel: boolean) => {
+        if (streamTerminated) {
+          return;
+        }
+        streamTerminated = true;
+        clearSilentDisconnectTimer();
+        if (this._responseStream === stream) {
+          this._responseStream = null;
+        }
+        stream.removeAllListeners();
+        stream.on("error", () => {}); // Prevent unhandled stale errors after cleanup.
+        if (cancel) {
+          stream.cancel();
+        }
+        stream.destroy();
+
+        if (reconnect && !signal?.aborted && !this._stopWorker) {
+          WorkerLogs.streamRetry(this._logger, this._backoff.peekNextDelay());
+          this._createNewClientAndRetry(signal).catch((retryErr) => {
+            if (!signal?.aborted && !this._stopWorker) {
+              WorkerLogs.workerError(this._logger, retryErr instanceof Error ? retryErr : new Error(String(retryErr)));
+            }
+          });
+        }
+      };
+      const armSilentDisconnectTimer = () => {
+        clearSilentDisconnectTimer();
+        const timer = setTimeout(() => {
+          if (silentDisconnectTimer !== timer) {
+            return;
+          }
+          clearSilentDisconnectTimer();
+          terminateStream(true, true);
+        }, this._silentDisconnectTimeoutMs);
+        silentDisconnectTimer = timer;
+        this._silentDisconnectTimer = timer;
+        timer.unref();
+      };
+
       // Wait for a work item to be received
       stream.on("data", (workItem: pb.WorkItem) => {
+        if (streamTerminated || signal?.aborted || this._stopWorker) {
+          return;
+        }
+        armSilentDisconnectTimer();
         const completionToken = workItem.getCompletiontoken();
         if (workItem.hasOrchestratorrequest()) {
           WorkerLogs.workItemReceived(
@@ -482,43 +562,23 @@ export class TaskHubGrpcWorker {
       stream.on("end", () => {
         if (signal?.aborted || this._stopWorker) {
           WorkerLogs.streamEnded(this._logger);
-          stream.removeAllListeners();
-          stream.destroy();
+          terminateStream(false, false);
           return;
         }
-        // Stream ended unexpectedly - clean up and retry
-        stream.removeAllListeners();
-        stream.on("error", () => {}); // Prevent unhandled "error" after cleanup
-        stream.destroy();
-        WorkerLogs.streamRetry(this._logger, this._backoff.peekNextDelay());
-        this._createNewClientAndRetry(signal).catch((retryErr) => {
-          if (!signal?.aborted && !this._stopWorker) {
-            WorkerLogs.workerError(this._logger, retryErr instanceof Error ? retryErr : new Error(String(retryErr)));
-          }
-        });
+        terminateStream(true, false);
       });
 
       stream.on("error", (err: Error) => {
         // Ignore cancellation errors when the worker is being stopped intentionally
         if (signal?.aborted || this._stopWorker) {
+          clearSilentDisconnectTimer();
           return;
         }
         WorkerLogs.streamErrorInfo(this._logger, err);
-
-        // Clean up the errored stream and retry the connection.
-        // In Node.js, gRPC stream errors (e.g., UNAVAILABLE, transport failures)
-        // may not always be followed by an "end" event. Without recovery here,
-        // the worker would silently stop processing work items.
-        stream.removeAllListeners();
-        stream.on("error", () => {}); // Prevent unhandled "error" after cleanup
-        stream.destroy();
-        WorkerLogs.streamRetry(this._logger, this._backoff.peekNextDelay());
-        this._createNewClientAndRetry(signal).catch((retryErr) => {
-          if (!signal?.aborted && !this._stopWorker) {
-            WorkerLogs.workerError(this._logger, retryErr instanceof Error ? retryErr : new Error(String(retryErr)));
-          }
-        });
+        terminateStream(true, false);
       });
+
+      armSilentDisconnectTimer();
     } catch (err) {
       if (signal?.aborted || this._stopWorker) {
         // ignoring the error because the worker has been stopped
@@ -544,6 +604,7 @@ export class TaskHubGrpcWorker {
     const responseStream = this._responseStream;
     this._stopWorker = true;
     this._abortController?.abort();
+    this._clearSilentDisconnectTimer();
 
     // Cancel stream first while error handlers are still attached
     // This allows the error handler to suppress CANCELLED errors
@@ -602,6 +663,13 @@ export class TaskHubGrpcWorker {
     // Brief pause to allow gRPC cleanup
     // https://github.com/grpc/grpc-node/issues/1563#issuecomment-829483711
     await sleep(1000);
+  }
+
+  private _clearSilentDisconnectTimer(): void {
+    if (this._silentDisconnectTimer !== null) {
+      clearTimeout(this._silentDisconnectTimer);
+      this._silentDisconnectTimer = null;
+    }
   }
 
   /**

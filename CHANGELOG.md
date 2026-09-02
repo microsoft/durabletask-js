@@ -15,6 +15,8 @@
 
 - Bound each worker sidecar hello attempt to 30 seconds, retry failed connections, and cancel
   pending hello calls and reconnect delays when the worker stops.
+- Reconnect worker work-item streams after 120 seconds without a message or health ping, with
+  `silentDisconnectTimeoutMs` available to configure the silence window.
 
 ## v0.4.0 (2026-07-31)
 

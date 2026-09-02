@@ -3,18 +3,17 @@
 
 /**
  * Tests that the TaskHubGrpcWorker correctly recovers when the gRPC work-item
- * stream emits an "error" event without a subsequent "end" event.
+ * stream fails explicitly or remains open without delivering messages.
  *
- * This validates the fix for a bug where the stream "error" handler only logged
- * the error but did not clean up the stream or retry the connection — causing
- * the worker to silently stop processing work items after transport-level
- * failures (e.g., UNAVAILABLE, network disconnections).
+ * This covers transport errors that omit a subsequent "end" event and half-open
+ * HTTP/2 connections that emit neither messages nor terminal events.
  */
 
 import { EventEmitter } from "events";
 import { TaskHubGrpcWorker } from "../src/worker/task-hub-grpc-worker";
 import { NoOpLogger } from "../src/types/logger.type";
 import { GrpcClient } from "../src/client/client-grpc";
+import * as pb from "../src/proto/orchestrator_service_pb";
 
 /**
  * Creates a mock GrpcClient whose `hello` call succeeds immediately
@@ -49,6 +48,167 @@ function flushAsync(): Promise<void> {
 }
 
 describe("Worker Stream Recovery", () => {
+  describe("silent stream watchdog", () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+      "rejects an invalid silent disconnect timeout (%s)",
+      (silentDisconnectTimeoutMs) => {
+        expect(
+          () =>
+            new TaskHubGrpcWorker({
+              logger: new NoOpLogger(),
+              silentDisconnectTimeoutMs,
+            }),
+        ).toThrow("silentDisconnectTimeoutMs must be a positive finite number");
+      },
+    );
+
+    it("rejects a silent disconnect timeout above the Node.js timer limit", () => {
+      expect(
+        () =>
+          new TaskHubGrpcWorker({
+            logger: new NoOpLogger(),
+            silentDisconnectTimeoutMs: 2_147_483_648,
+          }),
+      ).toThrow("silentDisconnectTimeoutMs must be no greater than 2147483647");
+    });
+
+    it("accepts the maximum Node.js timer delay", () => {
+      expect(
+        () =>
+          new TaskHubGrpcWorker({
+            logger: new NoOpLogger(),
+            silentDisconnectTimeoutMs: 2_147_483_647,
+          }),
+      ).not.toThrow();
+    });
+
+    it("cancels a permanently silent stream and reconnects", async () => {
+      const worker = new TaskHubGrpcWorker({
+        logger: new NoOpLogger(),
+        silentDisconnectTimeoutMs: 100,
+      });
+      const { client, mockStream } = createMockClient();
+      const retryMock = jest.fn().mockResolvedValue(undefined);
+      (worker as any)._createNewClientAndRetry = retryMock;
+
+      await worker.internalRunWorker(client);
+      await jest.advanceTimersByTimeAsync(99);
+
+      expect(mockStream.cancel).not.toHaveBeenCalled();
+      expect(retryMock).not.toHaveBeenCalled();
+
+      await jest.advanceTimersByTimeAsync(1);
+
+      expect(mockStream.cancel).toHaveBeenCalledTimes(1);
+      expect(mockStream.destroy).toHaveBeenCalledTimes(1);
+      expect(retryMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("uses a 120-second silence window by default", async () => {
+      const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+      const { client, mockStream } = createMockClient();
+      const retryMock = jest.fn().mockResolvedValue(undefined);
+      (worker as any)._createNewClientAndRetry = retryMock;
+
+      await worker.internalRunWorker(client);
+      await jest.advanceTimersByTimeAsync(119999);
+
+      expect(mockStream.cancel).not.toHaveBeenCalled();
+
+      await jest.advanceTimersByTimeAsync(1);
+
+      expect(mockStream.cancel).toHaveBeenCalledTimes(1);
+      expect(retryMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("resets the deadline for every message, including health pings", async () => {
+      const worker = new TaskHubGrpcWorker({
+        logger: new NoOpLogger(),
+        silentDisconnectTimeoutMs: 100,
+      });
+      const { client, mockStream } = createMockClient();
+      const retryMock = jest.fn().mockResolvedValue(undefined);
+      (worker as any)._createNewClientAndRetry = retryMock;
+
+      await worker.internalRunWorker(client);
+      await jest.advanceTimersByTimeAsync(60);
+      mockStream.emit("data", new pb.WorkItem());
+      await jest.advanceTimersByTimeAsync(60);
+
+      expect(mockStream.cancel).not.toHaveBeenCalled();
+
+      const healthPing = new pb.WorkItem();
+      healthPing.setHealthping(new pb.HealthPing());
+      mockStream.emit("data", healthPing);
+      await jest.advanceTimersByTimeAsync(99);
+
+      expect(mockStream.cancel).not.toHaveBeenCalled();
+
+      await jest.advanceTimersByTimeAsync(1);
+
+      expect(mockStream.cancel).toHaveBeenCalledTimes(1);
+      expect(retryMock).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(["error", "end"] as const)("cleans up the watchdog after a stream %s", async (event) => {
+      const worker = new TaskHubGrpcWorker({
+        logger: new NoOpLogger(),
+        silentDisconnectTimeoutMs: 100,
+      });
+      const { client, mockStream } = createMockClient();
+      const retryMock = jest.fn().mockResolvedValue(undefined);
+      (worker as any)._createNewClientAndRetry = retryMock;
+
+      await worker.internalRunWorker(client);
+      if (event === "error") {
+        mockStream.emit("error", new Error("14 UNAVAILABLE: Connection lost"));
+      } else {
+        mockStream.emit("end");
+      }
+
+      expect(retryMock).toHaveBeenCalledTimes(1);
+      expect(jest.getTimerCount()).toBe(0);
+
+      await jest.advanceTimersByTimeAsync(100);
+
+      expect(retryMock).toHaveBeenCalledTimes(1);
+      expect(mockStream.cancel).not.toHaveBeenCalled();
+    });
+
+    it("cancels the watchdog during shutdown without reconnecting", async () => {
+      const worker = new TaskHubGrpcWorker({
+        logger: new NoOpLogger(),
+        silentDisconnectTimeoutMs: 10000,
+      });
+      const { client, mockStream } = createMockClient();
+      const retryMock = jest.fn().mockResolvedValue(undefined);
+      (worker as any)._createNewClientAndRetry = retryMock;
+      (worker as any)._isRunning = true;
+      mockStream.cancel.mockImplementation(() => {
+        setTimeout(() => mockStream.emit("close"), 0);
+      });
+
+      await worker.internalRunWorker(client);
+      const stopPromise = worker.stop();
+      await jest.advanceTimersByTimeAsync(1000);
+      await stopPromise;
+
+      expect(jest.getTimerCount()).toBe(0);
+
+      await jest.advanceTimersByTimeAsync(10000);
+
+      expect(retryMock).not.toHaveBeenCalled();
+    });
+  });
+
   it("should retry connection after a stream error event", async () => {
     const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
     const { client, mockStream } = createMockClient();
