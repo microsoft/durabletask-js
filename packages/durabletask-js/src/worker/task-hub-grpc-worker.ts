@@ -817,7 +817,7 @@ export class TaskHubGrpcWorker {
       (error) => {
         WorkerLogs.workerError(
           this._logger,
-          new Error(`Failed to abandon throttled ${item.kind} work item (${reason})`, { cause: error }),
+          new Error(`Failed to abandon rejected ${item.kind} work item (${reason})`, { cause: error }),
         );
       },
       () => pending.delete(handledPromise),

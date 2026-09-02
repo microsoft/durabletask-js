@@ -26,6 +26,8 @@ describe("DTS worker concurrency E2E", () => {
   let releaseBarrier: (() => void) | undefined;
 
   beforeEach(() => {
+    workerStarted = false;
+    releaseBarrier = undefined;
     client = new DurableTaskAzureManagedClientBuilder().endpoint(endpoint, taskHub, null).build();
     worker = new DurableTaskAzureManagedWorkerBuilder()
       .endpoint(endpoint, taskHub, null)
