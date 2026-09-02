@@ -21,6 +21,8 @@ type MockStream = EventEmitter & { cancel: jest.Mock; destroy: jest.Mock };
 type MockStub = stubs.TaskHubSidecarServiceClient & {
   hello: jest.Mock;
   getWorkItems: jest.Mock;
+  completeActivityTask: jest.Mock;
+  abandonTaskActivityWorkItem: jest.Mock;
   close: jest.Mock;
 };
 
@@ -35,6 +37,28 @@ function grpcError(code: grpc.status, message = "gRPC failure"): grpc.ServiceErr
 function createHealthPing(): pb.WorkItem {
   const workItem = new pb.WorkItem();
   workItem.setHealthping(new pb.HealthPing());
+  return workItem;
+}
+
+function createActivityWorkItem(taskId: number): pb.WorkItem {
+  const instance = new pb.OrchestrationInstance();
+  instance.setInstanceid(`instance-${taskId}`);
+  const request = new pb.ActivityRequest();
+  request.setName("activity");
+  request.setTaskid(taskId);
+  request.setOrchestrationinstance(instance);
+  const workItem = new pb.WorkItem();
+  workItem.setCompletiontoken(`activity-${taskId}`);
+  workItem.setActivityrequest(request);
+  return workItem;
+}
+
+function createOrchestrationWorkItem(instanceId: string): pb.WorkItem {
+  const request = new pb.OrchestratorRequest();
+  request.setInstanceid(instanceId);
+  const workItem = new pb.WorkItem();
+  workItem.setCompletiontoken(instanceId);
+  workItem.setOrchestratorrequest(request);
   return workItem;
 }
 
@@ -77,6 +101,14 @@ function createStub(
       streams.push(stream);
       return stream;
     }),
+    completeActivityTask: jest.fn((...args: any[]) => {
+      (args.at(-1) as HelloCallback)(null, new Empty());
+      return createUnaryCall();
+    }),
+    abandonTaskActivityWorkItem: jest.fn((...args: any[]) => {
+      (args.at(-1) as HelloCallback)(null, new Empty());
+      return createUnaryCall();
+    }),
     close: jest.fn(),
   };
   return stub as unknown as MockStub;
@@ -110,6 +142,20 @@ async function flushPromises(): Promise<void> {
   for (let i = 0; i < 5; i++) {
     await Promise.resolve();
   }
+}
+
+async function waitFor(assertion: () => void): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 50; attempt++) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await flushPromises();
+    }
+  }
+  throw lastError;
 }
 
 async function failStream(stream: MockStream, code = grpc.status.UNAVAILABLE): Promise<void> {
@@ -333,6 +379,187 @@ describe("TaskHubGrpcWorker startup", () => {
     expect(generateClient).toHaveBeenCalledTimes(1);
     expect(stub.getWorkItems).toHaveBeenCalledTimes(3);
     await stopWorker(worker);
+  });
+
+  it("sends the same custom concurrency limits on initial and reconnected streams", async () => {
+    jest.spyOn(Math, "random").mockReturnValue(0);
+    const streams: MockStream[] = [];
+    const stub = createStub(streams);
+    const worker = await startWorker(stub, {
+      concurrency: {
+        maximumConcurrentActivityWorkItems: 2,
+        maximumConcurrentOrchestrationWorkItems: 3,
+        maximumConcurrentEntityWorkItems: 4,
+      },
+    });
+
+    await failStream(streams[0]);
+
+    expect(stub.getWorkItems).toHaveBeenCalledTimes(2);
+    for (const [request] of stub.getWorkItems.mock.calls) {
+      expect(request.getMaxconcurrentactivityworkitems()).toBe(2);
+      expect(request.getMaxconcurrentorchestrationworkitems()).toBe(3);
+      expect(request.getMaxconcurrententityworkitems()).toBe(4);
+    }
+    await stopWorker(worker);
+  });
+
+  it("keeps running and waiting work across reconnect while another kind progresses", async () => {
+    jest.spyOn(Math, "random").mockReturnValue(0);
+    const streams: MockStream[] = [];
+    const stub = createStub(streams);
+    const worker = await startWorker(stub, {
+      concurrency: {
+        maximumConcurrentActivityWorkItems: 1,
+        maximumConcurrentOrchestrationWorkItems: 1,
+      },
+    });
+    let releaseFirst!: () => void;
+    const first = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const activity = jest
+      .spyOn(worker as any, "_executeActivityInternal")
+      .mockImplementationOnce(() => first)
+      .mockResolvedValue(undefined);
+    const orchestration = jest.spyOn(worker as any, "_executeOrchestratorInternal").mockResolvedValue(undefined);
+
+    streams[0].emit("data", createActivityWorkItem(1));
+    streams[0].emit("data", createActivityWorkItem(2));
+    await flushPromises();
+    expect(activity).toHaveBeenCalledTimes(1);
+
+    await failStream(streams[0]);
+    expect(streams).toHaveLength(2);
+    streams[1].emit("data", createOrchestrationWorkItem("cross-kind"));
+    await waitFor(() => expect(orchestration).toHaveBeenCalledTimes(1));
+
+    releaseFirst();
+    await waitFor(() => {
+      expect(activity).toHaveBeenCalledTimes(2);
+      expect((worker as any)._pendingWorkItems.size).toBe(0);
+    });
+    await stopWorker(worker);
+  });
+
+  it("cancels waiting work on stop and does not dispatch it after restart", async () => {
+    const streams: MockStream[] = [];
+    const stub = createStub(streams);
+    const worker = await startWorker(stub, {
+      concurrency: { maximumConcurrentActivityWorkItems: 1 },
+    });
+    let releaseFirst!: () => void;
+    const first = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const activity = jest
+      .spyOn(worker as any, "_executeActivityInternal")
+      .mockImplementationOnce(() => first)
+      .mockResolvedValue(undefined);
+
+    streams[0].emit("data", createActivityWorkItem(1));
+    streams[0].emit("data", createActivityWorkItem(2));
+    await flushPromises();
+    expect(activity).toHaveBeenCalledTimes(1);
+
+    const stopping = worker.stop();
+    await jest.advanceTimersByTimeAsync(0);
+    expect(activity).toHaveBeenCalledTimes(1);
+    releaseFirst();
+    await flushPromises();
+    await jest.advanceTimersByTimeAsync(1000);
+    await stopping;
+
+    expect(activity).toHaveBeenCalledTimes(1);
+    expect(stub.abandonTaskActivityWorkItem).toHaveBeenCalledTimes(1);
+    expect((worker as any)._pendingWorkItems.size).toBe(0);
+
+    await worker.start();
+    await flushPromises();
+    streams[1].emit("data", createActivityWorkItem(3));
+    await waitFor(() => expect(activity).toHaveBeenCalledTimes(2));
+    await stopWorker(worker);
+  });
+
+  it("allows queued-work abandonment to finish during graceful shutdown", async () => {
+    const streams: MockStream[] = [];
+    const stub = createStub(streams);
+    const abandonCancel = jest.fn();
+    let completeAbandon!: HelloCallback;
+    stub.abandonTaskActivityWorkItem = jest.fn((...args: any[]) => {
+      completeAbandon = args.at(-1) as HelloCallback;
+      return createUnaryCall(abandonCancel);
+    });
+    const worker = await startWorker(stub, {
+      concurrency: { maximumConcurrentActivityWorkItems: 1 },
+    });
+    let releaseRunning!: () => void;
+    const running = new Promise<void>((resolve) => {
+      releaseRunning = resolve;
+    });
+    jest.spyOn(worker as any, "_executeActivityInternal").mockReturnValue(running);
+
+    streams[0].emit("data", createActivityWorkItem(1));
+    streams[0].emit("data", createActivityWorkItem(2));
+    await flushPromises();
+
+    const stopping = worker.stop();
+    await jest.advanceTimersByTimeAsync(0);
+    await flushPromises();
+    const cancellationCount = abandonCancel.mock.calls.length;
+
+    completeAbandon(null, new Empty());
+    releaseRunning();
+    await flushPromises();
+    await jest.advanceTimersByTimeAsync(1000);
+    await stopping;
+
+    expect(cancellationCount).toBe(0);
+    expect(stub.abandonTaskActivityWorkItem).toHaveBeenCalledTimes(1);
+    expect((worker as any)._pendingWorkItems.size).toBe(0);
+  });
+
+  it("refuses to restart after shutdown times out until the prior run finishes", async () => {
+    const streams: MockStream[] = [];
+    const stub = createStub(streams);
+    const worker = await startWorker(stub, {
+      concurrency: { maximumConcurrentActivityWorkItems: 1 },
+      shutdownTimeoutMs: 10,
+    });
+    let release!: () => void;
+    const running = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    jest.spyOn(worker as any, "_executeActivityInternal").mockReturnValue(running);
+
+    streams[0].emit("data", createActivityWorkItem(1));
+    await flushPromises();
+    const stopping = worker.stop();
+    await jest.advanceTimersByTimeAsync(10);
+    await flushPromises();
+    await jest.advanceTimersByTimeAsync(10);
+    await flushPromises();
+    await jest.advanceTimersByTimeAsync(1000);
+    await stopping;
+
+    let restartError: unknown;
+    try {
+      await worker.start();
+    } catch (error) {
+      restartError = error;
+    }
+
+    if (!restartError) {
+      release();
+      await waitFor(() => expect((worker as any)._pendingWorkItems.size).toBe(0));
+      await stopWorker(worker);
+    } else {
+      release();
+      await waitFor(() => expect((worker as any)._pendingWorkItems.size).toBe(0));
+    }
+    expect(restartError).toEqual(
+      new Error("The worker cannot restart until pending work items from the previous run have completed."),
+    );
   });
 
   it("reconnects without recreating the channel after a non-empty graceful drain", async () => {
