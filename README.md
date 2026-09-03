@@ -81,38 +81,25 @@ const state = await client.waitForOrchestrationCompletion(id, true, 60);
 console.log(`Result: ${state?.serializedOutput}`);
 ```
 
-### Worker concurrency and backpressure
+### Worker concurrency
 
-Configure independent limits for complete orchestration, activity, and entity work-item
-lifecycles through `TaskHubGrpcWorkerOptions.concurrency` or the Azure-managed worker builder:
+Core workers can send independent orchestration, activity, and entity concurrency hints to
+the backend:
 
 ```typescript
-const worker = createAzureManagedWorkerBuilder(connectionString)
-  .concurrency({
+const worker = new TaskHubGrpcWorker({
+  concurrency: {
     maximumConcurrentOrchestrationWorkItems: 10,
     maximumConcurrentActivityWorkItems: 20,
     maximumConcurrentEntityWorkItems: 5,
-  })
-  .addOrchestrator(helloCities)
-  .addActivity(sayHello)
-  .build();
+  },
+});
 ```
 
-Each omitted limit defaults at worker construction time to 100 times the logical processor
-count available to Node.js. Values must be non-negative safe integers; `0` disables that
-work-item kind. Entity V1 and V2 batches share the entity limit, and each batch counts as one
-work item regardless of its operation count. Because the protocol fields are signed 32-bit
-integers, larger safe-integer limits are enforced locally but their wire hints are capped at
-`2147483647`.
-
-The limits are sent to the backend on every work-item stream and are also enforced locally
-through independent bounded schedulers. Each scheduler can hold at most one waiting item per
-permit. If a backend exceeds that bound or sends a disabled kind, the worker abandons the item
-without pausing other work-item kinds. Abandon RPCs are bounded to 16 outstanding calls per
-kind; further violating deliveries are logged and dropped so a misbehaving backend cannot
-create unbounded local memory growth. When reconnect recreates a channel, the replaced delivery
-stub remains open for at least a 30-second grace period and until every work item delivered by
-that stub has finished its completion or abandonment path.
+Omitted values default to 100 times `os.availableParallelism()`. Values must be non-negative
+safe integers; `0` is forwarded unchanged. Values above the protocol's signed 32-bit range
+are capped at `2147483647` on the wire. The same three hints are sent on initial and
+reconnected work-item streams.
 
 You can find more samples in the [examples/azure-managed](./examples/azure-managed) directory.
 
@@ -209,7 +196,10 @@ Long-running orchestrations can restart with fresh history and optionally move t
 orchestration version:
 
 ```typescript
-const eternalOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, iteration: number): any {
+const eternalOrchestrator: TOrchestrator = async function* (
+  ctx: OrchestrationContext,
+  iteration: number,
+): any {
   yield ctx.callActivity(processIteration, iteration);
   ctx.continueAsNew(iteration + 1, true, "2.0.0");
 };

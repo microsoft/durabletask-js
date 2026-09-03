@@ -26,7 +26,6 @@ import { WorkItemFilters, generateWorkItemFiltersFromRegistry, toGrpcWorkItemFil
 import { compareVersions } from "../utils/versioning.util";
 import * as WorkerLogs from "./logs";
 import { ConcurrencyOptions, ResolvedConcurrencyOptions, resolveConcurrencyOptions } from "./concurrency-options";
-import { BoundedWorkItemScheduler, ScheduledWorkItem } from "./bounded-work-item-scheduler";
 import {
   DurableTaskAttributes,
   startSpanForOrchestrationExecution,
@@ -45,28 +44,10 @@ const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30000;
 /** Default maximum silence between work-item stream messages. */
 const DEFAULT_SILENT_DISCONNECT_TIMEOUT_MS = 120000;
 const DEFAULT_CHANNEL_RECREATE_FAILURE_THRESHOLD = 5;
-const RETIRED_STUB_CLOSE_GRACE_MS = 30000;
+const DEFERRED_STUB_CLOSE_DELAY_MS = 30000;
 const MAX_TIMER_DELAY_MS = 2_147_483_646;
 const MAX_PROTOCOL_CONCURRENCY = 2_147_483_647;
 const HELLO_TIMEOUT_MS = 30000;
-const MAX_PENDING_ABANDONS_PER_KIND = 16;
-
-type WorkItemKind = "activity" | "orchestration" | "entity";
-
-interface ScheduledWorkerWorkItem extends ScheduledWorkItem {
-  kind: WorkItemKind;
-  completionToken: string;
-  stub: stubs.TaskHubSidecarServiceClient;
-  releaseStubReference: () => void;
-}
-
-interface StubLifetime {
-  referenceCount: number;
-  retired: boolean;
-  graceElapsed: boolean;
-  closeTimer: ReturnType<typeof setTimeout> | null;
-  closed: boolean;
-}
 
 type WorkItemStreamResult = {
   outcome: "shutdown" | "silentDisconnect" | "gracefulDrain";
@@ -89,11 +70,7 @@ export interface TaskHubGrpcWorkerOptions {
   metadataGenerator?: MetadataGenerator;
   /** Optional logger instance. Defaults to ConsoleLogger. */
   logger?: Logger;
-  /**
-   * Optional timeout in milliseconds for graceful shutdown. Defaults to 30000.
-   * When it expires, referenced delivery stubs are force-closed as an explicit
-   * shutdown give-up boundary.
-   */
+  /** Optional timeout in milliseconds for graceful shutdown. Defaults to 30000. */
   shutdownTimeoutMs?: number;
   /**
    * Maximum time in milliseconds between work-item stream messages before reconnecting.
@@ -120,7 +97,7 @@ export interface TaskHubGrpcWorkerOptions {
    * activities, and entities.
    */
   workItemFilters?: WorkItemFilters | "auto";
-  /** Per-work-item concurrency limits and protocol hints. */
+  /** Backend concurrency hints for each work-item kind. */
   concurrency?: ConcurrencyOptions;
 }
 
@@ -145,11 +122,9 @@ export class TaskHubGrpcWorker {
   private _versioning?: VersioningOptions;
   private _workItemFilters?: WorkItemFilters | "auto";
   private _concurrency: ResolvedConcurrencyOptions;
-  private _schedulers: Record<WorkItemKind, BoundedWorkItemScheduler<ScheduledWorkerWorkItem>>;
-  private _pendingAbandons: Record<WorkItemKind, Set<Promise<void>>>;
   private _abortController: AbortController | null;
   private _workerLoopPromise: Promise<void> | null;
-  private _stubLifetimes: Map<stubs.TaskHubSidecarServiceClient, StubLifetime>;
+  private _deferredStubCloseTimers: Map<stubs.TaskHubSidecarServiceClient, ReturnType<typeof setTimeout>>;
 
   /**
    * Creates a new TaskHubGrpcWorker instance.
@@ -263,15 +238,9 @@ export class TaskHubGrpcWorker {
     this._versioning = resolvedVersioning;
     this._workItemFilters = resolvedWorkItemFilters;
     this._concurrency = resolveConcurrencyOptions(resolvedConcurrency);
-    this._schedulers = this._createSchedulers();
-    this._pendingAbandons = {
-      activity: new Set(),
-      orchestration: new Set(),
-      entity: new Set(),
-    };
     this._abortController = null;
     this._workerLoopPromise = null;
-    this._stubLifetimes = new Map();
+    this._deferredStubCloseTimers = new Map();
   }
 
   /**
@@ -452,17 +421,8 @@ export class TaskHubGrpcWorker {
     if (this._isRunning) {
       throw new Error("The worker is already running.");
     }
-    if (this._pendingWorkItems.size > 0) {
-      throw new Error("The worker cannot restart until pending work items from the previous run have completed.");
-    }
 
     this._stopWorker = false;
-    this._schedulers = this._createSchedulers();
-    this._pendingAbandons = {
-      activity: new Set(),
-      orchestration: new Set(),
-      entity: new Set(),
-    };
     this._backoff.reset();
     const abortController = new AbortController();
     this._abortController = abortController;
@@ -583,9 +543,7 @@ export class TaskHubGrpcWorker {
           WorkerLogs.channelRecreated(this._logger, this._hostAddress ?? "localhost:4001");
           consecutiveChannelFailures = 0;
           this._backoff.reset();
-          if (previousStub !== client.stub) {
-            this._deferStubClose(previousStub);
-          }
+          this._deferStubClose(previousStub);
           continue;
         }
       }
@@ -608,112 +566,20 @@ export class TaskHubGrpcWorker {
   }
 
   private _deferStubClose(stub: stubs.TaskHubSidecarServiceClient): void {
-    const lifetime = this._getOrCreateStubLifetime(stub);
-    if (lifetime.retired || lifetime.closed) {
-      return;
-    }
-
-    lifetime.retired = true;
     const timer = setTimeout(() => {
-      if (this._stubLifetimes.get(stub) !== lifetime || lifetime.closeTimer !== timer) {
-        return;
-      }
-      lifetime.closeTimer = null;
-      lifetime.graceElapsed = true;
-      this._closeRetiredStubIfReady(stub, lifetime);
-    }, RETIRED_STUB_CLOSE_GRACE_MS);
-    timer.unref();
-    lifetime.closeTimer = timer;
-  }
-
-  /**
-   * Force-closes retired stubs when stop reaches its cleanup boundary. Graceful
-   * stop first waits for all tracked work; a timed-out stop explicitly gives up
-   * and may close stubs that still have references.
-   */
-  private _closeDeferredStubs(): void {
-    for (const [stub, lifetime] of this._stubLifetimes) {
-      if (lifetime.retired) {
-        this._forceCloseStub(stub, lifetime);
-      }
-    }
-  }
-
-  private _retainStubReference(stub: stubs.TaskHubSidecarServiceClient): () => void {
-    const lifetime = this._getOrCreateStubLifetime(stub);
-    if (lifetime.closed) {
-      throw new Error("Cannot retain a closed work-item delivery stub.");
-    }
-
-    lifetime.referenceCount++;
-    let released = false;
-    return () => {
-      if (released) {
-        throw new Error("Work-item delivery stub reference was released more than once.");
-      }
-      released = true;
-      this._releaseStubReference(stub);
-    };
-  }
-
-  private _releaseStubReference(stub: stubs.TaskHubSidecarServiceClient): void {
-    const lifetime = this._stubLifetimes.get(stub);
-    if (!lifetime || lifetime.referenceCount === 0) {
-      throw new Error("Work-item delivery stub reference was released without a matching retain.");
-    }
-
-    lifetime.referenceCount--;
-    if (lifetime.referenceCount !== 0) {
-      return;
-    }
-
-    if (lifetime.retired && !lifetime.closed) {
-      this._closeRetiredStubIfReady(stub, lifetime);
-    } else {
-      this._stubLifetimes.delete(stub);
-    }
-  }
-
-  private _closeRetiredStubIfReady(stub: stubs.TaskHubSidecarServiceClient, lifetime: StubLifetime): void {
-    if (!lifetime.retired || !lifetime.graceElapsed || lifetime.referenceCount !== 0 || lifetime.closed) {
-      return;
-    }
-    this._forceCloseStub(stub, lifetime);
-  }
-
-  private _getOrCreateStubLifetime(stub: stubs.TaskHubSidecarServiceClient): StubLifetime {
-    let lifetime = this._stubLifetimes.get(stub);
-    if (!lifetime) {
-      lifetime = {
-        referenceCount: 0,
-        retired: false,
-        graceElapsed: false,
-        closeTimer: null,
-        closed: false,
-      };
-      this._stubLifetimes.set(stub, lifetime);
-    }
-    return lifetime;
-  }
-
-  private _forceCloseStub(stub: stubs.TaskHubSidecarServiceClient, trackedLifetime?: StubLifetime): void {
-    const lifetime = trackedLifetime ?? this._getOrCreateStubLifetime(stub);
-    if (lifetime.closed) {
-      return;
-    }
-
-    if (lifetime.closeTimer !== null) {
-      clearTimeout(lifetime.closeTimer);
-      lifetime.closeTimer = null;
-    }
-    lifetime.closed = true;
-    try {
+      this._deferredStubCloseTimers.delete(stub);
       stub.close();
-    } finally {
-      if (lifetime.referenceCount === 0) {
-        this._stubLifetimes.delete(stub);
-      }
+    }, DEFERRED_STUB_CLOSE_DELAY_MS);
+    timer.unref();
+    this._deferredStubCloseTimers.set(stub, timer);
+  }
+
+  private _closeDeferredStubs(): void {
+    for (const [stub, timer] of this._deferredStubCloseTimers) {
+      clearTimeout(timer);
+      stub.close();
     }
+    this._deferredStubCloseTimers.clear();
   }
 
   private _consumeWorkItemStream(
@@ -817,163 +683,20 @@ export class TaskHubGrpcWorker {
         "Orchestrator Request",
         workItem.getOrchestratorrequest()?.getInstanceid(),
       );
-      const request = workItem.getOrchestratorrequest() as pb.OrchestratorRequest;
-      this._scheduleWorkItem({
-        kind: "orchestration",
-        completionToken,
-        stub,
-        execute: () => this._executeOrchestratorInternal(request, completionToken, stub),
-        onError: (error) => {
-          WorkerLogs.executionError(this._logger, request.getInstanceid() || "(unknown)", error);
-        },
-      });
+      this._executeOrchestrator(workItem.getOrchestratorrequest() as pb.OrchestratorRequest, completionToken, stub);
     } else if (workItem.hasActivityrequest()) {
       WorkerLogs.workItemReceived(this._logger, "Activity Request");
-      const request = workItem.getActivityrequest() as pb.ActivityRequest;
-      this._scheduleWorkItem({
-        kind: "activity",
-        completionToken,
-        stub,
-        execute: () => this._executeActivityInternal(request, completionToken, stub),
-        onError: (error) => {
-          WorkerLogs.workerError(this._logger, error);
-        },
-      });
+      this._executeActivity(workItem.getActivityrequest() as pb.ActivityRequest, completionToken, stub);
     } else if (workItem.hasEntityrequest()) {
       const entityRequest = workItem.getEntityrequest() as pb.EntityBatchRequest;
       WorkerLogs.entityRequestReceived(this._logger, entityRequest.getInstanceid(), "Entity Request");
-      this._scheduleWorkItem({
-        kind: "entity",
-        completionToken,
-        stub,
-        execute: () => this._executeEntityInternal(entityRequest, completionToken, stub),
-        onError: (error) => {
-          WorkerLogs.workerError(this._logger, error);
-        },
-      });
+      this._executeEntity(entityRequest, completionToken, stub);
     } else if (workItem.hasEntityrequestv2()) {
       const entityRequestV2 = workItem.getEntityrequestv2() as pb.EntityRequest;
       WorkerLogs.entityRequestReceived(this._logger, entityRequestV2.getInstanceid(), "Entity Request V2");
-      this._scheduleWorkItem({
-        kind: "entity",
-        completionToken,
-        stub,
-        execute: () => this._executeEntityV2Internal(entityRequestV2, completionToken, stub),
-        onError: (error) => {
-          WorkerLogs.workerError(this._logger, error);
-        },
-      });
+      this._executeEntityV2(entityRequestV2, completionToken, stub);
     } else if (!workItem.hasHealthping()) {
       WorkerLogs.unknownWorkItem(this._logger);
-    }
-  }
-
-  private _createSchedulers(): Record<WorkItemKind, BoundedWorkItemScheduler<ScheduledWorkerWorkItem>> {
-    const create = (limit: number) =>
-      new BoundedWorkItemScheduler<ScheduledWorkerWorkItem>(limit, (promise, onError) => {
-        this._trackPendingWorkItem(promise, onError);
-      });
-    return {
-      activity: create(this._concurrency.maximumConcurrentActivityWorkItems),
-      orchestration: create(this._concurrency.maximumConcurrentOrchestrationWorkItems),
-      entity: create(this._concurrency.maximumConcurrentEntityWorkItems),
-    };
-  }
-
-  private _scheduleWorkItem(item: Omit<ScheduledWorkerWorkItem, "releaseStubReference">): void {
-    // Retain before schedule() can synchronously dispatch or enqueue the item.
-    // From here, either execution or rejection owns exactly one release.
-    const releaseStubReference = this._retainStubReference(item.stub);
-    const scheduledItem: ScheduledWorkerWorkItem = {
-      ...item,
-      releaseStubReference,
-      execute: async () => {
-        try {
-          await item.execute();
-        } finally {
-          releaseStubReference();
-        }
-      },
-    };
-
-    if (!this._schedulers[item.kind].schedule(scheduledItem)) {
-      this._rejectWorkItem(scheduledItem, this._concurrencyLimit(item.kind) === 0 ? "disabled" : "capacity");
-    }
-  }
-
-  private _concurrencyLimit(kind: WorkItemKind): number {
-    switch (kind) {
-      case "activity":
-        return this._concurrency.maximumConcurrentActivityWorkItems;
-      case "orchestration":
-        return this._concurrency.maximumConcurrentOrchestrationWorkItems;
-      case "entity":
-        return this._concurrency.maximumConcurrentEntityWorkItems;
-    }
-  }
-
-  private _stopSchedulers(): void {
-    for (const kind of ["activity", "orchestration", "entity"] as const) {
-      for (const item of this._schedulers[kind].stop()) {
-        this._rejectWorkItem(item, "shutdown");
-      }
-    }
-  }
-
-  private _rejectWorkItem(item: ScheduledWorkerWorkItem, reason: "capacity" | "disabled" | "shutdown"): void {
-    const pending = this._pendingAbandons[item.kind];
-    if (pending.size >= MAX_PENDING_ABANDONS_PER_KIND) {
-      WorkerLogs.workerError(
-        this._logger,
-        new Error(
-          `Dropping unexpected ${item.kind} work item (${reason}) because ` +
-            `${MAX_PENDING_ABANDONS_PER_KIND} abandon calls are already pending.`,
-        ),
-      );
-      item.releaseStubReference();
-      return;
-    }
-
-    const abandon = this._abandonWorkItem(item.kind, item.completionToken, item.stub);
-    const handledPromise = this._trackPendingWorkItem(
-      abandon,
-      (error) => {
-        WorkerLogs.workerError(
-          this._logger,
-          new Error(`Failed to abandon rejected ${item.kind} work item (${reason})`, { cause: error }),
-        );
-      },
-      () => {
-        item.releaseStubReference();
-        pending.delete(handledPromise);
-      },
-    );
-    pending.add(handledPromise);
-  }
-
-  private async _abandonWorkItem(
-    kind: WorkItemKind,
-    completionToken: string,
-    stub: stubs.TaskHubSidecarServiceClient,
-  ): Promise<void> {
-    switch (kind) {
-      case "activity": {
-        const request = new pb.AbandonActivityTaskRequest();
-        request.setCompletiontoken(completionToken);
-        await callWithMetadata(stub.abandonTaskActivityWorkItem.bind(stub), request, this._metadataGenerator);
-        return;
-      }
-      case "orchestration": {
-        const request = new pb.AbandonOrchestrationTaskRequest();
-        request.setCompletiontoken(completionToken);
-        await callWithMetadata(stub.abandonTaskOrchestratorWorkItem.bind(stub), request, this._metadataGenerator);
-        return;
-      }
-      case "entity": {
-        const request = new pb.AbandonEntityTaskRequest();
-        request.setCompletiontoken(completionToken);
-        await callWithMetadata(stub.abandonTaskEntityWorkItem.bind(stub), request, this._metadataGenerator);
-      }
     }
   }
 
@@ -984,8 +707,7 @@ export class TaskHubGrpcWorker {
 
   /**
    * Stop the worker and wait for any pending work items to complete.
-   * Uses a configurable timeout (default 30s) to wait for in-flight work, then
-   * force-closes delivery stubs if that explicit shutdown boundary expires.
+   * Uses a configurable timeout (default 30s) to wait for in-flight work.
    */
   async stop(): Promise<void> {
     if (!this._isRunning) {
@@ -994,7 +716,6 @@ export class TaskHubGrpcWorker {
 
     const responseStream = this._responseStream;
     this._stopWorker = true;
-    this._stopSchedulers();
     this._abortController?.abort();
     this._clearSilentDisconnectTimer();
 
@@ -1040,13 +761,10 @@ export class TaskHubGrpcWorker {
       }
     }
 
-    // Reaching this point is the explicit shutdown cleanup boundary. If the
-    // configured wait timed out, referenced stubs are force-closed rather than
-    // allowing transport cleanup to wait forever.
     this._closeDeferredStubs();
     if (this._stub) {
-      this._forceCloseStub(this._stub);
-      this._stub = null;
+      // Close the gRPC client - this is a synchronous operation
+      this._stub.close();
     }
     this._isRunning = false;
     this._abortController = null;
@@ -1174,11 +892,7 @@ export class TaskHubGrpcWorker {
     return undefined;
   }
 
-  private _trackPendingWorkItem(
-    workPromise: Promise<void>,
-    onError: (error: Error) => void,
-    onFinally?: () => void,
-  ): Promise<void> {
+  private _trackPendingWorkItem(workPromise: Promise<void>, onError: (error: Error) => void): void {
     const handledPromise = workPromise
       .catch((e: unknown) => {
         const error = e instanceof Error ? e : new Error(String(e));
@@ -1186,11 +900,9 @@ export class TaskHubGrpcWorker {
       })
       .finally(() => {
         this._pendingWorkItems.delete(handledPromise);
-        onFinally?.();
       });
 
     this._pendingWorkItems.add(handledPromise);
-    return handledPromise;
   }
 
   /**

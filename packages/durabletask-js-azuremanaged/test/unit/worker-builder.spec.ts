@@ -112,22 +112,4 @@ describe("DurableTaskAzureManagedWorkerBuilder", () => {
       expect((worker as any)._channelRecreateFailureThreshold).toBe(3);
     });
   });
-
-  describe("concurrency", () => {
-    it("forwards independent work-item limits to the core worker", () => {
-      const builder = new DurableTaskAzureManagedWorkerBuilder().endpoint(ENDPOINT, TASKHUB, null);
-      const options = {
-        maximumConcurrentActivityWorkItems: 2,
-        maximumConcurrentOrchestrationWorkItems: 3,
-        maximumConcurrentEntityWorkItems: 4,
-      };
-
-      expect(builder.concurrency(options)).toBe(builder);
-      const request = (builder.build() as any)._buildGetWorkItemsRequest();
-
-      expect(request.getMaxconcurrentactivityworkitems()).toBe(2);
-      expect(request.getMaxconcurrentorchestrationworkitems()).toBe(3);
-      expect(request.getMaxconcurrententityworkitems()).toBe(4);
-    });
-  });
 });

@@ -15,7 +15,6 @@ import {
   ConsoleLogger,
   VersioningOptions,
   WorkItemFilters,
-  ConcurrencyOptions,
 } from "@microsoft/durabletask-js";
 
 /**
@@ -34,7 +33,6 @@ export class DurableTaskAzureManagedWorkerBuilder {
   private _channelRecreateFailureThreshold?: number;
   private _versioning?: VersioningOptions;
   private _workItemFilters?: WorkItemFilters | "auto";
-  private _concurrency?: ConcurrencyOptions;
 
   /**
    * Creates a new instance of DurableTaskAzureManagedWorkerBuilder.
@@ -267,19 +265,6 @@ export class DurableTaskAzureManagedWorkerBuilder {
   }
 
   /**
-   * Sets independent concurrency limits for orchestration, activity, and entity work items.
-   * Omitted limits default to 100 times the available logical processor count. A limit of
-   * zero disables that work-item kind.
-   *
-   * @param options The per-work-item concurrency limits.
-   * @returns This builder instance.
-   */
-  concurrency(options: ConcurrencyOptions): DurableTaskAzureManagedWorkerBuilder {
-    this._concurrency = options;
-    return this;
-  }
-
-  /**
    * Configures versioning options for the worker.
    * This allows filtering orchestrations by version using different match strategies.
    *
@@ -340,7 +325,6 @@ export class DurableTaskAzureManagedWorkerBuilder {
       channelRecreateFailureThreshold: this._channelRecreateFailureThreshold,
       versioning: this._versioning,
       workItemFilters: this._workItemFilters,
-      concurrency: this._concurrency,
     });
 
     // Register all orchestrators

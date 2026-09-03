@@ -6,7 +6,6 @@ jest.mock("os", () => {
   return {
     ...actual,
     availableParallelism: jest.fn(actual.availableParallelism),
-    cpus: jest.fn(actual.cpus),
   };
 });
 
@@ -45,32 +44,6 @@ describe("worker concurrency options", () => {
     expect(request.getMaxconcurrentactivityworkitems()).toBe(300);
     expect(request.getMaxconcurrentorchestrationworkitems()).toBe(300);
     expect(request.getMaxconcurrententityworkitems()).toBe(300);
-  });
-
-  it("falls back to the logical CPU list when availableParallelism is unavailable", () => {
-    jest.mocked(os.availableParallelism).mockReturnValue(undefined as never);
-    jest.mocked(os.cpus).mockReturnValue([{ model: "test", speed: 1, times: {} as os.CpuInfo["times"] }]);
-
-    const request = getRequest(new TaskHubGrpcWorker({ logger: new NoOpLogger() }));
-
-    expect(request.getMaxconcurrentactivityworkitems()).toBe(100);
-    expect(request.getMaxconcurrentorchestrationworkitems()).toBe(100);
-    expect(request.getMaxconcurrententityworkitems()).toBe(100);
-  });
-
-  it("uses one logical processor when both CPU APIs fail", () => {
-    jest.mocked(os.availableParallelism).mockImplementation(() => {
-      throw new Error("unsupported");
-    });
-    jest.mocked(os.cpus).mockImplementation(() => {
-      throw new Error("unsupported");
-    });
-
-    const request = getRequest(new TaskHubGrpcWorker({ logger: new NoOpLogger() }));
-
-    expect(request.getMaxconcurrentactivityworkitems()).toBe(100);
-    expect(request.getMaxconcurrentorchestrationworkitems()).toBe(100);
-    expect(request.getMaxconcurrententityworkitems()).toBe(100);
   });
 
   it("applies custom limits independently and preserves zero", () => {
