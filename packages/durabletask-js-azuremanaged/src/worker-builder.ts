@@ -53,7 +53,9 @@ export class DurableTaskAzureManagedWorkerBuilder {
       throw new Error("connectionString must not be null or empty");
     }
 
-    this._options = DurableTaskAzureManagedWorkerOptions.fromConnectionString(connectionString);
+    this._options = DurableTaskAzureManagedWorkerOptions.fromConnectionString(
+      connectionString,
+    ).setAllowInsecureCredentials(this._options.isAllowInsecureCredentials());
     return this;
   }
 
@@ -81,8 +83,7 @@ export class DurableTaskAzureManagedWorkerBuilder {
     this._options
       .setEndpointAddress(endpoint)
       .setTaskHubName(taskHubName)
-      .setCredential(credential ?? null)
-      .setAllowInsecureCredentials(credential === null || credential === undefined);
+      .setCredential(credential ?? null);
 
     return this;
   }

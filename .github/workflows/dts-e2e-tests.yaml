@@ -57,7 +57,7 @@ jobs:
       - name: 🔧 Set environment variables
         run: |
           echo "TASKHUB=default" >> $GITHUB_ENV
-          echo "ENDPOINT=localhost:8080" >> $GITHUB_ENV
+          echo "ENDPOINT=http://localhost:8080" >> $GITHUB_ENV
 
       - name: ⚙️ NodeJS - Install
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

@@ -15,7 +15,7 @@ import {
 } from "@microsoft/durabletask-js-azuremanaged";
 
 const connectionString = process.env.DTS_CONNECTION_STRING;
-const endpoint = process.env.ENDPOINT || "localhost:8080";
+const endpoint = process.env.ENDPOINT || "http://localhost:8080";
 const taskHub = process.env.TASKHUB || "default";
 
 function createClient(): TaskHubGrpcClient {

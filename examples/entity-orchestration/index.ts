@@ -31,7 +31,7 @@ import {
 } from "@microsoft/durabletask-js-azuremanaged";
 
 // Read environment variables for DTS emulator or local sidecar
-const endpoint = process.env.ENDPOINT || "localhost:4001";
+const endpoint = process.env.ENDPOINT || "http://localhost:4001";
 const taskHub = process.env.TASKHUB || "default";
 
 // ============================================================================

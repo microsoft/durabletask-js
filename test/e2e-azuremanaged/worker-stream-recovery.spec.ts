@@ -8,7 +8,7 @@
  * that stopping a worker cancels reconnect work from that worker run.
  *
  * Environment variables:
- *   - ENDPOINT: The endpoint for the DTS emulator (default: localhost:8080)
+ *   - ENDPOINT: The endpoint for the DTS emulator (default: http://localhost:8080)
  *   - TASKHUB: The task hub name (default: default)
  */
 
@@ -25,12 +25,12 @@ import {
   DurableTaskAzureManagedWorkerBuilder,
 } from "@microsoft/durabletask-js-azuremanaged";
 
-const endpoint = process.env.ENDPOINT || "localhost:8080";
+const endpoint = process.env.ENDPOINT || "http://localhost:8080";
 const taskHub = process.env.TASKHUB || "default";
 
 const EMULATOR_CONTAINER = "dts-emulator-stream-recovery-test";
 const EMULATOR_IMAGE = "mcr.microsoft.com/dts/dts-emulator:latest";
-const EMULATOR_PORT = endpoint.split(":")[1] || "8080";
+const EMULATOR_PORT = new URL(endpoint).port || "8080";
 const WATCHDOG_TIMEOUT_MS = 10000;
 const WATCHDOG_EVENT_TIMEOUT_MS = 30000;
 const DISABLED_WATCHDOG_PAUSE_MS = WATCHDOG_TIMEOUT_MS + 5000;

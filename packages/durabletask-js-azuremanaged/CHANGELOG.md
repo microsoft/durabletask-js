@@ -10,6 +10,10 @@
 
 ### Fixes
 
+- Select TLS from the Azure-managed endpoint scheme independently of authentication, and require explicit opt-in
+  before sending token credentials over an insecure endpoint. Schemeless endpoints now default to HTTPS; local
+  plaintext endpoints must include the `http://` scheme.
+
 ## v0.4.0 (2026-07-31)
 
 ### Changes

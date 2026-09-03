@@ -73,6 +73,17 @@ The connection string `Authentication` parameter supports the following values:
 Endpoint=<endpoint>;Authentication=<auth-type>;TaskHub=<task-hub-name>[;ClientID=<client-id>][;TenantId=<tenant-id>]
 ```
 
+## Transport Security
+
+Endpoint transport and authentication are configured independently:
+
+- `https://` endpoints always use TLS.
+- `http://` endpoints use plaintext and are intended for local development and testing.
+- Endpoints without a scheme default to HTTPS.
+- Token credentials with an HTTP endpoint are rejected unless the client or worker builder explicitly calls
+  `.allowInsecureCredentials(true)`. This opt-in permits authentication metadata over plaintext; it never
+  downgrades an HTTPS endpoint.
+
 ## API Reference
 
 ### Classes

@@ -45,7 +45,7 @@ npm run start
 ## Expected Output
 
 ```
-Connecting to endpoint: localhost:8080, taskHub: default
+Connecting to endpoint: http://localhost:8080, taskHub: default
 Worker started successfully
 
 --- Signaling entity operations ---

@@ -24,7 +24,7 @@
  *   - EXPORT_HISTORY_E2E: Set to "1" to enable these tests (default: skipped)
  *   - AZURE_DTS_CONNECTION_STRING: Connection string for real DTS (required)
  *     Example: Endpoint=https://your-scheduler.eastus.durabletask.io;Authentication=DefaultAzure;TaskHub=your-taskhub
- *   - ENDPOINT: The endpoint for the DTS emulator (default: localhost:8080)
+ *   - ENDPOINT: The endpoint for the DTS emulator (default: http://localhost:8080)
  *   - TASKHUB: The task hub name (default: default)
  *   - AZURE_STORAGE_CONNECTION_STRING: Connection string for Azure Blob Storage or Azurite
  *     (default: UseDevelopmentStorage=true)
@@ -60,7 +60,7 @@ import {
 
 // Read environment variables
 const connectionString = process.env.AZURE_DTS_CONNECTION_STRING;
-const endpoint = process.env.ENDPOINT || "localhost:8080";
+const endpoint = process.env.ENDPOINT || "http://localhost:8080";
 const taskHub = process.env.TASKHUB || "default";
 const storageConnectionString =
   process.env.AZURE_STORAGE_CONNECTION_STRING || "UseDevelopmentStorage=true";

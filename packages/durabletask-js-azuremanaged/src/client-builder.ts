@@ -35,7 +35,9 @@ export class DurableTaskAzureManagedClientBuilder {
       throw new Error("connectionString must not be null or empty");
     }
 
-    this._options = DurableTaskAzureManagedClientOptions.fromConnectionString(connectionString);
+    this._options = DurableTaskAzureManagedClientOptions.fromConnectionString(
+      connectionString,
+    ).setAllowInsecureCredentials(this._options.isAllowInsecureCredentials());
     return this;
   }
 
@@ -63,8 +65,7 @@ export class DurableTaskAzureManagedClientBuilder {
     this._options
       .setEndpointAddress(endpoint)
       .setTaskHubName(taskHubName)
-      .setCredential(credential ?? null)
-      .setAllowInsecureCredentials(credential === null || credential === undefined);
+      .setCredential(credential ?? null);
 
     return this;
   }
@@ -157,10 +158,15 @@ export class DurableTaskAzureManagedClientBuilder {
       ...this._grpcChannelOptions,
     };
 
-    // Use the core TaskHubGrpcClient with custom credentials and metadata generator
-    // For insecure connections, metadata is passed via the metadataGenerator parameter
-    // For secure connections, metadata is included in the channel credentials
-    return new TaskHubGrpcClient(hostAddress, combinedOptions, true, channelCredentials, metadataGenerator, this._logger);
+    // Use the core TaskHubGrpcClient with custom channel credentials and per-call metadata.
+    return new TaskHubGrpcClient(
+      hostAddress,
+      combinedOptions,
+      true,
+      channelCredentials,
+      metadataGenerator,
+      this._logger,
+    );
   }
 }
 
