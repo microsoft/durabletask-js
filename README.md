@@ -81,6 +81,30 @@ const state = await client.waitForOrchestrationCompletion(id, true, 60);
 console.log(`Result: ${state?.serializedOutput}`);
 ```
 
+### Worker concurrency
+
+Core workers can send independent orchestration, activity, and entity concurrency hints to
+the backend:
+
+```typescript
+const worker = new TaskHubGrpcWorker({
+  concurrency: {
+    maximumConcurrentOrchestrationWorkItems: 10,
+    maximumConcurrentActivityWorkItems: 20,
+    maximumConcurrentEntityWorkItems: 5,
+  },
+});
+```
+
+The worker does not locally throttle handlers, and the backend may have more than the requested
+number of work items in flight or prefetched. Current Azure DTS versions treat `0` as no limit, so
+do not use `0` to disable a work-item kind.
+
+Omitted values default to 100 times `os.availableParallelism()`. Values must be non-negative
+safe integers; `0` is forwarded unchanged. Values above the protocol's signed 32-bit range
+are capped at `2147483647` on the wire. The same three hints are sent on initial and
+reconnected work-item streams.
+
 You can find more samples in the [examples/azure-managed](./examples/azure-managed) directory.
 
 ### Reusing orchestration instance IDs

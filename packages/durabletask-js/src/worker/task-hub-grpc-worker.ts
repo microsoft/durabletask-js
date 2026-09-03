@@ -25,6 +25,7 @@ import { VersioningOptions, VersionMatchStrategy, VersionFailureStrategy } from 
 import { WorkItemFilters, generateWorkItemFiltersFromRegistry, toGrpcWorkItemFilters } from "./work-item-filters";
 import { compareVersions } from "../utils/versioning.util";
 import * as WorkerLogs from "./logs";
+import { ConcurrencyOptions, ResolvedConcurrencyOptions, resolveConcurrencyOptions } from "./concurrency-options";
 import {
   DurableTaskAttributes,
   startSpanForOrchestrationExecution,
@@ -45,6 +46,7 @@ const DEFAULT_SILENT_DISCONNECT_TIMEOUT_MS = 120000;
 const DEFAULT_CHANNEL_RECREATE_FAILURE_THRESHOLD = 5;
 const DEFERRED_STUB_CLOSE_DELAY_MS = 30000;
 const MAX_TIMER_DELAY_MS = 2_147_483_646;
+const MAX_PROTOCOL_CONCURRENCY = 2_147_483_647;
 const HELLO_TIMEOUT_MS = 30000;
 
 type WorkItemStreamResult = {
@@ -95,6 +97,8 @@ export interface TaskHubGrpcWorkerOptions {
    * activities, and entities.
    */
   workItemFilters?: WorkItemFilters | "auto";
+  /** Backend concurrency hints for each work-item kind. */
+  concurrency?: ConcurrencyOptions;
 }
 
 export class TaskHubGrpcWorker {
@@ -117,6 +121,7 @@ export class TaskHubGrpcWorker {
   private _backoff: ExponentialBackoff;
   private _versioning?: VersioningOptions;
   private _workItemFilters?: WorkItemFilters | "auto";
+  private _concurrency: ResolvedConcurrencyOptions;
   private _abortController: AbortController | null;
   private _workerLoopPromise: Promise<void> | null;
   private _deferredStubCloseTimers: Map<stubs.TaskHubSidecarServiceClient, ReturnType<typeof setTimeout>>;
@@ -170,6 +175,7 @@ export class TaskHubGrpcWorker {
     let resolvedChannelRecreateFailureThreshold: number | undefined;
     let resolvedVersioning: VersioningOptions | undefined;
     let resolvedWorkItemFilters: WorkItemFilters | "auto" | undefined;
+    let resolvedConcurrency: ConcurrencyOptions | undefined;
 
     if (typeof hostAddressOrOptions === "object" && hostAddressOrOptions !== null) {
       // Options object constructor
@@ -184,6 +190,7 @@ export class TaskHubGrpcWorker {
       resolvedChannelRecreateFailureThreshold = hostAddressOrOptions.channelRecreateFailureThreshold;
       resolvedVersioning = hostAddressOrOptions.versioning;
       resolvedWorkItemFilters = hostAddressOrOptions.workItemFilters;
+      resolvedConcurrency = hostAddressOrOptions.concurrency;
     } else {
       // Deprecated positional parameters constructor
       resolvedHostAddress = hostAddressOrOptions;
@@ -230,6 +237,7 @@ export class TaskHubGrpcWorker {
     });
     this._versioning = resolvedVersioning;
     this._workItemFilters = resolvedWorkItemFilters;
+    this._concurrency = resolveConcurrencyOptions(resolvedConcurrency);
     this._abortController = null;
     this._workerLoopPromise = null;
     this._deferredStubCloseTimers = new Map();
@@ -781,6 +789,15 @@ export class TaskHubGrpcWorker {
    */
   private _buildGetWorkItemsRequest(): pb.GetWorkItemsRequest {
     const request = new pb.GetWorkItemsRequest();
+    request.setMaxconcurrentactivityworkitems(
+      Math.min(this._concurrency.maximumConcurrentActivityWorkItems, MAX_PROTOCOL_CONCURRENCY),
+    );
+    request.setMaxconcurrentorchestrationworkitems(
+      Math.min(this._concurrency.maximumConcurrentOrchestrationWorkItems, MAX_PROTOCOL_CONCURRENCY),
+    );
+    request.setMaxconcurrententityworkitems(
+      Math.min(this._concurrency.maximumConcurrentEntityWorkItems, MAX_PROTOCOL_CONCURRENCY),
+    );
 
     if (this._workItemFilters !== undefined) {
       const filters =

@@ -4,6 +4,7 @@
 // Client and Worker
 export { TaskHubGrpcClient, TaskHubGrpcClientOptions, MetadataGenerator } from "./client/client";
 export { TaskHubGrpcWorker, TaskHubGrpcWorkerOptions } from "./worker/task-hub-grpc-worker";
+export { ConcurrencyOptions } from "./worker/concurrency-options";
 export { VersioningOptions, VersionMatchStrategy, VersionFailureStrategy } from "./worker/versioning-options";
 export {
   WorkItemFilters,

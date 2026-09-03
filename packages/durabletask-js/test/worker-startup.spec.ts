@@ -335,6 +335,29 @@ describe("TaskHubGrpcWorker startup", () => {
     await stopWorker(worker);
   });
 
+  it("sends the same custom concurrency hints on initial and reconnected streams", async () => {
+    jest.spyOn(Math, "random").mockReturnValue(0);
+    const streams: MockStream[] = [];
+    const stub = createStub(streams);
+    const worker = await startWorker(stub, {
+      concurrency: {
+        maximumConcurrentActivityWorkItems: 2,
+        maximumConcurrentOrchestrationWorkItems: 3,
+        maximumConcurrentEntityWorkItems: 4,
+      },
+    });
+
+    await failStream(streams[0]);
+
+    expect(stub.getWorkItems).toHaveBeenCalledTimes(2);
+    for (const [request] of stub.getWorkItems.mock.calls) {
+      expect(request.getMaxconcurrentactivityworkitems()).toBe(2);
+      expect(request.getMaxconcurrentorchestrationworkitems()).toBe(3);
+      expect(request.getMaxconcurrententityworkitems()).toBe(4);
+    }
+    await stopWorker(worker);
+  });
+
   it("reconnects without recreating the channel after a non-empty graceful drain", async () => {
     jest.spyOn(Math, "random").mockReturnValue(0);
     const streams: MockStream[] = [];
