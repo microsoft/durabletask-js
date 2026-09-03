@@ -81,10 +81,10 @@ const state = await client.waitForOrchestrationCompletion(id, true, 60);
 console.log(`Result: ${state?.serializedOutput}`);
 ```
 
-### Worker concurrency and backpressure
+### Worker concurrency hints
 
-Configure independent limits for complete orchestration, activity, and entity work-item
-lifecycles through `TaskHubGrpcWorkerOptions.concurrency` or the Azure-managed worker builder:
+Use `TaskHubGrpcWorkerOptions.concurrency` or the Azure-managed worker builder to send
+independent orchestration, activity, and entity capacity hints to the backend:
 
 ```typescript
 const worker = createAzureManagedWorkerBuilder(connectionString)
@@ -93,26 +93,13 @@ const worker = createAzureManagedWorkerBuilder(connectionString)
     maximumConcurrentActivityWorkItems: 20,
     maximumConcurrentEntityWorkItems: 5,
   })
-  .addOrchestrator(helloCities)
-  .addActivity(sayHello)
   .build();
 ```
 
-Each omitted limit defaults at worker construction time to 100 times the logical processor
-count available to Node.js. Values must be non-negative safe integers; `0` disables that
-work-item kind. Entity V1 and V2 batches share the entity limit, and each batch counts as one
-work item regardless of its operation count. Because the protocol fields are signed 32-bit
-integers, larger safe-integer limits are enforced locally but their wire hints are capped at
-`2147483647`.
-
-The limits are sent to the backend on every work-item stream and are also enforced locally
-through independent bounded schedulers. Each scheduler can hold at most one waiting item per
-permit. If a backend exceeds that bound or sends a disabled kind, the worker abandons the item
-without pausing other work-item kinds. Abandon RPCs are bounded to 16 outstanding calls per
-kind; further violating deliveries are logged and dropped so a misbehaving backend cannot
-create unbounded local memory growth. When reconnect recreates a channel, the replaced delivery
-stub remains open for at least a 30-second grace period and until every work item delivered by
-that stub has finished its completion or abandonment path.
+Omitted values default to 100 times Node.js's available logical processor count. Values
+must be non-negative safe integers, and zero is supported. Values above the protocol's
+signed 32-bit range are capped on the wire. These values are backend dispatch hints, not
+strict local concurrency limits.
 
 You can find more samples in the [examples/azure-managed](./examples/azure-managed) directory.
 

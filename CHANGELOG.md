@@ -2,9 +2,8 @@
 
 ### New
 
-- Add `ConcurrencyOptions` to configure independent orchestration, activity, and entity
-  work-item limits on `TaskHubGrpcWorker`. The worker sends all three protocol hints and
-  enforces full work-item lifecycles locally with bounded per-kind backpressure.
+- Add `ConcurrencyOptions` for sending independent orchestration, activity, and entity
+  capacity hints to the backend on every worker stream.
 - Add an optional `newVersion` parameter to `OrchestrationContext.continueAsNew()` for version migrations.
 - Implement entity support in the in-memory testing backend ([#341](https://github.com/microsoft/durabletask-js/pull/341))
 - Add the top-level `StartOrchestrationOptions.dedupeStatuses` option, `ValidDedupeStatuses`, and
@@ -20,10 +19,9 @@
   pending hello calls and reconnect delays when the worker stops.
 - Align worker stream recovery with the .NET SDK: reconnect after 120 seconds without a message
   or health ping, reset retry state only after the first message, use full-jitter backoff, reuse
-  channels until five likely-poisoned failures, isolate recreated grpc-js transports, and dispose
-  replaced delivery stubs only after a 30-second grace period and all of their work-item completion
-  or abandonment paths settle. Sidecars that do not send health-ping work items, including the current
-  durabletask-go sidecar, should set `silentDisconnectTimeoutMs` to `0`.
+  channels until five likely-poisoned failures, isolate recreated grpc-js transports, and defer
+  disposal of replaced channels. Sidecars that do not send health-ping work items, including the
+  current durabletask-go sidecar, should set `silentDisconnectTimeoutMs` to `0`.
 
 ## v0.4.0 (2026-07-31)
 

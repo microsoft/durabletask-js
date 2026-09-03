@@ -4,18 +4,18 @@
 import * as os from "os";
 
 /**
- * Controls the maximum number of work-item lifecycles processed concurrently by a worker.
+ * Configures the worker capacity hints sent to the backend.
  *
- * A value of `0` disables processing for that work-item kind. Omitted values default to
- * 100 times the number of logical processors available to the process. Values above the
- * protocol's signed 32-bit range are enforced locally and capped only in the wire hint.
+ * Omitted values default to 100 times the number of logical processors available to the
+ * process. Zero is supported. Values above the protocol's signed 32-bit range are capped
+ * when sent to the backend.
  */
 export interface ConcurrencyOptions {
-  /** Maximum concurrent activity work items. */
+  /** Maximum concurrent activity work items the backend should dispatch. */
   maximumConcurrentActivityWorkItems?: number;
-  /** Maximum concurrent orchestration work items. */
+  /** Maximum concurrent orchestration work items the backend should dispatch. */
   maximumConcurrentOrchestrationWorkItems?: number;
-  /** Maximum concurrent entity work-item batches. Entity V1 and V2 share this limit. */
+  /** Maximum concurrent entity work-item batches the backend should dispatch. */
   maximumConcurrentEntityWorkItems?: number;
 }
 
@@ -28,8 +28,8 @@ export interface ResolvedConcurrencyOptions {
 function getLogicalProcessorCount(): number {
   try {
     const available = typeof os.availableParallelism === "function" ? os.availableParallelism() : undefined;
-    if (Number.isSafeInteger(available) && available! > 0) {
-      return Math.min(available!, Math.floor(Number.MAX_SAFE_INTEGER / 100));
+    if (typeof available === "number" && Number.isSafeInteger(available) && available > 0) {
+      return Math.min(available, Math.floor(Number.MAX_SAFE_INTEGER / 100));
     }
   } catch {
     // Fall through for runtimes/platforms where availableParallelism() is unavailable.

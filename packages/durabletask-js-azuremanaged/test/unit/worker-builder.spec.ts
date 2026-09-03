@@ -114,7 +114,7 @@ describe("DurableTaskAzureManagedWorkerBuilder", () => {
   });
 
   describe("concurrency", () => {
-    it("forwards independent work-item limits to the core worker", () => {
+    it("forwards independent work-item hints to the core worker", () => {
       const builder = new DurableTaskAzureManagedWorkerBuilder().endpoint(ENDPOINT, TASKHUB, null);
       const options = {
         maximumConcurrentActivityWorkItems: 2,

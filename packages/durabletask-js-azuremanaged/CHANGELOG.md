@@ -2,8 +2,7 @@
 
 ### New
 
-- Add `DurableTaskAzureManagedWorkerBuilder.concurrency()` for independent, locally enforced
-  orchestration, activity, and entity work-item limits.
+- Add `DurableTaskAzureManagedWorkerBuilder.concurrency()` for backend worker-capacity hints.
 - Add `DurableTaskAzureManagedWorkerBuilder.silentDisconnectTimeout()` to configure the
   core worker's work-item stream watchdog. Set it to `0` for sidecars that do not emit
   health-ping work items, including the current durabletask-go sidecar.

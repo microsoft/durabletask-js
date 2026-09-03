@@ -267,11 +267,10 @@ export class DurableTaskAzureManagedWorkerBuilder {
   }
 
   /**
-   * Sets independent concurrency limits for orchestration, activity, and entity work items.
-   * Omitted limits default to 100 times the available logical processor count. A limit of
-   * zero disables that work-item kind.
+   * Sets the orchestration, activity, and entity capacity hints sent to the backend.
+   * Omitted values default to 100 times the available logical processor count.
    *
-   * @param options The per-work-item concurrency limits.
+   * @param options The per-work-item concurrency capacity hints.
    * @returns This builder instance.
    */
   concurrency(options: ConcurrencyOptions): DurableTaskAzureManagedWorkerBuilder {
