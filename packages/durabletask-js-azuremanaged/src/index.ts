@@ -24,8 +24,5 @@ export { Logger, ConsoleLogger, NoOpLogger } from "@microsoft/durabletask-js";
 // Versioning exports - re-export from core package for convenience
 export { VersioningOptions, VersionMatchStrategy, VersionFailureStrategy } from "@microsoft/durabletask-js";
 
-// Worker concurrency export - re-export from core package for convenience
-export { ConcurrencyOptions } from "@microsoft/durabletask-js";
-
 // Azure-specific logger adapter
 export { AzureLoggerAdapter, createAzureLogger } from "./azure-logger-adapter";

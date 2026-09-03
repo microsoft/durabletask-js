@@ -81,25 +81,25 @@ const state = await client.waitForOrchestrationCompletion(id, true, 60);
 console.log(`Result: ${state?.serializedOutput}`);
 ```
 
-### Worker concurrency hints
+### Worker concurrency
 
-Use `TaskHubGrpcWorkerOptions.concurrency` or the Azure-managed worker builder to send
-independent orchestration, activity, and entity capacity hints to the backend:
+Core workers can send independent orchestration, activity, and entity concurrency hints to
+the backend:
 
 ```typescript
-const worker = createAzureManagedWorkerBuilder(connectionString)
-  .concurrency({
+const worker = new TaskHubGrpcWorker({
+  concurrency: {
     maximumConcurrentOrchestrationWorkItems: 10,
     maximumConcurrentActivityWorkItems: 20,
     maximumConcurrentEntityWorkItems: 5,
-  })
-  .build();
+  },
+});
 ```
 
-Omitted values default to 100 times Node.js's available logical processor count. Values
-must be non-negative safe integers, and zero is supported. Values above the protocol's
-signed 32-bit range are capped on the wire. These values are backend dispatch hints, not
-strict local concurrency limits.
+Omitted values default to 100 times `os.availableParallelism()`. Values must be non-negative
+safe integers; `0` is forwarded unchanged. Values above the protocol's signed 32-bit range
+are capped at `2147483647` on the wire. The same three hints are sent on initial and
+reconnected work-item streams.
 
 You can find more samples in the [examples/azure-managed](./examples/azure-managed) directory.
 

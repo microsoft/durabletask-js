@@ -2,8 +2,8 @@
 
 ### New
 
-- Add `ConcurrencyOptions` for sending independent orchestration, activity, and entity
-  capacity hints to the backend on every worker stream.
+- Add `ConcurrencyOptions` to configure the orchestration, activity, and entity concurrency
+  hints sent by `TaskHubGrpcWorker` to the backend.
 - Add an optional `newVersion` parameter to `OrchestrationContext.continueAsNew()` for version migrations.
 - Implement entity support in the in-memory testing backend ([#341](https://github.com/microsoft/durabletask-js/pull/341))
 - Add the top-level `StartOrchestrationOptions.dedupeStatuses` option, `ValidDedupeStatuses`, and

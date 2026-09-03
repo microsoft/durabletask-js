@@ -97,7 +97,7 @@ export interface TaskHubGrpcWorkerOptions {
    * activities, and entities.
    */
   workItemFilters?: WorkItemFilters | "auto";
-  /** Capacity hints sent to the backend when requesting work items. */
+  /** Backend concurrency hints for each work-item kind. */
   concurrency?: ConcurrencyOptions;
 }
 
@@ -782,7 +782,7 @@ export class TaskHubGrpcWorker {
   }
 
   /**
-   * Builds the GetWorkItemsRequest, attaching concurrency hints and work item filters.
+   * Builds the GetWorkItemsRequest, attaching work item filters based on configuration.
    * - undefined (default): no filters sent, worker receives all work items
    * - "auto": auto-generate filters from the registry
    * - explicit WorkItemFilters: use as provided

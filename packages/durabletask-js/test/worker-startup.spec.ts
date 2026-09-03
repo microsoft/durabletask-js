@@ -335,7 +335,7 @@ describe("TaskHubGrpcWorker startup", () => {
     await stopWorker(worker);
   });
 
-  it("sends exact concurrency hints on initial and reconnected streams", async () => {
+  it("sends the same custom concurrency hints on initial and reconnected streams", async () => {
     jest.spyOn(Math, "random").mockReturnValue(0);
     const streams: MockStream[] = [];
     const stub = createStub(streams);
@@ -349,16 +349,12 @@ describe("TaskHubGrpcWorker startup", () => {
 
     await failStream(streams[0]);
 
-    expect(
-      stub.getWorkItems.mock.calls.map(([request]: [pb.GetWorkItemsRequest]) => ({
-        activity: request.getMaxconcurrentactivityworkitems(),
-        orchestration: request.getMaxconcurrentorchestrationworkitems(),
-        entity: request.getMaxconcurrententityworkitems(),
-      })),
-    ).toEqual([
-      { activity: 2, orchestration: 3, entity: 4 },
-      { activity: 2, orchestration: 3, entity: 4 },
-    ]);
+    expect(stub.getWorkItems).toHaveBeenCalledTimes(2);
+    for (const [request] of stub.getWorkItems.mock.calls) {
+      expect(request.getMaxconcurrentactivityworkitems()).toBe(2);
+      expect(request.getMaxconcurrentorchestrationworkitems()).toBe(3);
+      expect(request.getMaxconcurrententityworkitems()).toBe(4);
+    }
     await stopWorker(worker);
   });
 

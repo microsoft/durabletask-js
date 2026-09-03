@@ -53,23 +53,6 @@ const worker = createAzureManagedWorkerBuilder("https://myservice.durabletask.io
 await worker.start();
 ```
 
-### Worker concurrency hints
-
-Use `.concurrency()` to send orchestration, activity, and entity capacity hints to DTS:
-
-```typescript
-const worker = createAzureManagedWorkerBuilder(connectionString)
-  .concurrency({
-    maximumConcurrentOrchestrationWorkItems: 10,
-    maximumConcurrentActivityWorkItems: 20,
-    maximumConcurrentEntityWorkItems: 5,
-  })
-  .build();
-```
-
-Omitted values use CPU-derived defaults. These are backend dispatch hints, not strict
-local concurrency limits.
-
 ## Supported Authentication Types
 
 The connection string `Authentication` parameter supports the following values:

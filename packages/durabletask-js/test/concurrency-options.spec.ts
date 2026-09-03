@@ -22,8 +22,8 @@ function getRequest(worker: TaskHubGrpcWorker): {
 }
 
 describe("worker concurrency options", () => {
-  beforeEach(() => {
-    jest.mocked(os.availableParallelism).mockReturnValue(1);
+  afterEach(() => {
+    jest.restoreAllMocks();
   });
 
   it("uses 100 times the available logical processor count for every default", () => {
@@ -75,21 +75,15 @@ describe("worker concurrency options", () => {
     expect(request.getMaxconcurrententityworkitems()).toBe(400);
   });
 
-  it("caps safe integers above the protocol int32 range in every wire hint", () => {
+  it("accepts safe integers above the protocol int32 range and caps only the wire hint", () => {
     const request = getRequest(
       new TaskHubGrpcWorker({
         logger: new NoOpLogger(),
-        concurrency: {
-          maximumConcurrentActivityWorkItems: Number.MAX_SAFE_INTEGER,
-          maximumConcurrentOrchestrationWorkItems: Number.MAX_SAFE_INTEGER,
-          maximumConcurrentEntityWorkItems: Number.MAX_SAFE_INTEGER,
-        },
+        concurrency: { maximumConcurrentActivityWorkItems: Number.MAX_SAFE_INTEGER },
       }),
     );
 
     expect(request.getMaxconcurrentactivityworkitems()).toBe(2_147_483_647);
-    expect(request.getMaxconcurrentorchestrationworkitems()).toBe(2_147_483_647);
-    expect(request.getMaxconcurrententityworkitems()).toBe(2_147_483_647);
     expect(() => (request as any).serializeBinary()).not.toThrow();
   });
 

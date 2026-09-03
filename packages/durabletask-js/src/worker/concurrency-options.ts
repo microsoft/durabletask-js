@@ -4,18 +4,17 @@
 import * as os from "os";
 
 /**
- * Configures the worker capacity hints sent to the backend.
+ * Configures backend concurrency hints for each work-item kind.
  *
  * Omitted values default to 100 times the number of logical processors available to the
- * process. Zero is supported. Values above the protocol's signed 32-bit range are capped
- * when sent to the backend.
+ * process. Values above the protocol's signed 32-bit range are capped on the wire.
  */
 export interface ConcurrencyOptions {
-  /** Maximum concurrent activity work items the backend should dispatch. */
+  /** Maximum concurrent activity work items. */
   maximumConcurrentActivityWorkItems?: number;
-  /** Maximum concurrent orchestration work items the backend should dispatch. */
+  /** Maximum concurrent orchestration work items. */
   maximumConcurrentOrchestrationWorkItems?: number;
-  /** Maximum concurrent entity work-item batches the backend should dispatch. */
+  /** Maximum concurrent entity work items. */
   maximumConcurrentEntityWorkItems?: number;
 }
 
