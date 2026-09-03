@@ -4,17 +4,20 @@
 import * as os from "os";
 
 /**
- * Configures backend concurrency hints for each work-item kind.
+ * Configures backend dispatch and prefetch concurrency hints for each work-item kind.
+ *
+ * These values do not enforce local worker handler concurrency, and a backend may dispatch
+ * more than the requested value. Current Azure DTS versions treat 0 as no limit.
  *
  * Omitted values default to 100 times the number of logical processors available to the
  * process. Values above the protocol's signed 32-bit range are capped on the wire.
  */
 export interface ConcurrencyOptions {
-  /** Maximum concurrent activity work items. */
+  /** Backend activity concurrency hint. */
   maximumConcurrentActivityWorkItems?: number;
-  /** Maximum concurrent orchestration work items. */
+  /** Backend orchestration concurrency hint. */
   maximumConcurrentOrchestrationWorkItems?: number;
-  /** Maximum concurrent entity work items. */
+  /** Backend entity concurrency hint. */
   maximumConcurrentEntityWorkItems?: number;
 }
 
