@@ -102,4 +102,16 @@ describe("worker concurrency options", () => {
         }),
     ).toThrow(`${name} must be a non-negative safe integer`);
   });
+
+  it.each([
+    "maximumConcurrentActivityWorkItems",
+    "maximumConcurrentOrchestrationWorkItems",
+    "maximumConcurrentEntityWorkItems",
+  ] as const)("rejects an explicit null %s value from JSON input", (name) => {
+    const concurrency = JSON.parse(`{"${name}":null}`) as ConcurrencyOptions;
+
+    expect(() => new TaskHubGrpcWorker({ logger: new NoOpLogger(), concurrency })).toThrow(
+      `${name} must be a non-negative safe integer`,
+    );
+  });
 });

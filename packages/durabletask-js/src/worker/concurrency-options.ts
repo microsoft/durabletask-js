@@ -36,15 +36,19 @@ export function resolveConcurrencyOptions(options: ConcurrencyOptions = {}): Res
   return {
     maximumConcurrentActivityWorkItems: validateLimit(
       "maximumConcurrentActivityWorkItems",
-      options.maximumConcurrentActivityWorkItems ?? defaultLimit,
+      options.maximumConcurrentActivityWorkItems === undefined
+        ? defaultLimit
+        : options.maximumConcurrentActivityWorkItems,
     ),
     maximumConcurrentOrchestrationWorkItems: validateLimit(
       "maximumConcurrentOrchestrationWorkItems",
-      options.maximumConcurrentOrchestrationWorkItems ?? defaultLimit,
+      options.maximumConcurrentOrchestrationWorkItems === undefined
+        ? defaultLimit
+        : options.maximumConcurrentOrchestrationWorkItems,
     ),
     maximumConcurrentEntityWorkItems: validateLimit(
       "maximumConcurrentEntityWorkItems",
-      options.maximumConcurrentEntityWorkItems ?? defaultLimit,
+      options.maximumConcurrentEntityWorkItems === undefined ? defaultLimit : options.maximumConcurrentEntityWorkItems,
     ),
   };
 }
