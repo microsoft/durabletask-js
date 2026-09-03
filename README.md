@@ -110,7 +110,9 @@ through independent bounded schedulers. Each scheduler can hold at most one wait
 permit. If a backend exceeds that bound or sends a disabled kind, the worker abandons the item
 without pausing other work-item kinds. Abandon RPCs are bounded to 16 outstanding calls per
 kind; further violating deliveries are logged and dropped so a misbehaving backend cannot
-create unbounded local memory growth.
+create unbounded local memory growth. When reconnect recreates a channel, the replaced delivery
+stub remains open for at least a 30-second grace period and until every work item delivered by
+that stub has finished its completion or abandonment path.
 
 You can find more samples in the [examples/azure-managed](./examples/azure-managed) directory.
 

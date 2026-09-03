@@ -245,6 +245,215 @@ describe("TaskHubGrpcWorker startup", () => {
     await stopWorker(worker);
   });
 
+  it("keeps a retired delivery stub open until its running and queued work settle", async () => {
+    jest.spyOn(Math, "random").mockReturnValue(0);
+    const streams: MockStream[] = [];
+    const stubsCreated: MockStub[] = [];
+    useNewStubPerClient(streams, stubsCreated);
+    const worker = new TaskHubGrpcWorker({
+      logger: new NoOpLogger(),
+      channelRecreateFailureThreshold: 1,
+      concurrency: { maximumConcurrentActivityWorkItems: 1 },
+    });
+    let releaseFirst!: () => void;
+    const first = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let releaseSecond!: () => void;
+    const second = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    let executionCount = 0;
+    worker.addNamedActivity("activity", async () => {
+      executionCount++;
+      await (executionCount === 1 ? first : second);
+    });
+
+    await worker.start();
+    await flushPromises();
+    const retiredStub = stubsCreated[0];
+    retiredStub.completeActivityTask.mockImplementation(
+      (
+        _request: pb.ActivityResponse,
+        _metadata: grpc.Metadata,
+        callback: (error: grpc.ServiceError | null, response: Empty) => void,
+      ) => {
+        const error =
+          retiredStub.close.mock.calls.length > 0 ? grpcError(grpc.status.UNAVAILABLE, "stub closed") : null;
+        callback(error, new Empty());
+        return createUnaryCall();
+      },
+    );
+
+    streams[0].emit("data", createActivityWorkItem(1));
+    streams[0].emit("data", createActivityWorkItem(2));
+    await waitFor(() => expect(executionCount).toBe(1));
+    await failStream(streams[0]);
+    expect(stubsCreated).toHaveLength(2);
+
+    await jest.advanceTimersByTimeAsync(30001);
+    expect(retiredStub.close).not.toHaveBeenCalled();
+
+    releaseFirst();
+    await waitFor(() => {
+      expect(retiredStub.completeActivityTask).toHaveBeenCalledTimes(1);
+      expect(executionCount).toBe(2);
+    });
+    expect(retiredStub.close).not.toHaveBeenCalled();
+
+    releaseSecond();
+    await waitFor(() => {
+      expect(retiredStub.completeActivityTask).toHaveBeenCalledTimes(2);
+      expect(retiredStub.close).toHaveBeenCalledTimes(1);
+    });
+    expect(retiredStub.completeActivityTask.mock.calls.map(([request]) => request.getCompletiontoken())).toEqual([
+      "activity-1",
+      "activity-2",
+    ]);
+    expect(retiredStub.abandonTaskActivityWorkItem).not.toHaveBeenCalled();
+    expect(stubsCreated[1].close).not.toHaveBeenCalled();
+
+    await stopWorker(worker);
+    expect(retiredStub.close).toHaveBeenCalledTimes(1);
+    expect(stubsCreated[1].close).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["success", "failure"] as const)(
+    "keeps a retired delivery stub open until overflow abandonment %s settles",
+    async (outcome) => {
+      jest.spyOn(Math, "random").mockReturnValue(0);
+      const streams: MockStream[] = [];
+      const stubsCreated: MockStub[] = [];
+      useNewStubPerClient(streams, stubsCreated);
+      const worker = new TaskHubGrpcWorker({
+        logger: new NoOpLogger(),
+        channelRecreateFailureThreshold: 1,
+        concurrency: { maximumConcurrentActivityWorkItems: 1 },
+      });
+      let releaseActivities!: () => void;
+      const activities = new Promise<void>((resolve) => {
+        releaseActivities = resolve;
+      });
+      worker.addNamedActivity("activity", async () => activities);
+
+      await worker.start();
+      await flushPromises();
+      const retiredStub = stubsCreated[0];
+      let finishAbandon!: (error: grpc.ServiceError | null, response: Empty) => void;
+      retiredStub.abandonTaskActivityWorkItem.mockImplementation(
+        (
+          _request: pb.AbandonActivityTaskRequest,
+          _metadata: grpc.Metadata,
+          callback: (error: grpc.ServiceError | null, response: Empty) => void,
+        ) => {
+          finishAbandon = callback;
+          return createUnaryCall();
+        },
+      );
+
+      streams[0].emit("data", createActivityWorkItem(1));
+      streams[0].emit("data", createActivityWorkItem(2));
+      streams[0].emit("data", createActivityWorkItem(3));
+      await waitFor(() => expect(retiredStub.abandonTaskActivityWorkItem).toHaveBeenCalledTimes(1));
+      await failStream(streams[0]);
+
+      await jest.advanceTimersByTimeAsync(30001);
+      expect(retiredStub.close).not.toHaveBeenCalled();
+
+      releaseActivities();
+      await waitFor(() => expect(retiredStub.completeActivityTask).toHaveBeenCalledTimes(2));
+      expect(retiredStub.close).not.toHaveBeenCalled();
+
+      finishAbandon(outcome === "failure" ? grpcError(grpc.status.UNAVAILABLE, "abandon failed") : null, new Empty());
+      await waitFor(() => expect(retiredStub.close).toHaveBeenCalledTimes(1));
+      expect(retiredStub.completeActivityTask.mock.calls.map(([request]) => request.getCompletiontoken())).toEqual([
+        "activity-1",
+        "activity-2",
+      ]);
+      expect(stubsCreated[1].close).not.toHaveBeenCalled();
+
+      await stopWorker(worker);
+      expect(retiredStub.close).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("releases dropped disabled work immediately without losing older abandon references", async () => {
+    jest.spyOn(Math, "random").mockReturnValue(0);
+    const streams: MockStream[] = [];
+    const stubsCreated: MockStub[] = [];
+    useNewStubPerClient(streams, stubsCreated);
+    const worker = new TaskHubGrpcWorker({
+      logger: new NoOpLogger(),
+      channelRecreateFailureThreshold: 1,
+      concurrency: { maximumConcurrentActivityWorkItems: 0 },
+    });
+
+    await worker.start();
+    await flushPromises();
+    const firstRetiredStub = stubsCreated[0];
+    const abandonCallbacks: Array<(error: grpc.ServiceError | null, response: Empty) => void> = [];
+    firstRetiredStub.abandonTaskActivityWorkItem.mockImplementation(
+      (
+        _request: pb.AbandonActivityTaskRequest,
+        _metadata: grpc.Metadata,
+        callback: (error: grpc.ServiceError | null, response: Empty) => void,
+      ) => {
+        abandonCallbacks.push(callback);
+        return createUnaryCall();
+      },
+    );
+    for (let taskId = 0; taskId < 16; taskId++) {
+      streams[0].emit("data", createActivityWorkItem(taskId));
+    }
+    await waitFor(() => expect(abandonCallbacks).toHaveLength(16));
+    await failStream(streams[0]);
+
+    const secondRetiredStub = stubsCreated[1];
+    streams[1].emit("data", createActivityWorkItem(16));
+    await flushPromises();
+    expect(secondRetiredStub.abandonTaskActivityWorkItem).not.toHaveBeenCalled();
+    await failStream(streams[1]);
+    expect(stubsCreated).toHaveLength(3);
+
+    await jest.advanceTimersByTimeAsync(30001);
+    expect(firstRetiredStub.close).not.toHaveBeenCalled();
+    expect(secondRetiredStub.close).toHaveBeenCalledTimes(1);
+    expect(stubsCreated[2].close).not.toHaveBeenCalled();
+
+    for (const callback of abandonCallbacks) {
+      callback(null, new Empty());
+    }
+    await waitFor(() => expect(firstRetiredStub.close).toHaveBeenCalledTimes(1));
+
+    await stopWorker(worker);
+    expect(firstRetiredStub.close).toHaveBeenCalledTimes(1);
+    expect(secondRetiredStub.close).toHaveBeenCalledTimes(1);
+    expect(stubsCreated[2].close).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retain delivery stubs for health pings or unknown work items", async () => {
+    jest.spyOn(Math, "random").mockReturnValue(0);
+    const streams: MockStream[] = [];
+    const stubsCreated: MockStub[] = [];
+    useNewStubPerClient(streams, stubsCreated);
+    const worker = new TaskHubGrpcWorker({
+      logger: new NoOpLogger(),
+      channelRecreateFailureThreshold: 1,
+    });
+
+    await worker.start();
+    await flushPromises();
+    streams[0].emit("data", createHealthPing());
+    streams[0].emit("data", new pb.WorkItem());
+    await failStream(streams[0]);
+
+    await jest.advanceTimersByTimeAsync(30000);
+    expect(stubsCreated[0].close).toHaveBeenCalledTimes(1);
+    expect(stubsCreated[1].close).not.toHaveBeenCalled();
+
+    await stopWorker(worker);
+  });
+
   it("isolates every recreated client from grpc-js's global subchannel pool", async () => {
     jest.spyOn(Math, "random").mockReturnValue(0);
     const streams: MockStream[] = [];
@@ -290,7 +499,7 @@ describe("TaskHubGrpcWorker startup", () => {
     await stopWorker(worker);
   });
 
-  it("closes deferred gRPC clients during shutdown", async () => {
+  it("force-closes retired gRPC clients during shutdown", async () => {
     jest.spyOn(Math, "random").mockReturnValue(0);
     const streams: MockStream[] = [];
     const stubsCreated: MockStub[] = [];
@@ -507,6 +716,7 @@ describe("TaskHubGrpcWorker startup", () => {
     await jest.advanceTimersByTimeAsync(0);
     await flushPromises();
     const cancellationCount = abandonCancel.mock.calls.length;
+    expect(stub.close).not.toHaveBeenCalled();
 
     completeAbandon(null, new Empty());
     releaseRunning();
@@ -517,9 +727,10 @@ describe("TaskHubGrpcWorker startup", () => {
     expect(cancellationCount).toBe(0);
     expect(stub.abandonTaskActivityWorkItem).toHaveBeenCalledTimes(1);
     expect((worker as any)._pendingWorkItems.size).toBe(0);
+    expect(stub.close).toHaveBeenCalledTimes(1);
   });
 
-  it("refuses to restart after shutdown times out until the prior run finishes", async () => {
+  it("force-closes referenced stubs on shutdown timeout and refuses restart until work finishes", async () => {
     const streams: MockStream[] = [];
     const stub = createStub(streams);
     const worker = await startWorker(stub, {
@@ -541,6 +752,7 @@ describe("TaskHubGrpcWorker startup", () => {
     await flushPromises();
     await jest.advanceTimersByTimeAsync(1000);
     await stopping;
+    expect(stub.close).toHaveBeenCalledTimes(1);
 
     let restartError: unknown;
     try {
@@ -560,6 +772,57 @@ describe("TaskHubGrpcWorker startup", () => {
     expect(restartError).toEqual(
       new Error("The worker cannot restart until pending work items from the previous run have completed."),
     );
+  });
+
+  it("force-closes a referenced retired stub on shutdown timeout and cleans it after work settles", async () => {
+    jest.spyOn(Math, "random").mockReturnValue(0);
+    const streams: MockStream[] = [];
+    const stubsCreated: MockStub[] = [];
+    useNewStubPerClient(streams, stubsCreated);
+    const worker = new TaskHubGrpcWorker({
+      logger: new NoOpLogger(),
+      channelRecreateFailureThreshold: 1,
+      concurrency: { maximumConcurrentActivityWorkItems: 1 },
+      shutdownTimeoutMs: 10,
+    });
+    let releaseActivity!: () => void;
+    const activity = new Promise<void>((resolve) => {
+      releaseActivity = resolve;
+    });
+    worker.addNamedActivity("activity", async () => activity);
+
+    await worker.start();
+    await flushPromises();
+    streams[0].emit("data", createActivityWorkItem(1));
+    await waitFor(() => expect((worker as any)._pendingWorkItems.size).toBe(1));
+    await failStream(streams[0]);
+    expect(stubsCreated).toHaveLength(2);
+
+    const stopping = worker.stop();
+    await jest.advanceTimersByTimeAsync(10);
+    await flushPromises();
+    await jest.advanceTimersByTimeAsync(1000);
+    await stopping;
+
+    expect(stubsCreated[0].close).toHaveBeenCalledTimes(1);
+    expect(stubsCreated[1].close).toHaveBeenCalledTimes(1);
+    expect((worker as any)._stubLifetimes.size).toBe(1);
+    await expect(worker.start()).rejects.toThrow(
+      "The worker cannot restart until pending work items from the previous run have completed.",
+    );
+
+    releaseActivity();
+    await waitFor(() => {
+      expect(stubsCreated[0].completeActivityTask).toHaveBeenCalledTimes(1);
+      expect((worker as any)._pendingWorkItems.size).toBe(0);
+      expect((worker as any)._stubLifetimes.size).toBe(0);
+    });
+    expect(stubsCreated[0].close).toHaveBeenCalledTimes(1);
+
+    await worker.start();
+    await flushPromises();
+    expect(stubsCreated).toHaveLength(3);
+    await stopWorker(worker);
   });
 
   it("reconnects without recreating the channel after a non-empty graceful drain", async () => {
