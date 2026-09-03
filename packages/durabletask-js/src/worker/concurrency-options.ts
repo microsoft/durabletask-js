@@ -25,27 +25,6 @@ export interface ResolvedConcurrencyOptions {
   maximumConcurrentEntityWorkItems: number;
 }
 
-function getLogicalProcessorCount(): number {
-  try {
-    const available = typeof os.availableParallelism === "function" ? os.availableParallelism() : undefined;
-    if (typeof available === "number" && Number.isSafeInteger(available) && available > 0) {
-      return Math.min(available, Math.floor(Number.MAX_SAFE_INTEGER / 100));
-    }
-  } catch {
-    // Fall through for runtimes/platforms where availableParallelism() is unavailable.
-  }
-
-  try {
-    const cpuCount = os.cpus().length;
-    if (Number.isSafeInteger(cpuCount) && cpuCount > 0) {
-      return Math.min(cpuCount, Math.floor(Number.MAX_SAFE_INTEGER / 100));
-    }
-  } catch {
-    // A conservative single-processor default is safer than failing worker construction.
-  }
-  return 1;
-}
-
 function validateLimit(name: keyof ResolvedConcurrencyOptions, value: number): number {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new RangeError(`${name} must be a non-negative safe integer, got ${value}`);
@@ -54,7 +33,7 @@ function validateLimit(name: keyof ResolvedConcurrencyOptions, value: number): n
 }
 
 export function resolveConcurrencyOptions(options: ConcurrencyOptions = {}): ResolvedConcurrencyOptions {
-  const defaultLimit = 100 * getLogicalProcessorCount();
+  const defaultLimit = 100 * os.availableParallelism();
   return {
     maximumConcurrentActivityWorkItems: validateLimit(
       "maximumConcurrentActivityWorkItems",

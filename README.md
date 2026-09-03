@@ -196,7 +196,10 @@ Long-running orchestrations can restart with fresh history and optionally move t
 orchestration version:
 
 ```typescript
-const eternalOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, iteration: number): any {
+const eternalOrchestrator: TOrchestrator = async function* (
+  ctx: OrchestrationContext,
+  iteration: number,
+): any {
   yield ctx.callActivity(processIteration, iteration);
   ctx.continueAsNew(iteration + 1, true, "2.0.0");
 };
