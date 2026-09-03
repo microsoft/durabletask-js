@@ -8,11 +8,15 @@
 - Add `DurableTaskAzureManagedWorkerBuilder.channelRecreateFailureThreshold()` to control when
   consecutive likely-poisoned failures recreate the gRPC channel.
 
+### Breaking changes
+
+- Schemeless endpoints now default to HTTPS. Connection-string and builder `.endpoint(...)` users
+  must prefix plaintext local or emulator endpoints with `http://`.
+
 ### Fixes
 
 - Select TLS from the Azure-managed endpoint scheme independently of authentication, and require explicit opt-in
-  before sending token credentials over an insecure endpoint. Schemeless endpoints now default to HTTPS; local
-  plaintext endpoints must include the `http://` scheme.
+  before sending token credentials over an insecure endpoint.
 
 ## v0.4.0 (2026-07-31)
 

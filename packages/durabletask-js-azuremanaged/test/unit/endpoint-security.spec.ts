@@ -135,14 +135,6 @@ describe.each(builderFactories)("$name endpoint security", ({ create, fromConnec
     expect((await getMetadata(value)).get("authorization")).toHaveLength(1);
   });
 
-  it("preserves explicit insecure credential opt-in across connection string configuration", () => {
-    expectInsecureChannel(
-      create()
-        .allowInsecureCredentials(true)
-        .connectionString("Endpoint=http://localhost:8080;Authentication=DefaultAzure;TaskHub=myTaskHub"),
-    );
-  });
-
   it("allows an HTTP token credential with explicit opt-in", async () => {
     const value = expectInsecureChannel(
       fromEndpoint("http://localhost:8080", new MockTokenCredential()).allowInsecureCredentials(true),

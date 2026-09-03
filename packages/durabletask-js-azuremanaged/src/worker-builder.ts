@@ -53,9 +53,7 @@ export class DurableTaskAzureManagedWorkerBuilder {
       throw new Error("connectionString must not be null or empty");
     }
 
-    this._options = DurableTaskAzureManagedWorkerOptions.fromConnectionString(
-      connectionString,
-    ).setAllowInsecureCredentials(this._options.isAllowInsecureCredentials());
+    this._options = DurableTaskAzureManagedWorkerOptions.fromConnectionString(connectionString);
     return this;
   }
 

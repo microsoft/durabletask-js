@@ -35,9 +35,7 @@ export class DurableTaskAzureManagedClientBuilder {
       throw new Error("connectionString must not be null or empty");
     }
 
-    this._options = DurableTaskAzureManagedClientOptions.fromConnectionString(
-      connectionString,
-    ).setAllowInsecureCredentials(this._options.isAllowInsecureCredentials());
+    this._options = DurableTaskAzureManagedClientOptions.fromConnectionString(connectionString);
     return this;
   }
 
