@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { AccessToken, GetTokenOptions, TokenCredential } from "@azure/identity";
+import { AccessToken, DefaultAzureCredential, GetTokenOptions, TokenCredential } from "@azure/identity";
 import * as grpc from "@grpc/grpc-js";
 import { DurableTaskAzureManagedClientBuilder } from "../../src/client-builder";
 import { DurableTaskAzureManagedClientOptions, DurableTaskAzureManagedWorkerOptions } from "../../src/options";
@@ -155,6 +155,32 @@ describe.each(builderFactories)("$name endpoint security", ({ create, fromConnec
     );
 
     expect((await getMetadata(value)).get("authorization")).toEqual(["Bearer mock-token"]);
+  });
+
+  it("allows connection string HTTP credentials when opt-in follows connectionString", async () => {
+    jest.spyOn(DefaultAzureCredential.prototype, "getToken").mockResolvedValue({
+      token: "mock-token",
+      expiresOnTimestamp: Date.now() + 3600000,
+    });
+    const value = expectInsecureChannel(
+      create()
+        .connectionString("Endpoint=http://localhost:8080;Authentication=DefaultAzure;TaskHub=myTaskHub")
+        .allowInsecureCredentials(true),
+    );
+
+    expect((await getMetadata(value)).get("authorization")).toHaveLength(1);
+  });
+
+  it("resets insecure credential opt-in when connectionString follows it", () => {
+    const createSsl = jest.spyOn(grpc.ChannelCredentials, "createSsl");
+    const createInsecure = jest.spyOn(grpc.ChannelCredentials, "createInsecure");
+    const builder = create()
+      .allowInsecureCredentials(true)
+      .connectionString("Endpoint=http://localhost:8080;Authentication=DefaultAzure;TaskHub=myTaskHub");
+
+    expect(() => builder.build()).toThrow("allowInsecureCredentials(true)");
+    expect(createSsl).not.toHaveBeenCalled();
+    expect(createInsecure).not.toHaveBeenCalled();
   });
 
   it("does not let explicit insecure credential opt-in downgrade an HTTPS endpoint", () => {
