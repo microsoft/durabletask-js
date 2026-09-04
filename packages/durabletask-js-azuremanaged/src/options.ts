@@ -9,6 +9,33 @@ import { getCredentialFromAuthenticationType } from "./credential-factory";
 import { getUserAgent } from "./user-agent";
 import { ClientRetryOptions, createServiceConfig, DEFAULT_SERVICE_CONFIG } from "./retry-policy";
 
+function normalizeEndpointAddress(endpointAddress: string): string {
+  const endpoint = endpointAddress.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "");
+  if (/[\t\n\f\r ]/.test(endpoint)) {
+    throw new Error("Invalid endpoint URL: expected an HTTP(S) URL or a schemeless authority.");
+  }
+
+  const schemeSeparatorIndex = endpoint.indexOf("://");
+  if (schemeSeparatorIndex === -1) {
+    if (endpoint.includes("/") || endpoint.includes("\\")) {
+      throw new Error("Invalid endpoint URL: expected an HTTP(S) URL or a schemeless authority.");
+    }
+    return `https://${endpoint}`;
+  }
+
+  const scheme = endpoint.slice(0, schemeSeparatorIndex);
+  if (scheme.includes("/") || scheme.includes("\\")) {
+    throw new Error("Invalid endpoint URL: expected '://' immediately after the scheme.");
+  }
+
+  const firstHostnameCharacter = endpoint[schemeSeparatorIndex + 3];
+  if (!firstHostnameCharacter || firstHostnameCharacter === "/" || firstHostnameCharacter === "\\") {
+    throw new Error("Invalid endpoint URL: expected a hostname immediately after '://'.");
+  }
+
+  return endpoint;
+}
+
 /**
  * Base options for configuring the Azure-managed Durable Task service.
  * Contains properties common to both client and worker configurations.
@@ -93,13 +120,7 @@ abstract class DurableTaskAzureManagedOptionsBase {
   }
 
   private getEndpointUrl(): URL {
-    const endpointAddress = this._endpointAddress.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "");
-    const schemeSeparator = /^[a-z][a-z\d+.-]*:([/\\]+)/i.exec(endpointAddress);
-    if (/[\t\n\f\r ]/.test(endpointAddress) || (schemeSeparator && schemeSeparator[1] !== "//")) {
-      throw new Error("Invalid endpoint URL: expected an HTTP(S) URL or a schemeless authority.");
-    }
-
-    const endpoint = endpointAddress.includes("://") ? endpointAddress : `https://${endpointAddress}`;
+    const endpoint = normalizeEndpointAddress(this._endpointAddress);
 
     let url: URL;
     try {

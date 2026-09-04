@@ -49,7 +49,13 @@ const builderFactories: BuilderFactory[] = [
   },
 ];
 
-const malformedSchemeEndpoints = ["htps:/scheduler.internal:8080", "http:/localhost:8080", "https:/example.com"];
+const malformedSchemeEndpoints = [
+  "htps:/scheduler.internal:8080",
+  "http:/localhost:8080",
+  "https:/example.com",
+  "https:/example.com/a://b",
+  "https:/\\example.com",
+];
 
 const silentlyRetargetedEndpoints = [
   "htt\nps:/example.com",
