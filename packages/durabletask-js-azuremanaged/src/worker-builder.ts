@@ -43,7 +43,8 @@ export class DurableTaskAzureManagedWorkerBuilder {
 
   /**
    * Configures the builder using a connection string.
-   * This replaces the current connection-derived options, so call it before subsequent option-setting methods.
+   * This replaces the entire options object and resets all previously configured options, so call it before
+   * subsequent option-setting methods.
    *
    * @param connectionString The connection string for Azure-managed Durable Task service.
    * @returns This builder instance.
