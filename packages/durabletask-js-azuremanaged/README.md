@@ -84,8 +84,8 @@ Endpoint transport and authentication are configured independently:
   `.allowInsecureCredentials(true)`. This opt-in permits authentication metadata over plaintext; it never
   downgrades an HTTPS endpoint.
 
-Because `connectionString()` replaces the builder's entire options object, all options configured before it are
-reset. Call subsequent option-setting methods after it:
+Because `connectionString()` replaces the builder's connection-derived options, connection options configured
+before it are reset. Call subsequent option-setting methods after it:
 
 ```typescript
 new DurableTaskAzureManagedClientBuilder()
