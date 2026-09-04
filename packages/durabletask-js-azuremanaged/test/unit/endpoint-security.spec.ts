@@ -193,10 +193,10 @@ describe.each(builderFactories)("$name endpoint security", ({ create, fromConnec
     expectSecureChannel(fromEndpoint("https://example.com", new MockTokenCredential()).allowInsecureCredentials(true));
   });
 
-  it("rejects unsupported endpoint schemes instead of using plaintext", () => {
+  it("rejects typo endpoint schemes instead of using plaintext", () => {
     const builder = fromConnectionString("Endpoint=htps://example.com;Authentication=None;TaskHub=myTaskHub");
 
-    expect(() => builder.build()).toThrow("Unsupported endpoint scheme");
+    expect(() => builder.build()).toThrow("Invalid endpoint URL");
   });
 
   it.each(malformedSchemeEndpoints)("rejects malformed scheme endpoint %s before channel construction", (endpoint) => {

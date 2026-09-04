@@ -9,33 +9,6 @@ import { getCredentialFromAuthenticationType } from "./credential-factory";
 import { getUserAgent } from "./user-agent";
 import { ClientRetryOptions, createServiceConfig, DEFAULT_SERVICE_CONFIG } from "./retry-policy";
 
-function normalizeEndpointAddress(endpointAddress: string): string {
-  const endpoint = endpointAddress.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "");
-  if (/[\t\n\f\r ]/.test(endpoint)) {
-    throw new Error("Invalid endpoint URL: expected an HTTP(S) URL or a schemeless authority.");
-  }
-
-  const schemeSeparatorIndex = endpoint.indexOf("://");
-  if (schemeSeparatorIndex === -1) {
-    if (endpoint.includes("/") || endpoint.includes("\\")) {
-      throw new Error("Invalid endpoint URL: expected an HTTP(S) URL or a schemeless authority.");
-    }
-    return `https://${endpoint}`;
-  }
-
-  const scheme = endpoint.slice(0, schemeSeparatorIndex);
-  if (scheme.includes("/") || scheme.includes("\\")) {
-    throw new Error("Invalid endpoint URL: expected '://' immediately after the scheme.");
-  }
-
-  const firstHostnameCharacter = endpoint[schemeSeparatorIndex + 3];
-  if (!firstHostnameCharacter || firstHostnameCharacter === "/" || firstHostnameCharacter === "\\") {
-    throw new Error("Invalid endpoint URL: expected a hostname immediately after '://'.");
-  }
-
-  return endpoint;
-}
-
 /**
  * Base options for configuring the Azure-managed Durable Task service.
  * Contains properties common to both client and worker configurations.
@@ -122,7 +95,17 @@ abstract class DurableTaskAzureManagedOptionsBase {
   }
 
   private getEndpointUrl(): URL {
-    const endpoint = normalizeEndpointAddress(this._endpointAddress);
+    let endpoint = this._endpointAddress.trim();
+    if (/\s/.test(endpoint)) {
+      throw new Error("Invalid endpoint URL: expected an HTTP(S) URL or a schemeless authority.");
+    }
+
+    if (!/^https?:\/\/[^/\\]/i.test(endpoint)) {
+      if (endpoint.includes("/") || endpoint.includes("\\")) {
+        throw new Error("Invalid endpoint URL: expected an HTTP(S) URL or a schemeless authority.");
+      }
+      endpoint = `https://${endpoint}`;
+    }
 
     let url: URL;
     try {
