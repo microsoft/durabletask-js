@@ -18,7 +18,7 @@ function createCounterEntity(): ITaskEntity {
 }
 
 describe("DurableTaskAzureManagedWorkerBuilder", () => {
-  const ENDPOINT = "localhost:8080";
+  const ENDPOINT = "http://localhost:8080";
   const TASKHUB = "test";
 
   describe("addEntity", () => {

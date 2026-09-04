@@ -10,7 +10,7 @@
  *
  * Example for emulator:
  *   docker run -i -p 8080:8080 -d mcr.microsoft.com/dts/dts-emulator:latest
- *   ENDPOINT=localhost:8080 TASKHUB=default npx jest rewind.spec.ts
+ *   ENDPOINT=http://localhost:8080 TASKHUB=default npx jest rewind.spec.ts
  *
  * Example for real DTS:
  *   DURABLE_TASK_SCHEDULER_CONNECTION_STRING="Endpoint=https://...;Authentication=DefaultAzure;TaskHub=th3" npx jest rewind.spec.ts
@@ -30,7 +30,7 @@ import {
 
 // Read environment variables - support both connection string and endpoint/taskhub
 const connectionString = process.env.DURABLE_TASK_SCHEDULER_CONNECTION_STRING;
-const endpoint = process.env.ENDPOINT || "localhost:8080";
+const endpoint = process.env.ENDPOINT || "http://localhost:8080";
 const taskHub = process.env.TASKHUB || "default";
 
 /**

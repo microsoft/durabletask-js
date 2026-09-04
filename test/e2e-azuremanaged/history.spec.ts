@@ -7,7 +7,7 @@
  * Environment variables (choose one):
  *   - DTS_CONNECTION_STRING: Full connection string (e.g., "Endpoint=https://...;Authentication=DefaultAzure;TaskHub=...")
  *   OR
- *   - ENDPOINT: The endpoint for the DTS emulator (default: localhost:8080)
+ *   - ENDPOINT: The endpoint for the DTS emulator (default: http://localhost:8080)
  *   - TASKHUB: The task hub name (default: default)
  */
 
@@ -38,7 +38,7 @@ import {
 
 // Read environment variables
 const connectionString = process.env.DTS_CONNECTION_STRING;
-const endpoint = process.env.ENDPOINT || "localhost:8080";
+const endpoint = process.env.ENDPOINT || "http://localhost:8080";
 const taskHub = process.env.TASKHUB || "default";
 
 function createClient(): TaskHubGrpcClient {

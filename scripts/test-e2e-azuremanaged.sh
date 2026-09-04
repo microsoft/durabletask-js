@@ -5,10 +5,10 @@
 # It expects the DTS emulator to be running at the specified endpoint.
 #
 # Environment variables:
-#   - ENDPOINT: The endpoint for the DTS emulator (default: localhost:8080)
+#   - ENDPOINT: The endpoint for the DTS emulator (default: http://localhost:8080)
 #   - TASKHUB: The task hub name (default: default)
 
-ENDPOINT="${ENDPOINT:-localhost:8080}"
+ENDPOINT="${ENDPOINT:-http://localhost:8080}"
 TASKHUB="${TASKHUB:-default}"
 
 # Start the DTS emulator if it is not running yet

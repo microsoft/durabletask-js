@@ -8,7 +8,7 @@
  *       docker run -i -p 8080:8080 -d mcr.microsoft.com/dts/dts-emulator:latest
  *
  * Environment variables:
- *   - ENDPOINT: The endpoint for the DTS emulator (default: localhost:8080)
+ *   - ENDPOINT: The endpoint for the DTS emulator (default: http://localhost:8080)
  *   - TASKHUB: The task hub name (default: default)
  *   - DURABLE_TASK_SCHEDULER_CONNECTION_STRING: Optional connection string for real Azure DTS
  */
@@ -27,7 +27,7 @@ import {
 import { DefaultAzureCredential } from "@azure/identity";
 
 // Read environment variables
-const endpoint = process.env.ENDPOINT || "localhost:8080";
+const endpoint = process.env.ENDPOINT || "http://localhost:8080";
 const taskHub = process.env.TASKHUB || "default";
 const connectionString = process.env.DURABLE_TASK_SCHEDULER_CONNECTION_STRING;
 

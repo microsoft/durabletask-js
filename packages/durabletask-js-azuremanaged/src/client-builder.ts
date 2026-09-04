@@ -25,6 +25,8 @@ export class DurableTaskAzureManagedClientBuilder {
 
   /**
    * Configures the builder using a connection string.
+   * This replaces the Azure-managed connection options. Builder-level settings such as the logger and gRPC
+   * channel options are preserved. Call connection option setters after this method.
    *
    * @param connectionString The connection string for Azure-managed Durable Task service.
    * @returns This builder instance.
@@ -63,8 +65,7 @@ export class DurableTaskAzureManagedClientBuilder {
     this._options
       .setEndpointAddress(endpoint)
       .setTaskHubName(taskHubName)
-      .setCredential(credential ?? null)
-      .setAllowInsecureCredentials(credential === null || credential === undefined);
+      .setCredential(credential ?? null);
 
     return this;
   }
@@ -157,10 +158,15 @@ export class DurableTaskAzureManagedClientBuilder {
       ...this._grpcChannelOptions,
     };
 
-    // Use the core TaskHubGrpcClient with custom credentials and metadata generator
-    // For insecure connections, metadata is passed via the metadataGenerator parameter
-    // For secure connections, metadata is included in the channel credentials
-    return new TaskHubGrpcClient(hostAddress, combinedOptions, true, channelCredentials, metadataGenerator, this._logger);
+    // Use the core TaskHubGrpcClient with custom channel credentials and per-call metadata.
+    return new TaskHubGrpcClient(
+      hostAddress,
+      combinedOptions,
+      true,
+      channelCredentials,
+      metadataGenerator,
+      this._logger,
+    );
   }
 }
 

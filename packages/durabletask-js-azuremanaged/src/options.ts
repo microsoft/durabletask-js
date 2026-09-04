@@ -87,23 +87,42 @@ abstract class DurableTaskAzureManagedOptionsBase {
    * @returns The normalized host address for gRPC connection.
    */
   getHostAddress(): string {
-    let endpoint = this._endpointAddress;
+    const url = this.getEndpointUrl();
+    if (url.protocol === "http:" && !url.port) {
+      return `${url.hostname}:80`;
+    }
+    return url.host;
+  }
 
-    // Add https:// prefix if no protocol is specified
-    if (!endpoint.startsWith("http://") && !endpoint.startsWith("https://")) {
+  private getEndpointUrl(): URL {
+    let endpoint = this._endpointAddress.trim();
+    if (/\s/.test(endpoint)) {
+      throw new Error("Invalid endpoint URL: expected an HTTP(S) URL or a schemeless authority.");
+    }
+
+    if (!/^https?:\/\/[^/\\]/i.test(endpoint)) {
+      if (/[/?#\\]/.test(endpoint)) {
+        throw new Error("Invalid endpoint URL: expected an HTTP(S) URL or a schemeless authority.");
+      }
       endpoint = `https://${endpoint}`;
     }
 
+    let url: URL;
     try {
-      const url = new URL(endpoint);
-      let authority = url.hostname;
-      if (url.port) {
-        authority = `${authority}:${url.port}`;
-      }
-      return authority;
+      url = new URL(endpoint);
     } catch (e) {
       throw new Error(`Invalid endpoint URL: ${endpoint}`, { cause: e });
     }
+
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new Error(`Unsupported endpoint scheme '${url.protocol}'. Only HTTP and HTTPS are supported.`);
+    }
+
+    if (!url.hostname || url.username || url.password) {
+      throw new Error("Invalid endpoint URL: the endpoint must contain a hostname without user information.");
+    }
+
+    return url;
   }
 
   /**
@@ -111,13 +130,11 @@ abstract class DurableTaskAzureManagedOptionsBase {
    * @param callerType The type of caller for user-agent header.
    * @param workerId Optional worker ID (only for workers).
    */
-  protected createMetadataGeneratorInternal(
-    callerType: string,
-    workerId?: string,
-  ): () => Promise<grpc.Metadata> {
+  protected createMetadataGeneratorInternal(callerType: string, workerId?: string): () => Promise<grpc.Metadata> {
     // Create token cache only if credential is not null
     let tokenCache: AccessTokenCache | null = null;
     if (this._credential) {
+      this.validateTokenCredentialTransport(this.getEndpointUrl());
       const scope = this._resourceId + "/.default";
       tokenCache = new AccessTokenCache(this._credential, scope, this._tokenRefreshMargin);
     }
@@ -146,20 +163,29 @@ abstract class DurableTaskAzureManagedOptionsBase {
 
   /**
    * Creates gRPC channel credentials based on the configured options.
-   * For insecure connections, returns insecure credentials.
-   * For secure connections, returns SSL credentials.
+   * HTTPS endpoints use SSL credentials; HTTP endpoints use insecure credentials.
+   * Token credentials over an insecure endpoint require explicit opt-in.
    * Note: Metadata (taskhub, auth token, etc.) is passed per-call via the metadataGenerator
    * rather than being composed into the channel credentials. This ensures consistent behavior
    * across both secure and insecure connections.
    */
-  protected createChannelCredentialsInternal(_callerType: string, _workerId?: string): grpc.ChannelCredentials {
-    if (this._allowInsecureCredentials) {
-      return grpc.ChannelCredentials.createInsecure();
+  protected createChannelCredentialsInternal(): grpc.ChannelCredentials {
+    const endpoint = this.getEndpointUrl();
+    this.validateTokenCredentialTransport(endpoint);
+
+    if (endpoint.protocol.toLowerCase() === "https:") {
+      return grpc.ChannelCredentials.createSsl();
     }
 
-    // For secure connections, use SSL credentials
-    // Metadata is passed per-call via the client/worker's metadataGenerator parameter
-    return grpc.ChannelCredentials.createSsl();
+    return grpc.ChannelCredentials.createInsecure();
+  }
+
+  private validateTokenCredentialTransport(endpoint: URL): void {
+    if (endpoint.protocol === "http:" && this._credential && !this._allowInsecureCredentials) {
+      throw new Error(
+        "Token credentials cannot be used with an insecure endpoint unless allowInsecureCredentials(true) is configured.",
+      );
+    }
   }
 
   /**
@@ -169,9 +195,7 @@ abstract class DurableTaskAzureManagedOptionsBase {
     this._endpointAddress = connectionString.getEndpoint();
     this._taskHubName = connectionString.getTaskHubName();
 
-    const credential = getCredentialFromAuthenticationType(connectionString);
-    this._credential = credential;
-    this._allowInsecureCredentials = credential === null;
+    this._credential = getCredentialFromAuthenticationType(connectionString);
   }
 }
 
@@ -243,7 +267,7 @@ export class DurableTaskAzureManagedClientOptions extends DurableTaskAzureManage
   /**
    * Creates a gRPC channel metadata generator for per-call metadata.
    * Does NOT include workerid header (client only).
-   * This is used for insecure connections where metadata can't be added via channel credentials.
+   * This is used for both secure and insecure connections.
    */
   createMetadataGenerator(): () => Promise<grpc.Metadata> {
     return this.createMetadataGeneratorInternal("DurableTaskClient");
@@ -253,10 +277,10 @@ export class DurableTaskAzureManagedClientOptions extends DurableTaskAzureManage
    * Creates gRPC channel credentials for the client.
    * Does NOT include workerid header.
    * For insecure connections, returns just insecure credentials (use createMetadataGenerator for metadata).
-   * For secure connections, returns SSL credentials composed with call credentials.
+   * For secure connections, returns SSL credentials.
    */
   createChannelCredentials(): grpc.ChannelCredentials {
-    return this.createChannelCredentialsInternal("DurableTaskClient");
+    return this.createChannelCredentialsInternal();
   }
 }
 
@@ -354,7 +378,7 @@ export class DurableTaskAzureManagedWorkerOptions extends DurableTaskAzureManage
   /**
    * Creates a gRPC channel metadata generator for per-call metadata.
    * Includes workerid header (worker only).
-   * This is used for insecure connections where metadata can't be added via channel credentials.
+   * This is used for both secure and insecure connections.
    */
   createMetadataGenerator(): () => Promise<grpc.Metadata> {
     return this.createMetadataGeneratorInternal("DurableTaskWorker", this._workerId);
@@ -364,9 +388,9 @@ export class DurableTaskAzureManagedWorkerOptions extends DurableTaskAzureManage
    * Creates gRPC channel credentials for the worker.
    * Includes workerid header.
    * For insecure connections, returns just insecure credentials (use createMetadataGenerator for metadata).
-   * For secure connections, returns SSL credentials composed with call credentials.
+   * For secure connections, returns SSL credentials.
    */
   createChannelCredentials(): grpc.ChannelCredentials {
-    return this.createChannelCredentialsInternal("DurableTaskWorker", this._workerId);
+    return this.createChannelCredentialsInternal();
   }
 }

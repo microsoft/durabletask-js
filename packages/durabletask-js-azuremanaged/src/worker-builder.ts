@@ -43,6 +43,8 @@ export class DurableTaskAzureManagedWorkerBuilder {
 
   /**
    * Configures the builder using a connection string.
+   * This replaces the Azure-managed connection options. Worker registrations and builder-level settings are
+   * preserved. Call connection option setters after this method.
    *
    * @param connectionString The connection string for Azure-managed Durable Task service.
    * @returns This builder instance.
@@ -81,8 +83,7 @@ export class DurableTaskAzureManagedWorkerBuilder {
     this._options
       .setEndpointAddress(endpoint)
       .setTaskHubName(taskHubName)
-      .setCredential(credential ?? null)
-      .setAllowInsecureCredentials(credential === null || credential === undefined);
+      .setCredential(credential ?? null);
 
     return this;
   }
