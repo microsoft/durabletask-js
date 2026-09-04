@@ -96,7 +96,13 @@ abstract class DurableTaskAzureManagedOptionsBase {
   }
 
   private getEndpointUrl(): URL {
-    const endpoint = this._endpointAddress.includes("://") ? this._endpointAddress : `https://${this._endpointAddress}`;
+    const endpointAddress = this._endpointAddress.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "");
+    const schemeSeparator = /^[a-z][a-z\d+.-]*:([/\\]+)/i.exec(endpointAddress);
+    if (/[\t\n\f\r ]/.test(endpointAddress) || (schemeSeparator && schemeSeparator[1] !== "//")) {
+      throw new Error("Invalid endpoint URL: expected an HTTP(S) URL or a schemeless authority.");
+    }
+
+    const endpoint = endpointAddress.includes("://") ? endpointAddress : `https://${endpointAddress}`;
 
     let url: URL;
     try {
@@ -107,6 +113,10 @@ abstract class DurableTaskAzureManagedOptionsBase {
 
     if (url.protocol !== "http:" && url.protocol !== "https:") {
       throw new Error(`Unsupported endpoint scheme '${url.protocol}'. Only HTTP and HTTPS are supported.`);
+    }
+
+    if (!url.hostname || url.username || url.password) {
+      throw new Error("Invalid endpoint URL: the endpoint must contain a hostname without user information.");
     }
 
     return url;

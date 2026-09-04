@@ -49,6 +49,16 @@ const builderFactories: BuilderFactory[] = [
   },
 ];
 
+const malformedSchemeEndpoints = ["htps:/scheduler.internal:8080", "http:/localhost:8080", "https:/example.com"];
+
+const silentlyRetargetedEndpoints = [
+  "htt\nps:/example.com",
+  "http:\t/localhost:8080",
+  "https://exa\nmple.com",
+  "https://user@example.com",
+  "https:///example.com",
+];
+
 describe.each(builderFactories)("$name endpoint security", ({ create, fromConnectionString, fromEndpoint }) => {
   const constructed: object[] = [];
 
@@ -115,6 +125,10 @@ describe.each(builderFactories)("$name endpoint security", ({ create, fromConnec
     expectSecureChannel(fromConnectionString("Endpoint=example.com;Authentication=None;TaskHub=myTaskHub"));
   });
 
+  it.each([" https://example.com ", " example.com "])("ignores outer whitespace in endpoint %s", (endpoint) => {
+    expectSecureChannel(fromEndpoint(endpoint, null));
+  });
+
   it("uses TLS with authorization metadata for an HTTPS token credential", async () => {
     const value = expectSecureChannel(fromEndpoint("https://example.com", new MockTokenCredential()));
 
@@ -152,18 +166,76 @@ describe.each(builderFactories)("$name endpoint security", ({ create, fromConnec
 
     expect(() => builder.build()).toThrow("Unsupported endpoint scheme");
   });
+
+  it.each(malformedSchemeEndpoints)("rejects malformed scheme endpoint %s before channel construction", (endpoint) => {
+    const createSsl = jest.spyOn(grpc.ChannelCredentials, "createSsl");
+    const createInsecure = jest.spyOn(grpc.ChannelCredentials, "createInsecure");
+    const builder = fromEndpoint(endpoint, new MockTokenCredential());
+
+    expect(() => builder.build()).toThrow("Invalid endpoint URL");
+    expect(createSsl).not.toHaveBeenCalled();
+    expect(createInsecure).not.toHaveBeenCalled();
+  });
+
+  it.each(silentlyRetargetedEndpoints)("rejects ambiguous endpoint %s before channel construction", (endpoint) => {
+    const createSsl = jest.spyOn(grpc.ChannelCredentials, "createSsl");
+    const createInsecure = jest.spyOn(grpc.ChannelCredentials, "createInsecure");
+    const builder = fromEndpoint(endpoint, new MockTokenCredential());
+
+    expect(() => builder.build()).toThrow("Invalid endpoint URL");
+    expect(createSsl).not.toHaveBeenCalled();
+    expect(createInsecure).not.toHaveBeenCalled();
+  });
 });
 
 describe.each([
   {
     name: "client",
+    create: (endpoint: string) => new DurableTaskAzureManagedClientOptions().setEndpointAddress(endpoint),
     fromConnectionString: DurableTaskAzureManagedClientOptions.fromConnectionString,
   },
   {
     name: "worker",
+    create: (endpoint: string) => new DurableTaskAzureManagedWorkerOptions().setEndpointAddress(endpoint),
     fromConnectionString: DurableTaskAzureManagedWorkerOptions.fromConnectionString,
   },
-])("$name options endpoint security", ({ fromConnectionString }) => {
+])("$name options endpoint security", ({ create, fromConnectionString }) => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it.each([
+    ["example.com", "example.com"],
+    ["example.com:8443", "example.com:8443"],
+    ["localhost:8080", "localhost:8080"],
+    ["127.0.0.1:8080", "127.0.0.1:8080"],
+    ["[::1]", "[::1]"],
+    ["[::1]:8080", "[::1]:8080"],
+    ["HTTPS://EXAMPLE.COM", "example.com"],
+    ["HTTP://LOCALHOST:8080", "localhost:8080"],
+    ["https://example.com/path?key=value#fragment", "example.com"],
+    [" https://example.com \n", "example.com"],
+    [" localhost:8080 ", "localhost:8080"],
+  ])("normalizes supported endpoint %s to authority %s", (endpoint, authority) => {
+    expect(create(endpoint).getHostAddress()).toBe(authority);
+  });
+
+  it.each([...silentlyRetargetedEndpoints, "https://", "::1"])("rejects invalid endpoint %s", (endpoint) => {
+    expect(() => create(endpoint).getHostAddress()).toThrow("Invalid endpoint URL");
+  });
+
+  it.each(malformedSchemeEndpoints)("rejects malformed scheme endpoint %s before channel construction", (endpoint) => {
+    const createSsl = jest.spyOn(grpc.ChannelCredentials, "createSsl");
+    const createInsecure = jest.spyOn(grpc.ChannelCredentials, "createInsecure");
+    const options = fromConnectionString(`Endpoint=${endpoint};Authentication=None;TaskHub=myTaskHub`).setCredential(
+      new MockTokenCredential(),
+    );
+
+    expect(() => options.createChannelCredentials()).toThrow("Invalid endpoint URL");
+    expect(createSsl).not.toHaveBeenCalled();
+    expect(createInsecure).not.toHaveBeenCalled();
+  });
+
   it("does not infer insecure token consent from an anonymous connection string", () => {
     const options = fromConnectionString(
       "Endpoint=http://localhost:8080;Authentication=None;TaskHub=myTaskHub",
