@@ -115,8 +115,10 @@ abstract class DurableTaskAzureManagedOptionsBase {
    */
   getHostAddress(): string {
     const url = this.getEndpointUrl();
-    const port = url.port || (url.protocol === "http:" ? "80" : "");
-    return port ? `${url.hostname}:${port}` : url.hostname;
+    if (url.protocol === "http:" && !url.port) {
+      return `${url.hostname}:80`;
+    }
+    return url.host;
   }
 
   private getEndpointUrl(): URL {
