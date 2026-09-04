@@ -188,6 +188,21 @@ describe.each(builderFactories)("$name endpoint security", ({ create, fromConnec
   });
 });
 
+describe("grpc-js endpoint target", () => {
+  it("preserves the HTTP default port in the client channel target", () => {
+    const client = new DurableTaskAzureManagedClientBuilder()
+      .endpoint("http://localhost:80", "myTaskHub", null)
+      .build();
+
+    try {
+      const stub = (client as unknown as { _stub: { getChannel(): grpc.Channel } })._stub;
+      expect(stub.getChannel().getTarget()).toBe("dns:localhost:80");
+    } finally {
+      (client as unknown as { _stub: { close(): void } })._stub.close();
+    }
+  });
+});
+
 describe.each([
   {
     name: "client",
@@ -213,6 +228,13 @@ describe.each([
     ["[::1]:8080", "[::1]:8080"],
     ["HTTPS://EXAMPLE.COM", "example.com"],
     ["HTTP://LOCALHOST:8080", "localhost:8080"],
+    ["example.com:80", "example.com:80"],
+    ["http://example.com", "example.com:80"],
+    ["http://example.com:80", "example.com:80"],
+    ["http://example.com:8080", "example.com:8080"],
+    ["https://example.com", "example.com"],
+    ["https://example.com:443", "example.com"],
+    ["https://example.com:8443", "example.com:8443"],
     ["https://example.com/path?key=value#fragment", "example.com"],
     [" https://example.com \n", "example.com"],
     [" localhost:8080 ", "localhost:8080"],
