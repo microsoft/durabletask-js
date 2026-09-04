@@ -84,8 +84,9 @@ Endpoint transport and authentication are configured independently:
   `.allowInsecureCredentials(true)`. This opt-in permits authentication metadata over plaintext; it never
   downgrades an HTTPS endpoint.
 
-Because `connectionString()` replaces the builder's entire options object, all options configured before it are
-reset. Call subsequent option-setting methods after it:
+`connectionString()` replaces only the Azure-managed connection options. Builder-level state such as the logger,
+gRPC channel options, and worker registrations is preserved. Connection options configured before it are reset, so
+`.allowInsecureCredentials(true)` must follow `.connectionString(...)`:
 
 ```typescript
 new DurableTaskAzureManagedClientBuilder()

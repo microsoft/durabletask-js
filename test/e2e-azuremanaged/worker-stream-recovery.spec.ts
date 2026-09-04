@@ -30,7 +30,8 @@ const taskHub = process.env.TASKHUB || "default";
 
 const EMULATOR_CONTAINER = "dts-emulator-stream-recovery-test";
 const EMULATOR_IMAGE = "mcr.microsoft.com/dts/dts-emulator:latest";
-const EMULATOR_PORT = new URL(endpoint).port || "8080";
+const endpointUrl = new URL(/^https?:\/\//i.test(endpoint) ? endpoint : `https://${endpoint}`);
+const EMULATOR_PORT = endpointUrl.port || (endpointUrl.protocol === "http:" ? "80" : "443");
 const WATCHDOG_TIMEOUT_MS = 10000;
 const WATCHDOG_EVENT_TIMEOUT_MS = 30000;
 const DISABLED_WATCHDOG_PAUSE_MS = WATCHDOG_TIMEOUT_MS + 5000;
