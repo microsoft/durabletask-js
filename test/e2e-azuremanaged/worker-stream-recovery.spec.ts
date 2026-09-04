@@ -25,7 +25,7 @@ import {
   DurableTaskAzureManagedWorkerBuilder,
 } from "@microsoft/durabletask-js-azuremanaged";
 
-const endpoint = process.env.ENDPOINT || "http://localhost:8080";
+const endpoint = (process.env.ENDPOINT || "http://localhost:8080").trim();
 const taskHub = process.env.TASKHUB || "default";
 
 const EMULATOR_CONTAINER = "dts-emulator-stream-recovery-test";

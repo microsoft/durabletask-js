@@ -274,9 +274,12 @@ describe.each([
     expect(create(endpoint).getHostAddress()).toBe(authority);
   });
 
-  it.each([...silentlyRetargetedEndpoints, "https://", "::1"])("rejects invalid endpoint %s", (endpoint) => {
-    expect(() => create(endpoint).getHostAddress()).toThrow("Invalid endpoint URL");
-  });
+  it.each([...silentlyRetargetedEndpoints, "https://", "::1", "example.com?next=other.test", "example.com#fragment"])(
+    "rejects invalid endpoint %s",
+    (endpoint) => {
+      expect(() => create(endpoint).getHostAddress()).toThrow("Invalid endpoint URL");
+    },
+  );
 
   it.each(malformedSchemeEndpoints)("rejects malformed scheme endpoint %s before channel construction", (endpoint) => {
     const createSsl = jest.spyOn(grpc.ChannelCredentials, "createSsl");

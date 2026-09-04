@@ -101,7 +101,7 @@ abstract class DurableTaskAzureManagedOptionsBase {
     }
 
     if (!/^https?:\/\/[^/\\]/i.test(endpoint)) {
-      if (endpoint.includes("/") || endpoint.includes("\\")) {
+      if (/[/?#\\]/.test(endpoint)) {
         throw new Error("Invalid endpoint URL: expected an HTTP(S) URL or a schemeless authority.");
       }
       endpoint = `https://${endpoint}`;
