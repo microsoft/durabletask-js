@@ -14,7 +14,7 @@ export type MetadataGenerator = () => Promise<grpc.Metadata>;
  * @param method The gRPC method to call (must be bound to the stub).
  * @param req The request object.
  * @param metadataGenerator Optional function to generate metadata for the call.
- * @param signal Optional signal that cancels the call.
+ * @param signal Optional signal that cancels waiting for metadata and the call.
  * @returns A promise that resolves with the response or rejects with an error.
  */
 export async function callWithMetadata<TReq, TRes>(
@@ -27,7 +27,6 @@ export async function callWithMetadata<TReq, TRes>(
   metadataGenerator?: MetadataGenerator,
   signal?: AbortSignal,
 ): Promise<TRes> {
-  const metadata = metadataGenerator ? await metadataGenerator() : new grpc.Metadata();
   if (signal?.aborted) {
     throw signal.reason;
   }
@@ -41,13 +40,21 @@ export async function callWithMetadata<TReq, TRes>(
         call?.cancel();
       };
       signal?.addEventListener("abort", onAbort, { once: true });
-      call = method(req, metadata, (error, response) => {
-        if (error) {
-          reject(error);
-        } else {
-          resolve(response);
+      const invoke = async () => {
+        const metadata = metadataGenerator ? await metadataGenerator() : new grpc.Metadata();
+        // Metadata generation may finish after cancellation; never start a late RPC.
+        if (signal?.aborted) {
+          throw signal.reason;
         }
-      });
+        call = method(req, metadata, (error, response) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve(response);
+          }
+        });
+      };
+      invoke().catch(reject);
     });
   } finally {
     signal?.removeEventListener("abort", onAbort);

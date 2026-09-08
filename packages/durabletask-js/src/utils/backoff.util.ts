@@ -37,10 +37,11 @@ export interface BackoffOptions {
 
   /**
    * Jitter distribution. "symmetric" preserves the default range around the delay;
-   * "full" selects uniformly from zero through the exponential upper bound.
+   * "full" selects uniformly from zero through the exponential upper bound;
+   * "positive" adds jitter above the delay, matching .NET worker delivery retries.
    * @default "symmetric"
    */
-  jitterStrategy?: "symmetric" | "full";
+  jitterStrategy?: "symmetric" | "full" | "positive";
 }
 
 /**
@@ -80,7 +81,7 @@ export class ExponentialBackoff {
   private readonly _multiplier: number;
   private readonly _maxAttempts: number;
   private readonly _jitterFactor: number;
-  private readonly _jitterStrategy: "symmetric" | "full";
+  private readonly _jitterStrategy: "symmetric" | "full" | "positive";
 
   private _currentDelayMs: number;
   private _attemptCount: number;
@@ -135,6 +136,9 @@ export class ExponentialBackoff {
     }
 
     const jitterRange = this._currentDelayMs * this._jitterFactor;
+    if (this._jitterStrategy === "positive") {
+      return Math.floor(this._currentDelayMs + Math.random() * jitterRange);
+    }
     const jitter = Math.random() * jitterRange * 2 - jitterRange;
     return Math.max(0, Math.floor(this._currentDelayMs + jitter));
   }

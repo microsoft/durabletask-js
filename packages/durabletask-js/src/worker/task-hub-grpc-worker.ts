@@ -4,6 +4,7 @@
 import * as pb from "../proto/orchestrator_service_pb";
 import * as stubs from "../proto/orchestrator_service_grpc_pb";
 import * as grpc from "@grpc/grpc-js";
+import { setMaxListeners } from "events";
 import { Registry } from "./registry";
 import { TActivity } from "../types/activity.type";
 import { TInput } from "../types/input.type";
@@ -48,6 +49,11 @@ const DEFERRED_STUB_CLOSE_DELAY_MS = 30000;
 const MAX_TIMER_DELAY_MS = 2_147_483_646;
 const MAX_PROTOCOL_CONCURRENCY = 2_147_483_647;
 const HELLO_TIMEOUT_MS = 30000;
+
+type ResponseDeliverySignals = {
+  completion: AbortSignal;
+  retry: AbortSignal;
+};
 
 type WorkItemStreamResult = {
   outcome: "shutdown" | "silentDisconnect" | "gracefulDrain";
@@ -114,6 +120,7 @@ export class TaskHubGrpcWorker {
   private _stub: stubs.TaskHubSidecarServiceClient | null;
   private _logger: Logger;
   private _pendingWorkItems: Set<Promise<void>>;
+  private _pendingWorkItemsByStub = new WeakMap<stubs.TaskHubSidecarServiceClient, Set<Promise<void>>>();
   private _shutdownTimeoutMs: number;
   private _silentDisconnectTimeoutMs: number;
   private _silentDisconnectTimer: ReturnType<typeof setTimeout> | null;
@@ -123,6 +130,8 @@ export class TaskHubGrpcWorker {
   private _workItemFilters?: WorkItemFilters | "auto";
   private _concurrency: ResolvedConcurrencyOptions;
   private _abortController: AbortController | null;
+  private _completionAbortController: AbortController | null;
+  private _responseDeliverySignals = new WeakMap<stubs.TaskHubSidecarServiceClient, ResponseDeliverySignals>();
   private _workerLoopPromise: Promise<void> | null;
   private _deferredStubCloseTimers: Map<stubs.TaskHubSidecarServiceClient, ReturnType<typeof setTimeout>>;
 
@@ -239,6 +248,7 @@ export class TaskHubGrpcWorker {
     this._workItemFilters = resolvedWorkItemFilters;
     this._concurrency = resolveConcurrencyOptions(resolvedConcurrency);
     this._abortController = null;
+    this._completionAbortController = null;
     this._workerLoopPromise = null;
     this._deferredStubCloseTimers = new Map();
   }
@@ -426,8 +436,16 @@ export class TaskHubGrpcWorker {
     this._backoff.reset();
     const abortController = new AbortController();
     this._abortController = abortController;
+    const completionAbortController = new AbortController();
+    this._completionAbortController = completionAbortController;
+    // A run can have many concurrent response deliveries; each removes its listener when settled.
+    setMaxListeners(0, abortController.signal, completionAbortController.signal);
     const client = new GrpcClient(this._hostAddress, this._grpcChannelOptions, this._tls, this._grpcChannelCredentials);
     this._stub = client.stub;
+    this._responseDeliverySignals.set(client.stub, {
+      completion: completionAbortController.signal,
+      retry: abortController.signal,
+    });
 
     const workerLoopPromise = this.internalRunWorker(client, abortController.signal);
     this._workerLoopPromise = workerLoopPromise;
@@ -540,6 +558,10 @@ export class TaskHubGrpcWorker {
             continue;
           }
           this._stub = client.stub;
+          const deliverySignals = this._responseDeliverySignals.get(previousStub);
+          if (deliverySignals) {
+            this._responseDeliverySignals.set(client.stub, deliverySignals);
+          }
           WorkerLogs.channelRecreated(this._logger, this._hostAddress ?? "localhost:4001");
           consecutiveChannelFailures = 0;
           this._backoff.reset();
@@ -566,9 +588,15 @@ export class TaskHubGrpcWorker {
   }
 
   private _deferStubClose(stub: stubs.TaskHubSidecarServiceClient): void {
+    const pendingWork = [...(this._pendingWorkItemsByStub.get(stub) ?? [])];
     const timer = setTimeout(() => {
-      this._deferredStubCloseTimers.delete(stub);
-      stub.close();
+      // Delivery retries may outlive the retirement delay. Keep their original stub alive.
+      void Promise.all(pendingWork).then(() => {
+        if (this._deferredStubCloseTimers.get(stub) === timer) {
+          this._deferredStubCloseTimers.delete(stub);
+          stub.close();
+        }
+      });
     }, DEFERRED_STUB_CLOSE_DELAY_MS);
     timer.unref();
     this._deferredStubCloseTimers.set(stub, timer);
@@ -761,6 +789,7 @@ export class TaskHubGrpcWorker {
       }
     }
 
+    this._completionAbortController?.abort();
     this._closeDeferredStubs();
     if (this._stub) {
       // Close the gRPC client - this is a synchronous operation
@@ -892,7 +921,16 @@ export class TaskHubGrpcWorker {
     return undefined;
   }
 
-  private _trackPendingWorkItem(workPromise: Promise<void>, onError: (error: Error) => void): void {
+  private _trackPendingWorkItem(
+    stub: stubs.TaskHubSidecarServiceClient,
+    workPromise: Promise<void>,
+    onError: (error: Error) => void,
+  ): void {
+    let stubWorkItems = this._pendingWorkItemsByStub.get(stub);
+    if (!stubWorkItems) {
+      stubWorkItems = new Set();
+      this._pendingWorkItemsByStub.set(stub, stubWorkItems);
+    }
     const handledPromise = workPromise
       .catch((e: unknown) => {
         const error = e instanceof Error ? e : new Error(String(e));
@@ -900,9 +938,56 @@ export class TaskHubGrpcWorker {
       })
       .finally(() => {
         this._pendingWorkItems.delete(handledPromise);
+        stubWorkItems.delete(handledPromise);
       });
 
     this._pendingWorkItems.add(handledPromise);
+    stubWorkItems.add(handledPromise);
+  }
+
+  private async _deliverResponse<TReq, TRes>(
+    stub: stubs.TaskHubSidecarServiceClient,
+    method: Parameters<typeof callWithMetadata<TReq, TRes>>[0],
+    request: TReq,
+    signal?: AbortSignal,
+  ): Promise<TRes> {
+    const signals = this._responseDeliverySignals.get(stub);
+    const backoff = new ExponentialBackoff({
+      initialDelayMs: 200,
+      maxDelayMs: 15000,
+      maxAttempts: 9, // Ten SDK attempts; each call retains any configured gRPC transport retries.
+      jitterStrategy: "positive",
+      jitterFactor: 0.2,
+    });
+    for (;;) {
+      try {
+        // Default initial delivery can drain; an explicit signal cancels every attempt.
+        const attemptSignal = signal ?? (backoff.attemptCount === 0 ? signals?.completion : signals?.retry);
+        return await callWithMetadata(method, request, this._metadataGenerator, attemptSignal);
+      } catch (error) {
+        const status = error instanceof Error ? this._getGrpcStatus(error) : undefined;
+        if (
+          !backoff.canRetry() ||
+          (status !== grpc.status.UNAVAILABLE &&
+            status !== grpc.status.UNKNOWN &&
+            status !== grpc.status.DEADLINE_EXCEEDED &&
+            status !== grpc.status.INTERNAL)
+        ) {
+          throw error;
+        }
+        await backoff.wait(signal ?? signals?.retry);
+      }
+    }
+  }
+
+  private async _abandonOrchestrationWorkItem(
+    stub: stubs.TaskHubSidecarServiceClient,
+    completionToken: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const request = new pb.AbandonOrchestrationTaskRequest();
+    request.setCompletiontoken(completionToken);
+    await this._deliverResponse(stub, stub.abandonTaskOrchestratorWorkItem.bind(stub), request, signal);
   }
 
   /**
@@ -914,7 +999,7 @@ export class TaskHubGrpcWorker {
     stub: stubs.TaskHubSidecarServiceClient,
   ): void {
     const workPromise = this._executeOrchestratorInternal(req, completionToken, stub);
-    this._trackPendingWorkItem(workPromise, (error) => {
+    this._trackPendingWorkItem(stub, workPromise, (error) => {
       WorkerLogs.executionError(this._logger, req.getInstanceid() || "(unknown)", error);
     });
   }
@@ -965,7 +1050,7 @@ export class TaskHubGrpcWorker {
         res.setActionsList(actions);
 
         try {
-          await callWithMetadata(stub.completeOrchestratorTask.bind(stub), res, this._metadataGenerator);
+          await this._deliverResponse(stub, stub.completeOrchestratorTask.bind(stub), res);
         } catch (e: unknown) {
           const error = e instanceof Error ? e : new Error(String(e));
           WorkerLogs.completionError(this._logger, instanceId, error);
@@ -981,13 +1066,7 @@ export class TaskHubGrpcWorker {
         );
 
         try {
-          const abandonRequest = new pb.AbandonOrchestrationTaskRequest();
-          abandonRequest.setCompletiontoken(completionToken);
-          await callWithMetadata(
-            stub.abandonTaskOrchestratorWorkItem.bind(stub),
-            abandonRequest,
-            this._metadataGenerator,
-          );
+          await this._abandonOrchestrationWorkItem(stub, completionToken);
         } catch (e: unknown) {
           const error = e instanceof Error ? e : new Error(String(e));
           WorkerLogs.completionError(this._logger, instanceId, error);
@@ -1094,7 +1173,7 @@ export class TaskHubGrpcWorker {
     }
 
     try {
-      await callWithMetadata(stub.completeOrchestratorTask.bind(stub), res, this._metadataGenerator);
+      await this._deliverResponse(stub, stub.completeOrchestratorTask.bind(stub), res);
     } catch (e: unknown) {
       const error = e instanceof Error ? e : new Error(String(e));
       WorkerLogs.completionError(this._logger, req.getInstanceid(), error);
@@ -1110,7 +1189,7 @@ export class TaskHubGrpcWorker {
     stub: stubs.TaskHubSidecarServiceClient,
   ): void {
     const workPromise = this._executeActivityInternal(req, completionToken, stub);
-    this._trackPendingWorkItem(workPromise, (error) => {
+    this._trackPendingWorkItem(stub, workPromise, (error) => {
       WorkerLogs.workerError(this._logger, error);
     });
   }
@@ -1175,7 +1254,7 @@ export class TaskHubGrpcWorker {
     }
 
     try {
-      await callWithMetadata(stub.completeActivityTask.bind(stub), res, this._metadataGenerator);
+      await this._deliverResponse(stub, stub.completeActivityTask.bind(stub), res);
     } catch (e: unknown) {
       const error = e instanceof Error ? e : new Error(String(e));
       WorkerLogs.activityResponseError(this._logger, req.getName(), req.getTaskid(), instanceId!, error);
@@ -1192,7 +1271,7 @@ export class TaskHubGrpcWorker {
     operationInfos?: pb.OperationInfo[],
   ): void {
     const workPromise = this._executeEntityInternal(req, completionToken, stub, operationInfos);
-    this._trackPendingWorkItem(workPromise, (error) => {
+    this._trackPendingWorkItem(stub, workPromise, (error) => {
       WorkerLogs.workerError(this._logger, error);
     });
   }
@@ -1293,7 +1372,7 @@ export class TaskHubGrpcWorker {
     stub: stubs.TaskHubSidecarServiceClient,
   ): void {
     const workPromise = this._executeEntityV2Internal(req, completionToken, stub);
-    this._trackPendingWorkItem(workPromise, (error) => {
+    this._trackPendingWorkItem(stub, workPromise, (error) => {
       WorkerLogs.workerError(this._logger, error);
     });
   }
@@ -1449,7 +1528,7 @@ export class TaskHubGrpcWorker {
     stub: stubs.TaskHubSidecarServiceClient,
   ): Promise<void> {
     try {
-      await callWithMetadata(stub.completeEntityTask.bind(stub), batchResult, this._metadataGenerator);
+      await this._deliverResponse(stub, stub.completeEntityTask.bind(stub), batchResult);
     } catch (e: any) {
       WorkerLogs.entityResponseDeliveryFailed(this._logger, e);
     }

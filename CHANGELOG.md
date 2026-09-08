@@ -15,6 +15,11 @@
 
 ### Fixes
 
+- Retry worker completion and version-rejection abandon delivery on transient gRPC failures,
+  with ten total SDK attempts and cancellable backoff. Retry the same response without rerunning user
+  code, preserve initial completion during graceful shutdown, cancel pending metadata waits, and
+  keep replaced channels alive for pending delivery. Existing transport retry settings are preserved;
+  each SDK attempt can include additional configured gRPC retries.
 - Bound each worker sidecar hello attempt to 30 seconds, retry failed connections, and cancel
   pending hello calls and reconnect delays when the worker stops.
 - Align worker stream recovery with the .NET SDK: reconnect after 120 seconds without a message
