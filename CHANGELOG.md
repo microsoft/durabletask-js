@@ -2,6 +2,7 @@
 
 ### New
 
+- Add an optional per-call `AbortSignal` to client start and completion waits.
 - Add `ConcurrencyOptions` to configure the orchestration, activity, and entity concurrency
   hints sent by `TaskHubGrpcWorker` to the backend.
 - Add an optional `newVersion` parameter to `OrchestrationContext.continueAsNew()` for version migrations.
@@ -20,6 +21,8 @@
   code, preserve initial completion during graceful shutdown, cancel pending metadata waits, and
   keep replaced channels alive for pending delivery. Existing transport retry settings are preserved;
   each SDK attempt can include additional configured gRPC retries.
+- Cancel pending client wait RPCs on timeout or cancellation without terminating the orchestration.
+  Retry server `DEADLINE_EXCEEDED` responses for completion waits with backoff within the original total timeout.
 - Bound each worker sidecar hello attempt to 30 seconds, retry failed connections, and cancel
   pending hello calls and reconnect delays when the worker stops.
 - Align worker stream recovery with the .NET SDK: reconnect after 120 seconds without a message

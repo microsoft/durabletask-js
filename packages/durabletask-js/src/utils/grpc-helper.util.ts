@@ -53,6 +53,12 @@ export async function callWithMetadata<TReq, TRes>(
             resolve(response);
           }
         });
+        // A synchronous interceptor can abort before the handle exists. Let grpc-js
+        // finish its queued startup before cancelling, or it can still dispatch the RPC.
+        if (signal?.aborted) {
+          const startedCall = call;
+          setImmediate(() => startedCall.cancel());
+        }
       };
       invoke().catch(reject);
     });

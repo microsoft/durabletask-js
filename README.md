@@ -81,6 +81,24 @@ const state = await client.waitForOrchestrationCompletion(id, true, 60);
 console.log(`Result: ${state?.serializedOutput}`);
 ```
 
+### Cancelling client waits
+
+`TaskHubGrpcClient.waitForOrchestrationStart()` and `waitForOrchestrationCompletion()` accept
+an optional fourth `AbortSignal` argument:
+
+```typescript
+const controller = new AbortController();
+const waiting = client.waitForOrchestrationCompletion(id, true, 60, controller.signal);
+controller.abort(); // Cancel this wait, not the orchestration.
+await waiting; // Rejects with controller.signal.reason (an AbortError by default).
+```
+
+The timeout is in seconds (default: 60) and includes metadata generation and all retry delays.
+Timeouts reject with `TimeoutError` and cancel the pending RPC. Completion waits recover from
+server `DEADLINE_EXCEEDED` responses with backoff, without resetting that total timeout;
+start waits and other errors are not retried by this wait logic. A later wait can still observe
+the orchestration's result after a previous wait was cancelled or timed out.
+
 ### Worker concurrency
 
 Core workers can send independent orchestration, activity, and entity concurrency hints to
