@@ -16,11 +16,8 @@
 
 ### Fixes
 
-- Retry worker completion and version-rejection abandon delivery on transient gRPC failures,
-  with ten total SDK attempts and cancellable backoff. Retry the same response without rerunning user
-  code, preserve initial completion during graceful shutdown, cancel pending metadata waits, and
-  keep replaced channels alive for pending delivery. Existing transport retry settings are preserved;
-  each SDK attempt can include additional configured gRPC retries.
+- Retry worker completion and version-rejection responses on transient gRPC failures, reusing
+  the computed response without rerunning user code. Bound SDK sends to ten with shutdown-aware backoff.
 - Cancel pending client wait RPCs on timeout or cancellation without terminating the orchestration.
   Retry server `DEADLINE_EXCEEDED` responses for completion waits with backoff within the original total timeout.
 - Bound each worker sidecar hello attempt to 30 seconds, retry failed connections, and cancel

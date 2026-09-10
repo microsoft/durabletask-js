@@ -127,28 +127,21 @@ You can find more samples in the [examples/azure-managed](./examples/azure-manag
 
 ### Worker response delivery
 
-Workers retry completion responses for orchestrations, activities, and entities, including
-version-mismatch failure and abandon responses. The policy follows the .NET worker: ten total
-SDK attempts for `UNAVAILABLE`, `UNKNOWN`, `DEADLINE_EXCEEDED`, or `INTERNAL`, with exponential
-backoff starting at 200 ms, capped at 15 seconds before adding 0-20% jitter. Other errors and
-exhausted attempts are reported through the existing worker error logs.
+An activity can return `42` but fail to report that result because of a transient gRPC error.
+Workers retry the same completion response and token instead of running the activity again.
+If a resend is accepted, the backend can advance the workflow using the saved result.
+This also applies to orchestration and entity responses, including version-rejection responses.
 
-Only delivery is retried: the response and completion token are reused, not the user code.
-This does not change the backend's at-least-once work-item delivery contract; a backend may
-redeliver work after a lock expires or an acknowledgement is lost.
+The policy follows the .NET worker: up to ten SDK sends for `UNAVAILABLE`, `UNKNOWN`,
+`DEADLINE_EXCEEDED`, or `INTERNAL`, with backoff starting at 200 ms, doubling to a 15-second
+cap before adding 0-20% jitter. Permanent errors and exhausted attempts use the existing
+error logs. Configured gRPC transport retries remain enabled, so ten SDK sends can involve
+more than ten network attempts.
 
-`stop()` cancels retry delays and retried RPCs. Already-running work can still send its first
-completion during the existing graceful-shutdown window (`shutdownTimeoutMs`, default 30 seconds);
-remaining completion RPCs are cancelled when that window expires. Replaced worker channels stay
-open until their pending work finishes or shutdown forces cleanup. Cancellation also stops waiting
-for response metadata. A metadata generator may continue running, but its late result cannot start an RPC.
-
-Existing channel options and Azure-managed transport retry configuration are preserved, matching
-the .NET Azure-managed worker. Each SDK attempt can therefore contain additional gRPC transport
-retries: ten SDK attempts is not a ten-network-attempt guarantee. For example, a channel policy
-allowing five attempts can produce up to fifty attempts across the two configured retry layers.
-Configure channel retries with that combined budget in mind. The worker's hello/stream reconnect
-loop and client retry behavior remain unchanged.
+`stop()` cancels retry backoff and in-flight retry RPCs. Already-running work can still send
+its first response during the existing bounded shutdown wait; user code and metadata
+generation are not canceled. Channel retirement and backend lock durations are unchanged.
+Retries do not guarantee connection recovery, acceptance of expired tokens, or exactly-once execution.
 
 ### Reusing orchestration instance IDs
 
