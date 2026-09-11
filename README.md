@@ -138,9 +138,12 @@ cap before adding 0-20% jitter. Permanent errors and exhausted attempts use the 
 error logs. Configured gRPC transport retries remain enabled, so ten SDK sends can involve
 more than ten network attempts.
 
-`stop()` cancels retry backoff and in-flight retry RPCs. Already-running work can still send
-its first response during the existing bounded shutdown wait; user code and metadata
-generation are not canceled. Channel retirement and backend lock durations are unchanged.
+`stop()` cancels all response RPCs, including the initial send, and retry backoff using
+the worker run's signal captured when the work item was dispatched. This applies equally
+to inline and streamed orchestrations, activities, entities, and version-failure/rejection
+responses. Work finishing after stop cannot send its first response, even after a restart.
+User code and metadata generation are not canceled; if metadata finishes after stop,
+the response RPC is not started. Channel retirement and backend lock durations are unchanged.
 Retries do not guarantee connection recovery, acceptance of expired tokens, or exactly-once execution.
 
 ### Reusing orchestration instance IDs

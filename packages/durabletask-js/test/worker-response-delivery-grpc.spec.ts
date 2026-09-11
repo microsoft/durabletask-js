@@ -117,6 +117,52 @@ describe("Worker response retries over gRPC", () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
+  it.each(["metadata", "RPC"] as const)("stop cancels the first response during %s", async (phase) => {
+    const received = deferred();
+    const cancelled = deferred();
+    const metadataStarted = deferred();
+    const metadata = deferred<grpc.Metadata>();
+    const requests: pb.ActivityResponse[] = [];
+    let finishResponse = () => {};
+    const stream = await start((call, callback) => {
+      requests.push(call.request);
+      received.resolve();
+      if (phase === "RPC") {
+        finishResponse = () => callback(null, new pb.CompleteTaskResponse());
+        call.once("cancelled", () => cancelled.resolve());
+      } else callback(null, new pb.CompleteTaskResponse());
+    });
+    if (phase === "metadata") {
+      worker["_metadataGenerator"] = () => {
+        metadataStarted.resolve();
+        return metadata.promise;
+      };
+    }
+    const send = jest.spyOn(worker["_stub"]!, "completeActivityTask");
+    let cancel: jest.SpyInstance | undefined;
+    try {
+      stream.write(workItem());
+      await withTimeout(phase === "metadata" ? metadataStarted.promise : received.promise, 5000);
+      if (phase === "RPC") {
+        const call = send.mock.results[0].value as grpc.ClientUnaryCall;
+        cancel = jest.spyOn(call, "cancel");
+      }
+      await worker.stop();
+      if (phase === "RPC") expect(cancel).toHaveBeenCalledTimes(1);
+    } finally {
+      metadata.resolve(new grpc.Metadata());
+      finishResponse();
+    }
+    await withTimeout(Promise.all(worker["_pendingWorkItems"]), 5000);
+    if (phase === "RPC") {
+      await withTimeout(cancelled.promise, 5000);
+    }
+    expect(send).toHaveBeenCalledTimes(phase === "RPC" ? 1 : 0);
+    expect(requests).toHaveLength(phase === "RPC" ? 1 : 0);
+    expect(activity).toHaveBeenCalledTimes(1);
+    expect(worker["_pendingWorkItems"].size).toBe(0);
+  });
+
   it("bounds SDK sends to ten without overriding configured transport retries", async () => {
     const wait = ExponentialBackoff.prototype.wait;
     jest.spyOn(ExponentialBackoff.prototype, "wait").mockImplementation(function (

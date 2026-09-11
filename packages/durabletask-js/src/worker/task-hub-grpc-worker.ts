@@ -114,6 +114,7 @@ export class TaskHubGrpcWorker {
   private _stub: stubs.TaskHubSidecarServiceClient | null;
   private _logger: Logger;
   private _pendingWorkItems: Set<Promise<void>>;
+  private _historyCancellations: Set<() => void>;
   private _shutdownTimeoutMs: number;
   private _silentDisconnectTimeoutMs: number;
   private _silentDisconnectTimer: ReturnType<typeof setTimeout> | null;
@@ -214,6 +215,7 @@ export class TaskHubGrpcWorker {
     this._stub = null;
     this._logger = resolvedLogger ?? new ConsoleLogger();
     this._pendingWorkItems = new Set();
+    this._historyCancellations = new Set();
     this._shutdownTimeoutMs = resolvedShutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
     const silentDisconnectTimeoutMs = resolvedSilentDisconnectTimeoutMs ?? DEFAULT_SILENT_DISCONNECT_TIMEOUT_MS;
     if (!Number.isFinite(silentDisconnectTimeoutMs)) {
@@ -717,6 +719,9 @@ export class TaskHubGrpcWorker {
     const responseStream = this._responseStream;
     this._stopWorker = true;
     this._abortController?.abort();
+    for (const cancel of this._historyCancellations) {
+      cancel();
+    }
     this._clearSilentDisconnectTimer();
 
     const streamClosed = responseStream
@@ -789,6 +794,7 @@ export class TaskHubGrpcWorker {
    */
   private _buildGetWorkItemsRequest(): pb.GetWorkItemsRequest {
     const request = new pb.GetWorkItemsRequest();
+    request.setCapabilitiesList([pb.WorkerCapability.WORKER_CAPABILITY_HISTORY_STREAMING]);
     request.setMaxconcurrentactivityworkitems(
       Math.min(this._concurrency.maximumConcurrentActivityWorkItems, MAX_PROTOCOL_CONCURRENCY),
     );
@@ -908,7 +914,7 @@ export class TaskHubGrpcWorker {
   private async _deliverResponse<TReq, TRes>(
     method: Parameters<typeof callWithMetadata<TReq, TRes>>[0],
     request: TReq,
-    retrySignal?: AbortSignal,
+    signal?: AbortSignal,
   ): Promise<TRes> {
     const backoff = new ExponentialBackoff({
       initialDelayMs: 200,
@@ -919,13 +925,7 @@ export class TaskHubGrpcWorker {
     });
     for (;;) {
       try {
-        // Allow the initial response to drain during shutdown; only retries use the captured run signal.
-        return await callWithMetadata(
-          method,
-          request,
-          this._metadataGenerator,
-          backoff.attemptCount === 0 ? undefined : retrySignal,
-        );
+        return await callWithMetadata(method, request, this._metadataGenerator, signal);
       } catch (error) {
         const status = error instanceof Error ? this._getGrpcStatus(error) : undefined;
         if (
@@ -937,7 +937,7 @@ export class TaskHubGrpcWorker {
         ) {
           throw error;
         }
-        await backoff.wait(retrySignal);
+        await backoff.wait(signal);
       }
     }
   }
@@ -957,6 +957,59 @@ export class TaskHubGrpcWorker {
     });
   }
 
+  private async _streamOrchestrationHistory(
+    req: pb.OrchestratorRequest,
+    stub: stubs.TaskHubSidecarServiceClient,
+    signal?: AbortSignal,
+  ): Promise<pb.HistoryEvent[]> {
+    const request = new pb.StreamInstanceHistoryRequest();
+    request.setInstanceid(req.getInstanceid());
+    request.setExecutionid(req.getExecutionid());
+    request.setForworkitemprocessing(true);
+    return new Promise<pb.HistoryEvent[]>((resolve, reject) => {
+      const events: pb.HistoryEvent[] = [];
+      let stream: grpc.ClientReadableStream<pb.HistoryChunk> | undefined;
+      let settled = false;
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        stream?.removeListener("data", onData);
+        stream?.removeListener("end", onEnd);
+        stream?.removeListener("error", onError);
+        stream?.removeListener("close", onClose);
+        this._historyCancellations.delete(cancel);
+        stream?.destroy();
+        if (error) reject(error);
+        else resolve(events);
+      };
+      const onData = (chunk: pb.HistoryChunk) => {
+        for (const event of chunk.getEventsList()) {
+          events.push(event);
+        }
+      };
+      const onEnd = () => finish();
+      const onError = (error: unknown) => finish(error instanceof Error ? error : new Error(String(error)));
+      const onClose = () => finish(new Error("Orchestration history stream closed before all history was received."));
+      const cancel = () => {
+        if (stream) stream.cancel();
+        else finish(new Error("Orchestration history hydration was cancelled."));
+      };
+      // Track metadata acquisition too: a stalled token refresh must not outlive shutdown.
+      this._historyCancellations.add(cancel);
+      this._getMetadata()
+        .then((metadata) => {
+          if (settled) return;
+          signal?.throwIfAborted();
+          stream = stub.streamInstanceHistory(request, metadata);
+          stream.on("data", onData);
+          stream.once("end", onEnd);
+          stream.once("error", onError);
+          stream.once("close", onClose);
+        })
+        .catch(onError);
+    });
+  }
+
   /**
    * Internal implementation of orchestrator execution.
    */
@@ -970,6 +1023,42 @@ export class TaskHubGrpcWorker {
 
     if (!instanceId) {
       throw new Error(`Could not execute the orchestrator as the instanceId was not provided (${instanceId})`);
+    }
+
+    if (req.getRequireshistorystreaming()) {
+      try {
+        const pastEvents = await this._streamOrchestrationHistory(req, stub, retrySignal);
+        retrySignal?.throwIfAborted();
+        if (
+          !pastEvents.some((event) => event.hasExecutionstarted()) &&
+          !req.getNeweventsList().some((event) => event.hasExecutionstarted())
+        ) {
+          throw new Error("The provided orchestration history was incomplete");
+        }
+        req.setPasteventsList(pastEvents);
+      } catch (e: unknown) {
+        if (retrySignal?.aborted) return;
+        const error = e instanceof Error ? e : new Error(String(e));
+        WorkerLogs.executionError(this._logger, instanceId, error);
+        const res = new pb.OrchestratorResponse();
+        res.setInstanceid(instanceId);
+        res.setCompletiontoken(completionToken);
+        res.setActionsList([
+          pbh.newCompleteOrchestrationAction(
+            -1,
+            pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+            undefined,
+            pbh.newFailureDetails(error),
+          ),
+        ]);
+        try {
+          await this._deliverResponse(stub.completeOrchestratorTask.bind(stub), res, retrySignal);
+        } catch (e: unknown) {
+          const error = e instanceof Error ? e : new Error(String(e));
+          WorkerLogs.completionError(this._logger, instanceId, error);
+        }
+        return;
+      }
     }
 
     // Check version compatibility if versioning is enabled
