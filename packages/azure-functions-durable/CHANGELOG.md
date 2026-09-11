@@ -2,6 +2,8 @@
 
 ### New
 
+- Add `app.setup({ maximumTimerIntervalMs })` and the equivalent worker/testing options to
+  configure timer segments or opt into native timers with `null`.
 - Add optional orchestration version migration support to `context.df.continueAsNew()`.
 - Added a `durable-functions/testing` entry point with `runOrchestrator`, which runs an orchestrator
   to a terminal state against inline activity implementations on the in-memory backend and always
@@ -14,6 +16,10 @@
 
 ### Fixes
 
+- Split long durable timers and retry delays into three-day segments by default so the gRPC
+  provider does not exceed Azure Storage's per-message delay limit. Logical timer identity and
+  cancellation semantics are unchanged. Keep the policy stable for in-flight instances; drain
+  already-segmented instances before changing the interval or disabling segmentation.
 ## v4.0.0-beta.1 (2026-07-31)
 
 ### Changes

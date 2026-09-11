@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+import { DurableTimerOptions, resolveMaximumTimerInterval } from "./durable-timer-options";
 import * as pb from "../proto/orchestrator_service_pb";
 import * as stubs from "../proto/orchestrator_service_grpc_pb";
 import * as grpc from "@grpc/grpc-js";
@@ -57,7 +58,7 @@ type WorkItemStreamResult = {
 /**
  * Options for creating a TaskHubGrpcWorker.
  */
-export interface TaskHubGrpcWorkerOptions {
+export interface TaskHubGrpcWorkerOptions extends DurableTimerOptions {
   /** The host address to connect to. Defaults to "localhost:4001". */
   hostAddress?: string;
   /** gRPC channel options. */
@@ -125,6 +126,7 @@ export class TaskHubGrpcWorker {
   private _abortController: AbortController | null;
   private _workerLoopPromise: Promise<void> | null;
   private _deferredStubCloseTimers: Map<stubs.TaskHubSidecarServiceClient, ReturnType<typeof setTimeout>>;
+  private readonly _maximumTimerIntervalMs: number | null;
 
   /**
    * Creates a new TaskHubGrpcWorker instance.
@@ -176,6 +178,7 @@ export class TaskHubGrpcWorker {
     let resolvedVersioning: VersioningOptions | undefined;
     let resolvedWorkItemFilters: WorkItemFilters | "auto" | undefined;
     let resolvedConcurrency: ConcurrencyOptions | undefined;
+    let resolvedTimerOptions: DurableTimerOptions = {};
 
     if (typeof hostAddressOrOptions === "object" && hostAddressOrOptions !== null) {
       // Options object constructor
@@ -191,6 +194,7 @@ export class TaskHubGrpcWorker {
       resolvedVersioning = hostAddressOrOptions.versioning;
       resolvedWorkItemFilters = hostAddressOrOptions.workItemFilters;
       resolvedConcurrency = hostAddressOrOptions.concurrency;
+      resolvedTimerOptions = hostAddressOrOptions;
     } else {
       // Deprecated positional parameters constructor
       resolvedHostAddress = hostAddressOrOptions;
@@ -202,6 +206,7 @@ export class TaskHubGrpcWorker {
       resolvedShutdownTimeoutMs = shutdownTimeoutMs;
     }
 
+    this._maximumTimerIntervalMs = resolveMaximumTimerInterval(resolvedTimerOptions);
     this._registry = new Registry();
     this._hostAddress = resolvedHostAddress;
     this._tls = resolvedUseTLS;
@@ -1064,7 +1069,9 @@ export class TaskHubGrpcWorker {
     let res;
 
     try {
-      const executor = new OrchestrationExecutor(this._registry, this._logger);
+      const executor = new OrchestrationExecutor(this._registry, this._logger, {
+        maximumTimerIntervalMs: this._maximumTimerIntervalMs,
+      });
       const result = await executor.execute(
         req.getInstanceid(),
         req.getPasteventsList(),

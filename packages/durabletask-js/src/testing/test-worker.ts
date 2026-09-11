@@ -20,6 +20,7 @@ import {
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 import * as pb from "../proto/orchestrator_service_pb";
 import * as pbh from "../utils/pb-helper.util";
+import { DurableTimerOptions, resolveMaximumTimerInterval } from "../worker/durable-timer-options";
 
 /**
  * Worker that processes orchestrations and activities from the in-memory backend.
@@ -34,8 +35,10 @@ export class TestOrchestrationWorker {
   private isRunning: boolean = false;
   private processingPromise: Promise<void> | null = null;
   private stopRequested: boolean = false;
+  private readonly maximumTimerIntervalMs: number | null;
 
-  constructor(backend: InMemoryOrchestrationBackend) {
+  constructor(backend: InMemoryOrchestrationBackend, options: DurableTimerOptions = {}) {
+    this.maximumTimerIntervalMs = resolveMaximumTimerInterval(options);
     this.registry = new Registry();
     this.backend = backend;
   }
@@ -178,7 +181,9 @@ export class TestOrchestrationWorker {
     const completionToken = instance.completionToken;
 
     try {
-      const executor = new OrchestrationExecutor(this.registry);
+      const executor = new OrchestrationExecutor(this.registry, undefined, {
+        maximumTimerIntervalMs: this.maximumTimerIntervalMs,
+      });
       const result = await executor.execute(instanceId, instance.history, instance.pendingEvents, instance.executionId);
 
       this.backend.completeOrchestration(instanceId, completionToken, result.actions, result.customStatus);

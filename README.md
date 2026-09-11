@@ -23,6 +23,43 @@ const entityResponseBytes = await worker.processEntityBatchRequest(entityBatchRe
 
 `TaskHubGrpcClient` already exposes orchestration start/query/event/terminate/suspend/resume/purge APIs and entity signal/read/query/clean APIs through its existing `hostAddress` and `metadataGenerator` options. Host integrations that need task-hub routing metadata should provide it through `metadataGenerator`, keeping host-specific metadata policy outside the core client. Azure-managed scheduler connection strings remain in `@microsoft/durabletask-js-azuremanaged`.
 
+## Long durable timers
+
+`createTimer(Date | seconds)` has no SDK-imposed total-duration cap. For backends with a
+per-message delay limit, configure `maximumTimerIntervalMs` on `TaskHubGrpcWorker`:
+
+```typescript
+const worker = new TaskHubGrpcWorker({
+  maximumTimerIntervalMs: 3 * 24 * 60 * 60 * 1000,
+});
+```
+
+This also applies to embedded `processOrchestratorRequest` calls and activity/sub-orchestration
+retry delays. A ten-day timer uses 3 + 3 + 3 + 1 day backend timers but remains one logical
+`TimerTask`: `whenAny` identity, `whenAll`, and cancellation are unchanged. Cancel removes the
+current segment; it does not mark the task complete. Intermediate segments do not resume user code.
+
+| Entry point | Default |
+| --- | --- |
+| Core `TaskHubGrpcWorker` / `TestOrchestrationWorker` | Native timers (`null`), preserving existing behavior |
+| Azure-managed worker builder | Explicitly native (`null`); DTS supports long timers |
+| `durable-functions` worker / `runOrchestrator` | Three-day segments, safe for Azure Storage |
+
+Use a positive safe integer in milliseconds, sized for your backend, or `null` to disable
+segmentation. `TestOrchestrationWorker(backend, { maximumTimerIntervalMs })` accepts the same
+option; match your production policy. Unlike Python's generic three-day default, generic
+JavaScript workers remain native by default for compatibility. No backend capability detection
+is performed. The in-memory backend separately bounds and re-arms Node.js timeouts, so native
+timers over approximately 24.9 days do not fire immediately.
+
+**Rollout:** keep the policy consistent across workers sharing a task hub and unchanged for
+in-flight orchestrations. An old, single native timer replays using its recorded `TimerFired.fireAt`
+and completes at its original deadline without inventing segments. However, changing the interval
+or disabling segmentation for an already-segmented history can complete a logical timer early or
+cause replay mismatches. Drain existing instances or use a new task hub before such changes.
+See the [Functions provider configuration](./packages/azure-functions-durable/README.md#long-durable-timers)
+for its native-timer opt-out.
+
 ## npm packages
 
 The following npm packages are available for download.

@@ -156,6 +156,44 @@ app.http("startHello", {
 });
 ```
 
+## Long durable timers
+
+Both core-native `ctx.createTimer(...)` and classic `context.df.createTimer(...)` use
+three-day backend segments by default, including durable retry delays. This allows, for example,
+a 30-day business timer on Azure Storage without sending a queue visibility delay over its
+seven-day limit. The gRPC host route does not apply the legacy host-side timer splitting;
+segmentation happens in the core SDK instead. There is no SDK cap on the total timer duration.
+The returned `TimerTask` keeps its identity across segments and completes only at the final
+deadline. `cancel()` cancels the current segment and prevents later segments without marking
+the task complete.
+
+For a backend with native long-timer support, such as DTS, opt out at application startup:
+
+```typescript
+import * as df from "durable-functions";
+
+df.app.setup({ maximumTimerIntervalMs: null });
+// Register orchestrations and entities after setup.
+```
+
+Call `setup` once, before any orchestration/entity registration or `getSharedWorker()` access
+(including registrations in imported modules). Omit it for the three-day default. A positive safe
+integer configures a different per-segment interval in milliseconds; choose one supported by
+your backend. Direct `new DurableFunctionsWorker({ maximumTimerIntervalMs: null })` integrations
+accept the same setting. Backend capabilities are not automatically detected.
+
+**Migration:** all workers for a task hub must use the same policy. Existing single native timer
+histories replay at their recorded final deadline, but this does not make arbitrary policy
+changes replay-safe. Do not change or disable segmentation for already-segmented instances:
+it can cause premature completion or nondeterministic replay. Drain them or deploy to a new
+task hub first. Use `null` to retain the previous native behavior during a rollout when required.
+
+`runOrchestrator(handler, { maximumTimerIntervalMs })` uses the same three-day default but does
+not inherit `app.setup`; pass the production override explicitly. Direct core
+`TestOrchestrationWorker` instances default to native timers, so supply
+`{ maximumTimerIntervalMs: 3 * 24 * 60 * 60 * 1000 }` as their second constructor argument to
+match this provider. Tests still wait in real time unless using the test runner's clock controls.
+
 ## Testing
 
 `durable-functions/testing` provides one helper for the common case — running an orchestrator to

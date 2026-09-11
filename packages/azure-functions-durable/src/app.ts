@@ -8,7 +8,7 @@ import {
   InvocationContext,
   app as azFuncApp,
 } from "@azure/functions";
-import { EntityFactory, TOrchestrator } from "@microsoft/durabletask-js";
+import { DurableTimerOptions, EntityFactory, TOrchestrator } from "@microsoft/durabletask-js";
 import * as trigger from "./trigger";
 import { ClassicEntity, wrapEntity } from "./entity-context";
 import { ClassicOrchestrator, wrapOrchestrator } from "./orchestration-context";
@@ -30,14 +30,31 @@ export * as client from "./app-client";
 // the byte-processor methods. Orchestrators and entities are pre-registered at decoration time so
 // the core executor can dispatch by name when the host delivers a work item. This mirrors Python's
 // provider intent while avoiding a new worker (and re-registration) per invocation.
-const sharedWorker = new DurableFunctionsWorker();
+let sharedWorker: DurableFunctionsWorker | undefined;
+
+/**
+ * Configures the app-wide durable timer policy. Call once, before registering orchestrations
+ * or entities (or calling getSharedWorker). Defaults to three-day segments; set
+ * maximumTimerIntervalMs to null for a backend with native long-timer support.
+ * Do not change this policy for in-flight orchestrations.
+ */
+export function setup(options: DurableTimerOptions): void {
+  if (sharedWorker) {
+    throw new Error("Durable app setup must precede orchestration/entity registration and worker access.");
+  }
+  sharedWorker = new DurableFunctionsWorker(options);
+  sharedWorker.addNamedOrchestrator(BUILTIN_HTTP_POLL_ORCHESTRATOR_NAME, builtinHttpPollOrchestrator);
+}
 
 /**
  * Returns the app-wide {@link DurableFunctionsWorker} that holds the orchestrator/entity registry.
  * Exposed for host integration and testing; application code does not normally need it.
  */
 export function getSharedWorker(): DurableFunctionsWorker {
-  return sharedWorker;
+  if (!sharedWorker) {
+    setup({});
+  }
+  return sharedWorker!;
 }
 
 /** Secondary bindings that pass straight through to `@azure/functions` `app.generic`. */
@@ -67,7 +84,7 @@ export function orchestration(
   handlerOrOptions: OrchestrationHandler | OrchestrationOptions,
 ): void {
   const options = normalizeOptions(handlerOrOptions);
-  sharedWorker.addNamedOrchestrator(functionName, wrapOrchestrator(options.handler));
+  getSharedWorker().addNamedOrchestrator(functionName, wrapOrchestrator(options.handler));
   azFuncApp.generic(functionName, {
     ...extraBindings(options),
     trigger: trigger.orchestration(),
@@ -82,7 +99,7 @@ export function orchestration(
  */
 export function entity(functionName: string, handlerOrOptions: EntityHandler | EntityOptions): void {
   const options = normalizeOptions(handlerOrOptions);
-  sharedWorker.addNamedEntity(functionName, wrapEntity(options.handler));
+  getSharedWorker().addNamedEntity(functionName, wrapEntity(options.handler));
   azFuncApp.generic(functionName, {
     ...extraBindings(options),
     trigger: trigger.entity(),
@@ -111,14 +128,14 @@ export function activity(
 /** @hidden */
 function createOrchestrationHandler(): FunctionHandler {
   return async (triggerInput: unknown, _context: InvocationContext): Promise<string> => {
-    return sharedWorker.handleOrchestratorRequest(extractBase64Request(triggerInput));
+    return getSharedWorker().handleOrchestratorRequest(extractBase64Request(triggerInput));
   };
 }
 
 /** @hidden */
 function createEntityHandler(): FunctionHandler {
   return async (triggerInput: unknown, _context: InvocationContext): Promise<string> => {
-    return sharedWorker.handleEntityBatchRequest(extractBase64Request(triggerInput));
+    return getSharedWorker().handleEntityBatchRequest(extractBase64Request(triggerInput));
   };
 }
 
@@ -170,5 +187,9 @@ function extractBase64Request(triggerInput: unknown): string {
 // host-dispatched handler. Names are reserved (see `./http/builtin`); registering here — rather than
 // per app instance — means they are wired once for the whole function app. Ported from the
 // durabletask-python design (Andy Staples, durabletask-python#155).
-orchestration(BUILTIN_HTTP_POLL_ORCHESTRATOR_NAME, { handler: builtinHttpPollOrchestrator });
+// Register the host binding now, but defer worker creation so app.setup can configure it.
+azFuncApp.generic(BUILTIN_HTTP_POLL_ORCHESTRATOR_NAME, {
+  trigger: trigger.orchestration(),
+  handler: createOrchestrationHandler(),
+});
 activity(BUILTIN_HTTP_ACTIVITY_NAME, { handler: builtinHttpActivity });

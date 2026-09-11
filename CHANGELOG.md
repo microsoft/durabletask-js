@@ -2,6 +2,9 @@
 
 ### New
 
+- Add configurable `maximumTimerIntervalMs` for deterministic long durable timer and retry-delay
+  segmentation. Core and test workers retain native timers by default; keep the policy stable
+  for in-flight orchestrations.
 - Add an optional per-call `AbortSignal` to client start and completion waits.
 - Add `ConcurrencyOptions` to configure the orchestration, activity, and entity concurrency
   hints sent by `TaskHubGrpcWorker` to the backend.
@@ -16,6 +19,7 @@
 
 ### Fixes
 
+- Prevent native in-memory timers longer than Node.js's timeout limit from firing immediately.
 - Retry worker completion and version-rejection responses on transient gRPC failures, reusing
   the computed response without rerunning user code. Bound SDK sends to ten with shutdown-aware backoff.
 - Cancel pending client wait RPCs on timeout or cancellation without terminating the orchestration.

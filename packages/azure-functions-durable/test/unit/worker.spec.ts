@@ -2,8 +2,45 @@
 // Licensed under the MIT License.
 
 import { DurableFunctionsWorker } from "../../src/worker";
+import { NoOpLogger } from "@microsoft/durabletask-js";
+import { ClassicOrchestrationContext, wrapOrchestrator } from "../../src/orchestration-context";
+import * as pb from "../../../durabletask-js/src/proto/orchestrator_service_pb";
+import * as ph from "../../../durabletask-js/src/utils/pb-helper.util";
+
+const DAY = 24 * 60 * 60 * 1000;
+const START = new Date("2026-01-01T00:00:00Z");
+
+async function timerActions(worker: DurableFunctionsWorker) {
+  worker.addNamedOrchestrator(
+    "long-timer",
+    wrapOrchestrator(function* (ctx: ClassicOrchestrationContext) {
+      yield ctx.df.createTimer(new Date(ctx.df.currentUtcDateTime.getTime() + 30 * DAY));
+      return "done";
+    }),
+  );
+  const request = new pb.OrchestratorRequest();
+  request.setInstanceid("instance");
+  request.setNeweventsList([
+    ph.newOrchestratorStartedEvent(START),
+    ph.newExecutionStartedEvent("long-timer", "instance"),
+  ]);
+  const response = await worker.handleOrchestratorRequest(Buffer.from(request.serializeBinary()).toString("base64"));
+  return pb.OrchestratorResponse.deserializeBinary(Buffer.from(response, "base64")).getActionsList();
+}
 
 describe("DurableFunctionsWorker", () => {
+  it.each([undefined, null, 2 * DAY])(
+    "applies the Functions timer policy %s through the protobuf path",
+    async (maximumTimerIntervalMs) => {
+      const options = { logger: new NoOpLogger(), maximumTimerIntervalMs };
+      const actions = await timerActions(new DurableFunctionsWorker(options));
+      const days = maximumTimerIntervalMs === undefined ? 3 : maximumTimerIntervalMs === null ? 30 : 2;
+      expect(actions).toHaveLength(1);
+      expect(actions[0].getId()).toBe(1);
+      expect(actions[0].getCreatetimer()?.getFireat()?.toDate()).toEqual(new Date(START.getTime() + days * DAY));
+    },
+  );
+
   it("decodes base64, delegates to processOrchestratorRequest, and re-encodes the response", async () => {
     const worker = new DurableFunctionsWorker();
     const responseBytes = Buffer.from("orchestrator response");

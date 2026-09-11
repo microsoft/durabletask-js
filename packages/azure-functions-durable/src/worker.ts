@@ -1,11 +1,19 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { TaskHubGrpcWorker, TaskHubGrpcWorkerOptions } from "@microsoft/durabletask-js";
+import { DurableTimerOptions, TaskHubGrpcWorker, TaskHubGrpcWorkerOptions } from "@microsoft/durabletask-js";
+
+/** @internal Shared by the Functions worker and its in-memory testing helper. */
+export function getDurableTimerOptions(options: DurableTimerOptions): DurableTimerOptions {
+  return {
+    maximumTimerIntervalMs:
+      options.maximumTimerIntervalMs === undefined ? 3 * 24 * 60 * 60 * 1000 : options.maximumTimerIntervalMs,
+  };
+}
 
 export class DurableFunctionsWorker extends TaskHubGrpcWorker {
   constructor(options: TaskHubGrpcWorkerOptions = {}) {
-    super(options);
+    super({ ...options, ...getDurableTimerOptions(options) });
   }
 
   async handleOrchestratorRequest(encodedRequest: string): Promise<string> {

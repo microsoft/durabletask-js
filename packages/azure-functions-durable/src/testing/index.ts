@@ -7,10 +7,11 @@ import {
   TestOrchestrationClient,
   TestOrchestrationWorker,
 } from "@microsoft/durabletask-js";
-import type { TaskFailureDetails } from "@microsoft/durabletask-js";
+import type { DurableTimerOptions, TaskFailureDetails } from "@microsoft/durabletask-js";
 import type { ActivityHandler, OrchestrationHandler } from "../app";
 import { wrapOrchestrator } from "../orchestration-context";
 import { OrchestrationRuntimeStatus, toDurableOrchestrationStatus } from "../orchestration-status";
+import { getDurableTimerOptions } from "../worker";
 
 const ORCHESTRATOR_NAME = "orchestrator";
 const DEFAULT_ACTIVITY_NAME = "activity";
@@ -26,7 +27,7 @@ export function createActivityContext(functionName: string = DEFAULT_ACTIVITY_NA
 }
 
 /** Options for {@link runOrchestrator}. */
-export interface OrchestratorTestOptions<TInput = unknown> {
+export interface OrchestratorTestOptions<TInput = unknown> extends DurableTimerOptions {
   /** Input passed to the orchestrator. */
   input?: TInput;
   /** Instance id to schedule under. Defaults to a generated id. */
@@ -69,7 +70,7 @@ export async function runOrchestrator<TOutput = unknown, TInput = unknown>(
   options: OrchestratorTestOptions<TInput> = {},
 ): Promise<OrchestrationTestResult<TOutput>> {
   const backend = new InMemoryOrchestrationBackend();
-  const worker = new TestOrchestrationWorker(backend);
+  const worker = new TestOrchestrationWorker(backend, getDurableTimerOptions(options));
   const client = new TestOrchestrationClient(backend);
 
   worker.addNamedOrchestrator(ORCHESTRATOR_NAME, wrapOrchestrator(handler));

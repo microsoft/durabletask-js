@@ -27,6 +27,7 @@ import { StopIterationError } from "./exception/stop-iteration-error";
 import { Registry } from "./registry";
 import { buildRewindResult } from "./rewind";
 import { RuntimeOrchestrationContext } from "./runtime-orchestration-context";
+import { DurableTimerOptions, resolveMaximumTimerInterval } from "./durable-timer-options";
 import {
   EntityOperationFailedException,
   createTaskFailureDetails,
@@ -47,8 +48,10 @@ export class OrchestrationExecutor {
   private _suspendedEvents: pb.HistoryEvent[];
   private _logger: Logger;
   private _orchestratorName: string;
+  private readonly _maximumTimerIntervalMs: number | null;
 
-  constructor(registry: Registry, logger?: Logger) {
+  constructor(registry: Registry, logger?: Logger, options: DurableTimerOptions = {}) {
+    this._maximumTimerIntervalMs = resolveMaximumTimerInterval(options);
     this._registry = registry;
     this._generator = undefined;
     this._isSuspended = false;
@@ -84,7 +87,9 @@ export class OrchestrationExecutor {
       return buildRewindResult(oldEvents, newEvents);
     }
 
-    const ctx = new RuntimeOrchestrationContext(instanceId);
+    const ctx = new RuntimeOrchestrationContext(instanceId, {
+      maximumTimerIntervalMs: this._maximumTimerIntervalMs,
+    });
     // Seed the execution ID from the authoritative source (the OrchestratorRequest on the gRPC path,
     // or the backend record on the in-memory path). The ExecutionStarted event replayed below may
     // also carry it; handleExecutionStarted reconciles the two.
@@ -351,6 +356,10 @@ export class OrchestrationExecutor {
       if (!ctx._isReplaying) {
         WorkerLogs.orchestrationUnexpectedEvent(this._logger, ctx._instanceId, "timerFired", timerId);
       }
+      return;
+    }
+
+    if (ctx.scheduleNextTimerSegment(timerTask, timerFiredEvent?.getFireat()?.toDate())) {
       return;
     }
 

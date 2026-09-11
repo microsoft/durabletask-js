@@ -15,6 +15,7 @@
 
 ### Fixes
 
+- Explicitly retain native DTS long timers when constructing core workers with timer-segmentation support.
 - Select TLS from the Azure-managed endpoint scheme independently of authentication, and require explicit opt-in
   before sending token credentials over an insecure endpoint.
 

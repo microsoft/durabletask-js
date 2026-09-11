@@ -6,6 +6,8 @@ import {
   InMemoryOrchestrationBackend,
   TestOrchestrationClient,
   TestOrchestrationWorker,
+  TOrchestrator,
+  whenAny,
 } from "@microsoft/durabletask-js";
 import { OrchestrationRuntimeStatus, toDurableOrchestrationStatus, wrapOrchestrator } from "../../src";
 import type { OrchestrationContext, OrchestrationHandler } from "../../src";
@@ -22,6 +24,43 @@ describe("durable-functions/testing", () => {
   });
 
   describe("runOrchestrator", () => {
+    it("uses the same default long-timer segments as the Functions worker", async () => {
+      const complete = jest.spyOn(InMemoryOrchestrationBackend.prototype, "completeOrchestration");
+      const day = 24 * 60 * 60 * 1000;
+      let startedAt = 0;
+      const orchestrator: TOrchestrator = async function* (ctx) {
+        startedAt = ctx.currentUtcDateTime.getTime();
+        const timer = ctx.createTimer((30 * day) / 1000);
+        yield whenAny([timer, ctx.callActivity("approve")]);
+        timer.cancel();
+        return "approved";
+      };
+      try {
+        expect((await runOrchestrator(orchestrator, { activities: { approve: () => "ok" } })).output).toBe("approved");
+        const timers = complete.mock.calls.flatMap((call) => call[2]).filter((action) => action.hasCreatetimer());
+        expect(timers).toHaveLength(1);
+        expect(timers[0].getCreatetimer()?.getFireat()?.toDate().getTime()).toBe(startedAt + 3 * day);
+      } finally {
+        complete.mockRestore();
+      }
+    });
+
+    it.each([5, null])("forwards the testing timer policy %s to the real executor", async (maximumTimerIntervalMs) => {
+      const complete = jest.spyOn(InMemoryOrchestrationBackend.prototype, "completeOrchestration");
+      const options = { instanceId: "timer-policy-test", maximumTimerIntervalMs };
+      const orchestrator: TOrchestrator = async function* (ctx) {
+        yield ctx.createTimer(0.015);
+        return "elapsed";
+      };
+      try {
+        expect((await runOrchestrator(orchestrator, options)).output).toBe("elapsed");
+        const timers = complete.mock.calls.flatMap((call) => call[2]).filter((action) => action.hasCreatetimer());
+        expect(timers).toHaveLength(maximumTimerIntervalMs === null ? 1 : 3);
+      } finally {
+        complete.mockRestore();
+      }
+    });
+
     it("runs a classic orchestrator against inline activities", async () => {
       const orchestrator: OrchestrationHandler = function* (
         context: OrchestrationContext,
