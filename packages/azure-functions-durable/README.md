@@ -159,24 +159,29 @@ app.http("startHello", {
 ## Long durable timers
 
 Both core-native `ctx.createTimer(...)` and classic `context.df.createTimer(...)` use
-fixed three-day backend segments automatically, including durable retry delays. This allows, for example,
+the Python-aligned core three-day default automatically, including durable retry delays. This allows, for example,
 a 30-day business timer on Azure Storage without sending a queue visibility delay over its
 seven-day limit. The gRPC host route does not apply the legacy host-side timer splitting;
 segmentation happens in the core SDK instead. There is no SDK cap on the total timer duration.
-The returned `TimerTask` keeps its identity across segments and completes only at the final
-deadline. `cancel()` cancels the current segment and prevents later segments without marking
-the task complete.
+The returned `TimerTask` keeps its identity across segments and completes normally only at the final deadline.
 
 No application configuration is needed. Functions uses these segments even with DTS, because
-backend capabilities are not automatically detected. Standalone core and Azure-managed workers
-retain native timers. `runOrchestrator` uses the Functions strategy automatically; direct core
-`TestOrchestrationWorker` instances remain native. Tests still wait in real time unless using
-the test runner's clock controls.
+backend capabilities are not automatically detected. The Azure-managed worker builder instead
+explicitly uses native timers. `runOrchestrator` and direct core test workers share the three-day
+default. Functions does not expose a timer interval override. Tests still wait in real time
+unless using the test runner's clock controls.
+
+**Cancellation now matches Python:** `cancel()` returns `true` on first cancellation (`false`
+if already terminal), removes the current segment, and marks the timer canceled and complete,
+not failed. `getResult()` and `result` throw the exported `TaskCancelledError` when canceled;
+timer `result` also throws while pending or failed. A canceled timer can win `Task.any`; check
+`isCanceled` before reading its result. `Task.all` waits for every child and propagates cancellation
+while collecting final results, including from the final completion/cancel callback.
 
 **Rollout/rollback:** existing single native timer histories replay at their recorded final
-deadline. Once segmented histories exist, do not mix old and new workers or roll back to a
-native-timer worker: it can cause premature completion or nondeterministic replay. Drain those
-instances or deploy to a new task hub before rollback or switching providers.
+deadline, but branching on the new cancellation state can change replay. Do not mix old and new
+workers for affected instances or roll back segmented histories to native timers. Drain them or
+use a new task hub first.
 
 ## Testing
 

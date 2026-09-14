@@ -14,7 +14,7 @@ import type { OrchestrationContext, OrchestrationHandler } from "../../src";
 import { createActivityContext, runOrchestrator } from "../../src/testing";
 
 describe("durable-functions/testing", () => {
-  it("retains native long timers when using the standalone core test worker", async () => {
+  it("uses the same three-day default in the standalone core test worker", async () => {
     const backend = new InMemoryOrchestrationBackend();
     const worker = new TestOrchestrationWorker(backend);
     const client = new TestOrchestrationClient(backend);
@@ -35,7 +35,7 @@ describe("durable-functions/testing", () => {
       await client.waitForOrchestrationCompletion(id);
       const timers = complete.mock.calls.flatMap((call) => call[2]).filter((action) => action.hasCreatetimer());
       expect(timers).toHaveLength(1);
-      expect(timers[0].getCreatetimer()?.getFireat()?.toDate().getTime()).toBe(startedAt + 30 * day);
+      expect(timers[0].getCreatetimer()?.getFireat()?.toDate().getTime()).toBe(startedAt + 3 * day);
     } finally {
       await worker.stop();
       backend.reset();
@@ -53,7 +53,7 @@ describe("durable-functions/testing", () => {
   });
 
   describe("runOrchestrator", () => {
-    it("automatically uses the same fixed long-timer segments as the Functions worker", async () => {
+    it("inherits the core three-day timer default, like the Functions worker", async () => {
       const complete = jest.spyOn(InMemoryOrchestrationBackend.prototype, "completeOrchestration");
       const day = 24 * 60 * 60 * 1000;
       let startedAt = 0;

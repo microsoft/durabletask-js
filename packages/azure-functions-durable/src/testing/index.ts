@@ -15,12 +15,6 @@ import { OrchestrationRuntimeStatus, toDurableOrchestrationStatus } from "../orc
 const ORCHESTRATOR_NAME = "orchestrator";
 const DEFAULT_ACTIVITY_NAME = "activity";
 
-class DurableFunctionsTestWorker extends TestOrchestrationWorker {
-  protected override get useShortTimerSegments(): boolean {
-    return true;
-  }
-}
-
 /**
  * Creates the {@link InvocationContext} an activity handler receives at runtime.
  *
@@ -75,7 +69,7 @@ export async function runOrchestrator<TOutput = unknown, TInput = unknown>(
   options: OrchestratorTestOptions<TInput> = {},
 ): Promise<OrchestrationTestResult<TOutput>> {
   const backend = new InMemoryOrchestrationBackend();
-  const worker = new DurableFunctionsTestWorker(backend);
+  const worker = new TestOrchestrationWorker(backend);
   const client = new TestOrchestrationClient(backend);
 
   worker.addNamedOrchestrator(ORCHESTRATOR_NAME, wrapOrchestrator(handler));

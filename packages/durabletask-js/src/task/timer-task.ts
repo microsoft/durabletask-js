@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 import { CompletableTask } from "./completable-task";
+import { TaskCancelledError } from "./exception/task-cancelled-error";
 
 /**
  * A durable timer task returned by `OrchestrationContext.createTimer`.
@@ -39,6 +40,18 @@ export class TimerTask extends CompletableTask<undefined> {
     return this._isCanceled;
   }
 
+  /** The timer result, or an exception if pending, failed, or canceled. */
+  override get result(): undefined {
+    return this.getResult();
+  }
+
+  override getResult(): undefined {
+    if (this._isCanceled) {
+      throw new TaskCancelledError();
+    }
+    return super.getResult();
+  }
+
   /**
    * Registers the handler invoked when this timer is first canceled.
    *
@@ -48,8 +61,8 @@ export class TimerTask extends CompletableTask<undefined> {
    *
    * @internal Invoked by the orchestration context when the timer is created.
    *   Not part of the public `TimerTask` surface; orchestrator code must not call it.
-   * @param handler - Called once, when {@link cancel} first transitions the timer
-   *   to the canceled state.
+   * @param handler - Invoked before changing task state. If it throws, cancellation
+   *   is not applied.
    */
   setCancelHandler(handler: () => void): void {
     this._cancelHandler = handler;
@@ -68,19 +81,22 @@ export class TimerTask extends CompletableTask<undefined> {
    *   completes, and a late `TimerFired` event is ignored because no pending task
    *   remains for it.
    *
-   * This is deterministic and replay-safe: it consumes no sequence number and
-   * only runs the injected handler. Cancel does NOT mark the task complete
-   * (`isCompleted` stays false). Calling `cancel()` after the timer has already
-   * fired (completed) or after it was already canceled is a no-op, so the handler
-   * runs at most once.
+   * Cancellation marks this timer complete and canceled, but not failed, and
+   * notifies its composite parent. Reading `result` or `getResult()` then throws
+   * {@link TaskCancelledError}. A whenAny parent completes with this timer;
+   * whenAll propagates cancellation when collecting its final child results.
+   *
+   * @returns true if cancellation was applied; false if already terminal.
+   * @throws If the cancel handler or parent completion callback throws.
    */
-  cancel(): void {
-    if (this._isComplete || this._isCanceled) {
-      // Already fired or already canceled — nothing to do.
-      return;
+  cancel(): boolean {
+    if (this._isComplete) {
+      return false;
     }
 
-    this._isCanceled = true;
     this._cancelHandler?.();
+    this._isCanceled = true;
+    this.complete(undefined);
+    return true;
   }
 }

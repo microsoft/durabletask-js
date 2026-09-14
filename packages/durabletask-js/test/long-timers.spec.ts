@@ -7,6 +7,7 @@ import { NoOpLogger } from "../src/types/logger.type";
 import { TimerTask } from "../src/task/timer-task";
 import { RetryPolicy } from "../src/task/retry/retry-policy";
 import { whenAll, whenAny } from "../src/task";
+import { TaskCancelledError } from "../src";
 import * as pb from "../src/proto/orchestrator_service_pb";
 import * as ph from "../src/utils/pb-helper.util";
 
@@ -18,14 +19,9 @@ const startEvents = () => [
   ph.newExecutionStartedEvent("timer-test", "instance"),
 ];
 
-class ShortTimerWorker extends TaskHubGrpcWorker {
-  protected override get useShortTimerSegments(): boolean {
-    return true;
-  }
-}
-
-function workerFor(orchestrator: TOrchestrator) {
-  const worker = new ShortTimerWorker({ logger: new NoOpLogger() });
+function workerFor(orchestrator: TOrchestrator, maximumTimerIntervalMs?: number | null) {
+  const options = { logger: new NoOpLogger(), maximumTimerIntervalMs };
+  const worker = new TaskHubGrpcWorker(options);
   worker.addNamedOrchestrator("timer-test", orchestrator);
   return worker;
 }
@@ -89,7 +85,7 @@ describe("backend-aware durable timers", () => {
       expect(timer!.isComplete).toBe(false);
     }
     expect(timer!.isComplete).toBe(true);
-    timer!.cancel();
+    expect(timer!.cancel()).toBe(false);
     expect(timer!.isCanceled).toBe(false);
     expectCompleted(actions, "elapsed");
   });
@@ -126,21 +122,86 @@ describe("backend-aware durable timers", () => {
     expectCompleted(await execute(worker, history, [ph.newTaskCompletedEvent(2, '"result"')]), "done");
   });
 
-  it("retains native long timers in the standalone core worker", async () => {
-    const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+  it.each([null, 0, -1, -0.5])("uses native timers for interval %s, like Python", async (interval) => {
+    const worker = workerFor(async function* (ctx) {
+      yield ctx.createTimer(atDay(30));
+    }, interval);
+    expectTimer(await execute(worker, [], startEvents()), 1, 30);
+  });
+
+  it("uses a custom interval throughout replay", async () => {
+    const worker = workerFor(async function* (ctx) {
+      yield ctx.createTimer(atDay(5));
+      return "elapsed";
+    }, 2 * DAY);
+    expectTimer(await execute(worker, [], startEvents()), 1, 2);
+    const history = [...startEvents(), ph.newTimerCreatedEvent(1, atDay(2))];
+    const fired = [ph.newOrchestratorStartedEvent(atDay(2)), ph.newTimerFiredEvent(1, atDay(2))];
+    expectTimer(await execute(worker, history, fired), 2, 4);
+  });
+
+  it.each([NaN, Infinity, -Infinity])("rejects non-finite interval %s", (maximumTimerIntervalMs) => {
+    const options = { logger: new NoOpLogger(), maximumTimerIntervalMs };
+    expect(() => new TaskHubGrpcWorker(options)).toThrow("maximumTimerIntervalMs");
+  });
+
+  it.each([0.1, 0.5, 1.5, 2])(
+    "rounds positive interval %s up to Date precision and makes replay progress",
+    async (interval) => {
+      const finalTime = START.getTime() + 5;
+      const worker = workerFor(async function* (ctx) {
+        yield ctx.createTimer(new Date(finalTime));
+        return "elapsed";
+      }, interval);
+      expect(worker.maximumTimerIntervalMs).toBe(Math.ceil(interval));
+      const history = startEvents();
+      let actions = await execute(worker, [], history);
+      let id = 1;
+      for (let time = START.getTime() + Math.ceil(interval); ; time = Math.min(time + Math.ceil(interval), finalTime)) {
+        expect(actions).toHaveLength(1);
+        expect(actions[0].getId()).toBe(id);
+        expect(actions[0].getCreatetimer()?.getFireat()?.toDate().getTime()).toBe(time);
+        history.push(ph.newTimerCreatedEvent(id, new Date(time)));
+        const events = [ph.newOrchestratorStartedEvent(new Date(time)), ph.newTimerFiredEvent(id, new Date(time))];
+        actions = await execute(worker, history, events);
+        history.push(...events);
+        id++;
+        if (time === finalTime) break;
+      }
+      expectCompleted(actions, "elapsed");
+    },
+  );
+
+  it("snapshots the worker interval instead of reading caller mutations", async () => {
+    const options = { logger: new NoOpLogger(), maximumTimerIntervalMs: 2 * DAY };
+    const worker = new TaskHubGrpcWorker(options);
+    options.maximumTimerIntervalMs = DAY;
+    worker.addNamedOrchestrator("timer-test", async function* (ctx) {
+      yield ctx.createTimer(atDay(10));
+    });
+    expect(worker.maximumTimerIntervalMs).toBe(2 * DAY);
+    expectTimer(await execute(worker, [], startEvents()), 1, 2);
+  });
+
+  it("uses the three-day default with the legacy core worker constructor", async () => {
+    const worker = new TaskHubGrpcWorker(undefined, undefined, undefined, undefined, undefined, new NoOpLogger());
     worker.addNamedOrchestrator("timer-test", async function* (ctx) {
       yield ctx.createTimer(atDay(30));
     });
-    expectTimer(await execute(worker, [], startEvents()), 1, 30);
+    expect(worker.maximumTimerIntervalMs).toBe(3 * DAY);
+    expectTimer(await execute(worker, [], startEvents()), 1, 3);
   });
 
   it("removes a canceled first segment before dispatch without affecting a sibling", async () => {
     const worker = workerFor(async function* (ctx) {
       const canceled = ctx.createTimer(atDay(30));
-      canceled.cancel();
-      canceled.cancel();
+      expect(canceled.cancel()).toBe(true);
+      expect(canceled.cancel()).toBe(false);
       expect(canceled.isCanceled).toBe(true);
-      expect(canceled.isCompleted).toBe(false);
+      expect(canceled.isCompleted).toBe(true);
+      expect(canceled.isFailed).toBe(false);
+      expect(() => canceled.getResult()).toThrow(TaskCancelledError);
+      expect(() => canceled.result).toThrow(TaskCancelledError);
       yield ctx.createTimer(atDay(10));
     });
     expectTimer(await execute(worker, [], startEvents()), 2, 3);
@@ -152,10 +213,13 @@ describe("backend-aware durable timers", () => {
       const work = kind === "activity" ? ctx.callActivity("work") : ctx.waitForExternalEvent("approval");
       const winner = yield whenAny([timer, work]);
       expect(winner).toBe(work);
-      timer.cancel();
-      timer.cancel();
+      expect(timer.cancel()).toBe(true);
+      expect(timer.cancel()).toBe(false);
       expect(timer.isCanceled).toBe(true);
-      expect(timer.isCompleted).toBe(false);
+      expect(timer.isCompleted).toBe(true);
+      expect(timer.isFailed).toBe(false);
+      expect(() => timer.getResult()).toThrow(TaskCancelledError);
+      expect(() => timer.result).toThrow(TaskCancelledError);
       yield ctx.waitForExternalEvent("finish");
       return "approved";
     });
@@ -288,11 +352,10 @@ describe("backend-aware durable timers", () => {
   });
 
   it("cannot replay an already-segmented history on a native-timer worker", async () => {
-    const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
-    worker.addNamedOrchestrator("timer-test", async function* (ctx) {
+    const worker = workerFor(async function* (ctx) {
       yield ctx.createTimer(atDay(10));
       return "elapsed";
-    });
+    }, null);
     const actions = await execute(
       worker,
       [
@@ -309,4 +372,60 @@ describe("backend-aware durable timers", () => {
     );
   });
 
+  it.each([false, true])("rejects yielding a canceled timer (after another task=%s)", async (afterTask) => {
+    const worker = workerFor(async function* (ctx) {
+      if (afterTask) yield ctx.waitForExternalEvent("begin");
+      const timer = ctx.createTimer(atDay(10));
+      timer.cancel();
+      yield timer;
+      return "must not succeed";
+    });
+    const actions = await execute(worker, [], [...startEvents(), ph.newEventRaisedEvent("begin")]);
+    expect(actions).toHaveLength(1);
+    const completed = actions[0].getCompleteorchestration()!;
+    expect(completed.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(completed.getFailuredetails()?.getErrortype()).toBe("TaskCancelledError");
+  });
+
+  it("resumes whenAny with a timer canceled before it is yielded", async () => {
+    const worker = workerFor(async function* (ctx): ReturnType<TOrchestrator> {
+      const timer = ctx.createTimer(atDay(10));
+      timer.cancel();
+      const winner = yield whenAny([timer, ctx.waitForExternalEvent("approval")]);
+      expect(winner).toBe(timer);
+      expect(() => winner.getResult()).toThrow("The task was cancelled.");
+      return "canceled";
+    });
+    expectCompleted(await execute(worker, [], startEvents()), "canceled");
+  });
+
+  it("lets orchestration code catch a canceled timer's result error", async () => {
+    const worker = workerFor(async function* (ctx) {
+      const timer = ctx.createTimer(atDay(10));
+      yield whenAny([timer, ctx.waitForExternalEvent("cancel")]);
+      timer.cancel();
+      try {
+        timer.getResult();
+      } catch (error) {
+        if (error instanceof TaskCancelledError) return "canceled";
+        throw error;
+      }
+      return "must not succeed";
+    });
+    expectCompleted(await execute(worker, [], [...startEvents(), ph.newEventRaisedEvent("cancel")]), "canceled");
+  });
+
+  it("waits for a sibling before propagating a canceled whenAll child", async () => {
+    const worker = workerFor(async function* (ctx) {
+      const timer = ctx.createTimer(atDay(10));
+      timer.cancel();
+      yield whenAll([timer, ctx.waitForExternalEvent("sibling")]);
+      return "must not succeed";
+    });
+    const history = startEvents();
+    expect(await execute(worker, [], history)).toEqual([]);
+    const actions = await execute(worker, history, [ph.newEventRaisedEvent("sibling")]);
+    expect(actions).toHaveLength(1);
+    expect(actions[0].getCompleteorchestration()?.getFailuredetails()?.getErrortype()).toBe("TaskCancelledError");
+  });
 });

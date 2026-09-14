@@ -1141,35 +1141,27 @@ export class InMemoryOrchestrationBackend {
     }
 
     // Schedule timer firing
+    const now = new Date();
+    const delay = Math.max(0, fireAt.getTime() - now.getTime());
     const executionId = instance.executionId;
 
-    const armTimer = () => {
-      // Node turns delays above its signed 32-bit limit into 1 ms. Re-arm without
-      // emitting extra durable history events when the backend timer is longer.
-      const delay = Math.min(2_147_483_647, Math.max(0, fireAt.getTime() - Date.now()));
-      const timerHandle = setTimeout(() => {
-        this.pendingTimers.delete(timerHandle);
-        this.removeInstanceTimer(instance.instanceId, timerHandle);
-        const currentInstance = this.instances.get(instance.instanceId);
-        if (
-          currentInstance &&
-          currentInstance.executionId === executionId &&
-          !this.isTerminalStatus(currentInstance.status)
-        ) {
-          if (Date.now() < fireAt.getTime()) {
-            armTimer();
-            return;
-          }
-          const timerFiredEvent = pbh.newTimerFiredEvent(timerId, fireAt);
-          currentInstance.pendingEvents.push(timerFiredEvent);
-          currentInstance.lastUpdatedAt = new Date();
-          this.enqueueOrchestration(instance.instanceId);
-        }
-      }, delay);
-      this.pendingTimers.add(timerHandle);
-      this.addInstanceTimer(instance.instanceId, timerHandle);
-    };
-    armTimer();
+    const timerHandle = setTimeout(() => {
+      this.pendingTimers.delete(timerHandle);
+      this.removeInstanceTimer(instance.instanceId, timerHandle);
+      const currentInstance = this.instances.get(instance.instanceId);
+      if (
+        currentInstance &&
+        currentInstance.executionId === executionId &&
+        !this.isTerminalStatus(currentInstance.status)
+      ) {
+        const timerFiredEvent = pbh.newTimerFiredEvent(timerId, fireAt);
+        currentInstance.pendingEvents.push(timerFiredEvent);
+        currentInstance.lastUpdatedAt = new Date();
+        this.enqueueOrchestration(instance.instanceId);
+      }
+    }, delay);
+    this.pendingTimers.add(timerHandle);
+    this.addInstanceTimer(instance.instanceId, timerHandle);
   }
 
   private processCreateSubOrchestrationAction(instance: OrchestrationInstance, action: pb.OrchestratorAction): void {

@@ -25,25 +25,38 @@ const entityResponseBytes = await worker.processEntityBatchRequest(entityBatchRe
 
 ## Long durable timers
 
-`createTimer(Date | seconds)` has no SDK-imposed total-duration cap. Timer handling is an
-internal provider strategy, not an application setting:
+`createTimer(Date | seconds)` has no SDK-imposed total-duration cap. Like the Python SDK,
+core workers default to three-day backend segments, including durable retry delays. A ten-day
+timer uses 3 + 3 + 3 + 1 day segments but remains one logical `TimerTask`.
 
 | Entry point | Timer behavior |
 | --- | --- |
-| Core `TaskHubGrpcWorker` / `TestOrchestrationWorker` | Native timers, preserving existing behavior |
-| Azure-managed worker builder | Native timers; DTS supports long timers |
-| `durable-functions` worker / `runOrchestrator` | Automatic three-day segments, including retry delays |
+| Core `TaskHubGrpcWorker` / `TestOrchestrationWorker` | Three-day default |
+| Azure-managed worker builder | Explicitly native timers; DTS supports long timers |
+| `durable-functions` worker / `runOrchestrator` | Inherits the core three-day default |
 
-Functions uses fixed three-day segments even when connected to DTS; there is no backend
-capability detection. A ten-day timer uses 3 + 3 + 3 + 1 day backend timers but remains one
-logical `TimerTask`. Identity, final completion, and cancellation semantics are unchanged.
-The in-memory backend separately bounds and re-arms Node.js timeouts so native timers over
-approximately 24.9 days do not fire immediately.
+Core `TaskHubGrpcWorker({ maximumTimerIntervalMs })` and
+`TestOrchestrationWorker(backend, { maximumTimerIntervalMs })` accept the Python-equivalent
+interval override in milliseconds. Omit it for three days; `null`, zero, or negative values
+disable segmentation. Values must be finite. Python's `timedelta` supports microseconds;
+JavaScript `Date` supports milliseconds, so positive fractions are rounded up to whole milliseconds.
+Functions exposes no timer configuration and also segments when connected to DTS, as in Python;
+there is no backend detection. Native in-memory timers still have Node.js's approximately
+24.9-day timeout limit when segmentation is disabled.
 
-**Rollout:** existing single native timers replay at their recorded final deadline. Once
-segmented histories exist, do not mix old and new Functions workers or roll back to a
-native-timer worker: this can cause early completion or replay mismatches. Drain those
-instances or use a new task hub before rollback or switching providers.
+**Cancellation change:** `timer.cancel()` now returns `true` on first cancellation and `false`
+when already terminal. It removes the current segment, marks the timer canceled and complete
+(`isCanceled`, `isComplete`, `isCompleted`), and notifies its parent; cancellation is not failure.
+`timer.getResult()` and `timer.result` throw `TaskCancelledError` after cancellation. For timers,
+`result` now aliases `getResult()` even while pending or failed. A canceled timer can win `whenAny`;
+inspect `isCanceled` before reading its result. `whenAll` counts cancellation as terminal and
+propagates the error when collecting final child results, which can throw from `cancel()` or
+a sibling's completion callback. Do not yield a canceled timer expecting success.
+
+**Rollout:** both the core default and cancellation semantics intentionally change to match Python.
+Existing single native timer histories replay at their recorded final deadline, but changed
+cancellation branching can affect replay. Avoid mixed versions; drain affected instances or use
+a new task hub before changing intervals, rolling back, or switching providers.
 
 ## npm packages
 

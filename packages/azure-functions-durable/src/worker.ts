@@ -4,12 +4,8 @@
 import { TaskHubGrpcWorker, TaskHubGrpcWorkerOptions } from "@microsoft/durabletask-js";
 
 export class DurableFunctionsWorker extends TaskHubGrpcWorker {
-  constructor(options: TaskHubGrpcWorkerOptions = {}) {
-    super(options);
-  }
-
-  protected override get useShortTimerSegments(): boolean {
-    return true;
+  constructor(options: Omit<TaskHubGrpcWorkerOptions, "maximumTimerIntervalMs"> = {}) {
+    super({ ...options, maximumTimerIntervalMs: undefined });
   }
 
   async handleOrchestratorRequest(encodedRequest: string): Promise<string> {

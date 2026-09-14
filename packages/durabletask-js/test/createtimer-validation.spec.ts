@@ -210,7 +210,7 @@ describe("createTimer input validation", () => {
     expect(fireAt?.getTime()).toEqual(startTime.getTime());
   });
 
-  it("should accept a valid Date object", async () => {
+  it.each([undefined, null])("should accept a valid Date object with timer interval %s", async (interval) => {
     const futureDate = new Date("2025-06-15T12:00:00Z");
     const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext) {
       yield ctx.createTimer(futureDate);
@@ -223,13 +223,14 @@ describe("createTimer input validation", () => {
       newOrchestratorStartedEvent(startTime),
       newExecutionStartedEvent(name, TEST_INSTANCE_ID),
     ];
-    const executor = new OrchestrationExecutor(registry, testLogger);
+    const executor = new OrchestrationExecutor(registry, testLogger, interval);
     const result = await executor.execute(TEST_INSTANCE_ID, [], newEvents);
 
     const timerActions = result.actions.filter((a) => a.hasCreatetimer());
     expect(timerActions.length).toEqual(1);
     const fireAt = timerActions[0].getCreatetimer()?.getFireat()?.toDate();
-    expect(fireAt?.getTime()).toEqual(futureDate.getTime());
+    const expectedFireAt = interval === null ? futureDate : new Date("2025-01-04T00:00:00Z");
+    expect(fireAt?.getTime()).toEqual(expectedFireAt.getTime());
   });
 
   it("should accept a negative number (timer fires in the past, which the sidecar handles)", async () => {

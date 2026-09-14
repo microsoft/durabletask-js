@@ -6,6 +6,7 @@ import { NoOpLogger } from "@microsoft/durabletask-js";
 import { ClassicOrchestrationContext, wrapOrchestrator } from "../../src/orchestration-context";
 import * as pb from "../../../durabletask-js/src/proto/orchestrator_service_pb";
 import * as ph from "../../../durabletask-js/src/utils/pb-helper.util";
+import { TaskCancelledError } from "../../src";
 
 const DAY = 24 * 60 * 60 * 1000;
 const START = new Date("2026-01-01T00:00:00Z");
@@ -29,6 +30,36 @@ async function timerActions(worker: DurableFunctionsWorker) {
 }
 
 describe("DurableFunctionsWorker", () => {
+  it("inherits the core default without a Functions timer configuration surface", async () => {
+    const options = { logger: new NoOpLogger(), maximumTimerIntervalMs: null };
+    const worker = new DurableFunctionsWorker(options);
+    // Extra properties from untyped JavaScript must not override the Functions default.
+    expect(worker.maximumTimerIntervalMs).toBe(3 * DAY);
+    const actions = await timerActions(worker);
+    expect(actions[0].getCreatetimer()?.getFireat()?.toDate()).toEqual(new Date(START.getTime() + 3 * DAY));
+  });
+
+  it("exposes Python-style canceled timer results through the classic context", async () => {
+    const worker = new DurableFunctionsWorker({ logger: new NoOpLogger() });
+    worker.addNamedOrchestrator("cancel", wrapOrchestrator(function* (ctx: ClassicOrchestrationContext) {
+      const timer = ctx.df.createTimer(10 * DAY / 1000);
+      expect(timer.cancel()).toBe(true);
+      expect(timer.cancel()).toBe(false);
+      expect(timer.isCompleted).toBe(true);
+      expect(timer.isCanceled).toBe(true);
+      expect(() => timer.result).toThrow(TaskCancelledError);
+      yield ctx.df.Task.any([timer]);
+      return "canceled";
+    }));
+    const request = new pb.OrchestratorRequest().setInstanceid("instance").setNeweventsList([
+      ph.newOrchestratorStartedEvent(START),
+      ph.newExecutionStartedEvent("cancel", "instance"),
+    ]);
+    const response = await worker.handleOrchestratorRequest(Buffer.from(request.serializeBinary()).toString("base64"));
+    const actions = pb.OrchestratorResponse.deserializeBinary(Buffer.from(response, "base64")).getActionsList();
+    expect(actions).toHaveLength(1);
+    expect(actions[0].getCompleteorchestration()?.getResult()?.getValue()).toBe('"canceled"');
+  });
   it("automatically splits classic-context long timers through the protobuf path", async () => {
     const actions = await timerActions(new DurableFunctionsWorker({ logger: new NoOpLogger() }));
     expect(actions).toHaveLength(1);

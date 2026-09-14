@@ -29,8 +29,7 @@ import {
 import { EntityInstanceId } from "../entities/entity-instance-id";
 import { SignalEntityOptions, CallEntityOptions } from "../entities/signal-entity-options";
 import { OrchestrationStateError } from "../task/exception/orchestration-state-error";
-
-const TIMER_SEGMENT_INTERVAL_MS = 3 * 24 * 60 * 60 * 1000;
+import { resolveMaximumTimerInterval } from "./timer-interval";
 
 export class RuntimeOrchestrationContext extends OrchestrationContext {
   _generator?: Generator<Task<any>, any, any>;
@@ -55,12 +54,12 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   _newVersion?: string;
   _customStatus?: string;
   _entityFeature: RuntimeOrchestrationEntityFeature;
-  private readonly _useShortTimerSegments: boolean;
+  private readonly _maximumTimerIntervalMs: number | null;
   private readonly _longTimers = new Map<CompletableTask<any>, number>();
 
-  constructor(instanceId: string, useShortTimerSegments = false) {
+  constructor(instanceId: string, maximumTimerIntervalMs?: number | null) {
     super();
-    this._useShortTimerSegments = useShortTimerSegments;
+    this._maximumTimerIntervalMs = resolveMaximumTimerInterval(maximumTimerIntervalMs);
 
     this._generator = undefined;
     this._isReplaying = true;
@@ -187,7 +186,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
           // the generator will return an IteratorResult with its next value
           // note that we are working with an AsyncGenerator, so we should await
           // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Generator/next
-          const { done, value } = await this._generator.next(this._previousTask._result);
+          const { done, value } = await this._generator.next(this._previousTask.getResult());
 
           // If we are done, raise StopIteration
           if (done) {
@@ -361,9 +360,10 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     startTime: number,
     id = this.nextSequenceNumber(),
   ): void {
-    const fireAt = this._useShortTimerSegments
-      ? Math.min(finalFireAt, startTime + TIMER_SEGMENT_INTERVAL_MS)
-      : finalFireAt;
+    const fireAt =
+      this._maximumTimerIntervalMs !== null && this._maximumTimerIntervalMs > 0
+        ? Math.min(finalFireAt, startTime + this._maximumTimerIntervalMs)
+        : finalFireAt;
     if (fireAt < finalFireAt) {
       this._longTimers.set(task, finalFireAt);
     } else {

@@ -20,6 +20,8 @@ import {
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 import * as pb from "../proto/orchestrator_service_pb";
 import * as pbh from "../utils/pb-helper.util";
+import type { TaskHubGrpcWorkerOptions } from "../worker/task-hub-grpc-worker";
+import { resolveMaximumTimerInterval } from "../worker/timer-interval";
 
 /**
  * Worker that processes orchestrations and activities from the in-memory backend.
@@ -34,15 +36,15 @@ export class TestOrchestrationWorker {
   private isRunning: boolean = false;
   private processingPromise: Promise<void> | null = null;
   private stopRequested: boolean = false;
+  private readonly maximumTimerIntervalMs: number | null;
 
-  constructor(backend: InMemoryOrchestrationBackend) {
+  constructor(
+    backend: InMemoryOrchestrationBackend,
+    options: Pick<TaskHubGrpcWorkerOptions, "maximumTimerIntervalMs"> = {},
+  ) {
+    this.maximumTimerIntervalMs = resolveMaximumTimerInterval(options.maximumTimerIntervalMs);
     this.registry = new Registry();
     this.backend = backend;
-  }
-
-  /** @internal Host test workers override this to match their provider's timer behavior. */
-  protected get useShortTimerSegments(): boolean {
-    return false;
   }
 
   /**
@@ -183,7 +185,7 @@ export class TestOrchestrationWorker {
     const completionToken = instance.completionToken;
 
     try {
-      const executor = new OrchestrationExecutor(this.registry, undefined, this.useShortTimerSegments);
+      const executor = new OrchestrationExecutor(this.registry, undefined, this.maximumTimerIntervalMs);
       const result = await executor.execute(instanceId, instance.history, instance.pendingEvents, instance.executionId);
 
       this.backend.completeOrchestration(instanceId, completionToken, result.actions, result.customStatus);
