@@ -3,6 +3,8 @@
 
 import { DurableTaskAzureManagedWorkerBuilder, createAzureManagedWorkerBuilder } from "../../src/worker-builder";
 import { TaskEntity, ITaskEntity, TaskEntityOperation } from "@microsoft/durabletask-js";
+import * as pb from "../../../durabletask-js/src/proto/orchestrator_service_pb";
+import * as ph from "../../../durabletask-js/src/utils/pb-helper.util";
 
 // Simple test entity for registration testing
 class CounterEntity extends TaskEntity<number> {
@@ -20,6 +22,29 @@ function createCounterEntity(): ITaskEntity {
 describe("DurableTaskAzureManagedWorkerBuilder", () => {
   const ENDPOINT = "http://localhost:8080";
   const TASKHUB = "test";
+
+  it("keeps DTS timers native at their full deadline", async () => {
+    const start = new Date("2026-01-01T00:00:00Z");
+    const deadline = new Date("2026-01-31T00:00:00Z");
+    const worker = new DurableTaskAzureManagedWorkerBuilder()
+      .endpoint(ENDPOINT, TASKHUB, null)
+      .addNamedOrchestrator("long-timer", async function* (ctx) {
+        yield ctx.createTimer(deadline);
+      })
+      .build();
+    const request = new pb.OrchestratorRequest();
+    request.setInstanceid("instance");
+    request.setNeweventsList([
+      ph.newOrchestratorStartedEvent(start),
+      ph.newExecutionStartedEvent("long-timer", "instance"),
+    ]);
+    const actions = pb.OrchestratorResponse.deserializeBinary(
+      await worker.processOrchestratorRequest(request.serializeBinary()),
+    ).getActionsList();
+    expect(actions).toHaveLength(1);
+    expect(actions[0].getId()).toBe(1);
+    expect(actions[0].getCreatetimer()?.getFireat()?.toDate()).toEqual(deadline);
+  });
 
   describe("addEntity", () => {
     it("should register an entity factory and return the builder for chaining", () => {

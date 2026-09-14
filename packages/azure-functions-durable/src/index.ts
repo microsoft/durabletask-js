@@ -32,7 +32,7 @@ export {
 // the classic durable-functions v3 top-level `TaskFailedError` export. (`DurableError` /
 // `AggregatedError` were never v3 top-level exports; the core engine surfaces `TaskFailedError` and
 // aggregate failures as JS-native `AggregateError`.) See the package README/CHANGELOG migration notes.
-export { TaskFailedError } from "@microsoft/durabletask-js";
+export { TaskFailedError, TaskCancelledError } from "@microsoft/durabletask-js";
 export {
   DurableOrchestrationContext,
   ClassicOrchestrationContext,

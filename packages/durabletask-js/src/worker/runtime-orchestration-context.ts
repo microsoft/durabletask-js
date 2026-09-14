@@ -28,6 +28,8 @@ import {
 } from "../entities/orchestration-entity-feature";
 import { EntityInstanceId } from "../entities/entity-instance-id";
 import { SignalEntityOptions, CallEntityOptions } from "../entities/signal-entity-options";
+import { OrchestrationStateError } from "../task/exception/orchestration-state-error";
+import { resolveMaximumTimerInterval } from "./timer-interval";
 
 export class RuntimeOrchestrationContext extends OrchestrationContext {
   _generator?: Generator<Task<any>, any, any>;
@@ -52,9 +54,12 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   _newVersion?: string;
   _customStatus?: string;
   _entityFeature: RuntimeOrchestrationEntityFeature;
+  private readonly _maximumTimerIntervalMs: number | null;
+  private readonly _longTimers = new Map<CompletableTask<any>, number>();
 
-  constructor(instanceId: string) {
+  constructor(instanceId: string, maximumTimerIntervalMs?: number | null) {
     super();
+    this._maximumTimerIntervalMs = resolveMaximumTimerInterval(maximumTimerIntervalMs);
 
     this._generator = undefined;
     this._isReplaying = true;
@@ -181,7 +186,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
           // the generator will return an IteratorResult with its next value
           // note that we are working with an AsyncGenerator, so we should await
           // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Generator/next
-          const { done, value } = await this._generator.next(this._previousTask._result);
+          const { done, value } = await this._generator.next(this._previousTask.getResult());
 
           // If we are done, raise StopIteration
           if (done) {
@@ -344,17 +349,53 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
       );
     }
 
-    const action = ph.newCreateTimerAction(id, fireAtDate);
-    this._pendingActions[action.getId()] = action;
-
     const timerTask = new TimerTask();
-    timerTask.setCancelHandler(() => {
-      delete this._pendingActions[id];
-      delete this._pendingTasks[id];
-    });
-    this._pendingTasks[id] = timerTask;
-
+    this.scheduleTimer(timerTask, fireAtDate.getTime(), this._currentUtcDatetime.getTime(), id);
     return timerTask;
+  }
+
+  private scheduleTimer(
+    task: CompletableTask<any>,
+    finalFireAt: number,
+    startTime: number,
+    id = this.nextSequenceNumber(),
+  ): void {
+    const fireAt =
+      this._maximumTimerIntervalMs !== null && this._maximumTimerIntervalMs > 0
+        ? Math.min(finalFireAt, startTime + this._maximumTimerIntervalMs)
+        : finalFireAt;
+    if (fireAt < finalFireAt) {
+      this._longTimers.set(task, finalFireAt);
+    } else {
+      this._longTimers.delete(task);
+    }
+    this._pendingActions[id] = ph.newCreateTimerAction(id, new Date(fireAt));
+    this._pendingTasks[id] = task;
+    if (task instanceof TimerTask) {
+      // The logical task survives each segment; cancellation must target its current ID.
+      task.setCancelHandler(() => {
+        delete this._pendingActions[id];
+        delete this._pendingTasks[id];
+        this._longTimers.delete(task);
+      });
+    }
+  }
+
+  scheduleNextTimerSegment(task: CompletableTask<any>, fireAt: Date | undefined): boolean {
+    const finalFireAt = this._longTimers.get(task);
+    if (finalFireAt === undefined) {
+      return false;
+    }
+    if (!fireAt || Number.isNaN(fireAt.getTime())) {
+      throw new OrchestrationStateError("A segmented timer requires TimerFired.fireAt");
+    }
+    if (fireAt.getTime() < finalFireAt) {
+      // Use the recorded deadline, not delivery time, so replay recreates identical segments.
+      this.scheduleTimer(task, finalFireAt, fireAt.getTime());
+      return true;
+    }
+    this._longTimers.delete(task);
+    return false;
   }
 
   callActivity<TInput, TOutput>(
@@ -622,12 +663,9 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
 
     const timerId = this.nextSequenceNumber();
     const fireAt = new Date(this._currentUtcDatetime.getTime() + delayMs);
-    const timerAction = ph.newCreateTimerAction(timerId, fireAt);
-    this._pendingActions[timerAction.getId()] = timerAction;
-
     // Create a RetryTimerTask that holds a reference to the retryable task
     const retryTimerTask = new RetryTimerTask(retryableTask);
-    this._pendingTasks[timerId] = retryTimerTask;
+    this.scheduleTimer(retryTimerTask, fireAt.getTime(), this._currentUtcDatetime.getTime(), timerId);
 
     return retryTimerTask;
   }

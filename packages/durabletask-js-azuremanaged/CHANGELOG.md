@@ -15,6 +15,8 @@
 
 ### Fixes
 
+- Explicitly disable core timer segmentation in the Azure-managed worker builder, matching Python's
+  native DTS timers. Functions connected to DTS still inherits the core three-day default.
 - Select TLS from the Azure-managed endpoint scheme independently of authentication, and require explicit opt-in
   before sending token credentials over an insecure endpoint.
 

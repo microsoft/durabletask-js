@@ -38,6 +38,31 @@ describe("In-Memory Backend", () => {
     backend.reset();
   });
 
+  it.each([
+    [null, 1],
+    [0, 1],
+    [-1, 1],
+    [5, 2],
+    [0.5, 10],
+  ])("uses maximumTimerIntervalMs=%s in the test worker", async (maximumTimerIntervalMs, segmentCount) => {
+    worker = new TestOrchestrationWorker(backend, { maximumTimerIntervalMs });
+    const complete = jest.spyOn(backend, "completeOrchestration");
+    worker.addNamedOrchestrator("timer-interval", async function* (ctx) {
+      yield ctx.createTimer(0.01);
+      return "elapsed";
+    });
+    await worker.start();
+    const id = await client.scheduleNewOrchestration("timer-interval");
+    const state = await client.waitForOrchestrationCompletion(id, true, 10);
+    expect(state?.runtimeStatus).toBe(OrchestrationStatus.COMPLETED);
+    const timers = complete.mock.calls.flatMap((call) => call[2]).filter((action) => action.hasCreatetimer());
+    expect(timers).toHaveLength(segmentCount);
+    expect(timers.map((action) => action.getId())).toEqual(
+      Array.from({ length: segmentCount! }, (_, index) => index + 1),
+    );
+    complete.mockRestore();
+  });
+
   it("should run an empty orchestration", async () => {
     let invoked = false;
 

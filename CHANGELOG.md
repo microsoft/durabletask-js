@@ -2,6 +2,9 @@
 
 ### New
 
+- Align core and test worker timers with Python: three-day segments by default and
+  `maximumTimerIntervalMs` override (`null`, zero, or negative disables segmentation).
+  Positive fractions round up to milliseconds to match JavaScript Date precision.
 - Add .NET-aligned worker history streaming: hydrate service-selected history before
   version checks and replay. History errors produce a Failed completion; shutdown
   cancels without submitting completion.
@@ -32,6 +35,16 @@
   channels until five likely-poisoned failures, isolate recreated grpc-js transports, and defer
   disposal of replaced channels. Sidecars that do not send health-ping work items, including the
   current durabletask-go sidecar, should set `silentDisconnectTimeoutMs` to `0`.
+
+### Breaking changes
+
+- Core timers now default to three-day segments instead of native timers; Azure-managed workers
+  explicitly retain native timers.
+- `TimerTask.cancel()` now returns a boolean, marks the timer canceled and complete, and notifies
+  composite parents. Timer `result` aliases `getResult()` and throws while pending, failed, or
+  canceled (`TaskCancelledError`). This matches Python's timer cancellation contract, including
+  propagation from whenAll's final child callback. Drain affected instances before changing
+  interval settings, mixing versions, or rolling back.
 
 ## v0.4.0 (2026-07-31)
 
