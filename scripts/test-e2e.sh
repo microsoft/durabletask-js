@@ -5,7 +5,7 @@
 # In CI/CD, we use durabletask-go sidecar instead (similar to Python SDK testing approach).
 #
 # NOTE: To run tests similar to the Python SDK setup:
-#       go install github.com/microsoft/durabletask-go@main
+#       go install github.com/microsoft/durabletask-go@3fe35d93fe1d2bdab21a3d85c14867532adef0b0
 #       durabletask-go --port 4001
 
 # Start the sidecar if it is not running yet

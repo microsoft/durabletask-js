@@ -67,7 +67,8 @@ jobs:
       # Install and run the durabletask-go sidecar for running e2e tests
       - name: ✅ Run E2E tests with durabletask-go sidecar
         run: |
-          go install github.com/microsoft/durabletask-go@main
+          # Last sidecar revision; upstream main removed the executable in microsoft/durabletask-go#158.
+          go install github.com/microsoft/durabletask-go@3fe35d93fe1d2bdab21a3d85c14867532adef0b0
           durabletask-go --port 4001 &
           sleep 5  # Wait for sidecar to be ready
           npm run test:e2e:internal
