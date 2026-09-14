@@ -29,17 +29,45 @@ async function timerActions(worker: DurableFunctionsWorker) {
 }
 
 describe("DurableFunctionsWorker", () => {
-  it.each([undefined, null, 2 * DAY])(
-    "applies the Functions timer policy %s through the protobuf path",
-    async (maximumTimerIntervalMs) => {
-      const options = { logger: new NoOpLogger(), maximumTimerIntervalMs };
-      const actions = await timerActions(new DurableFunctionsWorker(options));
-      const days = maximumTimerIntervalMs === undefined ? 3 : maximumTimerIntervalMs === null ? 30 : 2;
+  it("automatically splits classic-context long timers through the protobuf path", async () => {
+    const actions = await timerActions(new DurableFunctionsWorker({ logger: new NoOpLogger() }));
+    expect(actions).toHaveLength(1);
+    expect(actions[0].getId()).toBe(1);
+    expect(actions[0].getCreatetimer()?.getFireat()?.toDate()).toEqual(new Date(START.getTime() + 3 * DAY));
+  });
+
+  it.each([10, 30])("replays all fixed segments of a %s-day classic timer", async (days) => {
+    const worker = new DurableFunctionsWorker({ logger: new NoOpLogger() });
+    worker.addNamedOrchestrator("long-timer", wrapOrchestrator(function* (ctx: ClassicOrchestrationContext) {
+      yield ctx.df.createTimer(new Date(ctx.df.currentUtcDateTime.getTime() + days * DAY));
+      return "elapsed";
+    }));
+    const request = new pb.OrchestratorRequest().setInstanceid("instance");
+    const history: pb.HistoryEvent[] = [];
+    let events = [ph.newOrchestratorStartedEvent(START), ph.newExecutionStartedEvent("long-timer", "instance")];
+    const replay = async () => {
+      request.setPasteventsList(history).setNeweventsList(events);
+      const response = await worker.handleOrchestratorRequest(Buffer.from(request.serializeBinary()).toString("base64"));
+      return pb.OrchestratorResponse.deserializeBinary(Buffer.from(response, "base64")).getActionsList();
+    };
+    let id = 1;
+    for (let day = Math.min(3, days); ; day = Math.min(day + 3, days)) {
+      const actions = await replay();
+      const fireAt = new Date(START.getTime() + day * DAY);
       expect(actions).toHaveLength(1);
-      expect(actions[0].getId()).toBe(1);
-      expect(actions[0].getCreatetimer()?.getFireat()?.toDate()).toEqual(new Date(START.getTime() + days * DAY));
-    },
-  );
+      expect(actions[0].getId()).toBe(id);
+      expect(actions[0].getCreatetimer()?.getFireat()?.toDate()).toEqual(fireAt);
+      history.push(...events, ph.newTimerCreatedEvent(id, fireAt));
+      events = [ph.newOrchestratorStartedEvent(fireAt), ph.newTimerFiredEvent(id, fireAt)];
+      id++;
+      if (day === days) break;
+    }
+    const actions = await replay();
+    expect(actions).toHaveLength(1);
+    const completed = actions[0].getCompleteorchestration();
+    expect(completed?.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(completed?.getResult()?.getValue()).toBe('"elapsed"');
+  });
 
   it("decodes base64, delegates to processOrchestratorRequest, and re-encodes the response", async () => {
     const worker = new DurableFunctionsWorker();

@@ -25,40 +25,25 @@ const entityResponseBytes = await worker.processEntityBatchRequest(entityBatchRe
 
 ## Long durable timers
 
-`createTimer(Date | seconds)` has no SDK-imposed total-duration cap. For backends with a
-per-message delay limit, configure `maximumTimerIntervalMs` on `TaskHubGrpcWorker`:
+`createTimer(Date | seconds)` has no SDK-imposed total-duration cap. Timer handling is an
+internal provider strategy, not an application setting:
 
-```typescript
-const worker = new TaskHubGrpcWorker({
-  maximumTimerIntervalMs: 3 * 24 * 60 * 60 * 1000,
-});
-```
-
-This also applies to embedded `processOrchestratorRequest` calls and activity/sub-orchestration
-retry delays. A ten-day timer uses 3 + 3 + 3 + 1 day backend timers but remains one logical
-`TimerTask`: `whenAny` identity, `whenAll`, and cancellation are unchanged. Cancel removes the
-current segment; it does not mark the task complete. Intermediate segments do not resume user code.
-
-| Entry point | Default |
+| Entry point | Timer behavior |
 | --- | --- |
-| Core `TaskHubGrpcWorker` / `TestOrchestrationWorker` | Native timers (`null`), preserving existing behavior |
-| Azure-managed worker builder | Explicitly native (`null`); DTS supports long timers |
-| `durable-functions` worker / `runOrchestrator` | Three-day segments, safe for Azure Storage |
+| Core `TaskHubGrpcWorker` / `TestOrchestrationWorker` | Native timers, preserving existing behavior |
+| Azure-managed worker builder | Native timers; DTS supports long timers |
+| `durable-functions` worker / `runOrchestrator` | Automatic three-day segments, including retry delays |
 
-Use a positive safe integer in milliseconds, sized for your backend, or `null` to disable
-segmentation. `TestOrchestrationWorker(backend, { maximumTimerIntervalMs })` accepts the same
-option; match your production policy. Unlike Python's generic three-day default, generic
-JavaScript workers remain native by default for compatibility. No backend capability detection
-is performed. The in-memory backend separately bounds and re-arms Node.js timeouts, so native
-timers over approximately 24.9 days do not fire immediately.
+Functions uses fixed three-day segments even when connected to DTS; there is no backend
+capability detection. A ten-day timer uses 3 + 3 + 3 + 1 day backend timers but remains one
+logical `TimerTask`. Identity, final completion, and cancellation semantics are unchanged.
+The in-memory backend separately bounds and re-arms Node.js timeouts so native timers over
+approximately 24.9 days do not fire immediately.
 
-**Rollout:** keep the policy consistent across workers sharing a task hub and unchanged for
-in-flight orchestrations. An old, single native timer replays using its recorded `TimerFired.fireAt`
-and completes at its original deadline without inventing segments. However, changing the interval
-or disabling segmentation for an already-segmented history can complete a logical timer early or
-cause replay mismatches. Drain existing instances or use a new task hub before such changes.
-See the [Functions provider configuration](./packages/azure-functions-durable/README.md#long-durable-timers)
-for its native-timer opt-out.
+**Rollout:** existing single native timers replay at their recorded final deadline. Once
+segmented histories exist, do not mix old and new Functions workers or roll back to a
+native-timer worker: this can cause early completion or replay mismatches. Drain those
+instances or use a new task hub before rollback or switching providers.
 
 ## npm packages
 

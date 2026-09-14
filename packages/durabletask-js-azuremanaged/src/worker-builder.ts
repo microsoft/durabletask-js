@@ -326,8 +326,6 @@ export class DurableTaskAzureManagedWorkerBuilder {
       channelRecreateFailureThreshold: this._channelRecreateFailureThreshold,
       versioning: this._versioning,
       workItemFilters: this._workItemFilters,
-      // DTS natively supports long timers, so segmentation is unnecessary.
-      maximumTimerIntervalMs: null,
     });
 
     // Register all orchestrators

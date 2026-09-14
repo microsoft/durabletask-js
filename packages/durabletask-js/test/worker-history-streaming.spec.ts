@@ -19,6 +19,12 @@ import { DurableTaskAttributes } from "../src/tracing";
 
 type HistoryCall = grpc.ServerWritableStream<pb.StreamInstanceHistoryRequest, pb.HistoryChunk>;
 
+class ShortTimerWorker extends TaskHubGrpcWorker {
+  protected override get useShortTimerSegments(): boolean {
+    return true;
+  }
+}
+
 async function waitFor(predicate: () => boolean): Promise<void> {
   const deadline = Date.now() + 3000;
   while (!predicate()) {
@@ -184,10 +190,9 @@ describe("Worker history streaming over gRPC", () => {
     const dayMs = 24 * 60 * 60 * 1000;
     const startTime = new Date("2026-01-01T00:00:00Z").getTime();
     const atDay = (day: number) => new Date(startTime + day * dayMs);
-    worker = new TaskHubGrpcWorker({
+    worker = new ShortTimerWorker({
       hostAddress,
       logger: new NoOpLogger(),
-      maximumTimerIntervalMs: 3 * dayMs,
     });
     worker.addOrchestrator(async function* longTimer(ctx: OrchestrationContext): AsyncGenerator {
       yield ctx.createTimer(atDay(10));

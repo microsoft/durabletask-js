@@ -28,8 +28,9 @@ import {
 } from "../entities/orchestration-entity-feature";
 import { EntityInstanceId } from "../entities/entity-instance-id";
 import { SignalEntityOptions, CallEntityOptions } from "../entities/signal-entity-options";
-import { DurableTimerOptions, resolveMaximumTimerInterval } from "./durable-timer-options";
 import { OrchestrationStateError } from "../task/exception/orchestration-state-error";
+
+const TIMER_SEGMENT_INTERVAL_MS = 3 * 24 * 60 * 60 * 1000;
 
 export class RuntimeOrchestrationContext extends OrchestrationContext {
   _generator?: Generator<Task<any>, any, any>;
@@ -54,12 +55,12 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   _newVersion?: string;
   _customStatus?: string;
   _entityFeature: RuntimeOrchestrationEntityFeature;
-  private readonly _maximumTimerIntervalMs: number | null;
+  private readonly _useShortTimerSegments: boolean;
   private readonly _longTimers = new Map<CompletableTask<any>, number>();
 
-  constructor(instanceId: string, options: DurableTimerOptions = {}) {
+  constructor(instanceId: string, useShortTimerSegments = false) {
     super();
-    this._maximumTimerIntervalMs = resolveMaximumTimerInterval(options);
+    this._useShortTimerSegments = useShortTimerSegments;
 
     this._generator = undefined;
     this._isReplaying = true;
@@ -360,10 +361,9 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     startTime: number,
     id = this.nextSequenceNumber(),
   ): void {
-    const fireAt =
-      this._maximumTimerIntervalMs === null
-        ? finalFireAt
-        : Math.min(finalFireAt, startTime + this._maximumTimerIntervalMs);
+    const fireAt = this._useShortTimerSegments
+      ? Math.min(finalFireAt, startTime + TIMER_SEGMENT_INTERVAL_MS)
+      : finalFireAt;
     if (fireAt < finalFireAt) {
       this._longTimers.set(task, finalFireAt);
     } else {

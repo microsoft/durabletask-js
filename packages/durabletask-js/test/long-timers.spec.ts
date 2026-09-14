@@ -18,9 +18,14 @@ const startEvents = () => [
   ph.newExecutionStartedEvent("timer-test", "instance"),
 ];
 
-function workerFor(orchestrator: TOrchestrator, maximumTimerIntervalMs: number | null = 3 * DAY) {
-  const options = { logger: new NoOpLogger(), maximumTimerIntervalMs };
-  const worker = new TaskHubGrpcWorker(options);
+class ShortTimerWorker extends TaskHubGrpcWorker {
+  protected override get useShortTimerSegments(): boolean {
+    return true;
+  }
+}
+
+function workerFor(orchestrator: TOrchestrator) {
+  const worker = new ShortTimerWorker({ logger: new NoOpLogger() });
   worker.addNamedOrchestrator("timer-test", orchestrator);
   return worker;
 }
@@ -121,9 +126,8 @@ describe("backend-aware durable timers", () => {
     expectCompleted(await execute(worker, history, [ph.newTaskCompletedEvent(2, '"result"')]), "done");
   });
 
-  it.each([undefined, null])("retains native long timers with policy %s", async (maximumTimerIntervalMs) => {
-    const options = { logger: new NoOpLogger(), maximumTimerIntervalMs };
-    const worker = new TaskHubGrpcWorker(options);
+  it("retains native long timers in the standalone core worker", async () => {
+    const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
     worker.addNamedOrchestrator("timer-test", async function* (ctx) {
       yield ctx.createTimer(atDay(30));
     });
@@ -252,16 +256,6 @@ describe("backend-aware durable timers", () => {
     expectCompleted(await execute(worker, history, [completed]), "retried");
   });
 
-  it("snapshots worker timer options rather than observing later caller mutations", async () => {
-    const options = { maximumTimerIntervalMs: 3 * DAY, logger: new NoOpLogger() };
-    const worker = new TaskHubGrpcWorker(options);
-    options.maximumTimerIntervalMs = DAY;
-    worker.addNamedOrchestrator("timer-test", async function* (ctx) {
-      yield ctx.createTimer(atDay(30));
-    });
-    expectTimer(await execute(worker, [], startEvents()), 1, 3);
-  });
-
   it("snapshots the caller's Date before scheduling later segments", async () => {
     const worker = workerFor(async function* (ctx) {
       const deadline = atDay(4);
@@ -281,13 +275,6 @@ describe("backend-aware durable timers", () => {
     );
   });
 
-  it("supports a custom two-day segment interval", async () => {
-    const worker = workerFor(async function* (ctx) {
-      yield ctx.createTimer(atDay(30));
-    }, 2 * DAY);
-    expectTimer(await execute(worker, [], startEvents()), 1, 2);
-  });
-
   it("rejects a missing recorded fireAt for a segmented timer", async () => {
     const worker = workerFor(async function* (ctx) {
       yield ctx.createTimer(atDay(10));
@@ -300,11 +287,12 @@ describe("backend-aware durable timers", () => {
     );
   });
 
-  it("cannot replay an already-segmented history after disabling segmentation", async () => {
-    const worker = workerFor(async function* (ctx) {
+  it("cannot replay an already-segmented history on a native-timer worker", async () => {
+    const worker = new TaskHubGrpcWorker({ logger: new NoOpLogger() });
+    worker.addNamedOrchestrator("timer-test", async function* (ctx) {
       yield ctx.createTimer(atDay(10));
       return "elapsed";
-    }, null);
+    });
     const actions = await execute(
       worker,
       [
@@ -321,12 +309,4 @@ describe("backend-aware durable timers", () => {
     );
   });
 
-  it.each([0, -1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
-    "rejects invalid segment interval %s",
-    (maximumTimerIntervalMs) => {
-      expect(() => new TaskHubGrpcWorker({ logger: new NoOpLogger(), ...{ maximumTimerIntervalMs } })).toThrow(
-        "maximumTimerIntervalMs",
-      );
-    },
-  );
 });

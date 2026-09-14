@@ -9,58 +9,32 @@ import * as pb from "../../../durabletask-js/src/proto/orchestrator_service_pb";
 import * as ph from "../../../durabletask-js/src/utils/pb-helper.util";
 
 describe("app registration", () => {
-  it("exposes startup configuration for the shared worker's durable timer policy", () => {
-    expect(app).toHaveProperty("setup", expect.any(Function));
+  it("requires no timer setup API", () => {
+    expect(app).not.toHaveProperty("setup");
   });
 
-  it.each([undefined, null, 86400000])(
-    "uses policy %s for the normal app registration path",
-    async (maximumTimerIntervalMs) => {
-      await jest.isolateModulesAsync(async () => {
-        const isolatedApp = await import("../../src/app");
-        const { app: isolatedAzureApp } = await import("@azure/functions");
-        const register = jest.spyOn(isolatedAzureApp, "generic").mockImplementation(() => undefined);
-        const start = new Date("2026-01-01T00:00:00Z");
-        const day = 86400000;
-        try {
-          if (maximumTimerIntervalMs !== undefined) isolatedApp.setup({ maximumTimerIntervalMs });
-          isolatedApp.orchestration("configured-timer", async function* (ctx: OrchestrationContext) {
-            yield ctx.createTimer((30 * day) / 1000);
-          });
-          const request = new pb.OrchestratorRequest();
-          request.setInstanceid("instance");
-          request.setNeweventsList([
-            ph.newOrchestratorStartedEvent(start),
-            ph.newExecutionStartedEvent("configured-timer", "instance"),
-          ]);
-          const handler = register.mock.calls[0][1].handler;
-          const encodedResponse = await handler(
-            Buffer.from(request.serializeBinary()).toString("base64"),
-            {} as InvocationContext,
-          );
-          const actions = pb.OrchestratorResponse.deserializeBinary(
-            Buffer.from(encodedResponse as string, "base64"),
-          ).getActionsList();
-          expect(actions).toHaveLength(1);
-          const expectedInterval =
-            maximumTimerIntervalMs === undefined ? 3 * day : maximumTimerIntervalMs === null ? 30 * day : day;
-          expect(actions[0].getCreatetimer()?.getFireat()?.toDate()).toEqual(
-            new Date(start.getTime() + expectedInterval),
-          );
-          expect(() => isolatedApp.setup({ maximumTimerIntervalMs: null })).toThrow("must precede");
-        } finally {
-          register.mockRestore();
-        }
-      });
-    },
-  );
-
-  it("rejects invalid setup before initializing the shared worker", async () => {
-    await jest.isolateModulesAsync(async () => {
-      const isolatedApp = await import("../../src/app");
-      expect(() => isolatedApp.setup({ maximumTimerIntervalMs: 0 })).toThrow("maximumTimerIntervalMs");
-      expect(() => isolatedApp.setup({ maximumTimerIntervalMs: null })).not.toThrow();
+  it("automatically splits long timers in the normal app registration path", async () => {
+    const start = new Date("2026-01-01T00:00:00Z");
+    const day = 86400000;
+    app.orchestration("long-timer", async function* (ctx: OrchestrationContext) {
+      yield ctx.createTimer((30 * day) / 1000);
     });
+    const request = new pb.OrchestratorRequest();
+    request.setInstanceid("instance");
+    request.setNeweventsList([
+      ph.newOrchestratorStartedEvent(start),
+      ph.newExecutionStartedEvent("long-timer", "instance"),
+    ]);
+    const { options } = lastRegistration();
+    const encodedResponse = await options.handler(
+      Buffer.from(request.serializeBinary()).toString("base64"),
+      {} as InvocationContext,
+    );
+    const actions = pb.OrchestratorResponse.deserializeBinary(
+      Buffer.from(encodedResponse as string, "base64"),
+    ).getActionsList();
+    expect(actions).toHaveLength(1);
+    expect(actions[0].getCreatetimer()?.getFireat()?.toDate()).toEqual(new Date(start.getTime() + 3 * day));
   });
 
   let genericSpy: jest.SpyInstance;

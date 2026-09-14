@@ -2,9 +2,8 @@
 
 ### New
 
-- Add configurable `maximumTimerIntervalMs` for deterministic long durable timer and retry-delay
-  segmentation. Core and test workers retain native timers by default; keep the policy stable
-  for in-flight orchestrations.
+- Add internal fixed three-day segmentation for Functions durable timers and retry delays.
+  Standalone core and test workers retain native timers.
 - Add .NET-aligned worker history streaming: hydrate service-selected history before
   version checks and replay. History errors produce a Failed completion; shutdown
   cancels without submitting completion.
