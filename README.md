@@ -274,6 +274,84 @@ const purchaseOrderWorkflow: TOrchestrator = async function* (ctx: Orchestration
 
 You can find the full sample at [examples/hello-world/human_interaction.ts](./examples/hello-world/human_interaction.ts).
 
+### Versioned registration and dispatch
+
+One worker can host multiple implementations of the same orchestrator or activity name:
+
+```typescript
+import { TaskHubGrpcClient, TaskHubGrpcWorker } from "@microsoft/durabletask-js";
+
+const worker = new TaskHubGrpcWorker({
+  versioning: { defaultVersion: "v2" },
+  workItemFilters: "auto",
+});
+worker.addNamedOrchestrator("Order", async function* (ctx) {
+  yield ctx.callActivity("Price");
+}, "v1");
+worker.addNamedOrchestrator("Order", async function* (ctx) {
+  yield ctx.callActivity("Price");
+  yield ctx.callSubOrchestrator("Audit");
+}, "v2");
+worker.addNamedActivity("Price", () => 100, "v1");
+worker.addNamedActivity("Price", () => 120, "v2");
+worker.addNamedOrchestrator("Audit", () => "audited", "v2");
+await worker.start();
+
+const client = new TaskHubGrpcClient();
+await client.scheduleNewOrchestration("Order", undefined, { version: "v1" });
+await client.scheduleNewOrchestration("Order", undefined, { version: "v2" });
+```
+
+`addOrchestrator(fn, version?)` and `addActivity(fn, version?)` retain the function's native name;
+the named variants accept `(name, fn, version?)`. These signatures also apply to
+`TestOrchestrationWorker` and `DurableTaskAzureManagedWorkerBuilder`. Entities remain name-only.
+
+Versions are case-insensitive opaque strings: `"V1"` equals `"v1"`, but `"1"` and `"1.0"` are
+different registrations. Omitted, `undefined`, `null` (JavaScript), and `""` versions identify the
+unversioned registration. Whitespace-only registration versions are rejected; other strings are
+not trimmed. Duplicate name/version pairs throw. **Task names remain case-sensitive in JavaScript**,
+unlike .NET; this preserves existing JavaScript identifiers and function-name behavior.
+
+Dispatch uses the recorded `ExecutionStarted.version` during both initial execution and replay,
+and `ActivityRequest.version` for activities. Exact matches win. Following the
+[.NET factory contract](https://github.com/microsoft/durabletask-dotnet/blob/92474e9e35c66d64de36cabd0a17652376d37873/src/Worker/Core/DurableTaskFactory.cs),
+a name with **only an unversioned registration** can handle any request version. Adding any
+versioned registration for that name disables this fallback: unknown versions fail with the
+existing not-registered error (including the requested version), marked non-retriable. An
+unversioned request never selects a versioned implementation.
+
+| Scheduled work | When `options.version` is omitted | Explicit `version: ""` |
+| --- | --- | --- |
+| Activity | Current orchestration instance's `ctx.version` | Unversioned |
+| Sub-orchestration | Worker's `versioning.defaultVersion`, or unversioned if unset | Unversioned |
+| Top-level orchestration | Client's `defaultVersion`, or unversioned if unset | Unversioned |
+
+An explicit nonempty version overrides these defaults. Activities do **not** inherit the worker
+default, and children do **not** inherit the parent's version. Both policy and handler retries
+retain the originally selected version. Worker defaults do not change `continueAsNew` behavior.
+The in-memory client accepts the start `version` option; its worker accepts
+`{ versioning: { defaultVersion: "v2" } }`, but does not emulate gRPC worker acceptance/rejection.
+
+**Acceptance policy is separate from implementation lookup.** `Strict` and `CurrentOrOlder`
+apply before dispatch to both orchestrations and activities; registrations cannot bypass them.
+`Strict` with no worker version accepts only unversioned work. An omitted `matchStrategy` means
+`None`. `Reject` abandons mismatched work; `Fail` returns an explicit non-retriable failure.
+Auto filters contain one entry per logical name: all registered versions (including `""` for
+mixed registrations), or a wildcard for unversioned-only names. Under `Strict`, filters use the
+configured worker version, including `""`. Explicit filters are unchanged.
+
+**Migration:** previous JavaScript workers ignored activity request versions and always scheduled
+unspecified activities as unversioned. Versioned parents now pass their version to activities;
+use `{ version: "" }` to keep an activity unversioned. Setting a worker child default now affects
+unspecified child calls; use explicit child versions for stable routing. Keep implementations for
+all in-flight versions, and drain affected instances before changing replay-sensitive defaults or
+mixing old and new workers. Adding the first versioned registration removes the name's legacy
+catch-all, so register every version that still needs to run.
+
+Azure Functions `app.orchestration` / `app.activity` remain host registrations with unique function
+names, not a multi-version host-routing API. The embedded `DurableFunctionsWorker` inherits core
+version dispatch and child defaults for integrations that supply versioned protobuf requests.
+
 ### Continue as new
 
 Long-running orchestrations can restart with fresh history and optionally move to a new

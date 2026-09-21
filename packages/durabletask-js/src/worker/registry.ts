@@ -7,78 +7,107 @@ import { TOrchestrator } from "../types/orchestrator.type";
 import { TOutput } from "../types/output.type";
 import { EntityFactory } from "../entities/task-entity";
 
+interface TaskRegistration<T> {
+  readonly name: string;
+  readonly version: string;
+  readonly fn: T;
+}
+
+type TaskRegistrations<T> = Map<string, Map<string, TaskRegistration<T>>>;
+
+function addRegistration<T>(
+  registrations: TaskRegistrations<T>,
+  kind: string,
+  name: string,
+  fn: T,
+  version = "",
+): void {
+  if (!name) {
+    throw new Error(`A non-empty ${kind} name is required.`);
+  }
+  version = version ?? "";
+  if (version && !version.trim()) {
+    throw new Error("A task version must not contain only whitespace.");
+  }
+  const key = version.toLowerCase();
+  const versions = registrations.get(name) ?? new Map<string, TaskRegistration<T>>();
+  if (versions.has(key)) {
+    const versionText = version ? ` with version '${version}'` : "";
+    throw new Error(`A '${name}' ${kind}${versionText} already exists.`);
+  }
+  versions.set(key, { name, version, fn });
+  registrations.set(name, versions);
+}
+
+function getRegisteredTask<T>(registrations: TaskRegistrations<T>, name: string, version?: string): T | undefined {
+  const versions = registrations.get(name);
+  // Like the .NET processor, treat whitespace-only wire versions as unversioned.
+  const key = version?.trim() ? version.toLowerCase() : "";
+  const exact = versions?.get(key);
+  if (exact) {
+    return exact.fn;
+  }
+  // Legacy registrations handle any version only until this name opts into versioned dispatch.
+  return key && versions?.size === 1 ? versions.get("")?.fn : undefined;
+}
+
 /**
  * Registry for orchestrators, activities, and entities.
  *
  * @remarks
- * This class is used by the worker to look up task implementations by name.
+ * Task names are case-sensitive; versions are case-insensitive opaque strings.
+ * An omitted or empty version registers the unversioned implementation.
  * Entity names are normalized to lowercase for case-insensitive matching.
  */
 export class Registry {
-  private _orchestrators: Record<string, TOrchestrator>;
-  private _activities: Record<string, TActivity<TInput, TOutput>>;
+  private _orchestrators: TaskRegistrations<TOrchestrator>;
+  private _activities: TaskRegistrations<TActivity<TInput, TOutput>>;
   private _entities: Record<string, EntityFactory>;
 
   constructor() {
-    this._orchestrators = {};
-    this._activities = {};
+    this._orchestrators = new Map();
+    this._activities = new Map();
     this._entities = {};
   }
 
-  addOrchestrator(fn: TOrchestrator): string {
+  addOrchestrator(fn: TOrchestrator, version?: string): string {
     if (!fn) {
       throw new Error("An orchestrator function argument is required.");
     }
 
     const name = this._getFunctionName(fn);
-    this.addNamedOrchestrator(name, fn);
+    this.addNamedOrchestrator(name, fn, version);
     return name;
   }
 
-  addNamedOrchestrator(name: string, fn: TOrchestrator): void {
-    if (!name) {
-      throw new Error("A non-empty orchestrator name is required.");
-    }
-
-    if (name in this._orchestrators) {
-      throw new Error(`A '${name}' orchestrator already exists.`);
-    }
-
-    this._orchestrators[name] = fn;
+  addNamedOrchestrator(name: string, fn: TOrchestrator, version?: string): void {
+    addRegistration(this._orchestrators, "orchestrator", name, fn, version);
   }
 
-  getOrchestrator(name?: string): TOrchestrator | undefined {
+  getOrchestrator(name?: string, version?: string): TOrchestrator | undefined {
     if (!name) {
       return undefined;
     }
 
-    return this._orchestrators[name];
+    return getRegisteredTask(this._orchestrators, name, version);
   }
 
-  addActivity(fn: TActivity<TInput, TOutput>): string {
+  addActivity(fn: TActivity<TInput, TOutput>, version?: string): string {
     if (!fn) {
       throw new Error("An activity function argument is required.");
     }
 
     const name = this._getFunctionName(fn);
-    this.addNamedActivity(name, fn);
+    this.addNamedActivity(name, fn, version);
     return name;
   }
 
-  addNamedActivity(name: string, fn: TActivity<TInput, TOutput>): void {
-    if (!name) {
-      throw new Error("A non-empty activity name is required.");
-    }
-
-    if (name in this._activities) {
-      throw new Error(`A '${name}' activity already exists.`);
-    }
-
-    this._activities[name] = fn;
+  addNamedActivity(name: string, fn: TActivity<TInput, TOutput>, version?: string): void {
+    addRegistration(this._activities, "activity", name, fn, version);
   }
 
-  getActivity(name: string): TActivity<TInput, TOutput> | undefined {
-    return this._activities[name];
+  getActivity(name: string, version?: string): TActivity<TInput, TOutput> | undefined {
+    return getRegisteredTask(this._activities, name, version);
   }
 
   /**
@@ -152,14 +181,24 @@ export class Registry {
    * Gets the names of all registered orchestrators.
    */
   getOrchestratorNames(): string[] {
-    return Object.keys(this._orchestrators);
+    return [...this._orchestrators.keys()];
   }
 
   /**
    * Gets the names of all registered activities.
    */
   getActivityNames(): string[] {
-    return Object.keys(this._activities);
+    return [...this._activities.keys()];
+  }
+
+  /** Gets every orchestrator registration, including versions sharing the same name. */
+  getOrchestratorRegistrations(): TaskRegistration<TOrchestrator>[] {
+    return [...this._orchestrators.values()].flatMap((versions) => [...versions.values()]);
+  }
+
+  /** Gets every activity registration, including versions sharing the same name. */
+  getActivityRegistrations(): TaskRegistration<TActivity<TInput, TOutput>>[] {
+    return [...this._activities.values()].flatMap((versions) => [...versions.values()]);
   }
 
   /**

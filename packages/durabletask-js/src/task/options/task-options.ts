@@ -34,7 +34,8 @@ export interface TaskOptions {
   tags?: Record<string, string>;
   /**
    * The version of the task (activity) to execute.
-   * When specified, only workers that handle this version will process the task.
+   * Defaults to the current orchestration instance's version. An empty string explicitly
+   * selects an unversioned activity. Worker acceptance policy is checked before dispatch.
    */
   version?: string;
 }
@@ -44,6 +45,11 @@ export interface TaskOptions {
  * Extends TaskOptions with additional options specific to sub-orchestrations.
  */
 export interface SubOrchestrationOptions extends TaskOptions {
+  /**
+   * The child version. Defaults to the worker's versioning.defaultVersion, not the parent's
+   * instance version. An empty string explicitly selects an unversioned child.
+   */
+  version?: string;
   /**
    * The unique ID to use for the sub-orchestration instance.
    * If not specified, a deterministic ID will be generated based on the parent instance ID.

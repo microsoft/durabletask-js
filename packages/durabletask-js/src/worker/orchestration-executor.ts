@@ -50,7 +50,12 @@ export class OrchestrationExecutor {
   private _orchestratorName: string;
   private readonly _maximumTimerIntervalMs: number | null;
 
-  constructor(registry: Registry, logger?: Logger, maximumTimerIntervalMs?: number | null) {
+  constructor(
+    registry: Registry,
+    logger?: Logger,
+    maximumTimerIntervalMs?: number | null,
+    private readonly _defaultVersion?: string,
+  ) {
     this._maximumTimerIntervalMs = resolveMaximumTimerInterval(maximumTimerIntervalMs);
     this._registry = registry;
     this._generator = undefined;
@@ -87,7 +92,7 @@ export class OrchestrationExecutor {
       return buildRewindResult(oldEvents, newEvents);
     }
 
-    const ctx = new RuntimeOrchestrationContext(instanceId, this._maximumTimerIntervalMs);
+    const ctx = new RuntimeOrchestrationContext(instanceId, this._maximumTimerIntervalMs, this._defaultVersion);
     // Seed the execution ID from the authoritative source (the OrchestratorRequest on the gRPC path,
     // or the backend record on the in-memory path). The ExecutionStarted event replayed below may
     // also carry it; handleExecutionStarted reconciles the two.
@@ -255,10 +260,14 @@ export class OrchestrationExecutor {
     const executionStartedEvent = event.getExecutionstarted();
     const fn = this._registry.getOrchestrator(
       executionStartedEvent ? executionStartedEvent.getName() : undefined,
+      executionStartedEvent?.getVersion()?.getValue(),
     );
 
     if (!fn) {
-      throw new OrchestratorNotRegisteredError(executionStartedEvent?.getName());
+      throw new OrchestratorNotRegisteredError(
+        executionStartedEvent?.getName(),
+        executionStartedEvent?.getVersion()?.getValue(),
+      );
     }
 
     // Set the execution ID from the orchestration instance. If the executor was already seeded with

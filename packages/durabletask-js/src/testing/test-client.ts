@@ -25,8 +25,8 @@ export class TestOrchestrationClient {
   /**
    * Schedules a new orchestration.
    *
-   * The in-memory backend does not model orchestration versions or tags, so passing
-   * either option throws instead of silently diverging from TaskHubGrpcClient.
+   * The in-memory backend does not model tags, so passing that option throws
+   * instead of silently diverging from TaskHubGrpcClient.
    */
   async scheduleNewOrchestration(
     orchestrator: TOrchestrator | string,
@@ -50,9 +50,6 @@ export class TestOrchestrationClient {
       if (instanceIdOrOptions.tags !== undefined) {
         throw new Error("TestOrchestrationClient does not support the 'tags' option");
       }
-      if (instanceIdOrOptions.version !== undefined) {
-        throw new Error("TestOrchestrationClient does not support the 'version' option");
-      }
     }
     const instanceId =
       typeof instanceIdOrOptions === "string" || instanceIdOrOptions === undefined
@@ -69,7 +66,8 @@ export class TestOrchestrationClient {
     const id = instanceId ?? randomUUID();
     const encodedInput = input !== undefined ? JSON.stringify(input) : undefined;
 
-    await this.backend.createOrchestrationInstance(id, name, encodedInput, scheduledStartAt, dedupeStatuses);
+    const version = typeof instanceIdOrOptions === "object" ? instanceIdOrOptions.version : undefined;
+    await this.backend.createOrchestrationInstance(id, name, encodedInput, scheduledStartAt, dedupeStatuses, version);
     return id;
   }
 

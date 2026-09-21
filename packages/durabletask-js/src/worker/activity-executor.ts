@@ -22,11 +22,12 @@ export class ActivityExecutor {
     name: string,
     taskId: number,
     encodedInput?: string,
+    version?: string,
   ): Promise<string | undefined> {
-    const fn = this._registry.getActivity(name);
+    const fn = this._registry.getActivity(name, version);
 
     if (!fn) {
-      throw new ActivityNotRegisteredError(name);
+      throw new ActivityNotRegisteredError(name, version);
     }
 
     // Log activity start (EventId 603)

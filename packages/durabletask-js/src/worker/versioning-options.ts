@@ -2,21 +2,21 @@
 // Licensed under the MIT License.
 
 /**
- * Strategy for matching orchestration versions when processing work items.
+ * Strategy for matching orchestration and activity versions when processing work items.
  */
 export enum VersionMatchStrategy {
   /**
-   * No version matching - process all orchestrations regardless of version.
+   * No version filtering. Local registration lookup still uses the requested version.
    */
   None = 0,
 
   /**
-   * Only process orchestrations that exactly match the worker's version.
+   * Only process work items that match the worker's version using version comparison.
    */
   Strict = 1,
 
   /**
-   * Process orchestrations with the current version or older versions.
+   * Process work items with the current version or older versions.
    * Uses semantic versioning comparison.
    */
   CurrentOrOlder = 2,
@@ -40,7 +40,7 @@ export enum VersionFailureStrategy {
 }
 
 /**
- * Options for configuring version-based filtering of orchestrations.
+ * Options for version-based worker acceptance and default child orchestration versions.
  */
 export interface VersioningOptions {
   /**
@@ -49,8 +49,9 @@ export interface VersioningOptions {
   version?: string;
 
   /**
-   * The default version to use when starting new orchestrations without an explicit version.
-   * This is used by the client when scheduling new orchestrations.
+   * The default version for sub-orchestrations scheduled by this worker without an explicit
+   * version. An explicit empty string selects the unversioned child. This does not change
+   * the parent's version or activity versions. Top-level starts use the client's defaultVersion.
    */
   defaultVersion?: string;
 

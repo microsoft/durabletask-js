@@ -23,6 +23,38 @@ describe("DurableTaskAzureManagedWorkerBuilder", () => {
   const ENDPOINT = "http://localhost:8080";
   const TASKHUB = "test";
 
+  it("preserves named and inferred version registrations and the child default on build", async () => {
+    const activity = () => "activity";
+    const flow = async function* (ctx: import("@microsoft/durabletask-js").OrchestrationContext) {
+      yield ctx.callSubOrchestrator("Child");
+    };
+    const builder = new DurableTaskAzureManagedWorkerBuilder()
+      .endpoint(ENDPOINT, TASKHUB, null)
+      .versioning({ defaultVersion: "child" });
+    for (const version of ["v1", "v2"]) {
+      builder.addOrchestrator(flow, version).addNamedOrchestrator("Named", flow, version);
+      builder.addActivity(activity, version).addNamedActivity("Named", activity, version);
+    }
+    const worker = builder.build();
+    for (const name of ["flow", "Named"]) {
+      for (const version of ["v1", "v2"]) {
+        const request = new pb.OrchestratorRequest()
+          .setInstanceid("instance")
+          .setNeweventsList([ph.newExecutionStartedEvent(name, "instance", undefined, undefined, undefined, version)]);
+        const response = pb.OrchestratorResponse.deserializeBinary(
+          await worker.processOrchestratorRequest(request.serializeBinary()),
+        );
+        expect(response.getActionsList()[0].getCreatesuborchestration()?.getVersion()?.getValue()).toBe("child");
+      }
+    }
+    for (const name of ["activity", "Named"]) {
+      for (const version of ["v1", "v2"]) {
+        expect(worker["_registry"].getActivity(name, version)).toBe(activity);
+      }
+    }
+    expect(() => builder.addActivity(activity, "v1").build()).toThrow(/already exists/);
+  });
+
   it("keeps DTS timers native at their full deadline", async () => {
     const start = new Date("2026-01-01T00:00:00Z");
     const deadline = new Date("2026-01-31T00:00:00Z");

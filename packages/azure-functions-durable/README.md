@@ -20,6 +20,20 @@ This package supersedes the legacy [`durable-functions`](https://github.com/Azur
 - **Client** — `getClient(context)` returns a `DurableFunctionsClient` for scheduling, querying, signaling, and managing instances, plus HTTP management-payload helpers (`createCheckStatusResponse`, `createHttpManagementPayload`) for durable HTTP starters. The `app.client.*` starter helpers (`http`, `timer`, `storageBlob`, `storageQueue`, `serviceBusQueue`, `serviceBusTopic`, `eventHub`, `eventGrid`, `cosmosDB`, `generic`) register a normal trigger and inject the client as the handler's second argument, so `(trigger, client, context)` works without manually wiring `df.input.durableClient()` + `df.getClient(context)`.
 - **Classic (v3) compatibility** — orchestrators and entities written in the legacy `context.df.*` style, `RetryOptions`, `EntityId`, and the deprecated client aliases are adapted onto the core engine.
 
+### Versioning boundary
+
+`app.orchestration` and `app.activity` register **unique Azure Function names**. They do not expose
+multiple same-name versions to the Functions host; activities are dispatched by the host, not by
+the core worker's activity registry. Existing app registrations remain unversioned catch-alls.
+
+For embedded integrations using `DurableFunctionsWorker` directly, the inherited core registration
+methods accept an optional version and dispatch using the request's recorded version. Its constructor
+accepts `versioning.defaultVersion` for child scheduling, including through the classic context
+wrapper. Explicit child `version: ""` (the classic method's final argument) selects unversioned.
+This low-level capability does not add a multi-version Functions host registration protocol.
+See the core [versioning contract and migration guidance](../../README.md#versioned-registration-and-dispatch);
+unspecified activities now carry their parent's instance version on the wire.
+
 ## Migrating from durable-functions v3
 
 This provider keeps classic `context.df.*` orchestrators and entities working, but a few surfaces

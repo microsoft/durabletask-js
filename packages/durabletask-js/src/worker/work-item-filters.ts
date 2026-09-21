@@ -60,20 +60,27 @@ export function generateWorkItemFiltersFromRegistry(
   registry: Registry,
   versioning?: VersioningOptions,
 ): WorkItemFilters {
-  const versions: string[] = [];
-  if (versioning?.matchStrategy === VersionMatchStrategy.Strict && versioning.version) {
-    versions.push(versioning.version);
+  function taskFilters(registrations: { name: string; version: string }[]): OrchestrationWorkItemFilter[] {
+    const byName = new Map<string, string[]>();
+    for (const { name, version } of registrations) {
+      const versions = byName.get(name) ?? [];
+      versions.push(version);
+      byName.set(name, versions);
+    }
+    return [...byName].map(([name, versions]) => ({
+      name,
+      versions:
+        versioning?.matchStrategy === VersionMatchStrategy.Strict
+          ? [versioning.version ?? ""]
+          : versions.length === 1 && versions[0] === ""
+            ? []
+            : versions.sort(),
+    }));
   }
 
   return {
-    orchestrations: registry.getOrchestratorNames().map((name) => ({
-      name,
-      versions: [...versions],
-    })),
-    activities: registry.getActivityNames().map((name) => ({
-      name,
-      versions: [...versions],
-    })),
+    orchestrations: taskFilters(registry.getOrchestratorRegistrations()),
+    activities: taskFilters(registry.getActivityRegistrations()),
     entities: registry.getEntityNames().map((name) => ({
       name,
     })),

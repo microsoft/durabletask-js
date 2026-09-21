@@ -14,6 +14,9 @@
 
 ### Fixes
 
+- Inherit core version-aware replay dispatch and worker child defaults in the embedded
+  `DurableFunctionsWorker`, including classic-context wrappers. Host `app.*` function registrations
+  remain name-only; see README for the boundary and activity-version migration guidance.
 - Inherit Python-aligned core three-day timer/retry segments so the gRPC provider does not exceed
   Azure Storage's per-message delay limit. The testing helper inherits the same default. Functions
   also splits timers with DTS; there is no backend detection or Functions timer configuration.

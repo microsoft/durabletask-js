@@ -2,6 +2,9 @@
 
 ### New
 
+- Add optional version arguments to orchestrator/activity registrations in core and test workers,
+  dispatch by recorded/request version, and preserve versions in the in-memory backend. Same-name
+  versions coexist; unversioned-only registrations retain the .NET-compatible fallback.
 - Align core and test worker timers with Python: three-day segments by default and
   `maximumTimerIntervalMs` override (`null`, zero, or negative disables segmentation).
   Positive fractions round up to milliseconds to match JavaScript Date precision.
@@ -40,6 +43,12 @@
 
 ### Breaking changes
 
+- Activity calls without an explicit version now inherit the parent's instance version, and
+  child calls inherit the worker's `versioning.defaultVersion`; explicit `""` selects unversioned.
+  Worker acceptance checks now also apply to activities; `Strict` with an empty worker version
+  filters for unversioned work. Adding a versioned registration disables that name's unversioned
+  catch-all. Missing registrations are non-retriable. See README migration guidance before
+  changing defaults or upgrading workers with in-flight versioned instances.
 - Core timers now default to three-day segments instead of native timers; Azure-managed workers
   explicitly retain native timers.
 - `TimerTask.cancel()` now returns a boolean, marks the timer canceled and complete, and notifies
