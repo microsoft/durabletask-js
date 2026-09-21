@@ -22,6 +22,12 @@ const TimeoutOrchestrator: OrchestrationHandler = function* (context: Orchestrat
     const winner = yield context.df.Task.any([activityTask, timeoutTask]);
     if (winner === activityTask) {
         timeoutTask.cancel();
+        context.df.setCustomStatus({
+            timerCreatedAt: new Date(deadline - timeout).toISOString(),
+            timerDeadline: new Date(deadline).toISOString(),
+            timerCanceled: timeoutTask.isCanceled,
+            timerCompleted: timeoutTask.isCompleted,
+        });
         return activityTask.result;
     } else {
         return "The activity function timed out";

@@ -177,6 +177,9 @@ not failed. `getResult()` and `result` throw the exported `TaskCancelledError` w
 timer `result` also throws while pending or failed. A canceled timer can win `Task.any`; check
 `isCanceled` before reading its result. `Task.all` waits for every child and propagates cancellation
 while collecting final results, including from the final completion/cancel callback.
+Do not catch that callback exception and reuse the `Task.all` group or its parents: result
+collection and parent notification may not have finished even though the group is marked
+complete (a later result read can return `undefined`, unlike Python's `AttributeError`).
 
 **Rollout/rollback:** existing single native timer histories replay at their recorded final
 deadline, but branching on the new cancellation state can change replay. Do not mix old and new
