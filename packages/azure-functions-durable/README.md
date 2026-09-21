@@ -179,7 +179,7 @@ timer `result` also throws while pending or failed. A canceled timer can win `Ta
 while collecting final results, including from the final completion/cancel callback.
 Do not catch that callback exception and reuse the `Task.all` group or its parents: result
 collection and parent notification may not have finished even though the group is marked
-complete (a later result read can return `undefined`, unlike Python's `AttributeError`).
+complete. `getResult()` rejects that uninitialized result; parent notification is not resumed.
 
 **Rollout/rollback:** existing single native timer histories replay at their recorded final
 deadline, but branching on the new cancellation state can change replay. Do not mix old and new

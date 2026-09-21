@@ -54,8 +54,8 @@ propagates the error when collecting final child results, which can throw from `
 a sibling's completion callback. Do not yield a canceled timer expecting success.
 If that callback throws, do not catch it and reuse the `whenAll` group or its parents:
 the group can already be marked complete without a result and without notifying its parent.
-This follows Python's callback-failure boundary, but subsequent result reads differ:
-JavaScript can return `undefined`, whereas Python can raise `AttributeError`.
+Like Python, `getResult()` rejects this uninitialized result instead of treating it as success.
+Parent notification is not resumed after the callback exception.
 Custom `Task` subclasses now have their completed `getResult()` accessor called on each yield
 instead of reading the raw result field. Accessors must be replay-safe; thrown errors fail execution.
 

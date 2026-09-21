@@ -22,6 +22,8 @@
 
 ### Fixes
 
+- Reject uninitialized `whenAll` results after a canceled child's completion callback throws,
+  rather than allowing a caught cancellation followed by `yield` to report success.
 - Align worker response cancellation with .NET: `stop()` cancels initial sends as well
   as retries and backoff for all work items. Work finishing after stop no longer sends a response.
 - Retry worker completion and version-rejection responses on transient gRPC failures, reusing

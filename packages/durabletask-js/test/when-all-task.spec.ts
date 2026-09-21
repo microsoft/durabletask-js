@@ -3,8 +3,31 @@
 
 import { WhenAllTask } from "../src/task/when-all-task";
 import { CompletableTask } from "../src/task/completable-task";
+import { TimerTask } from "../src/task/timer-task";
+import { TaskCancelledError } from "../src/task/exception/task-cancelled-error";
 
 describe("WhenAllTask", () => {
+  it("rejects reading an unset result after a child cancellation callback throws", () => {
+    const timer = new TimerTask();
+    const all = new WhenAllTask([timer]);
+    expect(() => all.getResult()).toThrow("Task is not complete");
+    expect(() => timer.cancel()).toThrow(TaskCancelledError);
+    expect(timer.isCanceled).toBe(true);
+    expect(all.isComplete).toBe(true);
+    expect(all.isFailed).toBe(false);
+    expect(() => all.getResult()).toThrow("whenAll completed without a result");
+    expect(timer.cancel()).toBe(false);
+  });
+
+  it.each([false, true])("keeps a successful array of undefined results valid (pre-completed=%s)", (preCompleted) => {
+    const child = new CompletableTask<undefined>();
+    if (preCompleted) child.complete(undefined);
+    const all = new WhenAllTask([child]);
+    if (!preCompleted) child.complete(undefined);
+    expect(all.getResult()).toEqual([undefined]);
+    expect(all.result).toEqual([undefined]);
+  });
+
   it("should complete immediately when given an empty task array", () => {
     const task = new WhenAllTask<number>([]);
 

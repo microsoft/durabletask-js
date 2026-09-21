@@ -304,10 +304,30 @@ describe("segmented timer cancellation ordering", () => {
     expect(all.isFailed).toBe(false);
     // Python also leaves the outer parent pending after this callback throws.
     // Neither implementation initializes an all-result on this exceptional path.
-    expect(all.getResult()).toBeUndefined();
+    expect(() => all.getResult()).toThrow("whenAll completed without a result");
     expect(outer.isComplete).toBe(false);
     expect(timer.cancel()).toBe(false);
     expect(() => timer.getResult()).toThrow(TaskCancelledError);
+  });
+
+  it("does not complete successfully after catching cancellation and yielding the broken group", async () => {
+    const worker = workerFor(async function* (ctx): ReturnType<TOrchestrator> {
+      const timer = ctx.createTimer(atDay(10));
+      const all = whenAll([timer]);
+      try {
+        timer.cancel();
+      } catch (error) {
+        if (!(error instanceof TaskCancelledError)) throw error;
+      }
+      const result = yield all;
+      return result === undefined ? "FALSE_SUCCESS" : result;
+    });
+    const actions = await replay(worker, [], startEvents());
+    expect(actions).toHaveLength(1);
+    const completed = actions[0].getCompleteorchestration()!;
+    expect(completed.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(completed.getResult()).toBeUndefined();
+    expect(completed.getFailuredetails()?.getErrormessage()).toContain("whenAll completed without a result");
   });
 
   it.each([false, true])(
