@@ -14,6 +14,16 @@
 
 ### Fixes
 
+- Inherit Python-aligned core three-day timer/retry segments so the gRPC provider does not exceed
+  Azure Storage's per-message delay limit. The testing helper inherits the same default. Functions
+  also splits timers with DTS; there is no backend detection or Functions timer configuration.
+
+### Breaking changes
+
+- Timer cancellation now matches Python: boolean return, canceled terminal state, parent notification,
+  and `TaskCancelledError` from canceled results. Timer `result` now aliases `getResult()`, including
+  errors while pending or failed. Drain affected instances before mixing versions or rollback;
+  cancellation branching and already-segmented histories can change replay.
 ## v4.0.0-beta.1 (2026-07-31)
 
 ### Changes

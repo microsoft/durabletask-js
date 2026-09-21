@@ -23,6 +23,47 @@ const entityResponseBytes = await worker.processEntityBatchRequest(entityBatchRe
 
 `TaskHubGrpcClient` already exposes orchestration start/query/event/terminate/suspend/resume/purge APIs and entity signal/read/query/clean APIs through its existing `hostAddress` and `metadataGenerator` options. Host integrations that need task-hub routing metadata should provide it through `metadataGenerator`, keeping host-specific metadata policy outside the core client. Azure-managed scheduler connection strings remain in `@microsoft/durabletask-js-azuremanaged`.
 
+## Long durable timers
+
+`createTimer(Date | seconds)` has no SDK-imposed total-duration cap. Like the Python SDK,
+core workers default to three-day backend segments, including durable retry delays. A ten-day
+timer uses 3 + 3 + 3 + 1 day segments but remains one logical `TimerTask`.
+
+| Entry point | Timer behavior |
+| --- | --- |
+| Core `TaskHubGrpcWorker` / `TestOrchestrationWorker` | Three-day default |
+| Azure-managed worker builder | Explicitly native timers; DTS supports long timers |
+| `durable-functions` worker / `runOrchestrator` | Inherits the core three-day default |
+
+Core `TaskHubGrpcWorker({ maximumTimerIntervalMs })` and
+`TestOrchestrationWorker(backend, { maximumTimerIntervalMs })` accept the Python-equivalent
+interval override in milliseconds. Omit it for three days; `null`, zero, or negative values
+disable segmentation. Values must be finite. Python's `timedelta` supports microseconds;
+JavaScript `Date` supports milliseconds, so positive fractions are rounded up to whole milliseconds.
+Functions exposes no timer configuration and also segments when connected to DTS, as in Python;
+there is no backend detection. Native in-memory timers still have Node.js's approximately
+24.9-day timeout limit when segmentation is disabled.
+
+**Cancellation change:** `timer.cancel()` now returns `true` on first cancellation and `false`
+when already terminal. It removes the current segment, marks the timer canceled and complete
+(`isCanceled`, `isComplete`, `isCompleted`), and notifies its parent; cancellation is not failure.
+`timer.getResult()` and `timer.result` throw `TaskCancelledError` after cancellation. For timers,
+`result` now aliases `getResult()` even while pending or failed. A canceled timer can win `whenAny`;
+inspect `isCanceled` before reading its result. `whenAll` counts cancellation as terminal and
+propagates the error when collecting final child results, which can throw from `cancel()` or
+a sibling's completion callback. Do not yield a canceled timer expecting success.
+If that callback throws, do not catch it and reuse the `whenAll` group or its parents:
+the group can already be marked complete without a result and without notifying its parent.
+Like Python, `getResult()` rejects this uninitialized result instead of treating it as success.
+Parent notification is not resumed after the callback exception.
+Custom `Task` subclasses now have their completed `getResult()` accessor called on each yield
+instead of reading the raw result field. Accessors must be replay-safe; thrown errors fail execution.
+
+**Rollout:** both the core default and cancellation semantics intentionally change to match Python.
+Existing single native timer histories replay at their recorded final deadline, but changed
+cancellation branching can affect replay. Avoid mixed versions; drain affected instances or use
+a new task hub before changing intervals, rolling back, or switching providers.
+
 ## npm packages
 
 The following npm packages are available for download.

@@ -39,6 +39,7 @@ describe("Worker history streaming over gRPC", () => {
   const exporter = new InMemorySpanExporter();
   const provider = new BasicTracerProvider();
   let server: grpc.Server;
+  let hostAddress: string;
   let worker: TaskHubGrpcWorker;
   let subscription: grpc.ServerWritableStream<pb.GetWorkItemsRequest, pb.WorkItem> | undefined;
   let historyCalls: HistoryCall[];
@@ -107,8 +108,9 @@ describe("Worker history streaming over gRPC", () => {
         else resolve(boundPort);
       });
     });
+    hostAddress = `127.0.0.1:${port}`;
     worker = new TaskHubGrpcWorker({
-      hostAddress: `127.0.0.1:${port}`,
+      hostAddress,
       logger: new NoOpLogger(),
       metadataGenerator: async () => {
         const metadata = new grpc.Metadata();
@@ -176,6 +178,56 @@ describe("Worker history streaming over gRPC", () => {
       pb.WorkerCapability.WORKER_CAPABILITY_HISTORY_STREAMING,
     ]);
     expect(subscription!.request.getMaxconcurrentorchestrationworkitems()).toBeGreaterThan(0);
+  });
+
+  it("preserves long-timer segments when replaying streamed history", async () => {
+    const dayMs = 24 * 60 * 60 * 1000;
+    const startTime = new Date("2026-01-01T00:00:00Z").getTime();
+    const atDay = (day: number) => new Date(startTime + day * dayMs);
+    worker = new TaskHubGrpcWorker({
+      hostAddress,
+      logger: new NoOpLogger(),
+    });
+    worker.addOrchestrator(async function* longTimer(ctx: OrchestrationContext): AsyncGenerator {
+      yield ctx.createTimer(atDay(10));
+      return "elapsed";
+    });
+    const history = [
+      pbh.newOrchestratorStartedEvent(atDay(0)),
+      pbh.newExecutionStartedEvent("longTimer", instanceId, undefined, undefined, executionId),
+    ];
+    onHistory = (call) => {
+      call.write(chunk(history.slice(0, 2)));
+      call.write(chunk(history.slice(2)));
+      call.end();
+    };
+    await start();
+
+    let newEvents = [pbh.newOrchestratorStartedEvent(atDay(0))];
+    for (const [index, day] of [3, 6, 9, 10].entries()) {
+      send(request().setNeweventsList(newEvents));
+      await waitFor(() => responses.length === index + 1);
+      await settled();
+      const actions = responses[index].getActionsList();
+      expect(actions).toHaveLength(1);
+      expect(actions[0].getId()).toBe(index + 1);
+      expect(actions[0].getCreatetimer()?.getFireat()?.toDate()).toEqual(atDay(day));
+      history.push(...newEvents, pbh.newTimerCreatedEvent(index + 1, atDay(day)));
+      newEvents = [
+        pbh.newOrchestratorStartedEvent(atDay(day)),
+        pbh.newTimerFiredEvent(index + 1, atDay(day)),
+      ];
+    }
+
+    send(request().setNeweventsList(newEvents));
+    await waitFor(() => responses.length === 5);
+    await settled();
+    expect(responses[4].getActionsList()).toHaveLength(1);
+    const completed = responses[4].getActionsList()[0].getCompleteorchestration()!;
+    expect(completed.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+    expect(completed.getResult()?.getValue()).toBe('"elapsed"');
+    expect(historyCalls).toHaveLength(5);
+    expect(abandonments).toHaveLength(0);
   });
 
   it.each([false, true])("replays complete ordered history (streaming=%s) before new events", async (streaming) => {

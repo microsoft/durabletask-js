@@ -81,6 +81,7 @@ export { OrchestrationStatus as ProtoOrchestrationStatus } from "./proto/orchest
 // Failure details
 export { FailureDetails, TaskFailureDetails } from "./task/failure-details";
 export { TaskFailedError } from "./task/exception/task-failed-error";
+export { TaskCancelledError } from "./task/exception/task-cancelled-error";
 
 // Task utilities
 export { getName, whenAll, whenAny } from "./task";

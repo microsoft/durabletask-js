@@ -28,6 +28,15 @@ export class WhenAllTask<T> extends CompositeTask<T[]> {
     return this._tasks.length - this._completedTasks;
   }
 
+  override getResult(): T[] {
+    const result = super.getResult();
+    // A child result read can throw after completion is set but before the array is assigned.
+    if (result === undefined) {
+      throw new Error("whenAll completed without a result because child result collection failed");
+    }
+    return result;
+  }
+
   onChildCompleted(_task: Task<any>): void {
     if (this._isComplete) {
       // Already completed (all children done). Ignore subsequent child completions.

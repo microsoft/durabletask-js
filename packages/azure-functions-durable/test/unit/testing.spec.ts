@@ -6,12 +6,43 @@ import {
   InMemoryOrchestrationBackend,
   TestOrchestrationClient,
   TestOrchestrationWorker,
+  TOrchestrator,
+  whenAny,
 } from "@microsoft/durabletask-js";
 import { OrchestrationRuntimeStatus, toDurableOrchestrationStatus, wrapOrchestrator } from "../../src";
 import type { OrchestrationContext, OrchestrationHandler } from "../../src";
 import { createActivityContext, runOrchestrator } from "../../src/testing";
 
 describe("durable-functions/testing", () => {
+  it("uses the same three-day default in the standalone core test worker", async () => {
+    const backend = new InMemoryOrchestrationBackend();
+    const worker = new TestOrchestrationWorker(backend);
+    const client = new TestOrchestrationClient(backend);
+    const complete = jest.spyOn(backend, "completeOrchestration");
+    const day = 24 * 60 * 60 * 1000;
+    let startedAt = 0;
+    worker.addNamedOrchestrator("native-timer", async function* (ctx) {
+      startedAt = ctx.currentUtcDateTime.getTime();
+      const timer = ctx.createTimer((30 * day) / 1000);
+      yield whenAny([timer, ctx.callActivity("approve")]);
+      timer.cancel();
+      return "approved";
+    });
+    worker.addNamedActivity("approve", async () => "ok");
+    await worker.start();
+    try {
+      const id = await client.scheduleNewOrchestration("native-timer");
+      await client.waitForOrchestrationCompletion(id);
+      const timers = complete.mock.calls.flatMap((call) => call[2]).filter((action) => action.hasCreatetimer());
+      expect(timers).toHaveLength(1);
+      expect(timers[0].getCreatetimer()?.getFireat()?.toDate().getTime()).toBe(startedAt + 3 * day);
+    } finally {
+      await worker.stop();
+      backend.reset();
+      complete.mockRestore();
+    }
+  });
+
   describe("createActivityContext", () => {
     it("builds the invocation context an activity handler receives", async () => {
       const sayHello = (name: string, context: InvocationContext) => `${context.functionName}: Hello, ${name}!`;
@@ -22,6 +53,42 @@ describe("durable-functions/testing", () => {
   });
 
   describe("runOrchestrator", () => {
+    it("inherits the core three-day timer default, like the Functions worker", async () => {
+      const complete = jest.spyOn(InMemoryOrchestrationBackend.prototype, "completeOrchestration");
+      const day = 24 * 60 * 60 * 1000;
+      let startedAt = 0;
+      const orchestrator: TOrchestrator = async function* (ctx) {
+        startedAt = ctx.currentUtcDateTime.getTime();
+        const timer = ctx.createTimer((30 * day) / 1000);
+        yield whenAny([timer, ctx.callActivity("approve")]);
+        timer.cancel();
+        return "approved";
+      };
+      try {
+        expect((await runOrchestrator(orchestrator, { activities: { approve: () => "ok" } })).output).toBe("approved");
+        const timers = complete.mock.calls.flatMap((call) => call[2]).filter((action) => action.hasCreatetimer());
+        expect(timers).toHaveLength(1);
+        expect(timers[0].getCreatetimer()?.getFireat()?.toDate().getTime()).toBe(startedAt + 3 * day);
+      } finally {
+        complete.mockRestore();
+      }
+    });
+
+    it("keeps short timers as a single segment", async () => {
+      const complete = jest.spyOn(InMemoryOrchestrationBackend.prototype, "completeOrchestration");
+      const orchestrator: TOrchestrator = async function* (ctx) {
+        yield ctx.createTimer(0.015);
+        return "elapsed";
+      };
+      try {
+        expect((await runOrchestrator(orchestrator)).output).toBe("elapsed");
+        const timers = complete.mock.calls.flatMap((call) => call[2]).filter((action) => action.hasCreatetimer());
+        expect(timers).toHaveLength(1);
+      } finally {
+        complete.mockRestore();
+      }
+    });
+
     it("runs a classic orchestrator against inline activities", async () => {
       const orchestrator: OrchestrationHandler = function* (
         context: OrchestrationContext,

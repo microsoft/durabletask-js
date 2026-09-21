@@ -2,10 +2,41 @@
 // Licensed under the MIT License.
 
 import { GenericFunctionOptions, InvocationContext, app as azFuncApp } from "@azure/functions";
+import { OrchestrationContext } from "@microsoft/durabletask-js";
 import * as app from "../../src/app";
 import { DurableFunctionsWorker } from "../../src/worker";
+import * as pb from "../../../durabletask-js/src/proto/orchestrator_service_pb";
+import * as ph from "../../../durabletask-js/src/utils/pb-helper.util";
 
 describe("app registration", () => {
+  it("requires no timer setup API", () => {
+    expect(app).not.toHaveProperty("setup");
+  });
+
+  it("automatically splits long timers in the normal app registration path", async () => {
+    const start = new Date("2026-01-01T00:00:00Z");
+    const day = 86400000;
+    app.orchestration("long-timer", async function* (ctx: OrchestrationContext) {
+      yield ctx.createTimer((30 * day) / 1000);
+    });
+    const request = new pb.OrchestratorRequest();
+    request.setInstanceid("instance");
+    request.setNeweventsList([
+      ph.newOrchestratorStartedEvent(start),
+      ph.newExecutionStartedEvent("long-timer", "instance"),
+    ]);
+    const { options } = lastRegistration();
+    const encodedResponse = await options.handler(
+      Buffer.from(request.serializeBinary()).toString("base64"),
+      {} as InvocationContext,
+    );
+    const actions = pb.OrchestratorResponse.deserializeBinary(
+      Buffer.from(encodedResponse as string, "base64"),
+    ).getActionsList();
+    expect(actions).toHaveLength(1);
+    expect(actions[0].getCreatetimer()?.getFireat()?.toDate()).toEqual(new Date(start.getTime() + 3 * day));
+  });
+
   let genericSpy: jest.SpyInstance;
 
   beforeEach(() => {
