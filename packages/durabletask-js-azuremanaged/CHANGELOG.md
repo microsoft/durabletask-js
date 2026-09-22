@@ -2,6 +2,8 @@
 
 ### New
 
+- Add an optional final version argument to all orchestrator/activity builder registrations,
+  preserving same-name versions and version-aware auto filters in the built worker.
 - Add `DurableTaskAzureManagedWorkerBuilder.silentDisconnectTimeout()` to configure the
   core worker's work-item stream watchdog. Set it to `0` for sidecars that do not emit
   health-ping work items, including the current durabletask-go sidecar.

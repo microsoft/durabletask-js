@@ -57,7 +57,11 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   private readonly _maximumTimerIntervalMs: number | null;
   private readonly _longTimers = new Map<CompletableTask<any>, number>();
 
-  constructor(instanceId: string, maximumTimerIntervalMs?: number | null) {
+  constructor(
+    instanceId: string,
+    maximumTimerIntervalMs?: number | null,
+    private readonly _defaultVersion?: string,
+  ) {
     super();
     this._maximumTimerIntervalMs = resolveMaximumTimerInterval(maximumTimerIntervalMs);
 
@@ -406,7 +410,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     const id = this.nextSequenceNumber();
     const name = typeof activity === "string" ? activity : getName(activity);
     const encodedInput = input !== undefined ? JSON.stringify(input) : undefined;
-    const action = ph.newScheduleTaskAction(id, name, encodedInput, options?.tags, options?.version);
+    const action = ph.newScheduleTaskAction(id, name, encodedInput, options?.tags, options?.version ?? this._version);
     this._pendingActions[action.getId()] = action;
 
     const task = this.createRetryTaskOrDefault<TOutput>(action, id, options, "activity");
@@ -460,7 +464,14 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     }
 
     const encodedInput = input !== undefined ? JSON.stringify(input) : undefined;
-    const action = ph.newCreateSubOrchestrationAction(id, name, instanceId, encodedInput, options?.tags, options?.version);
+    const action = ph.newCreateSubOrchestrationAction(
+      id,
+      name,
+      instanceId,
+      encodedInput,
+      options?.tags,
+      options?.version ?? this._defaultVersion ?? "",
+    );
     this._pendingActions[action.getId()] = action;
 
     const task = this.createRetryTaskOrDefault<TOutput>(action, id, options, "subOrchestration");

@@ -4,6 +4,8 @@
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 import * as pb from "../proto/orchestrator_service_pb";
 import { Timestamp } from "google-protobuf/google/protobuf/timestamp_pb";
+import { ActivityNotRegisteredError } from "../worker/exception/activity-not-registered-error";
+import { OrchestratorNotRegisteredError } from "../worker/exception/orchestrator-not-registered-error";
 
 export function newOrchestratorStartedEvent(timestamp?: Date | null): pb.HistoryEvent {
   const ts = new Timestamp();
@@ -220,6 +222,9 @@ function buildFailureDetails(e: unknown, depth: number): pb.TaskFailureDetails {
 
   failure.setErrortype(errorType);
   failure.setErrormessage(errorMessage);
+  if (e instanceof ActivityNotRegisteredError || e instanceof OrchestratorNotRegisteredError) {
+    failure.setIsnonretriable(true);
+  }
 
   if (stack !== undefined) {
     const sv = new StringValue();
@@ -449,9 +454,7 @@ export function newScheduleTaskAction(
   scheduleTaskAction.setName(name);
   scheduleTaskAction.setInput(getStringValue(encodedInput));
   populateTagsMap(scheduleTaskAction.getTagsMap(), tags);
-  if (version) {
-    scheduleTaskAction.setVersion(getStringValue(version));
-  }
+  scheduleTaskAction.setVersion(getStringValueIfDefined(version));
 
   const action = new pb.OrchestratorAction();
   action.setId(id);
@@ -479,9 +482,7 @@ export function newCreateSubOrchestrationAction(
   createSubOrchestrationAction.setInstanceid(instanceId || "");
   createSubOrchestrationAction.setInput(getStringValue(encodedInput));
   populateTagsMap(createSubOrchestrationAction.getTagsMap(), tags);
-  if (version) {
-    createSubOrchestrationAction.setVersion(getStringValue(version));
-  }
+  createSubOrchestrationAction.setVersion(getStringValueIfDefined(version));
 
   const action = new pb.OrchestratorAction();
   action.setId(id);

@@ -24,8 +24,8 @@ import {
 export class DurableTaskAzureManagedWorkerBuilder {
   private _options: DurableTaskAzureManagedWorkerOptions;
   private _grpcChannelOptions: grpc.ChannelOptions = {};
-  private _orchestrators: { name?: string; fn: TOrchestrator }[] = [];
-  private _activities: { name?: string; fn: TActivity<TInput, TOutput> }[] = [];
+  private _orchestrators: { name?: string; fn: TOrchestrator; version?: string }[] = [];
+  private _activities: { name?: string; fn: TActivity<TInput, TOutput>; version?: string }[] = [];
   private _entities: { name?: string; factory: EntityFactory }[] = [];
   private _logger: Logger = new ConsoleLogger();
   private _shutdownTimeoutMs?: number;
@@ -148,10 +148,11 @@ export class DurableTaskAzureManagedWorkerBuilder {
    * Registers an orchestrator function with the worker.
    *
    * @param fn The orchestrator function.
+   * @param version Registration version; omitted or empty means unversioned.
    * @returns This builder instance.
    */
-  addOrchestrator(fn: TOrchestrator): DurableTaskAzureManagedWorkerBuilder {
-    this._orchestrators.push({ fn });
+  addOrchestrator(fn: TOrchestrator, version?: string): DurableTaskAzureManagedWorkerBuilder {
+    this._orchestrators.push({ fn, version });
     return this;
   }
 
@@ -160,10 +161,11 @@ export class DurableTaskAzureManagedWorkerBuilder {
    *
    * @param name The name of the orchestrator.
    * @param fn The orchestrator function.
+   * @param version Registration version; omitted or empty means unversioned.
    * @returns This builder instance.
    */
-  addNamedOrchestrator(name: string, fn: TOrchestrator): DurableTaskAzureManagedWorkerBuilder {
-    this._orchestrators.push({ name, fn });
+  addNamedOrchestrator(name: string, fn: TOrchestrator, version?: string): DurableTaskAzureManagedWorkerBuilder {
+    this._orchestrators.push({ name, fn, version });
     return this;
   }
 
@@ -171,10 +173,11 @@ export class DurableTaskAzureManagedWorkerBuilder {
    * Registers an activity function with the worker.
    *
    * @param fn The activity function.
+   * @param version Registration version; omitted or empty means unversioned.
    * @returns This builder instance.
    */
-  addActivity(fn: TActivity<TInput, TOutput>): DurableTaskAzureManagedWorkerBuilder {
-    this._activities.push({ fn });
+  addActivity(fn: TActivity<TInput, TOutput>, version?: string): DurableTaskAzureManagedWorkerBuilder {
+    this._activities.push({ fn, version });
     return this;
   }
 
@@ -183,10 +186,15 @@ export class DurableTaskAzureManagedWorkerBuilder {
    *
    * @param name The name of the activity.
    * @param fn The activity function.
+   * @param version Registration version; omitted or empty means unversioned.
    * @returns This builder instance.
    */
-  addNamedActivity(name: string, fn: TActivity<TInput, TOutput>): DurableTaskAzureManagedWorkerBuilder {
-    this._activities.push({ name, fn });
+  addNamedActivity(
+    name: string,
+    fn: TActivity<TInput, TOutput>,
+    version?: string,
+  ): DurableTaskAzureManagedWorkerBuilder {
+    this._activities.push({ name, fn, version });
     return this;
   }
 
@@ -331,20 +339,20 @@ export class DurableTaskAzureManagedWorkerBuilder {
     });
 
     // Register all orchestrators
-    for (const { name, fn } of this._orchestrators) {
+    for (const { name, fn, version } of this._orchestrators) {
       if (name) {
-        worker.addNamedOrchestrator(name, fn);
+        worker.addNamedOrchestrator(name, fn, version);
       } else {
-        worker.addOrchestrator(fn);
+        worker.addOrchestrator(fn, version);
       }
     }
 
     // Register all activities
-    for (const { name, fn } of this._activities) {
+    for (const { name, fn, version } of this._activities) {
       if (name) {
-        worker.addNamedActivity(name, fn);
+        worker.addNamedActivity(name, fn, version);
       } else {
-        worker.addActivity(fn);
+        worker.addActivity(fn, version);
       }
     }
 

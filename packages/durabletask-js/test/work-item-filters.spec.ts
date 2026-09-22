@@ -402,7 +402,7 @@ describe("WorkItemFilters", () => {
       expect(filters.activities![0].versions).toEqual([]);
     });
 
-    it("should not include version when Strict but version is not set", () => {
+    it("should filter for unversioned work when Strict but version is not set", () => {
       // Arrange
       const registry = new Registry();
       registry.addOrchestrator(myOrchestrator);
@@ -413,7 +413,7 @@ describe("WorkItemFilters", () => {
       });
 
       // Assert
-      expect(filters.orchestrations![0].versions).toEqual([]);
+      expect(filters.orchestrations![0].versions).toEqual([""]);
     });
 
     it("should not include version when no versioning options provided", () => {

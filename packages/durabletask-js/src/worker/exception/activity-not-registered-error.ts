@@ -2,8 +2,8 @@
 // Licensed under the MIT License.
 
 export class ActivityNotRegisteredError extends Error {
-  constructor(name: string) {
-    super(`Activity function '${name}' is not registered.`);
+  constructor(name: string, version?: string) {
+    super(`Activity function '${name}'${version ? ` with version '${version}'` : ""} is not registered.`);
     this.name = "ActivityNotRegisteredError";
   }
 }

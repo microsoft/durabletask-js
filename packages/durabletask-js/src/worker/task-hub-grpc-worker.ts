@@ -95,7 +95,7 @@ export interface TaskHubGrpcWorkerOptions {
    * Defaults to 5. Non-positive values disable channel recreation. Must be a safe integer.
    */
   channelRecreateFailureThreshold?: number;
-  /** Optional versioning options for filtering orchestrations by version. */
+  /** Version acceptance policy for orchestrations and activities, and the default child version. */
   versioning?: VersioningOptions;
   /**
    * Optional work item filters to control which work items the worker receives.
@@ -274,59 +274,63 @@ export class TaskHubGrpcWorker {
 
   /**
    * Registers an orchestrator function with the worker.
+   * An optional version permits same-name implementations. Omission or "" is unversioned.
    *
    * @param fn
    * @returns
    */
-  addOrchestrator(fn: TOrchestrator): string {
+  addOrchestrator(fn: TOrchestrator, version?: string): string {
     if (this._isRunning) {
       throw new Error("Cannot add orchestrator while worker is running.");
     }
 
-    return this._registry.addOrchestrator(fn);
+    return this._registry.addOrchestrator(fn, version);
   }
 
   /**
    * Registers an named orchestrator function with the worker.
+   * An optional version permits same-name implementations. Omission or "" is unversioned.
    *
    * @param fn
    * @returns
    */
-  addNamedOrchestrator(name: string, fn: TOrchestrator): string {
+  addNamedOrchestrator(name: string, fn: TOrchestrator, version?: string): string {
     if (this._isRunning) {
       throw new Error("Cannot add orchestrator while worker is running.");
     }
 
-    this._registry.addNamedOrchestrator(name, fn);
+    this._registry.addNamedOrchestrator(name, fn, version);
     return name;
   }
 
   /**
    * Registers an activity function with the worker.
+   * An optional version permits same-name implementations. Omission or "" is unversioned.
    *
    * @param fn
    * @returns
    */
-  addActivity(fn: TActivity<TInput, TOutput>): string {
+  addActivity(fn: TActivity<TInput, TOutput>, version?: string): string {
     if (this._isRunning) {
       throw new Error("Cannot add activity while worker is running.");
     }
 
-    return this._registry.addActivity(fn);
+    return this._registry.addActivity(fn, version);
   }
 
   /**
    * Registers an named activity function with the worker.
+   * An optional version permits same-name implementations. Omission or "" is unversioned.
    *
    * @param fn
    * @returns
    */
-  addNamedActivity(name: string, fn: TActivity<TInput, TOutput>): string {
+  addNamedActivity(name: string, fn: TActivity<TInput, TOutput>, version?: string): string {
     if (this._isRunning) {
       throw new Error("Cannot add activity while worker is running.");
     }
 
-    this._registry.addNamedActivity(name, fn);
+    this._registry.addNamedActivity(name, fn, version);
     return name;
   }
 
@@ -836,7 +840,7 @@ export class TaskHubGrpcWorker {
   /**
    * Result of version compatibility check.
    */
-  private _checkVersionCompatibility(req: pb.OrchestratorRequest): {
+  private _checkVersionCompatibility(orchestrationVersion?: string): {
     compatible: boolean;
     shouldFail: boolean;
     orchestrationVersion?: string;
@@ -844,18 +848,14 @@ export class TaskHubGrpcWorker {
     errorMessage?: string;
   } {
     // If no versioning options configured or match strategy is None, always compatible
-    if (!this._versioning || this._versioning.matchStrategy === VersionMatchStrategy.None) {
+    if (
+      !this._versioning ||
+      (this._versioning.matchStrategy ?? VersionMatchStrategy.None) === VersionMatchStrategy.None
+    ) {
       return { compatible: true, shouldFail: false };
     }
 
-    // Extract orchestration version from ExecutionStarted event
-    const orchestrationVersion = this._getOrchestrationVersion(req);
-    const workerVersion = this._versioning.version;
-
-    // If worker version is not set, process all
-    if (!workerVersion) {
-      return { compatible: true, shouldFail: false };
-    }
+    const workerVersion = this._versioning.version ?? "";
 
     let compatible = false;
     let errorType = "VersionMismatch";
@@ -1079,7 +1079,7 @@ export class TaskHubGrpcWorker {
     }
 
     // Check version compatibility if versioning is enabled
-    const versionCheckResult = this._checkVersionCompatibility(req);
+    const versionCheckResult = this._checkVersionCompatibility(this._getOrchestrationVersion(req));
     if (!versionCheckResult.compatible) {
       if (versionCheckResult.shouldFail) {
         // Fail the orchestration with version mismatch error
@@ -1170,7 +1170,12 @@ export class TaskHubGrpcWorker {
     let res;
 
     try {
-      const executor = new OrchestrationExecutor(this._registry, this._logger, this.maximumTimerIntervalMs);
+      const executor = new OrchestrationExecutor(
+        this._registry,
+        this._logger,
+        this.maximumTimerIntervalMs,
+        this._versioning?.defaultVersion,
+      );
       const result = await executor.execute(
         req.getInstanceid(),
         req.getPasteventsList(),
@@ -1272,30 +1277,51 @@ export class TaskHubGrpcWorker {
       throw new Error("Activity request does not contain an orchestration instance id");
     }
 
-    let res;
+    const versionCheck = this._checkVersionCompatibility(req.getVersion()?.getValue());
+    if (!versionCheck.compatible && !versionCheck.shouldFail) {
+      WorkerLogs.versionMismatchAbandon(
+        this._logger,
+        instanceId,
+        versionCheck.errorType!,
+        versionCheck.errorMessage!,
+      );
+      try {
+        const abandon = new pb.AbandonActivityTaskRequest().setCompletiontoken(completionToken);
+        await this._deliverResponse(stub.abandonTaskActivityWorkItem.bind(stub), abandon, retrySignal);
+      } catch (error: unknown) {
+        WorkerLogs.completionError(this._logger, instanceId, error);
+      }
+      return;
+    }
+
+    const res = new pb.ActivityResponse()
+      .setInstanceid(instanceId)
+      .setTaskid(req.getTaskid())
+      .setCompletiontoken(completionToken);
 
     // Start the activity span for distributed tracing
     const activitySpan = startSpanForTaskExecution(req);
 
     try {
-      const executor = new ActivityExecutor(this._registry, this._logger);
-      const result = await executor.execute(
-        instanceId,
-        req.getName(),
-        req.getTaskid(),
-        req.getInput()?.getValue() ?? "",
-      );
-
-      const s = new StringValue();
-      s.setValue(result ?? "");
-
-      res = new pb.ActivityResponse();
-      res.setInstanceid(instanceId);
-      res.setTaskid(req.getTaskid());
-      res.setCompletiontoken(completionToken);
-      res.setResult(s);
-
-      setSpanOk(activitySpan);
+      if (!versionCheck.compatible) {
+        const error = new Error(versionCheck.errorMessage);
+        WorkerLogs.activityExecutionError(this._logger, req.getName(), error);
+        setSpanError(activitySpan, error);
+        res.setFailuredetails(
+          pbh.newVersionMismatchFailureDetails(versionCheck.errorType!, versionCheck.errorMessage!),
+        );
+      } else {
+        const executor = new ActivityExecutor(this._registry, this._logger);
+        const result = await executor.execute(
+          instanceId,
+          req.getName(),
+          req.getTaskid(),
+          req.getInput()?.getValue() ?? "",
+          req.getVersion()?.getValue(),
+        );
+        res.setResult(new StringValue().setValue(result ?? ""));
+        setSpanOk(activitySpan);
+      }
     } catch (e: unknown) {
       const error = e instanceof Error ? e : new Error(String(e));
       WorkerLogs.activityExecutionError(this._logger, req.getName(), error);
@@ -1304,10 +1330,6 @@ export class TaskHubGrpcWorker {
 
       const failureDetails = pbh.newFailureDetails(error);
 
-      res = new pb.ActivityResponse();
-      res.setInstanceid(instanceId);
-      res.setTaskid(req.getTaskid());
-      res.setCompletiontoken(completionToken);
       res.setFailuredetails(failureDetails);
     } finally {
       // End the activity span BEFORE the gRPC completion call.

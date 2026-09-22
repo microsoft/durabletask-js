@@ -307,7 +307,6 @@ describe("TestOrchestrationClient orchestration ID reuse policy", () => {
 
   it.each([
     ["tags", { tags: { environment: "test" } }],
-    ["version", { version: "v2" }],
   ])("rejects unsupported %s options instead of silently dropping them", async (_name, options) => {
     await expect(
       client.scheduleNewOrchestration(waitingOrchestrator, undefined, {

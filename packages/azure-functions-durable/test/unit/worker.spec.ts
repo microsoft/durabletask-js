@@ -30,6 +30,42 @@ async function timerActions(worker: DurableFunctionsWorker) {
 }
 
 describe("DurableFunctionsWorker", () => {
+  it("dispatches versioned registrations and child defaults through the classic wrapper", async () => {
+    const worker = new DurableFunctionsWorker({
+      logger: new NoOpLogger(),
+      versioning: { defaultVersion: "child-default" },
+    });
+    for (const version of ["v1", "v2"]) {
+      worker.addNamedOrchestrator(
+        "Flow",
+        wrapOrchestrator(function* (ctx: ClassicOrchestrationContext) {
+          expect(ctx.df.version).toBe(version);
+          ctx.df.callSubOrchestrator("Child");
+          ctx.df.callSubOrchestrator("Child", undefined, undefined, "");
+          yield ctx.df.callSubOrchestrator("Child", undefined, undefined, "explicit");
+        }),
+        version,
+      );
+    }
+    for (const version of ["v1", "v2"]) {
+      const request = new pb.OrchestratorRequest()
+        .setInstanceid("instance")
+        .setNeweventsList([
+          ph.newOrchestratorStartedEvent(START),
+          ph.newExecutionStartedEvent("Flow", "instance", undefined, undefined, undefined, version),
+        ]);
+      const response = await worker.handleOrchestratorRequest(
+        Buffer.from(request.serializeBinary()).toString("base64"),
+      );
+      const actions = pb.OrchestratorResponse.deserializeBinary(Buffer.from(response, "base64")).getActionsList();
+      expect(actions.map((action) => action.getCreatesuborchestration()?.getVersion()?.getValue() ?? "")).toEqual([
+        "child-default",
+        "",
+        "explicit",
+      ]);
+    }
+  });
+
   it("inherits the core default without a Functions timer configuration surface", async () => {
     const options = { logger: new NoOpLogger(), maximumTimerIntervalMs: null };
     const worker = new DurableFunctionsWorker(options);

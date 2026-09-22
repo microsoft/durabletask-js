@@ -53,6 +53,28 @@ const worker = createAzureManagedWorkerBuilder("https://myservice.durabletask.io
 await worker.start();
 ```
 
+### Versioned registrations
+
+All four orchestrator/activity registration methods accept an optional final `version` argument,
+which is preserved when the builder constructs the worker:
+
+```typescript
+const worker = createAzureManagedWorkerBuilder("http://localhost:8080", "myTaskHub", null)
+  .versioning({ defaultVersion: "v2" })
+  .addNamedOrchestrator("Order", orderV1, "v1")
+  .addNamedOrchestrator("Order", orderV2, "v2")
+  .addNamedActivity("Price", priceV1, "v1")
+  .addNamedActivity("Price", priceV2, "v2")
+  .useWorkItemFilters()
+  .build();
+```
+
+Names remain case-sensitive; versions are case-insensitive opaque strings. Omitted or empty
+versions register an unversioned implementation. Worker filtering is independent of local
+dispatch. The worker default applies to child orchestrations, while activities default to their
+parent instance's version. See the core
+[versioning and migration contract](../../README.md#versioned-registration-and-dispatch).
+
 ## Supported Authentication Types
 
 The connection string `Authentication` parameter supports the following values:

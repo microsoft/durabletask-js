@@ -22,6 +22,7 @@ import * as pb from "../proto/orchestrator_service_pb";
 import * as pbh from "../utils/pb-helper.util";
 import type { TaskHubGrpcWorkerOptions } from "../worker/task-hub-grpc-worker";
 import { resolveMaximumTimerInterval } from "../worker/timer-interval";
+import type { VersioningOptions } from "../worker/versioning-options";
 
 /**
  * Worker that processes orchestrations and activities from the in-memory backend.
@@ -29,6 +30,8 @@ import { resolveMaximumTimerInterval } from "../worker/timer-interval";
  * This worker runs in the same process as the test and processes work items
  * synchronously in the Node.js event loop, avoiding the need for a separate
  * sidecar process.
+ * Versioned registrations and child defaults are supported; backend work-item filtering
+ * and the gRPC worker's version acceptance/rejection policy are not emulated.
  */
 export class TestOrchestrationWorker {
   private readonly registry: Registry;
@@ -37,55 +40,63 @@ export class TestOrchestrationWorker {
   private processingPromise: Promise<void> | null = null;
   private stopRequested: boolean = false;
   private readonly maximumTimerIntervalMs: number | null;
+  private readonly defaultVersion?: string;
 
   constructor(
     backend: InMemoryOrchestrationBackend,
-    options: Pick<TaskHubGrpcWorkerOptions, "maximumTimerIntervalMs"> = {},
+    options: Pick<TaskHubGrpcWorkerOptions, "maximumTimerIntervalMs"> & {
+      versioning?: Pick<VersioningOptions, "defaultVersion">;
+    } = {},
   ) {
     this.maximumTimerIntervalMs = resolveMaximumTimerInterval(options.maximumTimerIntervalMs);
+    this.defaultVersion = options.versioning?.defaultVersion;
     this.registry = new Registry();
     this.backend = backend;
   }
 
   /**
    * Registers an orchestrator function with the worker.
+   * Omit version (or use "") for an unversioned registration.
    */
-  addOrchestrator(fn: TOrchestrator): string {
+  addOrchestrator(fn: TOrchestrator, version?: string): string {
     if (this.isRunning) {
       throw new Error("Cannot add orchestrator while worker is running.");
     }
-    return this.registry.addOrchestrator(fn);
+    return this.registry.addOrchestrator(fn, version);
   }
 
   /**
    * Registers a named orchestrator function with the worker.
+   * Omit version (or use "") for an unversioned registration.
    */
-  addNamedOrchestrator(name: string, fn: TOrchestrator): string {
+  addNamedOrchestrator(name: string, fn: TOrchestrator, version?: string): string {
     if (this.isRunning) {
       throw new Error("Cannot add orchestrator while worker is running.");
     }
-    this.registry.addNamedOrchestrator(name, fn);
+    this.registry.addNamedOrchestrator(name, fn, version);
     return name;
   }
 
   /**
    * Registers an activity function with the worker.
+   * Omit version (or use "") for an unversioned registration.
    */
-  addActivity(fn: TActivity<TInput, TOutput>): string {
+  addActivity(fn: TActivity<TInput, TOutput>, version?: string): string {
     if (this.isRunning) {
       throw new Error("Cannot add activity while worker is running.");
     }
-    return this.registry.addActivity(fn);
+    return this.registry.addActivity(fn, version);
   }
 
   /**
    * Registers a named activity function with the worker.
+   * Omit version (or use "") for an unversioned registration.
    */
-  addNamedActivity(name: string, fn: TActivity<TInput, TOutput>): string {
+  addNamedActivity(name: string, fn: TActivity<TInput, TOutput>, version?: string): string {
     if (this.isRunning) {
       throw new Error("Cannot add activity while worker is running.");
     }
-    this.registry.addNamedActivity(name, fn);
+    this.registry.addNamedActivity(name, fn, version);
     return name;
   }
 
@@ -185,7 +196,12 @@ export class TestOrchestrationWorker {
     const completionToken = instance.completionToken;
 
     try {
-      const executor = new OrchestrationExecutor(this.registry, undefined, this.maximumTimerIntervalMs);
+      const executor = new OrchestrationExecutor(
+        this.registry,
+        undefined,
+        this.maximumTimerIntervalMs,
+        this.defaultVersion,
+      );
       const result = await executor.execute(instanceId, instance.history, instance.pendingEvents, instance.executionId);
 
       this.backend.completeOrchestration(instanceId, completionToken, result.actions, result.customStatus);
@@ -207,11 +223,11 @@ export class TestOrchestrationWorker {
    * Processes a single activity work item.
    */
   private async processActivity(workItem: ActivityWorkItem): Promise<void> {
-    const { instanceId, executionId, name, taskId, input } = workItem;
+    const { instanceId, executionId, name, taskId, input, version } = workItem;
 
     try {
       const executor = new ActivityExecutor(this.registry);
-      const result = await executor.execute(instanceId, name, taskId, input);
+      const result = await executor.execute(instanceId, name, taskId, input, version);
       this.backend.completeActivity(instanceId, executionId, taskId, result);
     } catch (error: unknown) {
       const err = error instanceof Error ? error : new Error(String(error));

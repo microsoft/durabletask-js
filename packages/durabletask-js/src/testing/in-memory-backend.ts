@@ -43,6 +43,7 @@ export interface ActivityWorkItem {
   name: string;
   taskId: number;
   input?: string;
+  version?: string;
   completionToken: number;
 }
 
@@ -158,6 +159,7 @@ export class InMemoryOrchestrationBackend {
     input?: string,
     scheduledStartTime?: Date,
     parentInstance?: ParentOrchestrationInstance,
+    version?: string,
   ): string {
     if (this.instances.has(instanceId)) {
       throw new OrchestrationAlreadyExistsError(`An orchestration with instance ID '${instanceId}' already exists`);
@@ -185,7 +187,7 @@ export class InMemoryOrchestrationBackend {
 
     // Add initial events to start the orchestration
     const orchestratorStarted = pbh.newOrchestratorStartedEvent(startTime);
-    const executionStarted = pbh.newExecutionStartedEvent(name, instanceId, input, parentInstance, executionId);
+    const executionStarted = pbh.newExecutionStartedEvent(name, instanceId, input, parentInstance, executionId, version);
 
     instance.pendingEvents.push(orchestratorStarted);
     instance.pendingEvents.push(executionStarted);
@@ -205,6 +207,7 @@ export class InMemoryOrchestrationBackend {
     input?: string,
     scheduledStartTime?: Date,
     dedupeStatuses?: readonly ClientOrchestrationStatus[],
+    version?: string,
   ): Promise<string> {
     if (dedupeStatuses !== undefined) {
       validateDedupeStatusesForReplacement(dedupeStatuses);
@@ -257,7 +260,7 @@ export class InMemoryOrchestrationBackend {
       }
     }
 
-    return this.createInstance(instanceId, name, input, scheduledStartTime);
+    return this.createInstance(instanceId, name, input, scheduledStartTime, undefined, version);
   }
 
   /**
@@ -1108,6 +1111,7 @@ export class InMemoryOrchestrationBackend {
 
     // Add TaskScheduled event to history
     const event = pbh.newTaskScheduledEvent(taskId, taskName, input);
+    event.getTaskscheduled()!.setVersion(scheduleTask.getVersion());
     instance.history.push(event);
 
     // Mark instance as running
@@ -1120,6 +1124,7 @@ export class InMemoryOrchestrationBackend {
       instanceId: instance.instanceId,
       executionId: instance.executionId,
       name: taskName,
+      version: scheduleTask.getVersion()?.getValue(),
       taskId,
       input,
       completionToken: instance.completionToken,
@@ -1173,6 +1178,7 @@ export class InMemoryOrchestrationBackend {
 
     // Add SubOrchestrationInstanceCreated event to history
     const event = pbh.newSubOrchestrationCreatedEvent(taskId, name, subInstanceId, input);
+    event.getSuborchestrationinstancecreated()!.setVersion(createSubOrch.getVersion());
     instance.history.push(event);
 
     // Mark instance as running
@@ -1182,11 +1188,18 @@ export class InMemoryOrchestrationBackend {
 
     // Create the sub-orchestration with parent instance info
     try {
-      this.createInstance(subInstanceId, name, input, undefined, {
-        name: instance.name,
-        instanceId: instance.instanceId,
-        taskScheduledId: taskId,
-      });
+      this.createInstance(
+        subInstanceId,
+        name,
+        input,
+        undefined,
+        {
+          name: instance.name,
+          instanceId: instance.instanceId,
+          taskScheduledId: taskId,
+        },
+        createSubOrch.getVersion()?.getValue(),
+      );
 
       // Watch for sub-orchestration completion
       this.watchSubOrchestration(instance.instanceId, instance.executionId, subInstanceId, taskId);
