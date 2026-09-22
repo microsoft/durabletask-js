@@ -196,6 +196,7 @@ describe("Versioned execution", () => {
       "parent",
     );
     const actions = await run(worker, request("Flow", "parent"));
+    expect(actions[0].getCreatesuborchestration()?.hasVersion()).toBe(true);
     expect(actions[0].getCreatesuborchestration()?.getVersion()?.getValue() ?? "").toBe(expected);
   });
 
@@ -212,6 +213,7 @@ describe("Versioned execution", () => {
       "parent",
     );
     const actions = await run(worker, request("Flow", "parent"));
+    expect(actions[0].getScheduletask()?.hasVersion()).toBe(true);
     expect(actions[0].getScheduletask()?.getVersion()?.getValue() ?? "").toBe(version ?? "parent");
   });
 
@@ -266,6 +268,7 @@ describe("Versioned execution", () => {
         }
         expect(actions).toHaveLength(1);
         const retried = actions[0];
+        expect(retried.getCreatesuborchestration()?.hasVersion()).toBe(true);
         expect(retried.getCreatesuborchestration()?.getVersion()?.getValue() ?? "").toBe(version ?? "child-default");
         expect(retried.getCreatesuborchestration()?.getInstanceid()).toBe(childId);
         req

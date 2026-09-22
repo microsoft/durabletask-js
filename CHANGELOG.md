@@ -25,6 +25,8 @@
 
 ### Fixes
 
+- Preserve explicit empty activity and child versions on the protobuf wire, including the
+  unversioned child default, so concrete empty-version work-item filters can match them.
 - Reject uninitialized `whenAll` results after a canceled child's completion callback throws,
   rather than allowing a caught cancellation followed by `yield` to report success.
 - Align worker response cancellation with .NET: `stop()` cancels initial sends as well

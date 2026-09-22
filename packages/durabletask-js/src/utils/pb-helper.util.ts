@@ -454,9 +454,7 @@ export function newScheduleTaskAction(
   scheduleTaskAction.setName(name);
   scheduleTaskAction.setInput(getStringValue(encodedInput));
   populateTagsMap(scheduleTaskAction.getTagsMap(), tags);
-  if (version) {
-    scheduleTaskAction.setVersion(getStringValue(version));
-  }
+  scheduleTaskAction.setVersion(getStringValueIfDefined(version));
 
   const action = new pb.OrchestratorAction();
   action.setId(id);
@@ -484,9 +482,7 @@ export function newCreateSubOrchestrationAction(
   createSubOrchestrationAction.setInstanceid(instanceId || "");
   createSubOrchestrationAction.setInput(getStringValue(encodedInput));
   populateTagsMap(createSubOrchestrationAction.getTagsMap(), tags);
-  if (version) {
-    createSubOrchestrationAction.setVersion(getStringValue(version));
-  }
+  createSubOrchestrationAction.setVersion(getStringValueIfDefined(version));
 
   const action = new pb.OrchestratorAction();
   action.setId(id);

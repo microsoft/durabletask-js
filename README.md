@@ -311,6 +311,8 @@ different registrations. Omitted, `undefined`, `null` (JavaScript), and `""` ver
 unversioned registration. Whitespace-only registration versions are rejected; other strings are
 not trimmed. Duplicate name/version pairs throw. **Task names remain case-sensitive in JavaScript**,
 unlike .NET; this preserves existing JavaScript identifiers and function-name behavior.
+Backend constraints still apply: Azure DTS accepts numeric `Major[.Minor[.Patch]]` orchestration
+versions, so use values such as `"1.0.0"` and `"2.0.0"` rather than `"v1"` and `"v2"` with that service.
 
 Dispatch uses the recorded `ExecutionStarted.version` during both initial execution and replay,
 and `ActivityRequest.version` for activities. Exact matches win. Following the

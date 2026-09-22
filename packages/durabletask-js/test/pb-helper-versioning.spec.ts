@@ -1,7 +1,27 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { newVersionMismatchFailureDetails, newFailureDetails } from "../src/utils/pb-helper.util";
+import {
+  newVersionMismatchFailureDetails,
+  newFailureDetails,
+  newScheduleTaskAction,
+  newCreateSubOrchestrationAction,
+} from "../src/utils/pb-helper.util";
+import { OrchestratorAction } from "../src/proto/orchestrator_service_pb";
+
+describe.each(["activity", "child"] as const)("serialized %s version presence", (kind) => {
+  it.each([undefined, "", "1.0.0"])("preserves the distinction between omitted and explicit version %s", (version) => {
+    const action =
+      kind === "activity"
+        ? newScheduleTaskAction(1, "Work", undefined, undefined, version)
+        : newCreateSubOrchestrationAction(1, "Work", "child", undefined, undefined, version);
+    const decoded = OrchestratorAction.deserializeBinary(action.serializeBinary());
+    const task = kind === "activity" ? decoded.getScheduletask()! : decoded.getCreatesuborchestration()!;
+
+    expect(task.hasVersion()).toBe(version !== undefined);
+    expect(task.getVersion()?.getValue()).toBe(version);
+  });
+});
 
 describe("pb-helper.util - Version Mismatch Failure Details", () => {
   describe("newVersionMismatchFailureDetails", () => {

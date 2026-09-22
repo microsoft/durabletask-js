@@ -470,7 +470,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
       instanceId,
       encodedInput,
       options?.tags,
-      options?.version ?? this._defaultVersion,
+      options?.version ?? this._defaultVersion ?? "",
     );
     this._pendingActions[action.getId()] = action;
 
