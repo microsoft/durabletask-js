@@ -15,7 +15,56 @@ const testLogger = new NoOpLogger();
 const TEST_INSTANCE_ID = "abc123";
 const TEST_TASK_ID = 42;
 
+describe("Activity Context", () => {
+  it("keeps the two-argument constructor compatible with empty metadata", () => {
+    const ctx = new ActivityContext(TEST_INSTANCE_ID, TEST_TASK_ID);
+    expect(ctx).toMatchObject({
+      orchestrationId: TEST_INSTANCE_ID,
+      taskId: TEST_TASK_ID,
+      name: "",
+      version: "",
+    });
+  });
+
+  it("normalizes a null version supplied by JavaScript callers", () => {
+    const ctx = Reflect.construct(ActivityContext, [TEST_INSTANCE_ID, TEST_TASK_ID, "LogicalActivity", null]);
+    expect(ctx).toMatchObject({
+      orchestrationId: TEST_INSTANCE_ID,
+      taskId: TEST_TASK_ID,
+      name: "LogicalActivity",
+      version: "",
+    });
+  });
+});
+
 describe("Activity Executor", () => {
+  it.each([
+    ["exact version", "2.0.0", "2.0.0"],
+    ["case-insensitive lookup", "2.0.0-rc", "2.0.0-RC"],
+    ["unversioned registration fallback", undefined, "2.0.0"],
+    ["missing version", undefined, undefined],
+    ["explicit empty version", undefined, ""],
+  ])("populates request metadata for %s", async (_scenario, registrationVersion, requestVersion) => {
+    let actualContext: ActivityContext | undefined;
+    function implementation(ctx: ActivityContext) {
+      actualContext = ctx;
+      return "done";
+    }
+    const registry = new Registry();
+    registry.addNamedActivity("LogicalActivity", implementation, registrationVersion);
+    const executor = new ActivityExecutor(registry, testLogger);
+
+    await expect(
+      executor.execute(TEST_INSTANCE_ID, "LogicalActivity", TEST_TASK_ID, undefined, requestVersion),
+    ).resolves.toBe('"done"');
+    expect(actualContext).toMatchObject({
+      orchestrationId: TEST_INSTANCE_ID,
+      taskId: TEST_TASK_ID,
+      name: "LogicalActivity",
+      version: requestVersion ?? "",
+    });
+  });
+
   it("should validates activity function input population", async () => {
     const testActivity = (ctx: ActivityContext, testInput: any) => {
       // return all activity inputs back as the output

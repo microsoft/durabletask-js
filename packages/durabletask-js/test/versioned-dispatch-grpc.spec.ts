@@ -3,7 +3,14 @@
 
 import * as grpc from "@grpc/grpc-js";
 import { Empty } from "google-protobuf/google/protobuf/empty_pb";
-import { NoOpLogger, TaskHubGrpcWorker, VersionMatchStrategy, VersionFailureStrategy, VersioningOptions } from "../src";
+import {
+  ActivityContext,
+  NoOpLogger,
+  TaskHubGrpcWorker,
+  VersionMatchStrategy,
+  VersionFailureStrategy,
+  VersioningOptions,
+} from "../src";
 import * as pb from "../src/proto/orchestrator_service_pb";
 import * as stubs from "../src/proto/orchestrator_service_grpc_pb";
 import * as ph from "../src/utils/pb-helper.util";
@@ -120,6 +127,35 @@ describe("Version dispatch over local gRPC", () => {
     const action = response.getActionsList()[0].getCompleteorchestration();
     return { result: action?.getResult()?.getValue(), failure: action?.getFailuredetails() };
   }
+
+  it.each<[string, string | undefined]>([
+    ["LogicalActivity", "2.0.0"],
+    ["LogicalActivity", undefined],
+    ["LogicalActivity", ""],
+    ["VersionedActivity", "2.0.0-RC"],
+  ])("exposes activity request metadata for %s / %s over gRPC", async (name, version) => {
+    let actualContext: ActivityContext | undefined;
+    function implementation(ctx: ActivityContext) {
+      actualContext = ctx;
+      return "done";
+    }
+    const stream = await start(
+      (worker) => {
+        worker.addNamedActivity("LogicalActivity", implementation);
+        worker.addNamedActivity("VersionedActivity", implementation, "2.0.0-rc");
+      },
+      { defaultVersion: "worker-default" },
+    );
+    const response = completion(await send(stream, "activity", name, version));
+    expect(response.failure).toBeUndefined();
+    expect(response.result).toBe('"done"');
+    expect(actualContext).toMatchObject({
+      orchestrationId: "instance",
+      taskId: 1,
+      name,
+      version: version ?? "",
+    });
+  });
 
   it("dispatches same-name versions, legacy fallback, and unknown versions without cross-version execution", async () => {
     const calls: string[] = [];
