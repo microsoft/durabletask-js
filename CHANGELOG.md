@@ -2,6 +2,9 @@
 
 ### New
 
+- Expose readonly `ActivityContext.name` and `ActivityContext.version` from the activity request,
+  preserving the requested version even when an unversioned implementation handles it. Existing
+  two-argument context construction remains supported, with empty name/version defaults.
 - Add optional version arguments to orchestrator/activity registrations in core and test workers,
   dispatch by recorded/request version, and preserve versions in the in-memory backend. Same-name
   versions coexist; unversioned-only registrations retain the .NET-compatible fallback.

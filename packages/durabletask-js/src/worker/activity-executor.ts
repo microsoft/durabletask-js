@@ -33,7 +33,7 @@ export class ActivityExecutor {
     // Log activity start (EventId 603)
     WorkerLogs.activityStarted(this._logger, orchestrationId, name);
 
-    const ctx = new ActivityContext(orchestrationId, taskId);
+    const ctx = new ActivityContext(orchestrationId, taskId, name, version);
 
     try {
       // Deserialize the input inside the try-catch so that malformed JSON
