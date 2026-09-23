@@ -6,6 +6,9 @@ import { AsyncRetryHandler } from "../src/task/retry/retry-handler";
 import { OrchestrationContext } from "../src/task/context/orchestration-context";
 import * as pb from "../src/proto/orchestrator_service_pb";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
+import { RetryableTask } from "../src/task/retryable-task";
+import { RetryPolicy } from "../src/task/retry/retry-policy";
+import { TaskFailureDetails } from "../src/task/failure-details";
 
 /**
  * Creates a minimal mock OrchestrationContext for testing.
@@ -187,6 +190,51 @@ describe("RetryHandlerTask", () => {
   });
 
   describe("shouldRetry", () => {
+    it.each(["activity", "subOrchestration"] as const)(
+      "keeps %s retry defaults and only checks the top-level non-retriable flag",
+      async (kind) => {
+        const inspect = jest.fn((failure: TaskFailureDetails) => {
+          expect(failure).toMatchObject({
+            errorType: "Error",
+            message: "",
+            innerFailure: { errorType: "", message: "", innerFailure: undefined },
+          });
+          return true;
+        });
+        const action = new pb.OrchestratorAction();
+        const startTime = new Date();
+        const handlerTask = new RetryHandlerTask(
+          async (context) => inspect(context.lastFailure),
+          mockCtx,
+          action,
+          startTime,
+          kind,
+        );
+        const policyTask = new RetryableTask(
+          new RetryPolicy({
+            firstRetryIntervalInMilliseconds: 1,
+            maxNumberOfAttempts: 3,
+            handleFailure: inspect,
+          }),
+          action,
+          startTime,
+          kind,
+        );
+        const failure = new pb.TaskFailureDetails().setInnerfailure(
+          new pb.TaskFailureDetails().setIsnonretriable(true),
+        );
+        handlerTask.recordFailure("", failure);
+        policyTask.recordFailure("", failure);
+        expect(await handlerTask.shouldRetry(startTime)).toBe(true);
+        expect(policyTask.computeNextDelayInMilliseconds(startTime)).toBe(1);
+        expect(inspect).toHaveBeenCalledTimes(2);
+        failure.setIsnonretriable(true);
+        expect(await handlerTask.shouldRetry(startTime)).toBe(false);
+        expect(policyTask.computeNextDelayInMilliseconds(startTime)).toBeUndefined();
+        expect(inspect).toHaveBeenCalledTimes(2);
+      },
+    );
+
     it("should return false when no failure recorded", async () => {
       // Arrange
       const handler: AsyncRetryHandler = async () => true;

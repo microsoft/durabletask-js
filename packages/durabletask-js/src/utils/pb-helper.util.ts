@@ -6,6 +6,8 @@ import * as pb from "../proto/orchestrator_service_pb";
 import { Timestamp } from "google-protobuf/google/protobuf/timestamp_pb";
 import { ActivityNotRegisteredError } from "../worker/exception/activity-not-registered-error";
 import { OrchestratorNotRegisteredError } from "../worker/exception/orchestrator-not-registered-error";
+import { TaskFailedError } from "../task/exception/task-failed-error";
+import { TaskFailureDetails } from "../task/failure-details";
 
 export function newOrchestratorStartedEvent(timestamp?: Date | null): pb.HistoryEvent {
   const ts = new Timestamp();
@@ -187,11 +189,15 @@ export function newSubOrchestrationCompletedEvent(eventId: number, encodedOutput
   return event;
 }
 
-export function newSubOrchestrationFailedEvent(eventId: number, ex: Error): pb.HistoryEvent {
+export function newSubOrchestrationFailedEvent(
+  eventId: number,
+  ex: Error,
+  failureDetails?: pb.TaskFailureDetails,
+): pb.HistoryEvent {
   const ts = new Timestamp();
 
   const subOrchestrationInstanceFailedEvent = new pb.SubOrchestrationInstanceFailedEvent();
-  subOrchestrationInstanceFailedEvent.setFailuredetails(newFailureDetails(ex));
+  subOrchestrationInstanceFailedEvent.setFailuredetails(failureDetails ?? newFailureDetails(ex));
   subOrchestrationInstanceFailedEvent.setTaskscheduledid(eventId);
 
   const event = new pb.HistoryEvent();
@@ -207,7 +213,7 @@ export function newFailureDetails(e: unknown): pb.TaskFailureDetails {
 }
 
 /**
- * Recursively builds TaskFailureDetails, populating innerFailure from error.cause.
+ * Builds TaskFailureDetails, forwarding received task details or serializing error.cause.
  * The depth parameter is internal to bound the cause-chain recursion and is not
  * exposed on the public newFailureDetails() signature.
  */
@@ -232,11 +238,21 @@ function buildFailureDetails(e: unknown, depth: number): pb.TaskFailureDetails {
     failure.setStacktrace(sv);
   }
 
-  // Populate innerFailure from error.cause to preserve the full error chain.
-  // A depth limit guards against pathological circular cause chains.
-  // error.cause can be any value, so guard against null/undefined explicitly rather
-  // than truthiness — a falsy-but-present cause (e.g. "" or 0) is still a valid cause.
-  if (e instanceof Error && e.cause != null && depth < MAX_CAUSE_DEPTH) {
+  if (e instanceof TaskFailedError && e.cause == null) {
+    // Keep the task wrapper and attach the received failure chain without rebuilding Error objects.
+    let current = failure;
+    for (let details: TaskFailureDetails | undefined = e.details; details; details = details.innerFailure) {
+      const inner = new pb.TaskFailureDetails();
+      inner.setErrortype(details.errorType);
+      inner.setErrormessage(details.message);
+      if (details.stackTrace !== undefined) {
+        inner.setStacktrace(new StringValue().setValue(details.stackTrace));
+      }
+      current.setInnerfailure(inner);
+      current = inner;
+    }
+  } else if (e instanceof Error && e.cause != null && depth < MAX_CAUSE_DEPTH) {
+    // Bound ordinary cause chains, including cycles; falsy-but-present causes remain valid.
     failure.setInnerfailure(buildFailureDetails(e.cause, depth + 1));
   }
 

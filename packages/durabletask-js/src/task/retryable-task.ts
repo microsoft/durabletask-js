@@ -4,6 +4,7 @@
 import { RetryTaskBase, RetryTaskType } from "./retry-task-base";
 import { RetryPolicy } from "./retry/retry-policy";
 import * as pb from "../proto/orchestrator_service_pb";
+import { convertFailureDetails } from "../utils/failure-details.util";
 
 /**
  * A task that can be retried according to a declarative retry policy.
@@ -66,10 +67,12 @@ export class RetryableTask<T> extends RetryTaskBase<T> {
 
     // Check if handleFailure predicate says we should NOT retry this failure type
     if (this.lastFailure) {
+      const details = convertFailureDetails(this.lastFailure);
       const failureDetails = {
-        errorType: this.lastFailure.getErrortype() || "Error",
-        message: this.lastFailure.getErrormessage() || "",
-        stackTrace: this.lastFailure.getStacktrace()?.getValue(),
+        errorType: details.errorType || "Error",
+        message: details.message,
+        stackTrace: details.stackTrace,
+        innerFailure: details.innerFailure,
       };
 
       if (!this._retryPolicy.shouldRetry(failureDetails)) {

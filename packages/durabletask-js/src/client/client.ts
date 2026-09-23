@@ -24,7 +24,7 @@ import { TerminateInstanceOptions, isTerminateInstanceOptions } from "../orchest
 import { callWithMetadata, MetadataGenerator } from "../utils/grpc-helper.util";
 import { OrchestrationQuery, ListInstanceIdsOptions, DEFAULT_PAGE_SIZE } from "../orchestration/orchestration-query";
 import { Page, AsyncPageable, createAsyncPageable } from "../orchestration/page";
-import { FailureDetails } from "../task/failure-details";
+import { convertFailureDetails } from "../utils/failure-details.util";
 import { HistoryEvent } from "../orchestration/history-event";
 import { convertProtoHistoryEvent } from "../utils/history-event-converter";
 import { Logger, ConsoleLogger } from "../types/logger.type";
@@ -1376,15 +1376,7 @@ export class TaskHubGrpcClient {
     }
 
     // Extract failure details if present
-    let failureDetails;
-    const protoFailureDetails = protoState.getFailuredetails();
-    if (protoFailureDetails) {
-      failureDetails = new FailureDetails(
-        protoFailureDetails.getErrormessage(),
-        protoFailureDetails.getErrortype(),
-        protoFailureDetails.getStacktrace()?.getValue(),
-      );
-    }
+    const failureDetails = convertFailureDetails(protoState.getFailuredetails());
 
     const tags = mapToRecord(protoState.getTagsMap());
 
