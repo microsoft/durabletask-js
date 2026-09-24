@@ -290,24 +290,30 @@ export function newEventSentEvent(eventId: number, instanceId: string, name: str
   return event;
 }
 
-export function newSuspendEvent(): pb.HistoryEvent {
+export function newSuspendEvent(reason?: string): pb.HistoryEvent {
+  const executionSuspendedEvent = new pb.ExecutionSuspendedEvent();
+  executionSuspendedEvent.setInput(getStringValueIfDefined(reason ?? undefined));
+
   const ts = new Timestamp();
 
   const event = new pb.HistoryEvent();
   event.setEventid(-1);
   event.setTimestamp(ts);
-  event.setExecutionsuspended(new pb.ExecutionSuspendedEvent());
+  event.setExecutionsuspended(executionSuspendedEvent);
 
   return event;
 }
 
-export function newResumeEvent(): pb.HistoryEvent {
+export function newResumeEvent(reason?: string): pb.HistoryEvent {
+  const executionResumedEvent = new pb.ExecutionResumedEvent();
+  executionResumedEvent.setInput(getStringValueIfDefined(reason ?? undefined));
+
   const ts = new Timestamp();
 
   const event = new pb.HistoryEvent();
   event.setEventid(-1);
   event.setTimestamp(ts);
-  event.setExecutionresumed(new pb.ExecutionResumedEvent());
+  event.setExecutionresumed(executionResumedEvent);
 
   return event;
 }

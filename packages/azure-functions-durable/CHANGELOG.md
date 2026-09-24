@@ -14,6 +14,8 @@
 
 ### Fixes
 
+- Forward the optional `reason` from the classic `suspend()` / `resume()` aliases to the
+  core client instead of ignoring it, preserving literal strings including empty strings.
 - Inherit core version-aware replay dispatch and worker child defaults in the embedded
   `DurableFunctionsWorker`, including classic-context wrappers. Host `app.*` function registrations
   remain name-only; see README for the boundary and activity-version migration guidance.

@@ -87,12 +87,17 @@ describe("DurableFunctionsClient", () => {
       expect(terminate).toHaveBeenCalledWith("id-1", "cancelled");
 
       const suspend = jest.spyOn(client, "suspendOrchestration").mockResolvedValue(undefined);
-      await client.suspend("id-1", "ignored-reason");
-      expect(suspend).toHaveBeenCalledWith("id-1");
-
       const resume = jest.spyOn(client, "resumeOrchestration").mockResolvedValue(undefined);
-      await client.resume("id-1", "ignored-reason");
-      expect(resume).toHaveBeenCalledWith("id-1");
+      for (const reason of ['  "maintenance"\n\u6682\u505c  ', "", undefined, null]) {
+        await Reflect.apply(client.suspend, client, ["id-1", reason]);
+        expect(suspend).toHaveBeenLastCalledWith("id-1", reason);
+        await Reflect.apply(client.resume, client, ["id-1", reason]);
+        expect(resume).toHaveBeenLastCalledWith("id-1", reason);
+      }
+      await client.suspend("id-1");
+      expect(suspend).toHaveBeenLastCalledWith("id-1", undefined);
+      await client.resume("id-1");
+      expect(resume).toHaveBeenLastCalledWith("id-1", undefined);
 
       const rewind = jest.spyOn(client, "rewindInstance").mockResolvedValue(undefined);
       await client.rewind("id-1", "retrying");

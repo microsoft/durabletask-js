@@ -314,7 +314,7 @@ export class InMemoryOrchestrationBackend {
   /**
    * Suspends an orchestration instance.
    */
-  suspend(instanceId: string): void {
+  suspend(instanceId: string, reason?: string): void {
     const instance = this.instances.get(instanceId);
     if (!instance) {
       throw new Error(`Orchestration instance '${instanceId}' not found`);
@@ -332,7 +332,7 @@ export class InMemoryOrchestrationBackend {
     // suspend RPC transitions the orchestration to SUSPENDED right away.
     instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_SUSPENDED;
 
-    const event = pbh.newSuspendEvent();
+    const event = pbh.newSuspendEvent(reason);
     instance.pendingEvents.push(event);
     instance.lastUpdatedAt = new Date();
 
@@ -346,7 +346,7 @@ export class InMemoryOrchestrationBackend {
   /**
    * Resumes a suspended orchestration instance.
    */
-  resume(instanceId: string): void {
+  resume(instanceId: string, reason?: string): void {
     const instance = this.instances.get(instanceId);
     if (!instance) {
       throw new Error(`Orchestration instance '${instanceId}' not found`);
@@ -364,7 +364,7 @@ export class InMemoryOrchestrationBackend {
     // Transition from SUSPENDED back to RUNNING to match real sidecar behavior.
     instance.status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING;
 
-    const event = pbh.newResumeEvent();
+    const event = pbh.newResumeEvent(reason);
     instance.pendingEvents.push(event);
     instance.lastUpdatedAt = new Date();
 
