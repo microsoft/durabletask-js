@@ -187,6 +187,42 @@ User code and metadata generation are not canceled; if metadata finishes after s
 the response RPC is not started. Channel retirement and backend lock durations are unchanged.
 Retries do not guarantee connection recovery, acceptance of expired tokens, or exactly-once execution.
 
+### Inspecting nested failures
+
+Task errors expose an optional, read-only `innerFailure` chain, with `errorType`, `message`,
+and optional `stackTrace` at each level. For an activity failure
+`OrderFailed -> PaymentFailed -> ConnectionTimeout`, orchestrator code can inspect:
+
+```typescript
+import { TaskFailedError } from "@microsoft/durabletask-js";
+
+try {
+  yield ctx.callActivity("placeOrder");
+} catch (error) {
+  if (error instanceof TaskFailedError) {
+    const paymentFailure = error.details.innerFailure;
+    const rootFailure = paymentFailure?.innerFailure;
+    ctx.setCustomStatus({ rootErrorType: rootFailure?.errorType });
+  }
+  throw error;
+}
+```
+
+The same chain is available as `context.lastFailure.innerFailure` in retry handlers and
+`failure.innerFailure` in `RetryPolicy.handleFailure`. Inspecting nested failures does not
+change retry decisions automatically. Client state and history also preserve the chain;
+an uncaught or rethrown task error retains its `TaskFailedError` wrapper, with the original
+task details under `state.failureDetails.innerFailure`.
+
+Missing inner failures remain `undefined`; existing two- and three-argument
+`FailureDetails` constructors still work, with an optional fourth argument for the inner
+details. Remote failures are not reconstructed as JavaScript `Error.cause` objects.
+The existing writer still limits ordinary `Error.cause` chains to ten inner levels;
+reading or forwarding already-received failure details does not add a truncation limit.
+If user code mutates received details into a cycle, forwarding preserves each unique
+failure and ends the chain with `errorType: "CircularFailureDetails"` and
+`message: "A circular innerFailure reference was detected."` rather than looping.
+
 ### Reusing orchestration instance IDs
 
 Set the top-level `dedupeStatuses` start option when an instance ID may be reused. The list

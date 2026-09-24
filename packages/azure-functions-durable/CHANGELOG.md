@@ -14,6 +14,7 @@
 
 ### Fixes
 
+- Preserve nested task `innerFailure` details in `durable-functions/testing` results.
 - Inherit core version-aware replay dispatch and worker child defaults in the embedded
   `DurableFunctionsWorker`, including classic-context wrappers. Host `app.*` function registrations
   remain name-only; see README for the boundary and activity-version migration guidance.

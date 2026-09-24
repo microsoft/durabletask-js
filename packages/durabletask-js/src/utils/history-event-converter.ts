@@ -9,7 +9,7 @@ import {
   ParentInstanceInfo,
   TraceContext,
 } from "../orchestration/history-event";
-import { FailureDetails } from "../task/failure-details";
+import { convertFailureDetails } from "./failure-details.util";
 
 // Map OrchestrationStatus enum values to their string names
 const ORCHESTRATION_STATUS_MAP: Record<number, string> = {
@@ -496,16 +496,6 @@ function convertTraceContext(traceContext: pb.TraceContext): TraceContext {
     spanId: traceContext.getSpanid(),
     traceState: traceContext.getTracestate()?.getValue(),
   };
-}
-
-function convertFailureDetails(details: pb.TaskFailureDetails | undefined): FailureDetails | undefined {
-  if (!details) return undefined;
-  
-  return new FailureDetails(
-    details.getErrormessage(),
-    details.getErrortype(),
-    details.getStacktrace()?.getValue(),
-  );
 }
 
 function convertTagsMap(tagsMap: ReturnType<pb.ExecutionStartedEvent["getTagsMap"]>): Record<string, string> | undefined {

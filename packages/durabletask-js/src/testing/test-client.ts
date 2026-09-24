@@ -6,7 +6,7 @@ import { getName } from "../task";
 import { TOrchestrator } from "../types/orchestrator.type";
 import { TInput } from "../types/input.type";
 import { OrchestrationState } from "../orchestration/orchestration-state";
-import { FailureDetails } from "../task/failure-details";
+import { convertFailureDetails } from "../utils/failure-details.util";
 import { EntityInstanceId } from "../entities/entity-instance-id";
 import { EntityMetadata } from "../entities/entity-metadata";
 import { InMemoryOrchestrationBackend, OrchestrationInstance } from "./in-memory-backend";
@@ -229,14 +229,7 @@ export class TestOrchestrationClient {
   }
 
   private toOrchestrationState(instance: OrchestrationInstance, fetchPayloads: boolean): OrchestrationState {
-    let failureDetails: FailureDetails | undefined;
-    if (instance.failureDetails) {
-      failureDetails = new FailureDetails(
-        instance.failureDetails.getErrormessage(),
-        instance.failureDetails.getErrortype(),
-        instance.failureDetails.getStacktrace()?.getValue(),
-      );
-    }
+    const failureDetails = convertFailureDetails(instance.failureDetails);
 
     return new OrchestrationState(
       instance.instanceId,

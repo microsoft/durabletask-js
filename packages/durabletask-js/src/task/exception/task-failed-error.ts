@@ -3,6 +3,7 @@
 
 import * as pb from "../../proto/orchestrator_service_pb";
 import { FailureDetails } from "../failure-details";
+import { convertFailureDetails } from "../../utils/failure-details.util";
 
 export class TaskFailedError extends Error {
   private _details: FailureDetails;
@@ -11,11 +12,7 @@ export class TaskFailedError extends Error {
     super(message);
     this.name = "TaskFailedError";
 
-    this._details = new FailureDetails(
-      details.getErrormessage(),
-      details.getErrortype(),
-      details?.getStacktrace()?.getValue(),
-    );
+    this._details = convertFailureDetails(details);
   }
 
   get details(): FailureDetails {
