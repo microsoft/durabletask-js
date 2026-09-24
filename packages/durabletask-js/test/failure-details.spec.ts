@@ -30,6 +30,17 @@ function errorChain(): Error {
   return outer;
 }
 
+function addBoundedCycle(tail: TaskFailureDetails, target: TaskFailureDetails) {
+  let reads = 0;
+  const get = jest.fn(() => {
+    // Keep a regressed serializer from hanging the test process.
+    if (++reads > 4) throw new Error("Repeatedly traversed a circular innerFailure");
+    return target;
+  });
+  Object.defineProperty(tail, "innerFailure", { get });
+  return get;
+}
+
 const expectedChain = {
   errorType: "OrderFailed",
   message: "Order failed",
@@ -96,8 +107,47 @@ describe("Public failure details", () => {
 
   it("retains explicitly assigned JavaScript causes on task errors", () => {
     const error = new TaskFailedError("failed", newFailureDetails(errorChain()));
+    const getInnerFailure = addBoundedCycle(error.details, error.details);
     error.cause = new Error("explicit cause");
     expect(newFailureDetails(error).getInnerfailure()?.getErrormessage()).toBe("explicit cause");
+    expect(getInnerFailure).not.toHaveBeenCalled();
+  });
+
+  it.each([1, 3])("marks a %i-node cycle after preserving each unique failure and the task wrapper", (length) => {
+    const proto = newFailureDetails(errorChain());
+    const error = new TaskFailedError("Activity task failed", proto);
+    let tail: TaskFailureDetails = error.details;
+    for (let i = 1; i < length; i++) tail = tail.innerFailure!;
+    const getInnerFailure = addBoundedCycle(tail, error.details);
+
+    const forwarded = newFailureDetails(error);
+    expect(forwarded.getErrortype()).toBe("TaskFailedError");
+    expect(forwarded.getErrormessage()).toBe(error.message);
+    expect(forwarded.getStacktrace()?.getValue()).toBe(error.stack);
+    let actual = forwarded.getInnerfailure();
+    let expected: pb.TaskFailureDetails | undefined = proto;
+    for (let i = 0; i < length; i++) {
+      expect(actual?.getErrortype()).toBe(expected?.getErrortype());
+      expect(actual?.getErrormessage()).toBe(expected?.getErrormessage());
+      expect(actual?.getStacktrace()?.getValue()).toBe(expected?.getStacktrace()?.getValue());
+      actual = actual?.getInnerfailure();
+      expected = expected?.getInnerfailure();
+    }
+    expect(actual?.getErrortype()).toBe("CircularFailureDetails");
+    expect(actual?.getErrormessage()).toBe("A circular innerFailure reference was detected.");
+    expect(actual?.getStacktrace()).toBeUndefined();
+    expect(actual?.getInnerfailure()).toBeUndefined();
+    expect(getInnerFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not treat distinct failure objects with identical fields as a cycle", () => {
+    const proto = new pb.TaskFailureDetails()
+      .setErrortype("Error")
+      .setErrormessage("same")
+      .setInnerfailure(new pb.TaskFailureDetails().setErrortype("Error").setErrormessage("same"));
+    const error = new TaskFailedError("failed", proto);
+    expect(error.details.innerFailure).not.toBe(error.details);
+    expect(newFailureDetails(error).getInnerfailure()?.serializeBinary()).toEqual(proto.serializeBinary());
   });
 
   it("preserves the chain in orchestration state and raiseIfFailed", () => {
@@ -208,7 +258,7 @@ describe.each(["activity", "subOrchestration"] as const)("In-memory %s failure c
   );
 });
 
-it("preserves an uncaught activity cause chain in the terminal client failure", async () => {
+it.each([false, true])("preserves terminal activity failure details with a cyclic rethrow: %s", async (cyclic) => {
   const backend = new InMemoryOrchestrationBackend();
   const client = new TestOrchestrationClient(backend);
   const worker = new TestOrchestrationWorker(backend);
@@ -216,16 +266,36 @@ it("preserves an uncaught activity cause chain in the terminal client failure", 
     throw errorChain();
   });
   worker.addNamedOrchestrator("order", async function* (ctx) {
-    yield ctx.callActivity("fail");
+    if (!cyclic) {
+      yield ctx.callActivity("fail");
+    } else {
+      try {
+        yield ctx.callActivity("fail");
+      } catch (error) {
+        if (!(error instanceof TaskFailedError)) throw error;
+        addBoundedCycle(error.details, error.details);
+        throw error;
+      }
+    }
   });
   await worker.start();
   try {
     const id = await client.scheduleNewOrchestration("order");
     const state = await client.waitForOrchestrationCompletion(id, true, 5);
+    expect(state?.runtimeStatus).toBe(OrchestrationStatus.FAILED);
     expect(state?.failureDetails).toMatchObject({
       errorType: "TaskFailedError",
       message: "Activity task #1 failed: Order failed",
-      innerFailure: expectedChain,
+      innerFailure: cyclic
+        ? {
+            ...expectedChain,
+            innerFailure: {
+              errorType: "CircularFailureDetails",
+              message: "A circular innerFailure reference was detected.",
+              innerFailure: undefined,
+            },
+          }
+        : expectedChain,
     });
   } finally {
     await worker.stop();

@@ -241,7 +241,17 @@ function buildFailureDetails(e: unknown, depth: number): pb.TaskFailureDetails {
   if (e instanceof TaskFailedError && e.cause == null) {
     // Keep the task wrapper and attach the received failure chain without rebuilding Error objects.
     let current = failure;
+    const seen = new Set<TaskFailureDetails>();
     for (let details: TaskFailureDetails | undefined = e.details; details; details = details.innerFailure) {
+      if (seen.has(details)) {
+        current.setInnerfailure(
+          new pb.TaskFailureDetails()
+            .setErrortype("CircularFailureDetails")
+            .setErrormessage("A circular innerFailure reference was detected."),
+        );
+        break;
+      }
+      seen.add(details);
       const inner = new pb.TaskFailureDetails();
       inner.setErrortype(details.errorType);
       inner.setErrormessage(details.message);

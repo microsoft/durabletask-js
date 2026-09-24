@@ -219,6 +219,9 @@ Missing inner failures remain `undefined`; existing two- and three-argument
 details. Remote failures are not reconstructed as JavaScript `Error.cause` objects.
 The existing writer still limits ordinary `Error.cause` chains to ten inner levels;
 reading or forwarding already-received failure details does not add a truncation limit.
+If user code mutates received details into a cycle, forwarding preserves each unique
+failure and ends the chain with `errorType: "CircularFailureDetails"` and
+`message: "A circular innerFailure reference was detected."` rather than looping.
 
 ### Reusing orchestration instance IDs
 
