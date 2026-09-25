@@ -1245,7 +1245,7 @@ export class InMemoryOrchestrationBackend {
           event = pbh.newSubOrchestrationCompletedEvent(taskId, subInstance.output);
         } else {
           const error = new Error(subInstance.failureDetails?.getErrormessage() || "Sub-orchestration failed");
-          event = pbh.newSubOrchestrationFailedEvent(taskId, error);
+          event = pbh.newSubOrchestrationFailedEvent(taskId, error, subInstance.failureDetails);
         }
         parentInstance.pendingEvents.push(event);
         parentInstance.lastUpdatedAt = new Date();

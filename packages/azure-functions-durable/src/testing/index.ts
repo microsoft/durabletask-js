@@ -97,6 +97,7 @@ export async function runOrchestrator<TOutput = unknown, TInput = unknown>(
             errorType: state.failureDetails.errorType,
             message: state.failureDetails.message,
             stackTrace: state.failureDetails.stackTrace,
+            innerFailure: state.failureDetails.innerFailure,
           }
         : undefined,
     };

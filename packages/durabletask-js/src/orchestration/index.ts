@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 import * as pb from "../proto/orchestrator_service_pb";
-import { FailureDetails } from "../task/failure-details";
+import { convertFailureDetails } from "../utils/failure-details.util";
 import { fromProtobuf } from "./enum/orchestration-status.enum";
 import { OrchestrationState } from "./orchestration-state";
 import { mapToRecord } from "../utils/tags.util";
@@ -16,16 +16,7 @@ export function newOrchestrationState(
   }
 
   const state = res.getOrchestrationstate();
-  let failureDetails;
-
-  const protoFailureDetails = state?.getFailuredetails();
-  if (protoFailureDetails) {
-    failureDetails = new FailureDetails(
-      protoFailureDetails.getErrormessage(),
-      protoFailureDetails.getErrortype(),
-      protoFailureDetails.getStacktrace()?.getValue(),
-    );
-  }
+  const failureDetails = convertFailureDetails(state?.getFailuredetails());
 
   const tsCreated = state?.getCreatedtimestamp();
   const tsUpdated = state?.getLastupdatedtimestamp();

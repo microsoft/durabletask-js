@@ -7,6 +7,7 @@ import { RetryTaskBase, RetryTaskType } from "./retry-task-base";
 import { AsyncRetryHandler, RetryHandlerResult } from "./retry/retry-handler";
 import { createRetryContext } from "./retry/retry-context";
 import { TaskFailureDetails } from "./failure-details";
+import { convertFailureDetails } from "../utils/failure-details.util";
 
 /**
  * A task that uses an AsyncRetryHandler for imperative retry control.
@@ -73,10 +74,12 @@ export class RetryHandlerTask<T> extends RetryTaskBase<T> {
       return false;
     }
 
+    const details = convertFailureDetails(this.lastFailure);
     const failureDetails: TaskFailureDetails = {
-      errorType: this.lastFailure.getErrortype() || "Error",
-      message: this.lastFailure.getErrormessage() || "",
-      stackTrace: this.lastFailure.getStacktrace()?.getValue(),
+      errorType: details.errorType || "Error",
+      message: details.message,
+      stackTrace: details.stackTrace,
+      innerFailure: details.innerFailure,
     };
 
     const totalRetryTimeMs = currentTime.getTime() - this.startTime.getTime();

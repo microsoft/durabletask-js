@@ -3,7 +3,8 @@
 
 /**
  * Interface representing task failure details.
- * This is used for retry handlers to inspect failure information.
+ * Used by task errors and retry handlers to inspect failure information,
+ * including the optional chain of underlying failures.
  */
 export interface TaskFailureDetails {
   /** The type/class name of the error */
@@ -12,17 +13,21 @@ export interface TaskFailureDetails {
   readonly message: string;
   /** The stack trace, if available */
   readonly stackTrace?: string;
+  /** Details of the underlying failure, if supplied by the task or backend. */
+  readonly innerFailure?: TaskFailureDetails;
 }
 
 export class FailureDetails implements TaskFailureDetails {
   private _message: string;
   private _errorType: string;
   private _stackTrace: string | undefined;
+  private _innerFailure: TaskFailureDetails | undefined;
 
-  constructor(message: string, errorType: string, stackTrace?: string) {
+  constructor(message: string, errorType: string, stackTrace?: string, innerFailure?: TaskFailureDetails) {
     this._message = message;
     this._errorType = errorType;
     this._stackTrace = stackTrace;
+    this._innerFailure = innerFailure;
   }
 
   get message(): string {
@@ -35,5 +40,9 @@ export class FailureDetails implements TaskFailureDetails {
 
   get stackTrace(): string | undefined {
     return this._stackTrace;
+  }
+
+  get innerFailure(): TaskFailureDetails | undefined {
+    return this._innerFailure;
   }
 }

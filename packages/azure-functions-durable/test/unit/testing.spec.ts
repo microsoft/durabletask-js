@@ -141,7 +141,7 @@ describe("durable-functions/testing", () => {
       const result = await runOrchestrator(orchestrator, {
         activities: {
           fail: () => {
-            throw new TypeError("activity failed");
+            throw new TypeError("activity failed", { cause: new Error("connection timed out") });
           },
         },
       });
@@ -151,6 +151,11 @@ describe("durable-functions/testing", () => {
       expect(result.failure).toMatchObject({
         errorType: expect.any(String),
         message: expect.stringContaining("activity failed"),
+        innerFailure: {
+          errorType: "TypeError",
+          message: "activity failed",
+          innerFailure: { errorType: "Error", message: "connection timed out", innerFailure: undefined },
+        },
       });
     });
 

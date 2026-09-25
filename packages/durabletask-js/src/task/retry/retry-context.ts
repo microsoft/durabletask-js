@@ -59,7 +59,7 @@ export interface RetryContext {
 
   /**
    * The details of the previous task failure.
-   * Contains the error type, message, and stack trace.
+   * Contains the error type, message, stack trace, and optional inner failure chain.
    */
   readonly lastFailure: TaskFailureDetails;
 
