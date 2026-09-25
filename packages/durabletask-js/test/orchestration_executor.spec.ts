@@ -39,7 +39,61 @@ const testLogger = new NoOpLogger();
 
 const TEST_INSTANCE_ID = "abc123";
 
+describe("Orchestration Context", () => {
+  it("keeps manual construction compatible with an empty, getter-only name", () => {
+    const ctx = new RuntimeOrchestrationContext(TEST_INSTANCE_ID);
+    expect(ctx).toMatchObject({ instanceId: TEST_INSTANCE_ID, name: "", version: "" });
+    expect(Object.getOwnPropertyDescriptor(RuntimeOrchestrationContext.prototype, "name")).toMatchObject({
+      get: expect.any(Function),
+      set: undefined,
+    });
+    expect(Reflect.set(ctx, "name", "changed")).toBe(false);
+  });
+});
+
 describe("Orchestration Executor", () => {
+  it.each([undefined, "1.0.0"])(
+    "preserves each logical name on initial execution and replay with registration version %s",
+    async (registrationVersion) => {
+      async function* implementation(ctx: OrchestrationContext) {
+        const initialName = ctx.name;
+        ctx.setCustomStatus([initialName, ctx.isReplaying]);
+        yield ctx.callActivity("Work");
+        return [initialName, ctx.name, ctx.instanceId, ctx.version, ctx.isReplaying];
+      }
+      const registry = new Registry();
+      const names = ["LogicalFlow", "logicalFlow"];
+      for (const name of names) {
+        registry.addNamedOrchestrator(name, implementation, registrationVersion);
+      }
+
+      for (const name of names) {
+        const startEvents = [
+          newOrchestratorStartedEvent(),
+          newExecutionStartedEvent(name, TEST_INSTANCE_ID, undefined, undefined, undefined, "1.0.0"),
+        ];
+        const initial = await new OrchestrationExecutor(registry, testLogger, undefined, "worker-default").execute(
+          TEST_INSTANCE_ID,
+          [],
+          startEvents,
+        );
+        expect(initial.customStatus).toBe(JSON.stringify([name, false]));
+        expect(initial.actions).toHaveLength(1);
+        expect(initial.actions[0].getScheduletask()?.getName()).toBe("Work");
+
+        const replay = await new OrchestrationExecutor(registry, testLogger, undefined, "worker-default").execute(
+          TEST_INSTANCE_ID,
+          [...startEvents, newTaskScheduledEvent(1, "Work")],
+          [newTaskCompletedEvent(1, '"done"')],
+        );
+        expect(replay.customStatus).toBe(JSON.stringify([name, true]));
+        const completed = getAndValidateSingleCompleteOrchestrationAction(replay);
+        expect(completed?.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED);
+        expect(completed?.getResult()?.getValue()).toBe(JSON.stringify([name, name, TEST_INSTANCE_ID, "1.0.0", false]));
+      }
+    },
+  );
+
   it("should validate the orchestrator function input population", async () => {
     const orchestrator: TOrchestrator = async (ctx: OrchestrationContext, input: any) => {
       // return all orchestrator inputs back as the output

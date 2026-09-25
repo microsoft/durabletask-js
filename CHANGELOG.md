@@ -2,6 +2,9 @@
 
 ### New
 
+- Expose readonly `OrchestrationContext.name` from execution-start history, preserving logical
+  aliases and case on initial execution and replay. `RuntimeOrchestrationContext` constructor
+  arguments are unchanged; manually constructed contexts have an empty name until initialized.
 - Add an optional `reason` to client `suspendOrchestration()` and `resumeOrchestration()`,
   forwarded unchanged to the service and recorded in in-memory test history. Empty strings
   are preserved; omitted reasons remain absent.
@@ -57,6 +60,8 @@
 
 ### Breaking changes
 
+- Custom `OrchestrationContext` subclasses and typed test doubles must implement the new
+  `name` getter/property. Orchestrators consuming SDK-provided contexts require no changes.
 - Activity calls without an explicit version now inherit the parent's instance version, and
   child calls inherit the worker's `versioning.defaultVersion`; explicit `""` selects unversioned.
   Worker acceptance checks now also apply to activities; `Strict` with an empty worker version

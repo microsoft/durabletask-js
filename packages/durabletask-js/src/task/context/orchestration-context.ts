@@ -14,6 +14,16 @@ import { compareVersions } from "../../utils/versioning.util";
 
 export abstract class OrchestrationContext {
   /**
+   * Gets the logical name used to schedule the current orchestration.
+   *
+   * This is the name recorded in orchestration history, preserving aliases and case,
+   * not necessarily the JavaScript function name. It remains the same during replay.
+   *
+   * @returns {string} The logical name of the currently executing orchestration.
+   */
+  abstract get name(): string;
+
+  /**
    * The instance ID of the currently executing orchestration.
    *
    * The instance ID is generated and fixed when the orchestrator function is scheduled. It can be either auto-generated, in which
