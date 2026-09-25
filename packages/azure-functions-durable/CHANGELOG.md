@@ -2,6 +2,8 @@
 
 ### New
 
+- Expose readonly `context.df.name`, forwarding the core logical orchestration name from history
+  and preserving aliases and case across replay. This does not add `InvocationContext.functionName`.
 - Add optional orchestration version migration support to `context.df.continueAsNew()`.
 - Added a `durable-functions/testing` entry point with `runOrchestrator`, which runs an orchestrator
   to a terminal state against inline activity implementations on the in-memory backend and always

@@ -36,6 +36,7 @@ function createFakeCoreContext() {
     debug: jest.fn(),
   };
   const ctx = {
+    name: "LogicalOrch",
     instanceId: "instance-1",
     isReplaying: true,
     currentUtcDateTime: new Date("2026-01-02T03:04:05.000Z"),
@@ -59,6 +60,7 @@ describe("DurableOrchestrationContext", () => {
     const { ctx } = createFakeCoreContext();
     const df = new DurableOrchestrationContext(ctx, { city: "Tokyo" });
 
+    expect(df.name).toBe("LogicalOrch");
     expect(df.instanceId).toBe("instance-1");
     expect(df.isReplaying).toBe(true);
     expect(df.currentUtcDateTime).toEqual(new Date("2026-01-02T03:04:05.000Z"));
@@ -408,9 +410,10 @@ describe("wrapOrchestrator end-to-end (real core executor)", () => {
 
     // Classic v3 sync generator using context.df.*; wrapOrchestrator wraps it so the engine drives it.
     const classic = function* (context: ClassicOrchestrationContext): Generator<Task<unknown>, string, unknown> {
+      const initialName = context.df.name;
       const input = context.df.getInput<string>();
       const result = (yield context.df.callActivity("echo", input)) as string;
-      return `classic-done:${result}`;
+      return `${initialName}:${context.df.name}:${result}`;
     };
     worker.addNamedOrchestrator("classicOrch", wrapOrchestrator(classic));
 
@@ -421,7 +424,7 @@ describe("wrapOrchestrator end-to-end (real core executor)", () => {
       const state = await client.waitForOrchestrationCompletion(id, true, 10);
 
       expect(state?.runtimeStatus).toBe(OrchestrationStatus.COMPLETED);
-      expect(state?.serializedOutput).toBe(JSON.stringify("classic-done:echo:IN"));
+      expect(state?.serializedOutput).toBe(JSON.stringify("classicOrch:classicOrch:echo:IN"));
     } finally {
       await worker.stop();
     }
