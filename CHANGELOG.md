@@ -2,6 +2,9 @@
 
 ### New
 
+- Add an optional `reason` to client `suspendOrchestration()` and `resumeOrchestration()`,
+  forwarded unchanged to the service and recorded in in-memory test history. Empty strings
+  are preserved; omitted reasons remain absent.
 - Expose readonly `ActivityContext.name` and `ActivityContext.version` from the activity request,
   preserving the requested version even when an unversioned implementation handles it. Existing
   two-argument context construction remains supported, with empty name/version defaults.

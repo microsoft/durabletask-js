@@ -434,12 +434,11 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    *
    * @deprecated Use {@link suspendOrchestration} instead.
    * @param instanceId - The orchestration instance to suspend.
-   * @param _reason - Accepted for classic v3 signature compatibility; ignored (the core engine does
-   *   not record a suspend reason).
+   * @param reason - Optional reason sent unchanged to the service, including an empty string.
    */
-  async suspend(instanceId: string, _reason?: string): Promise<void> {
+  async suspend(instanceId: string, reason?: string): Promise<void> {
     try {
-      await this.suspendOrchestration(instanceId);
+      await this.suspendOrchestration(instanceId, reason);
     } catch (error) {
       await this._mapControlPlaneError(error, instanceId, "suspend");
     }
@@ -450,11 +449,11 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    *
    * @deprecated Use {@link resumeOrchestration} instead.
    * @param instanceId - The orchestration instance to resume.
-   * @param _reason - Accepted for classic v3 signature compatibility; ignored.
+   * @param reason - Optional reason sent unchanged to the service, including an empty string.
    */
-  async resume(instanceId: string, _reason?: string): Promise<void> {
+  async resume(instanceId: string, reason?: string): Promise<void> {
     try {
-      await this.resumeOrchestration(instanceId);
+      await this.resumeOrchestration(instanceId, reason);
     } catch (error) {
       await this._mapControlPlaneError(error, instanceId, "resume");
     }

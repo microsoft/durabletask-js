@@ -572,13 +572,22 @@ export class TaskHubGrpcClient {
     );
   }
 
-  async suspendOrchestration(instanceId: string): Promise<void> {
+  /**
+   * Suspends an orchestration instance.
+   *
+   * @param instanceId - The orchestration instance to suspend.
+   * @param reason - Optional reason sent unchanged to the service, including an empty string.
+   */
+  async suspendOrchestration(instanceId: string, reason?: string): Promise<void> {
     if (!instanceId) {
       throw new Error("instanceId is required");
     }
 
     const req = new pb.SuspendRequest();
     req.setInstanceid(instanceId);
+    if (reason != null) {
+      req.setReason(new StringValue().setValue(reason));
+    }
 
     ClientLogs.suspendingInstance(this._logger, instanceId);
 
@@ -589,13 +598,22 @@ export class TaskHubGrpcClient {
     );
   }
 
-  async resumeOrchestration(instanceId: string): Promise<void> {
+  /**
+   * Resumes a suspended orchestration instance.
+   *
+   * @param instanceId - The orchestration instance to resume.
+   * @param reason - Optional reason sent unchanged to the service, including an empty string.
+   */
+  async resumeOrchestration(instanceId: string, reason?: string): Promise<void> {
     if (!instanceId) {
       throw new Error("instanceId is required");
     }
 
     const req = new pb.ResumeRequest();
     req.setInstanceid(instanceId);
+    if (reason != null) {
+      req.setReason(new StringValue().setValue(reason));
+    }
 
     ClientLogs.resumingInstance(this._logger, instanceId);
 

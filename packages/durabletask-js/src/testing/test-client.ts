@@ -145,16 +145,22 @@ export class TestOrchestrationClient {
 
   /**
    * Suspends an orchestration.
+   *
+   * @param instanceId - The orchestration instance to suspend.
+   * @param reason - Optional reason recorded unchanged in the suspension history event.
    */
-  async suspendOrchestration(instanceId: string): Promise<void> {
-    this.backend.suspend(instanceId);
+  async suspendOrchestration(instanceId: string, reason?: string): Promise<void> {
+    this.backend.suspend(instanceId, reason);
   }
 
   /**
    * Resumes a suspended orchestration.
+   *
+   * @param instanceId - The orchestration instance to resume.
+   * @param reason - Optional reason recorded unchanged in the resumption history event.
    */
-  async resumeOrchestration(instanceId: string): Promise<void> {
-    this.backend.resume(instanceId);
+  async resumeOrchestration(instanceId: string, reason?: string): Promise<void> {
+    this.backend.resume(instanceId, reason);
   }
 
   /**

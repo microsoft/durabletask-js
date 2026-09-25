@@ -855,6 +855,35 @@ describe("In-Memory Backend", () => {
   });
 
   describe("suspend and resume status", () => {
+    it.each(['  "maintenance"\n\u6682\u505c  ', "", undefined, null])(
+      "preserves suspend/resume reason %p in history",
+      async (reason) => {
+        const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext) {
+          yield ctx.waitForExternalEvent("proceed");
+          return "done";
+        };
+        worker.addOrchestrator(orchestrator);
+        await worker.start();
+        const id = await client.scheduleNewOrchestration(orchestrator);
+        await client.waitForOrchestrationStart(id, false, 10);
+
+        await Reflect.apply(client.suspendOrchestration, client, [id, reason]);
+        await client.raiseOrchestrationEvent(id, "proceed");
+        await Reflect.apply(client.resumeOrchestration, client, [id, reason]);
+
+        const state = await client.waitForOrchestrationCompletion(id, true, 10);
+        expect(state?.runtimeStatus).toBe(OrchestrationStatus.COMPLETED);
+        const history = backend.getInstance(id)!.history;
+        const suspended = history.find((event) => event.hasExecutionsuspended())?.getExecutionsuspended();
+        const resumed = history.find((event) => event.hasExecutionresumed())?.getExecutionresumed();
+        for (const event of [suspended, resumed]) {
+          expect(event).toBeDefined();
+          expect(event!.hasInput()).toBe(reason != null);
+          expect(event!.getInput()?.getValue()).toBe(reason ?? undefined);
+        }
+      },
+    );
+
     it("should update status to SUSPENDED when suspend is called", async () => {
       const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
         yield ctx.waitForExternalEvent("proceed");
