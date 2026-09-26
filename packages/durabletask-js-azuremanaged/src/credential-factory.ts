@@ -25,10 +25,12 @@ export function getCredentialFromAuthenticationType(
   connectionString: DurableTaskAzureManagedConnectionString,
 ): TokenCredential | null {
   const authType = connectionString.getAuthentication().toLowerCase().trim();
+  const authorityHost = connectionString.getAuthorityHost();
+  const authorityOptions = authorityHost ? { authorityHost } : undefined;
 
   switch (authType) {
     case "defaultazure":
-      return new DefaultAzureCredential();
+      return new DefaultAzureCredential(authorityOptions);
 
     case "managedidentity": {
       const clientId = connectionString.getClientId();
@@ -45,6 +47,7 @@ export function getCredentialFromAuthenticationType(
       const additionallyAllowedTenants = connectionString.getAdditionallyAllowedTenants();
 
       return new WorkloadIdentityCredential({
+        ...authorityOptions,
         ...(clientId && { clientId }),
         ...(tenantId && { tenantId }),
         ...(tokenFilePath && { tokenFilePath }),
@@ -53,7 +56,7 @@ export function getCredentialFromAuthenticationType(
     }
 
     case "environment":
-      return new EnvironmentCredential();
+      return new EnvironmentCredential(authorityOptions);
 
     case "azurecli":
       return new AzureCliCredential();
@@ -62,10 +65,10 @@ export function getCredentialFromAuthenticationType(
       return new AzurePowerShellCredential();
 
     case "visualstudiocode":
-      return new VisualStudioCodeCredential();
+      return new VisualStudioCodeCredential(authorityOptions);
 
     case "interactivebrowser":
-      return new InteractiveBrowserCredential({});
+      return new InteractiveBrowserCredential(authorityOptions ?? {});
 
     case "none":
       return null;

@@ -96,6 +96,36 @@ npm run example -- ./examples/azure-managed/hello-orchestrations/index.ts
 
 See each sample's README for details. See [Feature Coverage Map](#feature-coverage-map) below for full feature mapping.
 
+### Azure Government Configuration
+
+Use the actual endpoint and task hub of your government scheduler. For example, the existing samples can use
+this connection string in `.env`:
+
+```env
+DURABLE_TASK_SCHEDULER_CONNECTION_STRING=Endpoint=https://<your-scheduler>.usgovvirginia.durabletask.azure.us;Authentication=DefaultAzure;TaskHub=<your-taskhub>;ResourceId=https://durabletask.azure.us;AuthorityHost=https://login.microsoftonline.us
+```
+
+For local Azure CLI authentication, select the tool's cloud separately before signing in:
+
+```bash
+az cloud set --name AzureUSGovernment
+az login
+npm run example -- ./examples/azure-managed/hello-orchestrations/index.ts
+```
+
+`ResourceId` is the token audience URI, not the scheduler's ARM resource path. `AuthorityHost` configures
+supported SDK-created Azure Identity credentials; it does not select the Azure CLI or PowerShell cloud.
+Managed identity instead uses its hosting environment's identity endpoint and does not use an authority override.
+When creating your own credential, set `authorityHost` on that credential, not on a token request.
+Omitting the authority preserves Azure Identity defaults, including `AZURE_AUTHORITY_HOST` where applicable.
+
+If `ResourceId` is omitted or empty, `REGION_NAME` beginning with `usgov` or `usdod` (case-insensitive) selects
+`https://durabletask.azure.us`; all other values select `https://durabletask.io`. This is an intentional
+government-region default change. Pin `ResourceId=https://durabletask.io` to retain public-cloud authentication
+in a government-region environment. Audience selection never changes the endpoint or credential authority.
+See the [authentication API reference](../../packages/durabletask-js-azuremanaged/README.md#token-audience-and-azure-government)
+for explicit-parameter examples and normalization rules.
+
 ### CI Validation
 
 Samples are validated automatically by [`.github/workflows/validate-samples.yaml`](../../.github/workflows/validate-samples.yaml). Any subfolder with a `sample.json` is auto-discovered and tested on every PR.
