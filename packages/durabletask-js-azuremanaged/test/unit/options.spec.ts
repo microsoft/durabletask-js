@@ -21,6 +21,15 @@ describe("Options", () => {
   const CUSTOM_RESOURCE_ID = "https://custom.resource";
   const CUSTOM_REFRESH_MARGIN = 10 * 60 * 1000; // 10 minutes in ms
 
+  const originalRegion = process.env.REGION_NAME;
+  beforeEach(() => {
+    delete process.env.REGION_NAME;
+  });
+  afterEach(() => {
+    if (originalRegion === undefined) delete process.env.REGION_NAME;
+    else process.env.REGION_NAME = originalRegion;
+  });
+
   describe("DurableTaskAzureManagedClientOptions", () => {
     describe("fromConnectionString", () => {
       it("should create valid options from connection string", () => {

@@ -14,10 +14,13 @@ import { ClientRetryOptions, createServiceConfig, DEFAULT_SERVICE_CONFIG } from 
  * Contains properties common to both client and worker configurations.
  */
 abstract class DurableTaskAzureManagedOptionsBase {
+  private readonly _defaultResourceId: string = /^(usgov|usdod)/i.test(process.env.REGION_NAME ?? "")
+    ? "https://durabletask.azure.us"
+    : "https://durabletask.io";
   protected _endpointAddress: string = "";
   protected _taskHubName: string = "";
   protected _credential: TokenCredential | null = null;
-  protected _resourceId: string = "https://durabletask.io";
+  protected _resourceId: string = this._defaultResourceId;
   protected _allowInsecureCredentials: boolean = false;
   protected _tokenRefreshMargin: number = 5 * 60 * 1000; // 5 minutes in milliseconds
   protected _retryOptions: ClientRetryOptions | undefined = undefined;
@@ -44,10 +47,25 @@ abstract class DurableTaskAzureManagedOptionsBase {
   }
 
   /**
-   * Gets the resource ID.
+   * Gets the normalized token audience URI (not an Azure Resource Manager resource path).
+   * This does not configure the endpoint or credential authority.
    */
   getResourceId(): string {
     return this._resourceId;
+  }
+
+  protected resolveResourceId(resourceId?: string | null): string {
+    if (resourceId === undefined || resourceId === null || resourceId === "") {
+      return this._defaultResourceId;
+    }
+
+    const normalized = resourceId.trim().replace(/\/+$/, "").replace(/\/\.default$/i, "").replace(/\/+$/, "");
+    if (normalized === "") {
+      throw new Error(
+        "resourceId (ResourceId) cannot be empty after normalization. Provide a token audience URI, or omit it to use the region default.",
+      );
+    }
+    return normalized;
   }
 
   /**
@@ -194,6 +212,7 @@ abstract class DurableTaskAzureManagedOptionsBase {
   protected configureFromConnectionString(connectionString: DurableTaskAzureManagedConnectionString): void {
     this._endpointAddress = connectionString.getEndpoint();
     this._taskHubName = connectionString.getTaskHubName();
+    this._resourceId = this.resolveResourceId(connectionString.getResourceId());
 
     this._credential = getCredentialFromAuthenticationType(connectionString);
   }
@@ -244,8 +263,14 @@ export class DurableTaskAzureManagedClientOptions extends DurableTaskAzureManage
     return this;
   }
 
-  setResourceId(resourceId: string): DurableTaskAzureManagedClientOptions {
-    this._resourceId = resourceId;
+  /**
+   * Sets the token audience URI, trimming whitespace, trailing slashes and one /.default suffix.
+   * Null, undefined or empty selects the REGION_NAME default captured when these options were created:
+   * https://durabletask.azure.us for usgov/usdod prefixes (case-insensitive), otherwise https://durabletask.io.
+   * @throws Error if a nonempty value becomes empty after normalization.
+   */
+  setResourceId(resourceId?: string | null): DurableTaskAzureManagedClientOptions {
+    this._resourceId = this.resolveResourceId(resourceId);
     return this;
   }
 
@@ -352,8 +377,14 @@ export class DurableTaskAzureManagedWorkerOptions extends DurableTaskAzureManage
     return this;
   }
 
-  setResourceId(resourceId: string): DurableTaskAzureManagedWorkerOptions {
-    this._resourceId = resourceId;
+  /**
+   * Sets the token audience URI, trimming whitespace, trailing slashes and one /.default suffix.
+   * Null, undefined or empty selects the REGION_NAME default captured when these options were created:
+   * https://durabletask.azure.us for usgov/usdod prefixes (case-insensitive), otherwise https://durabletask.io.
+   * @throws Error if a nonempty value becomes empty after normalization.
+   */
+  setResourceId(resourceId?: string | null): DurableTaskAzureManagedWorkerOptions {
+    this._resourceId = this.resolveResourceId(resourceId);
     return this;
   }
 

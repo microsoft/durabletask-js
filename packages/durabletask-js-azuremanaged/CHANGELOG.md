@@ -2,6 +2,13 @@
 
 ### New
 
+- Support the `ResourceId` token audience URI in connection strings and an optional final `resourceId`
+  argument in the client/worker factory functions, alongside existing builder/options setters.
+  Trim surrounding whitespace and trailing slashes, remove one case-insensitive `/.default` suffix,
+  and reject nonempty values that normalize to empty. Preserve custom URI casing.
+- Support optional connection-string `AuthorityHost` for SDK-created Azure Identity credentials that
+  support authority configuration. Omission preserves Azure Identity defaults/environment settings.
+  Caller-supplied credentials own their authority; managed identity and developer-tool clouds remain separate.
 - Add an optional final version argument to all orchestrator/activity builder registrations,
   preserving same-name versions and version-aware auto filters in the built worker.
 - Add `DurableTaskAzureManagedWorkerBuilder.silentDisconnectTimeout()` to configure the
@@ -12,6 +19,12 @@
 
 ### Breaking changes
 
+- Missing, null, or empty resource IDs now default to `https://durabletask.azure.us` when `REGION_NAME`
+  starts with `usgov` or `usdod` (case-insensitive), otherwise `https://durabletask.io`. Defaults are
+  captured per options instance and preserved across token refreshes and worker reconnects.
+  Set `ResourceId=https://durabletask.io` (or `.resourceId("https://durabletask.io")`) explicitly to
+  retain the public audience in a government-region environment. Audience selection does not change
+  the service endpoint or credential authority/cloud.
 - Schemeless endpoints now default to HTTPS. Connection-string and builder `.endpoint(...)` users
   must prefix plaintext local or emulator endpoints with `http://`.
 

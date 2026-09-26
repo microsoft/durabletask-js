@@ -71,12 +71,17 @@ export class DurableTaskAzureManagedClientBuilder {
   }
 
   /**
-   * Sets the resource ID for authentication.
+   * Sets the token audience URI for authentication, not an Azure Resource Manager resource path.
+   * Normalizes whitespace, trailing slashes and one /.default suffix.
+   * Does not change the endpoint or credential authority.
    *
-   * @param resourceId The resource ID.
+   * @param resourceId The audience URI. Null, undefined or empty uses the default captured when
+   * the connection options were created: https://durabletask.azure.us for REGION_NAME starting
+   * with usgov/usdod (case-insensitive), otherwise https://durabletask.io.
    * @returns This builder instance.
+   * @throws Error if a nonempty value becomes empty after normalization.
    */
-  resourceId(resourceId: string): DurableTaskAzureManagedClientBuilder {
+  resourceId(resourceId?: string | null): DurableTaskAzureManagedClientBuilder {
     this._options.setResourceId(resourceId);
     return this;
   }
@@ -185,6 +190,8 @@ export function createAzureManagedClient(connectionString: string): TaskHubGrpcC
  * @param endpoint The endpoint address for Azure-managed Durable Task service.
  * @param taskHubName The name of the task hub to connect to.
  * @param credential The token credential for authentication, or null for anonymous access.
+ * @param resourceId Optional token audience URI. Uses the per-instance REGION_NAME default when omitted or empty.
+ * Configure authority on the supplied credential, independently of this audience and the endpoint.
  * @returns A new configured TaskHubGrpcClient instance.
  * @throws Error if endpoint or taskHubName is null or undefined.
  */
@@ -192,18 +199,20 @@ export function createAzureManagedClient(
   endpoint: string,
   taskHubName: string,
   credential?: TokenCredential | null,
+  resourceId?: string | null,
 ): TaskHubGrpcClient;
 
 export function createAzureManagedClient(
   endpointOrConnectionString: string,
   taskHubName?: string,
   credential?: TokenCredential | null,
+  resourceId?: string | null,
 ): TaskHubGrpcClient {
   const builder = new DurableTaskAzureManagedClientBuilder();
 
   if (taskHubName !== undefined) {
-    // Called with (endpoint, taskHubName, credential?)
-    return builder.endpoint(endpointOrConnectionString, taskHubName, credential).build();
+    // Called with (endpoint, taskHubName, credential?, resourceId?)
+    return builder.endpoint(endpointOrConnectionString, taskHubName, credential).resourceId(resourceId).build();
   } else {
     // Called with (connectionString)
     return builder.connectionString(endpointOrConnectionString).build();
