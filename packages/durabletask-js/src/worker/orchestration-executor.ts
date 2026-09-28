@@ -291,7 +291,8 @@ export class OrchestrationExecutor {
     // Log orchestration start (EventId 600)
     WorkerLogs.orchestrationStarted(this._logger, ctx._instanceId, this._orchestratorName);
 
-    // Set the version from the execution started event
+    // Set the name and version from the execution started event
+    ctx._name = executionStartedEvent?.getName() ?? "";
     ctx._version = executionStartedEvent?.getVersion()?.getValue() ?? "";
 
     // Extract parent instance info if this is a sub-orchestration

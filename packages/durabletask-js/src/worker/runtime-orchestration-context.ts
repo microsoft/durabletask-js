@@ -43,6 +43,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
   _newGuidCounter: number;
   _currentUtcDatetime: Date;
   _instanceId: string;
+  _name: string;
   _executionId: string = "";
   _version: string;
   _parent?: ParentOrchestrationInstance;
@@ -75,6 +76,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     this._newGuidCounter = 0;
     this._currentUtcDatetime = new Date(1000, 0, 1);
     this._instanceId = instanceId;
+    this._name = "";
     this._version = "";
     this._parent = undefined;
     this._completionStatus = undefined;
@@ -85,6 +87,11 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     this._newVersion = undefined;
     this._customStatus = undefined;
     this._entityFeature = new RuntimeOrchestrationEntityFeature(this);
+  }
+
+  /** The recorded logical name, or an empty string before execution history initializes the context. */
+  get name(): string {
+    return this._name;
   }
 
   get instanceId(): string {

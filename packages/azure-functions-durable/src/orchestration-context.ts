@@ -32,6 +32,11 @@ export class DurableOrchestrationContext {
     private readonly _input: unknown,
   ) {}
 
+  /** The recorded logical orchestration name, preserving aliases and case across replay. */
+  get name(): string {
+    return this._ctx.name;
+  }
+
   /** The instance ID of the current orchestration. */
   get instanceId(): string {
     return this._ctx.instanceId;
