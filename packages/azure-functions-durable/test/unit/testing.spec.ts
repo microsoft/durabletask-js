@@ -4,6 +4,9 @@
 import { InvocationContext } from "@azure/functions";
 import {
   InMemoryOrchestrationBackend,
+  FailureDetails,
+  OrchestrationState,
+  OrchestrationStatus,
   TestOrchestrationClient,
   TestOrchestrationWorker,
   TOrchestrator,
@@ -53,6 +56,40 @@ describe("durable-functions/testing", () => {
   });
 
   describe("runOrchestrator", () => {
+    it("preserves received root and nested properties in its failure projection", async () => {
+      const inner = new FailureDetails("inner", "InnerError", undefined, undefined, { retryable: false });
+      const failure = new FailureDetails("remote", "RemoteError", undefined, inner, { code: "RemoteCode" });
+      const state = new OrchestrationState(
+        "remote",
+        "orchestrator",
+        OrchestrationStatus.FAILED,
+        new Date(0),
+        new Date(0),
+        undefined,
+        undefined,
+        undefined,
+        failure,
+      );
+      // Inject received client state to isolate the adapter's public projection.
+      const wait = jest
+        .spyOn(TestOrchestrationClient.prototype, "waitForOrchestrationCompletion")
+        .mockResolvedValue(state);
+      try {
+        const orchestrator: TOrchestrator = async function* (ctx) {
+          yield ctx.createTimer(0);
+        };
+        const result = await runOrchestrator(orchestrator);
+        expect(result.failure).toMatchObject({
+          errorType: "RemoteError",
+          message: "remote",
+          properties: { code: "RemoteCode" },
+          innerFailure: { errorType: "InnerError", message: "inner", properties: { retryable: false } },
+        });
+      } finally {
+        wait.mockRestore();
+      }
+    });
+
     it("inherits the core three-day timer default, like the Functions worker", async () => {
       const complete = jest.spyOn(InMemoryOrchestrationBackend.prototype, "completeOrchestration");
       const day = 24 * 60 * 60 * 1000;

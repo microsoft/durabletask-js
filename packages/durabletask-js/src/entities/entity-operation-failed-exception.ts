@@ -3,6 +3,7 @@
 
 import { EntityInstanceId } from "./entity-instance-id";
 import * as pb from "../proto/orchestrator_service_pb";
+import { convertFailureProperties } from "../utils/failure-details.util";
 
 /**
  * Details about a task failure.
@@ -31,6 +32,8 @@ export interface TaskFailureDetails {
    * Details about an inner failure, if any.
    */
   readonly innerFailure?: TaskFailureDetails;
+  /** Structured backend values, if any; empty wire maps are undefined. Not collected from Error fields. */
+  readonly properties?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -49,6 +52,7 @@ export function createTaskFailureDetails(proto: pb.TaskFailureDetails | undefine
     errorMessage: proto.getErrormessage(),
     stackTrace: proto.getStacktrace()?.getValue(),
     innerFailure: createTaskFailureDetails(proto.getInnerfailure()),
+    properties: convertFailureProperties(proto),
   };
 }
 

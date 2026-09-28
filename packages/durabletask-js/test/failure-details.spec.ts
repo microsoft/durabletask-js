@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
+import { ListValue, Struct, Value } from "google-protobuf/google/protobuf/struct_pb";
 import {
   FailureDetails,
   InMemoryOrchestrationBackend,
@@ -16,6 +17,25 @@ import { newOrchestrationState } from "../src/orchestration";
 import * as pb from "../src/proto/orchestrator_service_pb";
 import { convertProtoHistoryEvent } from "../src/utils/history-event-converter";
 import { newFailureDetails } from "../src/utils/pb-helper.util";
+
+const wireProperties = {
+  code: "PaymentDeclined",
+  count: 0,
+  retryable: false,
+  reason: "",
+  optional: null,
+  context: { values: [1.5, true, null, "", { currency: "USD" }] },
+  timestamp: "dt:2026-09-28T00:00:00Z",
+};
+
+function receivedFailure(): pb.TaskFailureDetails {
+  const failure = newFailureDetails(errorChain());
+  for (const [key, value] of Object.entries(wireProperties)) {
+    failure.getPropertiesMap().set(key, Value.fromJavaScript(value));
+  }
+  failure.getInnerfailure()!.getPropertiesMap().set("status", Value.fromJavaScript(402));
+  return pb.TaskFailureDetails.deserializeBinary(failure.serializeBinary());
+}
 
 function errorChain(): Error {
   const inner = new Error("Connection timed out");
@@ -58,7 +78,69 @@ const expectedChain = {
   },
 };
 
+const expectedReceivedChain = {
+  ...expectedChain,
+  properties: wireProperties,
+  innerFailure: { ...expectedChain.innerFailure, properties: { status: 402 } },
+};
+
 describe("Public failure details", () => {
+  it("receives and forwards structured wire properties at each failure level", () => {
+    const proto = receivedFailure();
+    const error = new TaskFailedError("Activity task failed", proto);
+    expect(error.details.properties).toEqual(wireProperties);
+    expect(error.details.innerFailure?.properties).toEqual({ status: 402 });
+    expect(newFailureDetails(error).getInnerfailure()?.serializeBinary()).toEqual(proto.serializeBinary());
+  });
+
+  it("keeps delivered property keys as data at the root and inside lists and structs", () => {
+    const fields = new Struct();
+    fields.getFieldsMap().set("constructor", Value.fromJavaScript("also data"));
+    fields.getFieldsMap().set("toString", Value.fromJavaScript({ marker: "data" }));
+    const value = new Value().setStructValue(fields);
+    const proto = new pb.TaskFailureDetails();
+    proto.getPropertiesMap().set("nested", value);
+    proto.getPropertiesMap().set("constructor", Value.fromJavaScript(false));
+    proto.getPropertiesMap().set("list", new Value().setListValue(new ListValue().setValuesList([value])));
+    const decoded = pb.TaskFailureDetails.deserializeBinary(proto.serializeBinary());
+    const error = new TaskFailedError("failed", decoded);
+    const nested = { constructor: "also data", toString: { marker: "data" } };
+    const expected = { nested, constructor: false, list: [nested] };
+    expect(Reflect.get(error.details, "properties")).toEqual(expected);
+    expect(Object.prototype).not.toHaveProperty("marker");
+    expect(newFailureDetails(error).getInnerfailure()?.serializeBinary()).toEqual(decoded.serializeBinary());
+  });
+
+  it.each([undefined, 1n, () => 1, new Date(0), { nested: undefined }, Object.fromEntries([["__proto__", "data"]])])(
+    "rejects unsupported values added to received properties (%p)",
+    (value) => {
+      const error = new TaskFailedError("failed", receivedFailure());
+      Object.defineProperty(error.details, "properties", { value: { invalid: value } });
+      expect(() => newFailureDetails(error)).toThrow();
+    },
+  );
+
+  it("rejects a cyclic property graph rather than returning a truncated success", () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const error = new TaskFailedError("failed", receivedFailure());
+    Object.defineProperty(error.details, "properties", { value: cyclic });
+    expect(() => newFailureDetails(error)).toThrow();
+  });
+
+  it("forwards deeply nested property values without an arbitrary depth limit", () => {
+    let value: unknown = { leaf: false };
+    for (let i = 0; i < 15; i++) value = { child: value };
+    const error = new TaskFailedError("failed", receivedFailure());
+    Object.defineProperty(error.details, "properties", { value: { deep: value } });
+    expect(newFailureDetails(error).getInnerfailure()?.getPropertiesMap().get("deep")?.toJavaScript()).toEqual(value);
+  });
+
+  it("does not collect arbitrary properties from ordinary JavaScript errors", () => {
+    const error = Object.assign(new Error("local"), { properties: wireProperties, code: "local" });
+    expect(newFailureDetails(error).getPropertiesMap().getLength()).toBe(0);
+  });
+
   it("preserves a three-level wire chain in TaskFailedError without changing its message or cause", () => {
     const error = new TaskFailedError("Activity task failed", newFailureDetails(errorChain()));
     expect(error.details).toMatchObject(expectedChain);
@@ -73,6 +155,7 @@ describe("Public failure details", () => {
       errorType: "Error",
       stackTrace: "stack",
       innerFailure: undefined,
+      properties: undefined,
     });
     expect(new FailureDetails("message", "Error").stackTrace).toBeUndefined();
     const proto = new pb.TaskFailureDetails();
@@ -81,11 +164,16 @@ describe("Public failure details", () => {
       errorType: "",
       stackTrace: undefined,
       innerFailure: undefined,
+      properties: undefined,
     });
     proto.setStacktrace(new StringValue().setValue(""));
     expect(new TaskFailedError("failed", proto).details.stackTrace).toBe("");
     const inner = new FailureDetails("inner", "InnerError");
     expect(new FailureDetails("outer", "OuterError", undefined, inner).innerFailure).toBe(inner);
+    const properties = { code: "RemoteCode" };
+    const details = new FailureDetails("outer", "OuterError", undefined, inner, properties);
+    expect(details.properties).toBe(properties);
+    expect(Reflect.set(details, "properties", {})).toBe(false);
   });
 
   it("does not apply the outbound Error.cause depth limit to an incoming wire chain", () => {
@@ -114,7 +202,7 @@ describe("Public failure details", () => {
   });
 
   it.each([1, 3])("marks a %i-node cycle after preserving each unique failure and the task wrapper", (length) => {
-    const proto = newFailureDetails(errorChain());
+    const proto = receivedFailure();
     const error = new TaskFailedError("Activity task failed", proto);
     let tail: TaskFailureDetails = error.details;
     for (let i = 1; i < length; i++) tail = tail.innerFailure!;
@@ -130,6 +218,7 @@ describe("Public failure details", () => {
       expect(actual?.getErrortype()).toBe(expected?.getErrortype());
       expect(actual?.getErrormessage()).toBe(expected?.getErrormessage());
       expect(actual?.getStacktrace()?.getValue()).toBe(expected?.getStacktrace()?.getValue());
+      expect(actual?.getPropertiesMap().toArray()).toEqual(expected?.getPropertiesMap().toArray());
       actual = actual?.getInnerfailure();
       expected = expected?.getInnerfailure();
     }
@@ -151,12 +240,12 @@ describe("Public failure details", () => {
   });
 
   it("preserves the chain in orchestration state and raiseIfFailed", () => {
-    const proto = new pb.OrchestrationState().setFailuredetails(newFailureDetails(errorChain()));
+    const proto = new pb.OrchestrationState().setFailuredetails(receivedFailure());
     const state = newOrchestrationState(
       "order",
       new pb.GetInstanceResponse().setExists(true).setOrchestrationstate(proto),
     );
-    expect(state?.failureDetails).toMatchObject(expectedChain);
+    expect(state?.failureDetails).toMatchObject(expectedReceivedChain);
     let thrown: unknown;
     try {
       state?.raiseIfFailed();
@@ -166,14 +255,14 @@ describe("Public failure details", () => {
     expect(thrown).toMatchObject({
       name: "OrchestrationFailedError",
       message: "Orchestration 'order' failed: Order failed",
-      failureDetails: expectedChain,
+      failureDetails: expectedReceivedChain,
     });
   });
 
   it.each(["execution", "activity", "subOrchestration", "entity"] as const)(
     "preserves the chain in %s history events",
     (kind) => {
-      const details = newFailureDetails(errorChain());
+      const details = receivedFailure();
       const event = new pb.HistoryEvent();
       if (kind === "execution")
         event.setExecutioncompleted(new pb.ExecutionCompletedEvent().setFailuredetails(details));
@@ -185,12 +274,14 @@ describe("Public failure details", () => {
       }
       if (kind === "entity")
         event.setEntityoperationfailed(new pb.EntityOperationFailedEvent().setFailuredetails(details));
-      expect(convertProtoHistoryEvent(event)).toMatchObject({ failureDetails: expectedChain });
+      expect(convertProtoHistoryEvent(event)).toMatchObject({
+        failureDetails: expectedReceivedChain,
+      });
     },
   );
 });
 
-describe.each(["activity", "subOrchestration"] as const)("In-memory %s failure chains", (kind) => {
+describe.each(["activity", "subOrchestration"] as const)("In-memory %s received failure chains", (kind) => {
   it.each(["handler", "policy"] as const)(
     "reaches %s retry inspection, catch, history and client state",
     async (mode) => {
@@ -212,8 +303,10 @@ describe.each(["activity", "subOrchestration"] as const)("In-memory %s failure c
             })
           : (context: { lastFailure: TaskFailureDetails }) => inspectFailure(context.lastFailure);
       const fail = () => {
-        throw errorChain();
+        // Simulate an error already received from a foreign worker, not local Error field collection.
+        throw new TaskFailedError("Foreign task failed", receivedFailure());
       };
+      const expected = { errorType: "TaskFailedError", innerFailure: expectedReceivedChain };
       worker.addNamedActivity("fail", fail);
       worker.addNamedOrchestrator("fail", fail);
       worker.addNamedOrchestrator("order", async function* (ctx) {
@@ -231,24 +324,23 @@ describe.each(["activity", "subOrchestration"] as const)("In-memory %s failure c
         const id = await client.scheduleNewOrchestration("order");
         const state = await client.waitForOrchestrationCompletion(id, true, 5);
         expect(inspected).toHaveLength(1);
-        expect(inspected[0]).toMatchObject(expectedChain);
-        expect(inspected[0].innerFailure?.innerFailure?.errorType).toBe("ConnectionTimeout");
+        expect(inspected[0]).toMatchObject(expected);
         expect(caught).toHaveLength(1);
-        expect(caught[0]).toMatchObject(expectedChain);
+        expect(caught[0]).toMatchObject(expected);
         expect(state?.runtimeStatus).toBe(OrchestrationStatus.FAILED);
         const terminalFailure = {
           errorType: "TaskFailedError",
-          innerFailure: expectedChain,
+          innerFailure: expected,
         };
         expect(state?.failureDetails).toMatchObject(terminalFailure);
         expect((await client.getOrchestrationState(id, false))?.failureDetails).toMatchObject(terminalFailure);
         const history = backend.getInstance(id)!.history.map(convertProtoHistoryEvent);
         const failedEvent = history.find(
-          (event) => event && "failureDetails" in event && event.failureDetails?.errorType === "OrderFailed",
+          (event) => event && "failureDetails" in event && event.failureDetails?.errorType === "TaskFailedError",
         );
-        expect(failedEvent).toMatchObject({ failureDetails: expectedChain });
+        expect(failedEvent).toMatchObject({ failureDetails: expected });
         if (kind === "subOrchestration") {
-          expect((await client.getOrchestrationState("child"))?.failureDetails).toMatchObject(expectedChain);
+          expect((await client.getOrchestrationState("child"))?.failureDetails).toMatchObject(expected);
         }
       } finally {
         await worker.stop();

@@ -73,6 +73,7 @@ export class RetryableTask<T> extends RetryTaskBase<T> {
         message: details.message,
         stackTrace: details.stackTrace,
         innerFailure: details.innerFailure,
+        properties: details.properties,
       };
 
       if (!this._retryPolicy.shouldRetry(failureDetails)) {

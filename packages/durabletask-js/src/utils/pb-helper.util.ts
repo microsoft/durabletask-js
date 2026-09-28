@@ -8,6 +8,7 @@ import { ActivityNotRegisteredError } from "../worker/exception/activity-not-reg
 import { OrchestratorNotRegisteredError } from "../worker/exception/orchestrator-not-registered-error";
 import { TaskFailedError } from "../task/exception/task-failed-error";
 import { TaskFailureDetails } from "../task/failure-details";
+import { setFailureProperties } from "./failure-details.util";
 
 export function newOrchestratorStartedEvent(timestamp?: Date | null): pb.HistoryEvent {
   const ts = new Timestamp();
@@ -258,6 +259,7 @@ function buildFailureDetails(e: unknown, depth: number): pb.TaskFailureDetails {
       if (details.stackTrace !== undefined) {
         inner.setStacktrace(new StringValue().setValue(details.stackTrace));
       }
+      setFailureProperties(inner, details.properties);
       current.setInnerfailure(inner);
       current = inner;
     }
