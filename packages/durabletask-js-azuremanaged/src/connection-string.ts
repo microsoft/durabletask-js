@@ -34,6 +34,24 @@ export class DurableTaskAzureManagedConnectionString {
   }
 
   /**
+   * Gets the raw token audience URI. Options normalize this value before use.
+   * Missing or empty selects the per-options REGION_NAME default; whitespace-only is invalid.
+   * This is not an Azure Resource Manager resource path.
+   */
+  getResourceId(): string | undefined {
+    return this.getValue("ResourceId");
+  }
+
+  /**
+   * Gets the optional Azure Identity authority host for SDK-created credentials that support it.
+   * Omission preserves Azure Identity defaults, including AZURE_AUTHORITY_HOST where applicable.
+   * Does not apply to managed identity or configure developer tools' clouds.
+   */
+  getAuthorityHost(): string | undefined {
+    return this.getValue("AuthorityHost");
+  }
+
+  /**
    * Gets the managed identity or workload identity client ID specified in the connection string.
    * @returns The client ID, or undefined if not specified.
    */
@@ -109,9 +127,10 @@ export class DurableTaskAzureManagedConnectionString {
     for (const pair of pairs) {
       const equalsIndex = pair.indexOf("=");
       if (equalsIndex > 0) {
-        const key = pair.substring(0, equalsIndex).trim();
-        const value = pair.substring(equalsIndex + 1).trim();
-        properties.set(key.toLowerCase(), value);
+        const key = pair.substring(0, equalsIndex).trim().toLowerCase();
+        const value = pair.substring(equalsIndex + 1);
+        // Preserve ResourceId whitespace so options can distinguish empty from whitespace-only input.
+        properties.set(key, key === "resourceid" ? value : value.trim());
       }
     }
 

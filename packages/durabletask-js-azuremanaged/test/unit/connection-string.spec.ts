@@ -178,6 +178,22 @@ describe("DurableTaskAzureManagedConnectionString", () => {
       expect(connectionString.getClientId()).toBe("my-client-id");
     });
 
+    describe("getResourceId", () => {
+      it("returns undefined when absent and preserves empty versus whitespace-only values", () => {
+        expect(new DurableTaskAzureManagedConnectionString(VALID_CONNECTION_STRING).getResourceId()).toBeUndefined();
+        expect(new DurableTaskAzureManagedConnectionString(VALID_CONNECTION_STRING + ";ResourceId=").getResourceId())
+          .toBe("");
+        expect(new DurableTaskAzureManagedConnectionString(VALID_CONNECTION_STRING + ";ResourceId= \t ").getResourceId())
+          .toBe(" \t ");
+      });
+
+      it("preserves the raw audience for normalization by options", () => {
+        const raw = " api://Custom/.default/.DEFAULT/ ";
+        const parsed = new DurableTaskAzureManagedConnectionString(VALID_CONNECTION_STRING + ";RESOURCEID=" + raw);
+        expect(parsed.getResourceId()).toBe(raw);
+      });
+    });
+
     it("should return undefined when not present", () => {
       const connectionString = new DurableTaskAzureManagedConnectionString(VALID_CONNECTION_STRING);
 
