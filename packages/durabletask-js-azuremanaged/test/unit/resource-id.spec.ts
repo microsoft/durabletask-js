@@ -4,6 +4,7 @@
 import { DefaultAzureCredential, TokenCredential } from "@azure/identity";
 import * as grpc from "@grpc/grpc-js";
 import { TaskHubGrpcClient, TaskHubGrpcWorker } from "@microsoft/durabletask-js";
+import { performance } from "node:perf_hooks";
 import {
   createAzureManagedClient,
   createAzureManagedWorkerBuilder,
@@ -210,6 +211,30 @@ describe("Resource audience", () => {
 
     it.each(invalidResourceIds)("rejects invalid anonymous resourceId %j", (resourceId) => {
       expect(() => create(null, resourceId)).toThrow(/resourceId.*cannot be empty after normalization/);
+    });
+
+    it("normalizes long slash runs without backtracking or changing the requested scope", async () => {
+      const slashes = "/".repeat(100_000);
+      const cases = [
+        [`api://Custom/${slashes}resource/.DEFAULT/`, `api://Custom/${slashes}resource`],
+        [`api://Custom${slashes}.DEFAULT${slashes}`, "api://Custom"],
+        [`api://Custom/${slashes}.default/resource`, `api://Custom/${slashes}.default/resource`],
+        [`api://Custom/.default/.DEFAULT${slashes}`, "api://Custom/.default"],
+      ];
+      const credential = recordingCredential();
+      for (const [resourceId, expected] of cases) {
+        const start = performance.now();
+        const generate = create(credential, resourceId);
+        // A generous bound: the old regexes take seconds even on smaller inputs.
+        expect(performance.now() - start).toBeLessThan(1000);
+        await generate();
+        expect(credential.getToken).toHaveBeenLastCalledWith(`${expected}/.default`, undefined);
+      }
+      expect(credential.getToken).toHaveBeenCalledTimes(cases.length);
+      expect(() => create(null, slashes)).toThrow(/resourceId.*cannot be empty after normalization/);
+      expect(() => create(null, `${slashes}.DEFAULT${slashes}`)).toThrow(
+        /resourceId.*cannot be empty after normalization/,
+      );
     });
 
     it("resolves defaults independently for each instance", async () => {

@@ -59,13 +59,25 @@ abstract class DurableTaskAzureManagedOptionsBase {
       return this._defaultResourceId;
     }
 
-    const normalized = resourceId.trim().replace(/\/+$/, "").replace(/\/\.default$/i, "").replace(/\/+$/, "");
-    if (normalized === "") {
+    const trimmed = resourceId.trim();
+    let end = trimmed.length;
+    // Scan trailing slashes directly to avoid regex backtracking on long internal slash runs.
+    while (end > 0 && trimmed[end - 1] === "/") {
+      end--;
+    }
+    const scopeSuffix = "/.default";
+    if (end >= scopeSuffix.length && trimmed.slice(end - scopeSuffix.length, end).toLowerCase() === scopeSuffix) {
+      end -= scopeSuffix.length;
+      while (end > 0 && trimmed[end - 1] === "/") {
+        end--;
+      }
+    }
+    if (end === 0) {
       throw new Error(
         "resourceId (ResourceId) cannot be empty after normalization. Provide a token audience URI, or omit it to use the region default.",
       );
     }
-    return normalized;
+    return trimmed.slice(0, end);
   }
 
   /**

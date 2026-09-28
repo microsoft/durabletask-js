@@ -5,7 +5,8 @@
 - Support the `ResourceId` token audience URI in connection strings and an optional final `resourceId`
   argument in the client/worker factory functions, alongside existing builder/options setters.
   Trim surrounding whitespace and trailing slashes, remove one case-insensitive `/.default` suffix,
-  and reject nonempty values that normalize to empty. Preserve custom URI casing.
+  and reject nonempty values that normalize to empty. Preserve custom URI casing and normalize
+  slash-heavy inputs in linear time.
 - Support optional connection-string `AuthorityHost` for SDK-created Azure Identity credentials that
   support authority configuration. Omission preserves Azure Identity defaults/environment settings.
   Caller-supplied credentials own their authority; managed identity and developer-tool clouds remain separate.
