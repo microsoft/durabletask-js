@@ -190,7 +190,7 @@ Retries do not guarantee connection recovery, acceptance of expired tokens, or e
 ### Inspecting nested failures
 
 Task errors expose an optional, read-only `innerFailure` chain, with `errorType`, `message`,
-and optional `stackTrace` at each level. For an activity failure
+and optional `stackTrace` and `properties` at each level. For an activity failure
 `OrderFailed -> PaymentFailed -> ConnectionTimeout`, orchestrator code can inspect:
 
 ```typescript
@@ -202,7 +202,12 @@ try {
   if (error instanceof TaskFailedError) {
     const paymentFailure = error.details.innerFailure;
     const rootFailure = paymentFailure?.innerFailure;
-    ctx.setCustomStatus({ rootErrorType: rootFailure?.errorType });
+    // If the backend supplied a structured "code" property, narrow its unknown value.
+    const code = paymentFailure?.properties?.["code"];
+    ctx.setCustomStatus({
+      rootErrorType: rootFailure?.errorType,
+      paymentCode: typeof code === "string" ? code : undefined,
+    });
   }
   throw error;
 }
@@ -216,12 +221,24 @@ task details under `state.failureDetails.innerFailure`.
 
 Missing inner failures remain `undefined`; existing two- and three-argument
 `FailureDetails` constructors still work, with an optional fourth argument for the inner
-details. Remote failures are not reconstructed as JavaScript `Error.cause` objects.
+details and fifth argument for properties. Remote failures are not reconstructed as
+JavaScript `Error.cause` objects.
 The existing writer still limits ordinary `Error.cause` chains to ten inner levels;
 reading or forwarding already-received failure details does not add a truncation limit.
 If user code mutates received details into a cycle, forwarding preserves each unique
 failure and ends the chain with `errorType: "CircularFailureDetails"` and
 `message: "A circular innerFailure reference was detected."` rather than looping.
+
+`properties` is a `Readonly<Record<string, unknown>>` containing values already received
+from the backend: strings, numbers, booleans, `null`, arrays, and objects. Empty or absent
+wire maps become `undefined`. Wire strings stay strings, including .NET `dt:`/`dto:`
+date encodings; this is not CLR type reconstruction or a custom data converter.
+The same properties reach retry callbacks, client state/history, entity failure details,
+and test adapters. Ordinary JavaScript `Error` fields are **not** automatically collected.
+Forwarding user-mutated properties rejects unsupported values (such as `Date`, `bigint`,
+or `undefined`) and circular objects instead of silently dropping data. The current
+protobuf dependency cannot retain the reserved `__proto__` map key on receipt; adding
+that key before forwarding also raises a serialization error.
 
 ### Reusing orchestration instance IDs
 

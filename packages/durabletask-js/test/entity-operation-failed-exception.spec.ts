@@ -10,6 +10,7 @@ import {
 import { TaskFailedError } from "../src/task/exception/task-failed-error";
 import * as pb from "../src/proto/orchestrator_service_pb";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
+import { Value } from "google-protobuf/google/protobuf/struct_pb";
 
 describe("EntityOperationFailedException", () => {
   describe("constructor", () => {
@@ -155,11 +156,13 @@ describe("createTaskFailureDetails", () => {
     const innerProto = new pb.TaskFailureDetails();
     innerProto.setErrortype("InnerError");
     innerProto.setErrormessage("Inner message");
+    innerProto.getPropertiesMap().set("retryable", Value.fromJavaScript(false));
 
     const proto = new pb.TaskFailureDetails();
     proto.setErrortype("OuterError");
     proto.setErrormessage("Outer message");
     proto.setInnerfailure(innerProto);
+    proto.getPropertiesMap().set("code", Value.fromJavaScript("Conflict"));
 
     // Act
     const result = createTaskFailureDetails(proto);
@@ -169,6 +172,8 @@ describe("createTaskFailureDetails", () => {
     expect(result!.innerFailure).toBeDefined();
     expect(result!.innerFailure!.errorType).toBe("InnerError");
     expect(result!.innerFailure!.errorMessage).toBe("Inner message");
+    expect(Reflect.get(result!, "properties")).toEqual({ code: "Conflict" });
+    expect(Reflect.get(result!.innerFailure!, "properties")).toEqual({ retryable: false });
   });
 
   it("should handle missing optional fields", () => {
@@ -185,5 +190,6 @@ describe("createTaskFailureDetails", () => {
     expect(result).toBeDefined();
     expect(result!.stackTrace).toBeUndefined();
     expect(result!.innerFailure).toBeUndefined();
+    expect(Reflect.get(result!, "properties")).toBeUndefined();
   });
 });

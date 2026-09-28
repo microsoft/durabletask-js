@@ -34,6 +34,9 @@
 
 ### Fixes
 
+- Preserve received structured failure `properties` in task errors, retry callbacks, client
+  state/history, entity failures, and testing. Forward them with rethrown task failure chains.
+  Empty wire maps remain `undefined`; arbitrary JavaScript `Error` fields are not collected.
 - Preserve nested `innerFailure` details in task errors, retry handlers and predicates,
   client state/history, and in-memory testing. Uncaught or rethrown task failures retain
   their received chain beneath the existing `TaskFailedError` wrapper. Retry decisions

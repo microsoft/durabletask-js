@@ -15,6 +15,12 @@ export interface TaskFailureDetails {
   readonly stackTrace?: string;
   /** Details of the underlying failure, if supplied by the task or backend. */
   readonly innerFailure?: TaskFailureDetails;
+  /**
+   * Structured values received from the backend, not collected from JavaScript Error fields.
+   * Empty wire maps are undefined. Values are protobuf Value data (strings, numbers, booleans,
+   * null, arrays, or objects); narrow unknown values before using them.
+   */
+  readonly properties?: Readonly<Record<string, unknown>>;
 }
 
 export class FailureDetails implements TaskFailureDetails {
@@ -22,12 +28,20 @@ export class FailureDetails implements TaskFailureDetails {
   private _errorType: string;
   private _stackTrace: string | undefined;
   private _innerFailure: TaskFailureDetails | undefined;
+  private _properties: Readonly<Record<string, unknown>> | undefined;
 
-  constructor(message: string, errorType: string, stackTrace?: string, innerFailure?: TaskFailureDetails) {
+  constructor(
+    message: string,
+    errorType: string,
+    stackTrace?: string,
+    innerFailure?: TaskFailureDetails,
+    properties?: Readonly<Record<string, unknown>>,
+  ) {
     this._message = message;
     this._errorType = errorType;
     this._stackTrace = stackTrace;
     this._innerFailure = innerFailure;
+    this._properties = properties;
   }
 
   get message(): string {
@@ -44,5 +58,9 @@ export class FailureDetails implements TaskFailureDetails {
 
   get innerFailure(): TaskFailureDetails | undefined {
     return this._innerFailure;
+  }
+
+  get properties(): Readonly<Record<string, unknown>> | undefined {
+    return this._properties;
   }
 }

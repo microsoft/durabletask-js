@@ -80,6 +80,7 @@ export class RetryHandlerTask<T> extends RetryTaskBase<T> {
       message: details.message,
       stackTrace: details.stackTrace,
       innerFailure: details.innerFailure,
+      properties: details.properties,
     };
 
     const totalRetryTimeMs = currentTime.getTime() - this.startTime.getTime();

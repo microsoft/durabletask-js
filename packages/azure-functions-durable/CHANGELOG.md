@@ -16,6 +16,8 @@
 
 ### Fixes
 
+- Preserve received failure `properties` in `durable-functions/testing` results, including
+  nested failures. This does not collect arbitrary JavaScript `Error` fields.
 - Forward the optional `reason` from the classic `suspend()` / `resume()` aliases to the
   core client instead of ignoring it, preserving literal strings including empty strings.
 - Preserve nested task `innerFailure` details in `durable-functions/testing` results.
