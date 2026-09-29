@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+import { RetryOptions } from "../retry-options";
+
 /**
  * Durable HTTP request/response models that **mirror** the durable-functions v3 shapes (they are not
  * the v3 classes themselves).
@@ -43,8 +45,24 @@ export class ManagedIdentityTokenSource {
 }
 
 /**
- * Options accepted by `context.df.callHttp` (classic durable-functions v3 shape).
+ * Opt-in failure retries for the initial `callHttp` request (not subsequent `202` Location polls).
+ * Uses durable activity retries; exhausting the policy fails `callHttp` with `TaskFailedError`.
+ * Only enable retries when repeating the request's side effects is safe.
  */
+export class HttpRetryOptions extends RetryOptions {
+  /** Maximum delay between retries, in milliseconds. Defaults to six days, matching .NET HTTP retries. */
+  public override maxRetryIntervalInMilliseconds?: number = 6 * 24 * 60 * 60 * 1000;
+
+  /**
+   * Response status codes that fail the activity and trigger retries. Omitted/empty means every
+   * non-2xx response (including 4xx/5xx and unfollowed redirects), matching .NET EnsureSuccessStatusCode.
+   * A non-empty list is exact: even `202` can be retried instead of polled. Excluded codes are returned.
+   * Activity failures, including transport errors, are retried regardless of this list.
+   */
+  public statusCodesToRetry?: number[];
+}
+
+/** Options accepted by `context.df.callHttp`. */
 export interface CallHttpOptions {
   /** The HTTP request method. */
   method: string;
@@ -56,6 +74,8 @@ export interface CallHttpOptions {
   headers?: { [key: string]: string };
   /** The source of the OAuth token to add to the request. */
   tokenSource?: TokenSource;
+  /** Optional durable failure retry policy for the initial request only. Omitted means no retries. */
+  retryOptions?: HttpRetryOptions;
   /**
    * Whether to keep polling the request after receiving a `202 Accepted` response. Replaces the
    * deprecated `asynchronousPatternEnabled`; if both are specified, `enablePolling` takes precedence.
@@ -135,4 +155,6 @@ export interface DurableHttpRequestPayload {
   tokenSource?: { kind?: string; resource: string };
   /** Whether to keep polling on `202 Accepted`. Defaults to `true` when absent. */
   enablePolling?: boolean;
+  /** Serializable retry policy for this request; methods are never included in history. */
+  retryOptions?: Omit<HttpRetryOptions, "toRetryPolicy">;
 }
