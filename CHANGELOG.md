@@ -2,6 +2,9 @@
 
 ### New
 
+- Add readonly `OrchestrationState.isRunning` and `isCompleted` predicates computed from
+  `runtimeStatus`. Completion means `COMPLETED`, `FAILED`, or `TERMINATED` (not necessarily success),
+  matching .NET; `CANCELED` is excluded.
 - Expose readonly `OrchestrationContext.name` from execution-start history, preserving logical
   aliases and case on initial execution and replay. `RuntimeOrchestrationContext` constructor
   arguments are unchanged; manually constructed contexts have an empty name until initialized.

@@ -27,6 +27,49 @@ describe("OrchestrationState", () => {
     );
   }
 
+  describe("status predicates", () => {
+    it.each([
+      [OrchestrationStatus.RUNNING, true, false],
+      [OrchestrationStatus.COMPLETED, false, true],
+      [OrchestrationStatus.FAILED, false, true],
+      [OrchestrationStatus.CANCELED, false, false],
+      [OrchestrationStatus.TERMINATED, false, true],
+      [OrchestrationStatus.CONTINUED_AS_NEW, false, false],
+      [OrchestrationStatus.PENDING, false, false],
+      [OrchestrationStatus.SUSPENDED, false, false],
+      [999 as OrchestrationStatus, false, false],
+    ])("should classify runtime status %s", (runtimeStatus, isRunning, isCompleted) => {
+      const state = createState(runtimeStatus);
+
+      expect(state).toMatchObject({ isRunning, isCompleted });
+    });
+
+    it("should reflect changes to runtimeStatus", () => {
+      const state = createState(OrchestrationStatus.RUNNING);
+      expect(state).toMatchObject({ isRunning: true, isCompleted: false });
+
+      state.runtimeStatus = OrchestrationStatus.COMPLETED;
+      expect(state).toMatchObject({ isRunning: false, isCompleted: true });
+
+      state.runtimeStatus = OrchestrationStatus.SUSPENDED;
+      expect(state).toMatchObject({ isRunning: false, isCompleted: false });
+
+      state.runtimeStatus = OrchestrationStatus.RUNNING;
+      expect(state).toMatchObject({ isRunning: true, isCompleted: false });
+    });
+
+    it.each(["isRunning", "isCompleted"])("should expose %s as a getter-only property", (property) => {
+      const state = createState(OrchestrationStatus.RUNNING);
+
+      expect(Object.getOwnPropertyDescriptor(OrchestrationState.prototype, property)).toMatchObject({
+        get: expect.any(Function),
+        set: undefined,
+      });
+      expect(Reflect.set(state, property, !Reflect.get(state, property))).toBe(false);
+      expect(state).toMatchObject({ isRunning: true, isCompleted: false });
+    });
+  });
+
   describe("raiseIfFailed", () => {
     it("should throw OrchestrationFailedError when failureDetails is present", () => {
       const details = new FailureDetails("Something went wrong", "Error", "at foo.ts:1");

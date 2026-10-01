@@ -41,6 +41,24 @@ export class OrchestrationState {
     this.tags = tags;
   }
 
+  /** Gets whether the current runtimeStatus is RUNNING. */
+  get isRunning(): boolean {
+    return this.runtimeStatus === OrchestrationStatus.RUNNING;
+  }
+
+  /**
+   * Gets whether the current runtimeStatus is COMPLETED, FAILED, or TERMINATED.
+   * Completion does not imply success. All other statuses, including CANCELED,
+   * return false, matching the .NET SDK.
+   */
+  get isCompleted(): boolean {
+    return (
+      this.runtimeStatus === OrchestrationStatus.COMPLETED ||
+      this.runtimeStatus === OrchestrationStatus.FAILED ||
+      this.runtimeStatus === OrchestrationStatus.TERMINATED
+    );
+  }
+
   raiseIfFailed(): void {
     if (this.failureDetails) {
       throw new OrchestrationFailedError(
