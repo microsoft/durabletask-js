@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 import { addDurableGrpcMetadata } from "../../src/durable-grpc";
+import packageJson from "../../package.json";
 
 describe("addDurableGrpcMetadata", () => {
   it("adds durableRequiresGrpc without mutating the original binding", () => {
@@ -13,6 +14,8 @@ describe("addDurableGrpcMetadata", () => {
       type: "orchestrationTrigger",
       name: "context",
       durableRequiresGrpc: true,
+      durableSdkName: packageJson.name,
+      durableSdkVersion: packageJson.version,
     });
     expect(binding).toEqual({ type: "orchestrationTrigger", name: "context" });
   });
