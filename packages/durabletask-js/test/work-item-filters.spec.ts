@@ -682,7 +682,10 @@ describe("WorkItemFilters", () => {
           entities: [{ name: "ExplicitEnt" }],
         },
       });
-      // Register different names to prove explicit filters take precedence
+      worker.addNamedOrchestrator("ExplicitOrch", myOrchestrator);
+      worker.addNamedActivity("ExplicitAct", myActivity);
+      worker.addNamedEntity("ExplicitEnt", myEntity);
+      // Other registrations must not be included in explicit filters.
       worker.addOrchestrator(myOrchestrator);
 
       // Act

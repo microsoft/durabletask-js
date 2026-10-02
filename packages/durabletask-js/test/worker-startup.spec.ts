@@ -15,6 +15,8 @@ import {
   EVENT_STREAM_TIMEOUT,
 } from "../src/worker/logs";
 import { TaskHubGrpcWorker, TaskHubGrpcWorkerOptions } from "../src/worker/task-hub-grpc-worker";
+import { WorkItemFilters } from "../src/worker/work-item-filters";
+import { VersionMatchStrategy } from "../src/worker/versioning-options";
 
 type HelloCallback = (error: grpc.ServiceError | null, response: Empty) => void;
 type MockStream = EventEmitter & { cancel: jest.Mock; destroy: jest.Mock };
@@ -146,6 +148,210 @@ describe("TaskHubGrpcWorker startup", () => {
   afterEach(() => {
     jest.useRealTimers();
     jest.restoreAllMocks();
+  });
+
+  describe("explicit work item filter validation", () => {
+    let worker: TaskHubGrpcWorker;
+    let stub: MockStub;
+    let generateClient: jest.SpyInstance;
+
+    beforeEach(() => {
+      stub = createStub([]);
+      generateClient = useStub(stub);
+    });
+
+    afterEach(async () => {
+      if (worker?.["_isRunning"]) {
+        await stopWorker(worker);
+      }
+    });
+
+    it.each([
+      ["orchestrations", "Orchestrations"],
+      ["activities", "Activities"],
+      ["entities", "Entities"],
+    ] as const)("rejects unknown %s before any startup side effects", async (kind, category) => {
+      const metadataGenerator = jest.fn();
+      worker = new TaskHubGrpcWorker({
+        workItemFilters: { [kind]: [{ name: "Missing" }] },
+        metadataGenerator,
+        logger: new NoOpLogger(),
+      });
+
+      await expect(worker.start()).rejects.toThrow(`${category}: [Missing]`);
+
+      expect(generateClient).not.toHaveBeenCalled();
+      expect(metadataGenerator).not.toHaveBeenCalled();
+      expect(stub.hello).not.toHaveBeenCalled();
+      expect(stub.getWorkItems).not.toHaveBeenCalled();
+      expect(worker["_isRunning"]).toBe(false);
+      expect(worker["_stub"]).toBeNull();
+      expect(worker["_abortController"]).toBeNull();
+      expect(worker["_workerLoopPromise"]).toBeNull();
+      expect(worker["_responseStream"]).toBeNull();
+      expect(worker["_silentDisconnectTimer"]).toBeNull();
+      expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it("reports all missing names grouped by task kind with registration guidance", async () => {
+      worker = new TaskHubGrpcWorker({
+        workItemFilters: {
+          orchestrations: [{ name: "Known" }, { name: "Order" }, { name: "Refund" }],
+          activities: [{ name: "Charge" }, { name: "Known" }, { name: "Notify" }],
+          entities: [{ name: "Cart" }, { name: "Stock" }, { name: "KNOWN" }],
+        },
+        logger: new NoOpLogger(),
+      });
+      worker.addNamedOrchestrator("Known", () => undefined);
+      worker.addNamedActivity("Known", () => undefined);
+      worker.addNamedEntity("Known", () => ({ run: () => undefined }));
+
+      await expect(worker.start()).rejects.toThrow(
+        "Cannot start worker: work item filter names do not match registered tasks. " +
+          "Register them on this worker or remove them from the filters. " +
+          "Orchestrations: [Order, Refund] Activities: [Charge, Notify] Entities: [Cart, Stock]",
+      );
+    });
+
+    it.each(["", null, undefined])("reports an empty JavaScript filter name (%s) in every category", async (name) => {
+      const filters: WorkItemFilters = JSON.parse(
+        JSON.stringify({
+          orchestrations: [{ name }],
+          activities: [{ name }],
+          entities: [{ name }],
+        }),
+      );
+      worker = new TaskHubGrpcWorker({ workItemFilters: filters, logger: new NoOpLogger() });
+
+      await expect(worker.start()).rejects.toThrow(
+        "Orchestrations: [<empty>] Activities: [<empty>] Entities: [<empty>]",
+      );
+      expect(generateClient).not.toHaveBeenCalled();
+    });
+
+    it.each(["orchestrations", "activities", "entities"] as const)(
+      "does not count registrations of other kinds for %s",
+      async (kind) => {
+        worker = new TaskHubGrpcWorker({
+          workItemFilters: { [kind]: [{ name: "Shared" }] },
+          logger: new NoOpLogger(),
+        });
+        if (kind !== "orchestrations") worker.addNamedOrchestrator("Shared", () => undefined);
+        if (kind !== "activities") worker.addNamedActivity("Shared", () => undefined);
+        if (kind !== "entities") worker.addNamedEntity("Shared", () => ({ run: () => undefined }));
+
+        await expect(worker.start()).rejects.toThrow("[Shared]");
+      },
+    );
+
+    it("matches orchestrator and activity aliases exactly, not function names or different casing", async () => {
+      function implementation() {}
+      worker = new TaskHubGrpcWorker({
+        workItemFilters: {
+          orchestrations: [{ name: "order" }, { name: "implementation" }],
+          activities: [{ name: "send" }, { name: "implementation" }],
+        },
+        logger: new NoOpLogger(),
+      });
+      worker.addNamedOrchestrator("Order", implementation);
+      worker.addNamedActivity("Send", implementation);
+
+      await expect(worker.start()).rejects.toThrow(
+        "Orchestrations: [order, implementation] Activities: [send, implementation]",
+      );
+    });
+
+    it.each([
+      { versions: undefined },
+      { versions: [] },
+      { versions: [""] },
+      { versions: ["v1"] },
+      { versions: ["unregistered-version", "*"] },
+    ])("accepts names registered only with versions, without validating $versions", async ({ versions }) => {
+      worker = new TaskHubGrpcWorker({
+        workItemFilters: {
+          orchestrations: [{ name: "Order", versions }],
+          activities: [{ name: "Send", versions }],
+          entities: [{ name: "COUNTER" }],
+        },
+        versioning: { version: "different-policy-version", matchStrategy: VersionMatchStrategy.Strict },
+        logger: new NoOpLogger(),
+      });
+      worker.addNamedOrchestrator("Order", () => undefined, "v1");
+      worker.addNamedActivity("Send", () => undefined, "v1");
+      worker.addNamedEntity("Counter", () => ({ run: () => undefined }));
+
+      await worker.start();
+      await flushPromises();
+
+      const request: pb.GetWorkItemsRequest = stub.getWorkItems.mock.calls[0][0];
+      expect(request.getWorkitemfilters()?.toObject()).toEqual({
+        orchestrationsList: [{ name: "Order", versionsList: versions ?? [] }],
+        activitiesList: [{ name: "Send", versionsList: versions ?? [] }],
+        entitiesList: [{ name: "counter" }],
+      });
+    });
+
+    it.each([
+      { workItemFilters: undefined },
+      { workItemFilters: "auto" as const },
+      { workItemFilters: {} },
+      { workItemFilters: { orchestrations: [], activities: [], entities: [] } },
+    ])("preserves empty-registry startup with $workItemFilters", async ({ workItemFilters }) => {
+      worker = new TaskHubGrpcWorker({ workItemFilters, logger: new NoOpLogger() });
+
+      await worker.start();
+      await flushPromises();
+
+      const request: pb.GetWorkItemsRequest = stub.getWorkItems.mock.calls[0][0];
+      expect(request.hasWorkitemfilters()).toBe(workItemFilters !== undefined);
+      if (workItemFilters !== undefined) {
+        expect(request.getWorkitemfilters()?.toObject()).toEqual({
+          orchestrationsList: [],
+          activitiesList: [],
+          entitiesList: [],
+        });
+      }
+    });
+
+    it("allows registration and another start after validation fails", async () => {
+      function flow() {}
+      function activity() {}
+      function entity() {
+        return { run: () => undefined };
+      }
+      worker = new TaskHubGrpcWorker({
+        workItemFilters: {
+          orchestrations: [{ name: "flow", versions: ["future"] }],
+          activities: [{ name: "activity", versions: ["future"] }],
+          entities: [{ name: "ENTITY" }],
+        },
+        logger: new NoOpLogger(),
+      });
+      await expect(worker.start()).rejects.toThrow("Register them on this worker");
+
+      worker.addOrchestrator(flow);
+      worker.addActivity(activity);
+      worker.addEntity(entity);
+      await worker.start();
+      await flushPromises();
+
+      expect(stub.hello).toHaveBeenCalledTimes(1);
+      expect(stub.getWorkItems).toHaveBeenCalledTimes(1);
+      expect(worker["_isRunning"]).toBe(true);
+    });
+
+    it("preserves the already-running error before validating filters again", async () => {
+      const filters: WorkItemFilters = {};
+      worker = new TaskHubGrpcWorker({ workItemFilters: filters, logger: new NoOpLogger() });
+      await worker.start();
+      await flushPromises();
+      filters.activities = [{ name: "Missing" }];
+
+      await expect(worker.start()).rejects.toThrow("The worker is already running.");
+      expect(generateClient).toHaveBeenCalledTimes(1);
+      expect(stub.getWorkItems).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("uses full jitter for reconnect backoff", () => {
