@@ -2,6 +2,9 @@
 
 ### New
 
+- Expose optional `PurgeResult.isComplete` from the backend for single-instance and filtered purges:
+  `true` means finished, `false` means partial, and `undefined` means completion was not reported.
+  Existing `deletedInstanceCount` values and count-only construction are unchanged.
 - Add readonly `OrchestrationState.isRunning` and `isCompleted` predicates computed from
   `runtimeStatus`. Completion means `COMPLETED`, `FAILED`, or `TERMINATED` (not necessarily success),
   matching .NET; `CANCELED` is excluded.
