@@ -822,7 +822,7 @@ export class TaskHubGrpcClient {
     if (!res) {
       return;
     }
-    return new PurgeResult(res.getDeletedinstancecount());
+    return new PurgeResult(res.getDeletedinstancecount(), res.getIscomplete()?.getValue());
   }
 
   /**
