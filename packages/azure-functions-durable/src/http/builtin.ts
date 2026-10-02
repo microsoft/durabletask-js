@@ -267,7 +267,9 @@ export async function builtinHttpActivity(input: DurableHttpRequestPayload): Pro
   // The Fetch standard forbids a request body on GET/HEAD. v3 (the host extension) attached content
   // regardless of method; rather than silently drop it and change the request, fail loudly.
   if (request.content !== undefined && (method === "GET" || method === "HEAD")) {
-    throw new Error(`callHttp: an HTTP ${method} request cannot carry a body; remove 'body' or use POST/PUT/PATCH.`);
+    throw new Error(
+      `callHttp: an HTTP ${method} request cannot carry a body; remove 'body' or use POST/PUT/PATCH.`,
+    );
   }
 
   const headers: { [key: string]: string } = { ...(request.headers ?? {}) };
@@ -297,21 +299,23 @@ export async function builtinHttpActivity(input: DurableHttpRequestPayload): Pro
     body: includeBody ? request.content : undefined,
   });
 
-  const responseHeaders: { [key: string]: string } = {};
-  response.headers.forEach((value, key) => {
-    responseHeaders[key] = value;
-  });
-  const content = await response.text();
-
   if (request.retryOptions !== undefined) {
     const codes = request.retryOptions.statusCodesToRetry;
     const shouldRetry = codes?.length
       ? codes.includes(response.status)
       : response.status < 200 || response.status >= 300;
     if (shouldRetry) {
+      // The discarded body may never end. Cancel it before buffering so durable retries can proceed.
+      await response.body?.cancel();
       throw new Error(`HTTP request failed with status code ${response.status}.`);
     }
   }
+
+  const responseHeaders: { [key: string]: string } = {};
+  response.headers.forEach((value, key) => {
+    responseHeaders[key] = value;
+  });
+  const content = await response.text();
 
   const result: BuiltinHttpActivityResult = { statusCode: response.status, headers: responseHeaders, content };
   // Record the post-redirect URL so a relative `Location` is resolved against the URI that actually

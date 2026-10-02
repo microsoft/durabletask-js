@@ -161,6 +161,8 @@ df.app.orchestration("FetchReport", function* (context: df.OrchestrationContext)
 
 The policy and a copy of the status list are recorded with the request. Retries reuse the core
 activity retry engine and durable timers, so replay does not reissue completed network requests.
+Selected failure responses have their unused body canceled before buffering, so even a body that
+never ends does not prevent a durable retry. Returned responses still include their complete body.
 Exhaustion throws `TaskFailedError` into the caller (or fails the orchestration if uncaught); it does
 **not** return the last failed HTTP response. An excluded status is returned normally. Transport and
 other activity failures use the same retry budget regardless of the status list. Retrying a request

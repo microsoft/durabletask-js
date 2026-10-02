@@ -91,12 +91,15 @@ async function runHttp(request: DurableHttpRequestPayload, activityDurationMs = 
 describe("durable HTTP failure retries", () => {
   let server: Server;
   let uri: string;
-  let responses: (number | "disconnect")[];
+  let responses: (number | "disconnect" | "open503")[];
+  let discardedBodyClosed: Promise<boolean>;
   let received: { method?: string; url?: string; headers: IncomingHttpHeaders; body: string }[];
 
   beforeEach(async () => {
     received = [];
     responses = [200];
+    let notifyBodyClosed: (withoutEnd: boolean) => void;
+    discardedBodyClosed = new Promise((resolve) => (notifyBodyClosed = resolve));
     server = createServer((req, res) => {
       let body = "";
       req.setEncoding("utf8");
@@ -106,6 +109,12 @@ describe("durable HTTP failure retries", () => {
         const status = responses.shift() ?? 200;
         if (status === "disconnect") {
           req.socket.destroy();
+          return;
+        }
+        if (status === "open503") {
+          res.writeHead(503);
+          res.write("partial body that the server never ends");
+          res.once("close", () => notifyBodyClosed(!res.writableEnded));
           return;
         }
         res.writeHead(status, status === 202 ? { Location: "/status", "Retry-After": "2" } : {});
@@ -129,6 +138,32 @@ describe("durable HTTP failure retries", () => {
       retryOptions: Object.assign(new HttpRetryOptions(1000, attempts), { statusCodesToRetry: codes }),
     };
   }
+
+  it("cancels an open retryable response body and durably retries before the server ends it", async () => {
+    responses = ["open503", 200];
+    const run = runHttp(request([503]));
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const [{ completed, delays, history }, closedWithoutEnd] = await Promise.race([
+        Promise.all([run, discardedBodyClosed]),
+        new Promise<never>((_, reject) => {
+          deadline = setTimeout(
+            () => reject(new Error("Retry blocked waiting for the discarded response body.")),
+            2000,
+          );
+        }),
+      ]);
+      expect(closedWithoutEnd).toBe(true);
+      expect(JSON.parse(completed.getResult()!.getValue()).statusCode).toBe(200);
+      expect(received).toHaveLength(2);
+      expect(delays).toEqual([1000]);
+      expect(history.filter((event) => event.hasTaskfailed())).toHaveLength(1);
+    } finally {
+      clearTimeout(deadline);
+      server.closeAllConnections();
+      await Promise.allSettled([run]);
+    }
+  });
 
   it.each([429, 503])(
     "retries configured %s then returns success, without duplicate requests on replay",
@@ -185,6 +220,7 @@ describe("durable HTTP failure retries", () => {
     responses = [400];
     const { completed, delays } = await runHttp(request([429, 503]));
     expect(JSON.parse(completed.getResult()!.getValue()).statusCode).toBe(400);
+    expect(JSON.parse(completed.getResult()!.getValue()).content).toBe("response 400");
     expect(received).toHaveLength(1);
     expect(delays).toEqual([]);
   });
@@ -193,6 +229,7 @@ describe("durable HTTP failure retries", () => {
     responses = [503];
     const { completed, delays } = await runHttp({ method: "GET", uri });
     expect(JSON.parse(completed.getResult()!.getValue()).statusCode).toBe(503);
+    expect(JSON.parse(completed.getResult()!.getValue()).content).toBe("response 503");
     expect(received).toHaveLength(1);
     expect(delays).toEqual([]);
   });

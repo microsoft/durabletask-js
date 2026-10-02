@@ -39,7 +39,6 @@
   and `TaskCancelledError` from canceled results. Timer `result` now aliases `getResult()`, including
   errors while pending or failed. Drain affected instances before mixing versions or rollback;
   cancellation branching and already-segmented histories can change replay.
-
 ## v4.0.0-beta.1 (2026-07-31)
 
 ### Changes
