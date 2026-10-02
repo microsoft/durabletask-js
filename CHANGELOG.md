@@ -69,6 +69,11 @@
 
 ### Breaking changes
 
+- Workers now reject explicit work-item filter names not registered in the corresponding
+  task kind at `start()`, before connecting. Previously these configurations could start.
+  One error lists all missing names; register them or remove them from the filters before
+  retrying. Valid configurations, empty/auto/default filters, and filter versions are unchanged.
+  Orchestrator/activity names remain case-sensitive; entity names remain case-insensitive.
 - Custom `OrchestrationContext` subclasses and typed test doubles must implement the new
   `name` getter/property. Orchestrators consuming SDK-provided contexts require no changes.
 - Activity calls without an explicit version now inherit the parent's instance version, and

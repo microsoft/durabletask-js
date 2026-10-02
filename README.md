@@ -393,7 +393,19 @@ apply before dispatch to both orchestrations and activities; registrations canno
 `None`. `Reject` abandons mismatched work; `Fail` returns an explicit non-retriable failure.
 Auto filters contain one entry per logical name: all registered versions (including `""` for
 mixed registrations), or a wildcard for unversioned-only names. Under `Strict`, filters use the
-configured worker version, including `""`. Explicit filters are unchanged.
+configured worker version, including `""`. Explicit filters keep their configured versions.
+
+Work item filtering is opt-in: omitted `workItemFilters` sends no filters, `"auto"` generates
+them from registrations, and an explicit object selects only its configured entries.
+`DurableTaskAzureManagedWorkerBuilder.useWorkItemFilters()` selects auto-generation;
+passing an object selects explicit filters. Empty filter objects and lists remain valid.
+Before connecting, `worker.start()` now rejects explicit filter names not registered in the
+same task kind, listing all missing names grouped by orchestrations, activities, and entities.
+Previously these configurations could start. Register each missing name on that worker or
+remove it from the filters, then retry `start()`. Orchestrator and activity names are
+case-sensitive (including aliases); entity names are case-insensitive. Validation checks
+names across all registered versions, not filter versions or version-policy compatibility.
+Valid configurations and their wire filters are unchanged.
 
 **Migration:** previous JavaScript workers ignored activity request versions and always scheduled
 unspecified activities as unversioned. Versioned parents now pass their version to activities;

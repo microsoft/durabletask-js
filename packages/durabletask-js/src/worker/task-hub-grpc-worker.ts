@@ -103,6 +103,8 @@ export interface TaskHubGrpcWorkerOptions {
    * Set to a WorkItemFilters object to use explicit filters.
    * Set to "auto" to auto-generate filters from the registered orchestrations,
    * activities, and entities.
+   * Explicit filter names must be registered in the corresponding task kind before start().
+   * Names are checked across all registered versions; filter versions are not validated.
    */
   workItemFilters?: WorkItemFilters | "auto";
   /** Backend concurrency hints for each work-item kind. */
@@ -444,6 +446,8 @@ export class TaskHubGrpcWorker {
     if (this._isRunning) {
       throw new Error("The worker is already running.");
     }
+
+    this._validateWorkItemFilters();
 
     this._stopWorker = false;
     this._backoff.reset();
@@ -804,6 +808,41 @@ export class TaskHubGrpcWorker {
     if (this._silentDisconnectTimer !== null) {
       clearTimeout(this._silentDisconnectTimer);
       this._silentDisconnectTimer = null;
+    }
+  }
+
+  private _validateWorkItemFilters(): void {
+    const filters = this._workItemFilters;
+    if (filters === undefined || filters === "auto") {
+      return;
+    }
+
+    const errors: string[] = [];
+    function checkNames(
+      category: string,
+      entries: { name: string }[] | undefined,
+      registeredNames: string[],
+      ignoreCase = false,
+    ): void {
+      const registered = new Set(registeredNames);
+      const unknown = (entries ?? [])
+        .map(({ name }) => name)
+        .filter((name) => !name || !registered.has(ignoreCase ? name.toLowerCase() : name))
+        .map((name) => name || "<empty>");
+      if (unknown.length > 0) {
+        errors.push(`${category}: [${unknown.join(", ")}]`);
+      }
+    }
+
+    checkNames("Orchestrations", filters.orchestrations, this._registry.getOrchestratorNames());
+    checkNames("Activities", filters.activities, this._registry.getActivityNames());
+    checkNames("Entities", filters.entities, this._registry.getEntityNames(), true);
+    if (errors.length > 0) {
+      throw new Error(
+        "Cannot start worker: work item filter names do not match registered tasks. " +
+          "Register them on this worker or remove them from the filters. " +
+          errors.join(" "),
+      );
     }
   }
 
