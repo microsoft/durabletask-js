@@ -168,6 +168,10 @@ export class DurableOrchestrationContext {
    * endpoint returns `202 Accepted`, waits on durable timers (honoring `Retry-After`) and re-polls
    * until completion. The whole flow is a single `yield`, preserving the v3 ergonomics.
    *
+   * `retryOptions` enables durable failure retries for the initial request only. Exhaustion throws
+   * `TaskFailedError` into the calling generator; excluded HTTP statuses are returned unchanged.
+   * Like the .NET in-process extension, subsequent `202` Location polls do not inherit this policy.
+   *
    * Trust-boundary change vs v3: the HTTP request now runs as a durable **activity inside the app /
    * worker process** (via `fetch`), not in the Functions host extension. Outbound network path,
    * identity, and firewall/VNet behavior therefore follow the worker process. Managed-identity
@@ -194,6 +198,19 @@ export class DurableOrchestrationContext {
     }
     if (options.tokenSource !== undefined) {
       request.tokenSource = { kind: options.tokenSource.kind, resource: options.tokenSource.resource };
+    }
+    if (options.retryOptions !== undefined) {
+      const policy = options.retryOptions.toRetryPolicy();
+      request.retryOptions = {
+        firstRetryIntervalInMilliseconds: policy.firstRetryIntervalInMilliseconds,
+        maxNumberOfAttempts: policy.maxNumberOfAttempts,
+        backoffCoefficient: policy.backoffCoefficient,
+        maxRetryIntervalInMilliseconds: policy.maxRetryIntervalInMilliseconds,
+        retryTimeoutInMilliseconds: policy.retryTimeoutInMilliseconds,
+      };
+      if (options.retryOptions.statusCodesToRetry != null) {
+        request.retryOptions.statusCodesToRetry = [...options.retryOptions.statusCodesToRetry];
+      }
     }
     return this._ctx.callSubOrchestrator<DurableHttpRequestPayload, DurableHttpResponse>(
       BUILTIN_HTTP_POLL_ORCHESTRATOR_NAME,

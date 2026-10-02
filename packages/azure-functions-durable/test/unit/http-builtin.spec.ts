@@ -8,7 +8,7 @@ import {
   isSameOrigin,
   retryAfterSeconds,
 } from "../../src/http/builtin";
-import { DurableHttpRequestPayload, DurableHttpResponse } from "../../src/http/models";
+import { DurableHttpRequestPayload, DurableHttpResponse, HttpRetryOptions } from "../../src/http/models";
 
 // `@azure/identity` is an OPTIONAL peer dependency loaded lazily via `require` inside the activity.
 // A `{ virtual: true }` mock stands in so the token-acquisition path can be exercised and the REAL
@@ -178,6 +178,44 @@ describe("builtinHttpActivity", () => {
       headers: { "content-type": "text/plain" },
       content: "hello",
     });
+  });
+
+  it.each([429, 503])("cancels a selected %s body without buffering it", async (status) => {
+    const cancel = jest.fn(async () => undefined);
+    const text = jest.fn(async () => "discarded");
+    const response = {
+      ...fakeResponse(status, {}, ""),
+      body: { cancel },
+      text,
+    };
+    global.fetch = makeFetchMock(response) as unknown as typeof fetch;
+    await expect(
+      builtinHttpActivity({ method: "POST", uri: "http://127.0.0.1/", retryOptions: new HttpRetryOptions(100, 2) }),
+    ).rejects.toThrow(`HTTP request failed with status code ${status}.`);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(text).not.toHaveBeenCalled();
+  });
+
+  it("fails a selected status with a null response body", async () => {
+    global.fetch = jest.fn(async () => new Response(null, { status: 503 }));
+    await expect(
+      builtinHttpActivity({ method: "HEAD", uri: "http://127.0.0.1/", retryOptions: new HttpRetryOptions(100, 2) }),
+    ).rejects.toThrow("HTTP request failed with status code 503.");
+  });
+
+  it("surfaces a body cancellation failure rather than silently discarding it", async () => {
+    const cleanupError = new Error("body cancellation failed");
+    const text = jest.fn(async () => "discarded");
+    const response = {
+      ...fakeResponse(503, {}, ""),
+      body: { cancel: jest.fn().mockRejectedValue(cleanupError) },
+      text,
+    };
+    global.fetch = makeFetchMock(response) as unknown as typeof fetch;
+    await expect(
+      builtinHttpActivity({ method: "POST", uri: "http://127.0.0.1/", retryOptions: new HttpRetryOptions(100, 2) }),
+    ).rejects.toBe(cleanupError);
+    expect(text).not.toHaveBeenCalled();
   });
 
   it("sends a body for non-GET/HEAD methods", async () => {

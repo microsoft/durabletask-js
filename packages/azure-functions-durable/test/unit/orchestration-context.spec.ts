@@ -21,6 +21,8 @@ import {
   wrapOrchestrator,
 } from "../../src/orchestration-context";
 import { RetryOptions } from "../../src/retry-options";
+import { HttpRetryOptions } from "../../src/http/models";
+import type { HttpRetryOptions as PublicHttpRetryOptions } from "../../src";
 import { BUILTIN_HTTP_POLL_ORCHESTRATOR_NAME } from "../../src/http/builtin";
 
 /** Builds a fake core OrchestrationContext whose methods return sentinel values via jest mocks. */
@@ -195,6 +197,75 @@ describe("DurableOrchestrationContext", () => {
       content: JSON.stringify({ hello: "world" }),
       tokenSource: { kind: "AzureManagedIdentity", resource: "https://management.core.windows.net/" },
     });
+  });
+
+  it("snapshots a validated HTTP retry policy and status list into the serialized request", () => {
+    const { ctx, raw } = createFakeCoreContext();
+    const df = new DurableOrchestrationContext(ctx, undefined);
+    const retryOptions = Object.assign(new HttpRetryOptions(1000, 3), { statusCodesToRetry: [429, 503] });
+    retryOptions.backoffCoefficient = 2;
+    retryOptions.maxRetryIntervalInMilliseconds = 10000;
+    retryOptions.retryTimeoutInMilliseconds = 60000;
+    const options = { method: "POST", url: "https://example.test/api", retryOptions };
+    df.callHttp(options);
+    retryOptions.statusCodesToRetry.push(500);
+    retryOptions.backoffCoefficient = 5;
+    const payload = raw.callSubOrchestrator.mock.calls[0][1];
+    expect(payload.retryOptions).toEqual({
+      firstRetryIntervalInMilliseconds: 1000,
+      maxNumberOfAttempts: 3,
+      backoffCoefficient: 2,
+      maxRetryIntervalInMilliseconds: 10000,
+      retryTimeoutInMilliseconds: 60000,
+      statusCodesToRetry: [429, 503],
+    });
+    expect(JSON.parse(JSON.stringify(payload)).retryOptions).toEqual(payload.retryOptions);
+  });
+
+  it("treats a runtime null HTTP status list as the default, matching .NET", () => {
+    const { ctx, raw } = createFakeCoreContext();
+    const retryOptions = new HttpRetryOptions(1000, 3);
+    Reflect.set(retryOptions, "statusCodesToRetry", null);
+    new DurableOrchestrationContext(ctx, undefined).callHttp({
+      method: "GET",
+      url: "https://example.test/api",
+      retryOptions,
+    });
+    expect(raw.callSubOrchestrator.mock.calls[0][1].retryOptions).not.toHaveProperty("statusCodesToRetry");
+  });
+
+  it("snapshots HTTP defaults without changing the generic activity retry defaults", () => {
+    const { ctx, raw } = createFakeCoreContext();
+    const retryOptions: PublicHttpRetryOptions = new HttpRetryOptions(1000, 3);
+    new DurableOrchestrationContext(ctx, undefined).callHttp({
+      method: "GET",
+      url: "https://example.test/api",
+      retryOptions,
+    });
+    expect(raw.callSubOrchestrator.mock.calls[0][1].retryOptions).toEqual({
+      firstRetryIntervalInMilliseconds: 1000,
+      maxNumberOfAttempts: 3,
+      backoffCoefficient: 1,
+      maxRetryIntervalInMilliseconds: 6 * 24 * 60 * 60 * 1000,
+      retryTimeoutInMilliseconds: -1,
+    });
+    expect(new RetryOptions(1000, 3).toRetryPolicy().maxRetryIntervalInMilliseconds).toBe(3600000);
+  });
+
+  it.each([
+    ["firstRetryIntervalInMilliseconds", { firstRetryIntervalInMilliseconds: 0 }],
+    ["maxNumberOfAttempts", { maxNumberOfAttempts: 0 }],
+    ["maxNumberOfAttempts", { maxNumberOfAttempts: NaN }],
+    ["backoffCoefficient", { backoffCoefficient: 0.5 }],
+    ["maxRetryIntervalInMilliseconds", { maxRetryIntervalInMilliseconds: 999 }],
+    ["retryTimeoutInMilliseconds", { retryTimeoutInMilliseconds: 999 }],
+  ])("rejects invalid HTTP %s before scheduling any work", (field, invalid) => {
+    const { ctx, raw } = createFakeCoreContext();
+    const df = new DurableOrchestrationContext(ctx, undefined);
+    const retryOptions = Object.assign(new HttpRetryOptions(1000, 3), invalid);
+    const options = { method: "GET", url: "https://example.test/api", retryOptions };
+    expect(() => df.callHttp(options)).toThrow(field);
+    expect(raw.callSubOrchestrator).not.toHaveBeenCalled();
   });
 
   it("honors enablePolling=false (and the deprecated asynchronousPatternEnabled alias) for callHttp", () => {

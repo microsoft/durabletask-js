@@ -71,7 +71,8 @@ changed:
   ([#318](https://github.com/microsoft/durabletask-js/issues/318)) — though **not** as a drop-in, fully
   v3-equivalent replacement: the known incompatibilities and behavior differences listed below are
   load-bearing for migration, so review them before relying on it. It accepts the v3
-  `CallHttpOptions` (`method`, `url`, `body`, `headers`, `tokenSource`, `enablePolling`) and returns a
+  `CallHttpOptions` (`method`, `url`, `body`, `headers`, `tokenSource`, `enablePolling`), adds opt-in
+  [`retryOptions`](#durable-http-failure-retries), and returns a
   `Task<DurableHttpResponse>` (`{ statusCode, headers, content }`), including automatic `202 Accepted`
   polling that honors `Retry-After` via durable timers. **Trust-boundary change:** in v3 the Functions
   **host** extension executed the HTTP request; here it runs as a durable **activity inside your
@@ -129,6 +130,69 @@ changed:
   `(ctx) => ctx.instanceId` was mis-routed to the classic context. Standard classic orchestrators —
   sync **generators** (`function*`) using `context.df.*` — are unaffected; convert any non-generator
   classic orchestrator to generator form, or to the core-native `ctx.*` API.
+
+## Durable HTTP failure retries
+
+Use `HttpRetryOptions` to retry failures of the **initial** `callHttp` request. It extends the existing
+`RetryOptions` API; all intervals are milliseconds, and the attempt count includes the first request.
+
+```typescript
+import * as df from "durable-functions";
+import type { Task } from "@microsoft/durabletask-js";
+
+df.app.orchestration("FetchReport", function* (context: df.OrchestrationContext): Generator<
+  Task<unknown>,
+  unknown,
+  unknown
+> {
+  const retryOptions = new df.HttpRetryOptions(1000, 4);
+  retryOptions.backoffCoefficient = 2;
+  retryOptions.maxRetryIntervalInMilliseconds = 10000;
+  retryOptions.retryTimeoutInMilliseconds = 60000;
+  retryOptions.statusCodesToRetry = [429, 500, 503];
+
+  return yield context.df.callHttp({
+    method: "GET",
+    url: context.df.getInput<string>(),
+    retryOptions,
+  });
+});
+```
+
+The policy and a copy of the status list are recorded with the request. Retries reuse the core
+activity retry engine and durable timers, so replay does not reissue completed network requests.
+Selected failure responses have their unused body canceled before buffering, so even a body that
+never ends does not prevent a durable retry. Returned responses still include their complete body.
+Exhaustion throws `TaskFailedError` into the caller (or fails the orchestration if uncaught); it does
+**not** return the last failed HTTP response. An excluded status is returned normally. Transport and
+other activity failures use the same retry budget regardless of the status list. Retrying a request
+can repeat side effects, including when a server processed it but the connection failed before the
+response arrived. Enable retries only for operations that are safe to repeat.
+
+Defaults follow the .NET **in-process Durable Functions extension**, not the generic .NET Durable
+Task SDK: backoff `1`, maximum interval **six days**, and no overall retry timeout. An omitted or empty
+status list retries non-2xx responses, including 4xx/5xx and any unfollowed 3xx, matching
+[`TaskHttpActivityShim`'s `EnsureSuccessStatusCode`](https://github.com/Azure/azure-functions-durable-extension/blob/4437edf785533ccdf219c15f496777ba1c30d41d/src/WebJobs.Extensions.DurableTask/Listener/TaskHttpActivityShim.cs#L63-L88).
+An explicit list is exact, even for success codes: listing `202` retries the initial request instead
+of following its Location. Existing `fetch` redirect behavior is unchanged.
+
+**202 polling is separate:** like the extension's
+[`CreateLocationPollRequest`](https://github.com/Azure/azure-functions-durable-extension/blob/4437edf785533ccdf219c15f496777ba1c30d41d/src/WebJobs.Extensions.DurableTask/ContextImplementations/DurableOrchestrationContext.cs#L283-L379),
+Location polls **do not inherit the failure retry policy**. For example, initial `503 -> 202` can retry,
+then a poll returning `503` ends the call with that response, without retrying the poll. The existing
+polling `Retry-After` delays and credential-stripping rules remain unchanged. Failure retry delays use
+the configured policy, not `Retry-After`. `enablePolling: false` disables only polling, not retries.
+
+JavaScript-specific behavior: options use millisecond numbers rather than .NET `TimeSpan`; `-1` means
+unlimited maximum interval or retry timeout. Scalar validation and timeout boundaries reuse the core
+`RetryPolicy`: no retry is scheduled if its delay exceeds the remaining timeout, equality is allowed,
+and the timeout does not cancel an in-flight HTTP request or limit the subsequent polling loop.
+Long retry delays use the provider's existing three-day durable timer segments. Failures surface as
+JavaScript `TaskFailedError`, not .NET exception types.
+
+Omitting `retryOptions` preserves existing response, failure, and polling behavior. Deploy the updated
+worker before enabling the option; do not add it to existing in-flight orchestration code without
+versioning or draining those instances, because it changes the durable action history.
 
 ## Requirements
 

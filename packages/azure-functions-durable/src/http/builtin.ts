@@ -33,7 +33,7 @@
  * durabletask-python design (Andy Staples, durabletask-python#155).
  */
 
-import { OrchestrationContext, Task } from "@microsoft/durabletask-js";
+import { OrchestrationContext, RetryPolicy, Task } from "@microsoft/durabletask-js";
 import { DurableHttpRequestPayload, DurableHttpResponse } from "./models";
 
 /**
@@ -234,10 +234,10 @@ async function acquireBearerToken(resource: string): Promise<string> {
  *
  * @remarks
  * `input` is the JSON form of a durable HTTP request (`method`, `uri`, `content`, `headers`,
- * `tokenSource`). Non-2xx responses (including `202`) are captured rather than thrown — the global
- * `fetch` only rejects on network errors, not on HTTP status — so the poll orchestrator can inspect
- * the status code and headers. Only http/https URIs are permitted (an SSRF guard that closes off
- * `file://`, `ftp://`, ... schemes from orchestration-supplied URLs).
+ * `tokenSource`, `retryOptions`). Responses are returned unless an opt-in retry policy selects the
+ * status as a failure. Activity failures are retried by the orchestrator's durable retry policy,
+ * never by an in-process retry loop. Only http/https URIs are permitted (an SSRF guard that closes
+ * off `file://`, `ftp://`, ... schemes from orchestration-supplied URLs).
  *
  * When a `tokenSource` is present, the acquired bearer token **overwrites** any caller-supplied
  * `Authorization` header (matching v3, which applies the caller's headers first and then the token),
@@ -299,6 +299,18 @@ export async function builtinHttpActivity(input: DurableHttpRequestPayload): Pro
     body: includeBody ? request.content : undefined,
   });
 
+  if (request.retryOptions !== undefined) {
+    const codes = request.retryOptions.statusCodesToRetry;
+    const shouldRetry = codes?.length
+      ? codes.includes(response.status)
+      : response.status < 200 || response.status >= 300;
+    if (shouldRetry) {
+      // The discarded body may never end. Cancel it before buffering so durable retries can proceed.
+      await response.body?.cancel();
+      throw new Error(`HTTP request failed with status code ${response.status}.`);
+    }
+  }
+
   const responseHeaders: { [key: string]: string } = {};
   response.headers.forEach((value, key) => {
     responseHeaders[key] = value;
@@ -345,6 +357,7 @@ function buildPollRequest(
   enablePolling: boolean,
 ): DurableHttpRequestPayload {
   const sameOrigin = isSameOrigin(trustAnchorUri, resolved);
+  // Like .NET CreateLocationPollRequest, Location polls do not inherit the initial retry policy.
   const pollRequest: DurableHttpRequestPayload = { method: "GET", uri: resolved, enablePolling };
 
   if (request.headers !== undefined) {
@@ -390,10 +403,14 @@ export async function* builtinHttpPollOrchestrator(
   }
 
   const request = input ?? ({} as DurableHttpRequestPayload);
-  // v3 opt-out: when polling is disabled the first response is returned as-is (no 202 loop).
+  // v3 opt-out: skip the 202 loop when polling is disabled; failure retries are independent.
   const enablePolling = request.enablePolling !== false;
 
-  let response = (yield ctx.callActivity(BUILTIN_HTTP_ACTIVITY_NAME, request)) as BuiltinHttpActivityResult;
+  const initialTask =
+    request.retryOptions === undefined
+      ? ctx.callActivity(BUILTIN_HTTP_ACTIVITY_NAME, request)
+      : ctx.callActivity(BUILTIN_HTTP_ACTIVITY_NAME, request, { retry: new RetryPolicy(request.retryOptions) });
+  let response = (yield initialTask) as BuiltinHttpActivityResult;
   // Two DISTINCT URIs, deliberately NOT merged into one variable:
   //   - `originalUri` is the credential TRUST ANCHOR: the URI the app author declared. It is captured
   //     once and NEVER reassigned, so a callee-controlled `Location` (or a redirect `fetch` followed)

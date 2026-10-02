@@ -2,6 +2,11 @@
 
 ### New
 
+- Add opt-in `callHttp({ retryOptions: new HttpRetryOptions(...) })` failure retries using the core
+  durable activity retry engine, configurable status codes, backoff, attempt limits, and timeout.
+  Defaults match .NET in-process HTTP retries (non-2xx statuses, six-day maximum interval);
+  exhaustion throws `TaskFailedError`. Like .NET, `202` Location polls do not inherit the retry
+  policy. Calls without retry options are unchanged. See README for replay rollout and idempotency guidance.
 - Expose readonly `context.df.name`, forwarding the core logical orchestration name from history
   and preserving aliases and case across replay. This does not add `InvocationContext.functionName`.
 - Add optional orchestration version migration support to `context.df.continueAsNew()`.
