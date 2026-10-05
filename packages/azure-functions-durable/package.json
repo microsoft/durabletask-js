@@ -64,7 +64,7 @@
   },
   "dependencies": {
     "@azure/functions": "^4.16.1",
-    "@grpc/grpc-js": "^1.14.4",
+    "@grpc/grpc-js": "^1.14.5",
     "@microsoft/durabletask-js": "0.4.0"
   },
   "peerDependencies": {
