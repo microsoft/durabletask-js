@@ -5,6 +5,7 @@ import { DurableTaskAzureManagedWorkerBuilder, createAzureManagedWorkerBuilder }
 import { TaskEntity, ITaskEntity, TaskEntityOperation } from "@microsoft/durabletask-js";
 import * as pb from "../../../durabletask-js/src/proto/orchestrator_service_pb";
 import * as ph from "../../../durabletask-js/src/utils/pb-helper.util";
+import { GrpcClient } from "../../../durabletask-js/src/client/client-grpc";
 
 // Simple test entity for registration testing
 class CounterEntity extends TaskEntity<number> {
@@ -22,6 +23,32 @@ function createCounterEntity(): ITaskEntity {
 describe("DurableTaskAzureManagedWorkerBuilder", () => {
   const ENDPOINT = "http://localhost:8080";
   const TASKHUB = "test";
+
+  it("rejects unknown explicit filter names on start after applying builder registrations", async () => {
+    const generateClient = jest.spyOn(GrpcClient.prototype, "_generateClient").mockImplementation(() => {
+      throw new Error("Unexpected gRPC startup");
+    });
+    try {
+      const worker = new DurableTaskAzureManagedWorkerBuilder()
+        .endpoint(ENDPOINT, TASKHUB, null)
+        .useWorkItemFilters({
+          orchestrations: [{ name: "Known" }, { name: "MissingFlow" }],
+          activities: [{ name: "Known" }, { name: "MissingActivity" }],
+          entities: [{ name: "KNOWN" }, { name: "MissingEntity" }],
+        })
+        .addNamedOrchestrator("Known", () => undefined, "v1")
+        .addNamedActivity("Known", () => undefined, "v1")
+        .addNamedEntity("Known", createCounterEntity)
+        .build();
+
+      await expect(worker.start()).rejects.toThrow(
+        "Orchestrations: [MissingFlow] Activities: [MissingActivity] Entities: [MissingEntity]",
+      );
+      expect(generateClient).not.toHaveBeenCalled();
+    } finally {
+      generateClient.mockRestore();
+    }
+  });
 
   it("preserves named and inferred version registrations and the child default on build", async () => {
     const activity = () => "activity";
