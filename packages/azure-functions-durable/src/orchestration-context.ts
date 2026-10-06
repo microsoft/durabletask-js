@@ -31,7 +31,7 @@ function normalizeSubOrchestrationOptions(
   optionsOrInstanceId?: SubOrchestrationOptions | string,
   version?: string,
 ): SubOrchestrationOptions | undefined {
-  if (typeof optionsOrInstanceId === "object") {
+  if (optionsOrInstanceId !== null && typeof optionsOrInstanceId === "object") {
     return {
       instanceId: optionsOrInstanceId.instanceId,
       version: optionsOrInstanceId.version,
