@@ -38,6 +38,7 @@ import {
   setSpanError,
   setSpanOk,
   endSpan,
+  getOtelApi,
 } from "../tracing";
 
 /** Default timeout in milliseconds for graceful shutdown. */
@@ -1351,13 +1352,19 @@ export class TaskHubGrpcWorker {
         );
       } else {
         const executor = new ActivityExecutor(this._registry, this._logger);
-        const result = await executor.execute(
-          instanceId,
-          req.getName(),
-          req.getTaskid(),
-          req.getInput()?.getValue() ?? "",
-          req.getVersion()?.getValue(),
-        );
+        const executeActivity = () =>
+          executor.execute(
+            instanceId,
+            req.getName(),
+            req.getTaskid(),
+            req.getInput()?.getValue() ?? "",
+            req.getVersion()?.getValue(),
+          );
+        const otel = getOtelApi();
+        const result =
+          otel && activitySpan
+            ? await otel.context.with(otel.trace.setSpan(otel.context.active(), activitySpan), executeActivity)
+            : await executeActivity();
         res.setResult(new StringValue().setValue(result ?? ""));
         setSpanOk(activitySpan);
       }

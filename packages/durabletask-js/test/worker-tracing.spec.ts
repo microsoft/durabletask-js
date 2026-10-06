@@ -12,16 +12,20 @@
  */
 
 import * as pb from "../src/proto/orchestrator_service_pb";
+import * as stubs from "../src/proto/orchestrator_service_grpc_pb";
 import {
   newOrchestratorStartedEvent,
   newExecutionStartedEvent,
 } from "../src/utils/pb-helper.util";
 import { OrchestrationExecutor } from "../src/worker/orchestration-executor";
 import { Registry } from "../src/worker/registry";
+import { TaskHubGrpcWorker } from "../src/worker/task-hub-grpc-worker";
 import { NoOpLogger } from "../src/types/logger.type";
 import { TOrchestrator } from "../src/types/orchestrator.type";
 import { OrchestrationContext } from "../src/task/context/orchestration-context";
 import { ActivityContext } from "../src/task/context/activity-context";
+import * as traceContextUtils from "../src/tracing/trace-context-utils";
+import { AsyncLocalStorage } from "async_hooks";
 
 import {
   startSpanForOrchestrationExecution,
@@ -50,17 +54,48 @@ let exporter: InMemorySpanExporter;
 let provider: BasicTracerProvider;
 let previousTracerProvider: otel.TracerProvider | undefined;
 
+class TestAsyncContextManager implements otel.ContextManager {
+  private readonly storage = new AsyncLocalStorage<otel.Context>();
+
+  active(): otel.Context {
+    return this.storage.getStore() ?? otel.ROOT_CONTEXT;
+  }
+
+  with<A extends unknown[], F extends (...args: A) => ReturnType<F>>(
+    context: otel.Context,
+    fn: F,
+    thisArg?: ThisParameterType<F>,
+    ...args: A
+  ): ReturnType<F> {
+    return this.storage.run(context, () => fn.call(thisArg, ...args));
+  }
+
+  bind<T>(_context: otel.Context, target: T): T {
+    return target;
+  }
+
+  enable(): this {
+    return this;
+  }
+
+  disable(): this {
+    this.storage.disable();
+    return this;
+  }
+}
+
 beforeAll(() => {
   exporter = new InMemorySpanExporter();
   provider = new BasicTracerProvider();
   provider.addSpanProcessor(new SimpleSpanProcessor(exporter));
 
   previousTracerProvider = otel.trace.getTracerProvider();
-  provider.register();
+  provider.register({ contextManager: new TestAsyncContextManager() });
 });
 
 afterAll(async () => {
   await provider.shutdown();
+  otel.context.disable();
 
   if (previousTracerProvider) {
     otel.trace.setGlobalTracerProvider(previousTracerProvider);
@@ -70,6 +105,38 @@ afterAll(async () => {
 beforeEach(() => {
   exporter.reset();
 });
+
+function createActivityRequest(
+  name: string,
+  taskId: number,
+  traceId: string,
+  parentSpanId: string,
+): pb.ActivityRequest {
+  return new pb.ActivityRequest()
+    .setName(name)
+    .setTaskid(taskId)
+    .setOrchestrationinstance(new pb.OrchestrationInstance().setInstanceid(`${name}-instance`))
+    .setParenttracecontext(createPbTraceContext(`00-${traceId}-${parentSpanId}-01`));
+}
+
+function createActivityStub(): {
+  stub: stubs.TaskHubSidecarServiceClient;
+  response: () => pb.ActivityResponse | undefined;
+} {
+  let capturedResponse: pb.ActivityResponse | undefined;
+  const stub = {
+    completeActivityTask: (
+      response: pb.ActivityResponse,
+      _metadata: unknown,
+      callback: (error: Error | null, response: pb.CompleteTaskResponse) => void,
+    ) => {
+      capturedResponse = response;
+      callback(null, new pb.CompleteTaskResponse());
+    },
+  } as unknown as stubs.TaskHubSidecarServiceClient;
+
+  return { stub, response: () => capturedResponse };
+}
 
 /**
  * Helper that mirrors the worker's _executeOrchestratorInternal tracing flow.
@@ -430,5 +497,161 @@ describe("Worker Tracing - Activity Span Lifecycle", () => {
     expect(actSpan!.status.code).toBe(otel.SpanStatusCode.ERROR);
     expect(actSpan!.status.message).toBe("Activity failed");
     expect(actSpan!.endTime).toBeDefined();
+  });
+});
+
+describe("Worker Tracing - Activity Active Context", () => {
+  const tracer = otel.trace.getTracer("worker-tracing-user-code");
+
+  it("parents user spans to the activity execution span before and after await", async () => {
+    const worker = new TaskHubGrpcWorker({ logger: testLogger });
+    worker.addNamedActivity("parentedActivity", async () => {
+      const beforeAwait = tracer.startSpan("user-before-await");
+      beforeAwait.end();
+
+      await Promise.resolve();
+
+      const afterAwait = tracer.startSpan("user-after-await");
+      afterAwait.end();
+      return "done";
+    });
+    const request = createActivityRequest(
+      "parentedActivity",
+      1,
+      "11111111111111111111111111111111",
+      "1111111111111111",
+    );
+    const { stub } = createActivityStub();
+    const callerSpan = tracer.startSpan("success-caller");
+    const callerContext = otel.trace.setSpan(otel.ROOT_CONTEXT, callerSpan);
+
+    await otel.context.with(callerContext, async () => {
+      expect(otel.trace.getSpan(otel.context.active())).toBe(callerSpan);
+      await (worker as any)._executeActivityInternal(request, "completion-token", stub);
+      expect(otel.trace.getSpan(otel.context.active())).toBe(callerSpan);
+    });
+    callerSpan.end();
+
+    const spans = exporter.getFinishedSpans();
+    const activitySpan = spans.find((span) => span.name === "activity:parentedActivity")!;
+    const beforeAwait = spans.find((span) => span.name === "user-before-await")!;
+    const afterAwait = spans.find((span) => span.name === "user-after-await")!;
+
+    expect(beforeAwait.parentSpanId).toBe(activitySpan.spanContext().spanId);
+    expect(afterAwait.parentSpanId).toBe(activitySpan.spanContext().spanId);
+    expect(beforeAwait.spanContext().traceId).toBe(activitySpan.spanContext().traceId);
+    expect(afterAwait.spanContext().traceId).toBe(activitySpan.spanContext().traceId);
+  });
+
+  it("keeps concurrent activity contexts isolated", async () => {
+    const worker = new TaskHubGrpcWorker({ logger: testLogger });
+    let started = 0;
+    let releaseActivities!: () => void;
+    let reportBothStarted!: () => void;
+    const activitiesStarted = new Promise<void>((resolve) => {
+      reportBothStarted = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseActivities = resolve;
+    });
+
+    for (const name of ["activityA", "activityB"]) {
+      worker.addNamedActivity(name, async () => {
+        started++;
+        if (started === 2) {
+          reportBothStarted();
+        }
+        await release;
+        const child = tracer.startSpan(`user-${name}`);
+        child.end();
+        return name;
+      });
+    }
+
+    const first = createActivityRequest("activityA", 1, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaa");
+    const second = createActivityRequest("activityB", 2, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "bbbbbbbbbbbbbbbb");
+    const firstStub = createActivityStub();
+    const secondStub = createActivityStub();
+
+    const firstExecution = (worker as any)._executeActivityInternal(first, "first-completion-token", firstStub.stub);
+    const secondExecution = (worker as any)._executeActivityInternal(
+      second,
+      "second-completion-token",
+      secondStub.stub,
+    );
+    await activitiesStarted;
+    releaseActivities();
+    await Promise.all([firstExecution, secondExecution]);
+
+    const spans = exporter.getFinishedSpans();
+    for (const name of ["activityA", "activityB"]) {
+      const activitySpan = spans.find((span) => span.name === `activity:${name}`)!;
+      const childSpan = spans.find((span) => span.name === `user-${name}`)!;
+      expect(childSpan.parentSpanId).toBe(activitySpan.spanContext().spanId);
+      expect(childSpan.spanContext().traceId).toBe(activitySpan.spanContext().traceId);
+    }
+  });
+
+  it("restores the caller context and preserves failure tracing when activity code throws", async () => {
+    const worker = new TaskHubGrpcWorker({ logger: testLogger });
+    worker.addNamedActivity("throwingActivity", async () => {
+      await Promise.resolve();
+      const child = tracer.startSpan("user-throwing-activity");
+      child.end();
+      throw new Error("activity exploded");
+    });
+    const request = createActivityRequest(
+      "throwingActivity",
+      3,
+      "33333333333333333333333333333333",
+      "3333333333333333",
+    );
+    const activityStub = createActivityStub();
+    const callerSpan = tracer.startSpan("caller");
+    const callerContext = otel.trace.setSpan(otel.ROOT_CONTEXT, callerSpan);
+
+    await otel.context.with(callerContext, async () => {
+      expect(otel.trace.getSpan(otel.context.active())).toBe(callerSpan);
+      await (worker as any)._executeActivityInternal(request, "failure-completion-token", activityStub.stub);
+      expect(otel.trace.getSpan(otel.context.active())).toBe(callerSpan);
+    });
+    callerSpan.end();
+
+    const spans = exporter.getFinishedSpans();
+    const activitySpan = spans.find((span) => span.name === "activity:throwingActivity")!;
+    const childSpan = spans.find((span) => span.name === "user-throwing-activity")!;
+
+    expect(childSpan.parentSpanId).toBe(activitySpan.spanContext().spanId);
+    expect(activitySpan.status).toEqual({
+      code: otel.SpanStatusCode.ERROR,
+      message: "activity exploded",
+    });
+    expect(activityStub.response()?.getFailuredetails()?.getErrormessage()).toBe("activity exploded");
+  });
+
+  it("executes and completes activities when tracing is unavailable", async () => {
+    const worker = new TaskHubGrpcWorker({ logger: testLogger });
+    worker.addNamedActivity("untracedActivity", async () => {
+      await Promise.resolve();
+      return "untraced result";
+    });
+    const request = createActivityRequest(
+      "untracedActivity",
+      4,
+      "44444444444444444444444444444444",
+      "4444444444444444",
+    );
+    const activityStub = createActivityStub();
+    const getOtelApi = jest.spyOn(traceContextUtils, "getOtelApi").mockReturnValue(undefined);
+
+    try {
+      await (worker as any)._executeActivityInternal(request, "untraced-completion-token", activityStub.stub);
+    } finally {
+      getOtelApi.mockRestore();
+    }
+
+    expect(activityStub.response()?.getResult()?.getValue()).toBe(JSON.stringify("untraced result"));
+    expect(activityStub.response()?.getFailuredetails()).toBeUndefined();
+    expect(exporter.getFinishedSpans()).toHaveLength(0);
   });
 });
