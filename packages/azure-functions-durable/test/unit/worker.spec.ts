@@ -6,7 +6,7 @@ import { NoOpLogger } from "@microsoft/durabletask-js";
 import { ClassicOrchestrationContext, wrapOrchestrator } from "../../src/orchestration-context";
 import * as pb from "../../../durabletask-js/src/proto/orchestrator_service_pb";
 import * as ph from "../../../durabletask-js/src/utils/pb-helper.util";
-import { TaskCancelledError } from "../../src";
+import { RetryOptions, TaskCancelledError, type SubOrchestrationOptions } from "../../src";
 
 const DAY = 24 * 60 * 60 * 1000;
 const START = new Date("2026-01-01T00:00:00Z");
@@ -64,6 +64,118 @@ describe("DurableFunctionsWorker", () => {
         "explicit",
       ]);
     }
+  });
+
+  it("forwards tagged sub-orchestration options without changing positional calls", async () => {
+    const worker = new DurableFunctionsWorker({
+      logger: new NoOpLogger(),
+      versioning: { defaultVersion: "child-default" },
+    });
+    worker.addNamedOrchestrator(
+      "parent",
+      wrapOrchestrator(function* (ctx: ClassicOrchestrationContext) {
+        const tags = { empty: "", owner: "durable" };
+        ctx.df.callSubOrchestrator("DefaultChild");
+        ctx.df.callSubOrchestrator("LegacyChild", undefined, "legacy-id", "legacy-version");
+        const tagged = ctx.df.callSubOrchestrator(
+          "TaggedChild",
+          { value: 42 },
+          {
+            instanceId: "tagged-id",
+            version: "tagged-version",
+            tags,
+          },
+        );
+        tags.owner = "mutated";
+        ctx.df.callSubOrchestrator("EmptyTagsChild", undefined, { tags: {} });
+        yield tagged;
+      }),
+    );
+    const request = new pb.OrchestratorRequest()
+      .setInstanceid("parent-id")
+      .setNeweventsList([ph.newOrchestratorStartedEvent(START), ph.newExecutionStartedEvent("parent", "parent-id")]);
+
+    const response = await worker.handleOrchestratorRequest(Buffer.from(request.serializeBinary()).toString("base64"));
+    const actions = pb.OrchestratorResponse.deserializeBinary(Buffer.from(response, "base64")).getActionsList();
+    const children = actions.map((action) => action.getCreatesuborchestration()!);
+
+    expect(children.map((child) => child.getName())).toEqual([
+      "DefaultChild",
+      "LegacyChild",
+      "TaggedChild",
+      "EmptyTagsChild",
+    ]);
+    expect(children[0].getVersion()?.getValue()).toBe("child-default");
+    expect(children[0].getTagsMap().getLength()).toBe(0);
+    expect(children[1].getInstanceid()).toBe("legacy-id");
+    expect(children[1].getVersion()?.getValue()).toBe("legacy-version");
+    expect(children[1].getTagsMap().getLength()).toBe(0);
+    expect(children[2].getInstanceid()).toBe("tagged-id");
+    expect(children[2].getVersion()?.getValue()).toBe("tagged-version");
+    expect(children[2].getTagsMap().toObject()).toEqual([
+      ["empty", ""],
+      ["owner", "durable"],
+    ]);
+    expect(children[3].getTagsMap().getLength()).toBe(0);
+  });
+
+  it("preserves facade tags when retrying a sub-orchestration", async () => {
+    const worker = new DurableFunctionsWorker({ logger: new NoOpLogger() });
+    worker.addNamedOrchestrator(
+      "retry-parent",
+      wrapOrchestrator(function* (ctx: ClassicOrchestrationContext): Generator<unknown, unknown, unknown> {
+        const options: SubOrchestrationOptions = {
+          instanceId: "retry-child-id",
+          version: "retry-child-version",
+          tags: { empty: "", owner: "durable" },
+        };
+        return yield ctx.df.callSubOrchestratorWithRetry("RetryChild", new RetryOptions(1000, 2), undefined, options);
+      }),
+    );
+    const startEvents = [
+      ph.newOrchestratorStartedEvent(START),
+      ph.newExecutionStartedEvent("retry-parent", "parent-id"),
+    ];
+    const execute = async (pastEvents: pb.HistoryEvent[], newEvents: pb.HistoryEvent[]) => {
+      const request = new pb.OrchestratorRequest()
+        .setInstanceid("parent-id")
+        .setPasteventsList(pastEvents)
+        .setNeweventsList(newEvents);
+      const response = await worker.handleOrchestratorRequest(
+        Buffer.from(request.serializeBinary()).toString("base64"),
+      );
+      return pb.OrchestratorResponse.deserializeBinary(Buffer.from(response, "base64")).getActionsList();
+    };
+
+    const initialActions = await execute([], startEvents);
+    const initialAction = initialActions[0];
+    const initialChild = initialAction.getCreatesuborchestration()!;
+    expect(initialChild.getTagsMap().toObject()).toEqual([
+      ["empty", ""],
+      ["owner", "durable"],
+    ]);
+
+    const created = ph.newSubOrchestrationCreatedEvent(
+      initialAction.getId(),
+      initialChild.getName(),
+      initialChild.getInstanceid(),
+      initialChild.getInput()?.getValue(),
+    );
+    const failed = ph.newSubOrchestrationFailedEvent(initialAction.getId(), new Error("transient"));
+    const timerActions = await execute([...startEvents, created], [failed]);
+    const timerAction = timerActions[0];
+    const fireAt = timerAction.getCreatetimer()!.getFireat()!.toDate();
+    const timerCreated = ph.newTimerCreatedEvent(timerAction.getId(), fireAt);
+    const timerFired = ph.newTimerFiredEvent(timerAction.getId(), fireAt);
+
+    const retryActions = await execute([...startEvents, created, failed, timerCreated], [timerFired]);
+    const retriedChild = retryActions[0].getCreatesuborchestration()!;
+    expect(retriedChild.getInstanceid()).toBe("retry-child-id");
+    expect(retriedChild.getVersion()?.getValue()).toBe("retry-child-version");
+    expect(retriedChild.getTagsMap().toObject()).toEqual([
+      ["empty", ""],
+      ["owner", "durable"],
+    ]);
   });
 
   it("inherits the core default without a Functions timer configuration surface", async () => {

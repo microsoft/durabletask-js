@@ -39,6 +39,7 @@ export {
   ClassicOrchestrator,
   wrapOrchestrator,
 } from "./orchestration-context";
+export type { SubOrchestrationOptions } from "./orchestration-context";
 export { DurableEntityContext, ClassicEntityContext, ClassicEntity, wrapEntity } from "./entity-context";
 export {
   DurableOrchestrationStatus,
