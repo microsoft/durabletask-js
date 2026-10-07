@@ -16,6 +16,35 @@ import { BUILTIN_HTTP_POLL_ORCHESTRATOR_NAME } from "./http/builtin";
 import { CallHttpOptions, DurableHttpRequestPayload, DurableHttpResponse } from "./http/models";
 
 /**
+ * Options for scheduling a sub-orchestration through the classic Durable Functions context.
+ */
+export interface SubOrchestrationOptions {
+  /** The unique ID to use for the sub-orchestration instance. */
+  instanceId?: string;
+  /** The version of the sub-orchestration to execute. */
+  version?: string;
+  /** Tags to associate with the sub-orchestration instance. */
+  tags?: Record<string, string>;
+}
+
+function normalizeSubOrchestrationOptions(
+  optionsOrInstanceId?: SubOrchestrationOptions | string,
+  version?: string,
+): SubOrchestrationOptions | undefined {
+  if (optionsOrInstanceId !== null && typeof optionsOrInstanceId === "object") {
+    return {
+      instanceId: optionsOrInstanceId.instanceId,
+      version: optionsOrInstanceId.version,
+      tags: optionsOrInstanceId.tags === undefined ? undefined : { ...optionsOrInstanceId.tags },
+    };
+  }
+
+  return optionsOrInstanceId !== undefined || version !== undefined
+    ? { instanceId: optionsOrInstanceId, version }
+    : undefined;
+}
+
+/**
  * Classic Durable Functions (v3) orchestration context, exposed to migrating orchestrators as
  * `context.df`.
  *
@@ -93,27 +122,56 @@ export class DurableOrchestrationContext {
     });
   }
 
-  /** Schedules a sub-orchestrator for execution. */
-  callSubOrchestrator<T = unknown>(name: string, input?: unknown, instanceId?: string, version?: string): Task<T> {
+  /**
+   * Schedules a sub-orchestrator for execution.
+   *
+   * Tags supplied through the options overload are snapshotted when the task is scheduled.
+   */
+  callSubOrchestrator<T = unknown>(name: string, input?: unknown, options?: SubOrchestrationOptions): Task<T>;
+  callSubOrchestrator<T = unknown>(name: string, input?: unknown, instanceId?: string, version?: string): Task<T>;
+  callSubOrchestrator<T = unknown>(
+    name: string,
+    input?: unknown,
+    optionsOrInstanceId?: SubOrchestrationOptions | string,
+    version?: string,
+  ): Task<T> {
     return this._ctx.callSubOrchestrator<unknown, T>(
       name,
       input,
-      instanceId !== undefined || version !== undefined ? { instanceId, version } : undefined,
+      normalizeSubOrchestrationOptions(optionsOrInstanceId, version),
     );
   }
 
-  /** Schedules a sub-orchestrator for execution with a retry policy. */
+  /**
+   * Schedules a sub-orchestrator for execution with a retry policy.
+   *
+   * Tags supplied through the options overload are snapshotted when the task is scheduled and
+   * preserved by subsequent retry attempts.
+   */
+  callSubOrchestratorWithRetry<T = unknown>(
+    name: string,
+    retryOptions: RetryOptions,
+    input?: unknown,
+    options?: SubOrchestrationOptions,
+  ): Task<T>;
   callSubOrchestratorWithRetry<T = unknown>(
     name: string,
     retryOptions: RetryOptions,
     input?: unknown,
     instanceId?: string,
     version?: string,
+  ): Task<T>;
+  callSubOrchestratorWithRetry<T = unknown>(
+    name: string,
+    retryOptions: RetryOptions,
+    input?: unknown,
+    optionsOrInstanceId?: SubOrchestrationOptions | string,
+    version?: string,
   ): Task<T> {
+    const options = normalizeSubOrchestrationOptions(optionsOrInstanceId, version);
     return this._ctx.callSubOrchestrator<unknown, T>(name, input, {
       retry: retryOptions.toRetryPolicy(),
-      instanceId,
-      version,
+      ...options,
     });
   }
 

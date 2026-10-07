@@ -67,6 +67,9 @@ tests are `it.skip` with a comment citing the same reason.
 | `purge.spec.ts`               | `PurgeInstancesTests`          | purge by time / by entity id (purge-without-start-time #644 skipped)                                        |
 | `class-based-entity.spec.ts`  | `ClassBasedEntityTests`        | class-based entity state                                                                                    |
 
+`sub-orchestration-tags.spec.ts` is an SDK-specific regression that verifies tagged
+child metadata through the Functions host, Preview extension, and AzureStorage provider.
+
 ### Node bug annotations honored
 
 - [#642](https://github.com/Azure/azure-functions-durable-js/issues/642) — entity
@@ -83,11 +86,11 @@ tests are `it.skip` with a comment citing the same reason.
 - Node swallows suspend/resume/terminate of a **terminal** instance and returns
   success (`200`); the specs assert that behavior.
 
-The only test-app deviation from `BasicNode` is the `file:` dependency wiring
-(see `test-app/package.json`); the Durable function code is otherwise kept close
-to the source app. Host readiness is detected by polling `/admin/host/status`
-for `state == "Running"`, the same way the extension's C# `FunctionAppProcess`
-fixture does.
+The test app keeps the ported functions close to `BasicNode`, with two intentional
+additions: the `file:` dependency wiring (see `test-app/package.json`) and the
+feature-specific sub-orchestration-tags regression route. Host readiness is detected
+by polling `/admin/host/status` for `state == "Running"`, the same way the extension's
+C# `FunctionAppProcess` fixture does.
 
 ## Running locally
 

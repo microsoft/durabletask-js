@@ -2,6 +2,9 @@
 
 ### New
 
+- Add options-object overloads to `callSubOrchestrator()` and `callSubOrchestratorWithRetry()` so
+  classic orchestrators can attach tags to child orchestration instances. Existing positional
+  `instanceId` and `version` calls are unchanged.
 - Add opt-in `callHttp({ retryOptions: new HttpRetryOptions(...) })` failure retries using the core
   durable activity retry engine, configurable status codes, backoff, attempt limits, and timeout.
   Defaults match .NET in-process HTTP retries (non-2xx statuses, six-day maximum interval);
