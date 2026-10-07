@@ -33,11 +33,7 @@ export abstract class RetryTaskBase<T> extends CompletableTask<T> {
    * @param startTime - The time when the task was first scheduled
    * @param taskType - The type of task (activity or sub-orchestration)
    */
-  constructor(
-    action: pb.OrchestratorAction,
-    startTime: Date,
-    taskType: RetryTaskType,
-  ) {
+  constructor(action: pb.OrchestratorAction, startTime: Date, taskType: RetryTaskType) {
     super();
     this._action = action;
     this._startTime = startTime;
@@ -151,8 +147,6 @@ export abstract class RetryTaskBase<T> extends CompletableTask<T> {
     this._exception = new TaskFailedError(message, details);
     this._isComplete = true;
 
-    if (this._parent) {
-      this._parent.onChildCompleted(this);
-    }
+    this.notifyParents();
   }
 }

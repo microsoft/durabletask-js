@@ -280,18 +280,20 @@ describe("segmented timer cancellation ordering", () => {
     expectCompleted(await replay(worker, history, [ph.newTaskCompletedEvent(2, '"done"')]), "done");
   });
 
-  it("cancels a shared timer winner without changing either race's task identity", () => {
+  it("preserves direct-child winner identity when a timer is shared between nested races", () => {
     const timer = new RuntimeOrchestrationContext("shared-timer").createTimer(atDay(10));
     const work = new CompletableTask<string>();
     const firstRace = whenAny([timer, work]);
     const secondRace = whenAny([firstRace, timer]);
     timer.cancel();
+    expect(firstRace.getResult()).toBe(timer);
     expect(secondRace.isComplete).toBe(true);
-    expect(secondRace.getResult()).toBe(timer);
-    expect(() => secondRace.getResult().getResult()).toThrow(TaskCancelledError);
+    // The first race observes the timer, then completes as the second race's direct child.
+    expect(secondRace.getResult()).toBe(firstRace);
+    expect(() => firstRace.getResult().getResult()).toThrow(TaskCancelledError);
     work.complete("done");
-    expect(firstRace.getResult()).toBe(work);
-    expect(secondRace.getResult()).toBe(timer);
+    expect(firstRace.getResult()).toBe(timer);
+    expect(secondRace.getResult()).toBe(firstRace);
   });
 
   it("leaves a caught whenAll completion exception as a boundary, not a reusable parent result", () => {

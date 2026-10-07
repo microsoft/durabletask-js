@@ -153,9 +153,8 @@ describe("WhenAllTask", () => {
     const child2 = new CompletableTask<number>();
     const task = new WhenAllTask([child1, child2]);
 
-    // Spy parent to detect premature or duplicate notifications.
-    const parent = { onChildCompleted: jest.fn() };
-    task._parent = parent as any;
+    const parent = new WhenAllTask([task]);
+    jest.spyOn(parent, "onChildCompleted");
 
     // First child fails: under wait-all the WhenAll must not complete or notify yet.
     child1.fail("first failure");
