@@ -40,6 +40,8 @@
 
 ### Fixes
 
+- Make the Durable Task activity execution span active while user activity code runs, so
+  spans created by activities inherit the correct parent across awaits and concurrent executions.
 - Preserve received structured failure `properties` in task errors, retry callbacks, client
   state/history, entity failures, and testing. Forward them with rethrown task failure chains.
   Empty wire maps remain `undefined`; arbitrary JavaScript `Error` fields are not collected.
