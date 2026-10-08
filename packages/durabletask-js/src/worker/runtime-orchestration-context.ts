@@ -80,8 +80,9 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     this._version = "";
     this._parent = undefined;
     this._completionStatus = undefined;
-    this._receivedEvents = {};
-    this._pendingEvents = {};
+    // Event names must not resolve inherited object properties.
+    this._receivedEvents = Object.create(null);
+    this._pendingEvents = Object.create(null);
     this._newInput = undefined;
     this._saveEvents = false;
     this._newVersion = undefined;
