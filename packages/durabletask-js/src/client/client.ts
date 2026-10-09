@@ -693,6 +693,10 @@ export class TaskHubGrpcClient {
    * instance. The restarted orchestration will use the same input that was provided
    * when the orchestration was originally started.
    *
+   * Restarting with a new ID is a restart-as-clone, not execution-history cloning.
+   * The context's `sourceInstanceId` is available only if the backend supplies
+   * lineage metadata. The current protocol does not support choosing a destination ID or version.
+   *
    * @param instanceId - The unique ID of the orchestration instance to restart.
    * @param restartWithNewInstanceId - If true, the restarted orchestration will be assigned
    * a new instance ID. If false (default), the same instance ID will be reused.

@@ -26,7 +26,7 @@ import type { HttpRetryOptions as PublicHttpRetryOptions } from "../../src";
 import { BUILTIN_HTTP_POLL_ORCHESTRATOR_NAME } from "../../src/http/builtin";
 
 /** Builds a fake core OrchestrationContext whose methods return sentinel values via jest mocks. */
-function createFakeCoreContext() {
+function createFakeCoreContext(sourceInstanceId?: string) {
   const entities = {
     callEntity: jest.fn().mockReturnValue("callEntity-task"),
     signalEntity: jest.fn(),
@@ -40,6 +40,7 @@ function createFakeCoreContext() {
   const ctx = {
     name: "LogicalOrch",
     instanceId: "instance-1",
+    sourceInstanceId,
     isReplaying: true,
     currentUtcDateTime: new Date("2026-01-02T03:04:05.000Z"),
     version: "1.2.3",
@@ -58,6 +59,14 @@ function createFakeCoreContext() {
 }
 
 describe("DurableOrchestrationContext", () => {
+  it.each([undefined, "", "source:@Case/123"])("forwards read-only source lineage %s", (sourceInstanceId) => {
+    const { ctx } = createFakeCoreContext(sourceInstanceId);
+    const df = new DurableOrchestrationContext(ctx, undefined);
+    expect(df.sourceInstanceId).toBe(sourceInstanceId);
+    expect(df.parentInstanceId).toBeUndefined();
+    expect(Reflect.set(df, "sourceInstanceId", "changed")).toBe(false);
+  });
+
   it("exposes identity/replay properties and getInput from the core context", () => {
     const { ctx } = createFakeCoreContext();
     const df = new DurableOrchestrationContext(ctx, { city: "Tokyo" });

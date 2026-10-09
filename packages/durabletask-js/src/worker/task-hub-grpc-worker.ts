@@ -12,6 +12,7 @@ import { TOrchestrator } from "../types/orchestrator.type";
 import { TOutput } from "../types/output.type";
 import { GrpcClient } from "../client/client-grpc";
 import { Empty } from "google-protobuf/google/protobuf/empty_pb";
+import { Value } from "google-protobuf/google/protobuf/struct_pb";
 import * as pbh from "../utils/pb-helper.util";
 import { callWithMetadata, MetadataGenerator } from "../utils/grpc-helper.util";
 import { OrchestrationExecutor } from "./orchestration-executor";
@@ -1210,6 +1211,20 @@ export class TaskHubGrpcWorker {
     let res;
 
     try {
+      const source = req.getPropertiesMap().get("sourceInstanceId");
+      let sourceInstanceId: string | undefined;
+      if (source !== undefined) {
+        switch (source.getKindCase()) {
+          case Value.KindCase.STRING_VALUE:
+            sourceInstanceId = source.getStringValue();
+            break;
+          case Value.KindCase.NULL_VALUE:
+            break;
+          default:
+            throw new TypeError("OrchestratorRequest sourceInstanceId must be a string or null.");
+        }
+      }
+
       const executor = new OrchestrationExecutor(
         this._registry,
         this._logger,
@@ -1221,6 +1236,7 @@ export class TaskHubGrpcWorker {
         req.getPasteventsList(),
         req.getNeweventsList(),
         req.getExecutionid()?.getValue(),
+        sourceInstanceId,
       );
 
       // Process actions to inject trace context into scheduled tasks, sub-orchestrations, etc.
