@@ -37,13 +37,15 @@ export class WhenAllTask<T> extends CompositeTask<T[]> {
     return result;
   }
 
-  onChildCompleted(_task: Task<any>): void {
-    if (this._isComplete) {
+  onChildCompleted(task: Task<any>): void {
+    const occurrences = this._pendingChildren.get(task);
+    if (this._isComplete || occurrences === undefined) {
       // Already completed (all children done). Ignore subsequent child completions.
       return;
     }
 
-    this._completedTasks++;
+    this._pendingChildren.delete(task);
+    this._completedTasks += occurrences;
 
     // Wait-all: a failing child does not complete the whenAll early; we wait until every child
     // is terminal. This prevents a later failing sibling's TaskFailed from being dropped against
@@ -70,7 +72,7 @@ export class WhenAllTask<T> extends CompositeTask<T[]> {
         this._result = this._tasks.map((child) => child.getResult());
       }
 
-      this._parent?.onChildCompleted(this);
+      this.notifyParents();
     }
   }
 

@@ -9,6 +9,7 @@ import { Task } from "./task";
 export class CompositeTask<T> extends Task<T> {
   _tasks: Task<any>[] = [];
   _completedTasks: number;
+  protected readonly _pendingChildren = new Map<Task<any>, number>();
 
   constructor(tasks: Task<any>[]) {
     super();
@@ -17,12 +18,24 @@ export class CompositeTask<T> extends Task<T> {
     this._completedTasks = 0;
 
     for (const task of tasks) {
-      task._parent = this;
+      this._pendingChildren.set(task, (this._pendingChildren.get(task) ?? 0) + 1);
+    }
 
-      if (task._isComplete) {
+    for (const task of this._pendingChildren.keys()) {
+      if (task.isComplete) {
         this.onChildCompleted(task);
+      } else {
+        task._parents.add(this);
       }
     }
+  }
+
+  protected override notifyParents(): void {
+    for (const task of this._pendingChildren.keys()) {
+      task._parents.delete(this);
+    }
+    this._pendingChildren.clear();
+    super.notifyParents();
   }
 
   // @todo: should be abstract method

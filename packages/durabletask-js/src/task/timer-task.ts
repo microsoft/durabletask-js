@@ -82,12 +82,12 @@ export class TimerTask extends CompletableTask<undefined> {
    *   remains for it.
    *
    * Cancellation marks this timer complete and canceled, but not failed, and
-   * notifies its composite parent. Reading `result` or `getResult()` then throws
+   * notifies its composite parents. Reading `result` or `getResult()` then throws
    * {@link TaskCancelledError}. A whenAny parent completes with this timer;
    * whenAll propagates cancellation when collecting its final child results.
    *
    * @returns true if cancellation was applied; false if already terminal.
-   * @throws If the cancel handler or parent completion callback throws.
+   * @throws If the cancel handler or a parent completion callback throws.
    */
   cancel(): boolean {
     if (this._isComplete) {
