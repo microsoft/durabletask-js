@@ -40,6 +40,10 @@
 
 ### Fixes
 
+- Preserve trailing external events in the same work item after `continueAsNew(..., true)`,
+  rather than delivering them to abandoned listeners in the previous execution. Already-consumed
+  events are not duplicated; `saveEvents=false` still discards unprocessed events. Case-insensitive
+  event-name matching, per-name FIFO ordering, and payload values are unchanged.
 - Handle external event names such as `constructor` and `__proto__` without failing the
   orchestration. Case-insensitive matching, per-name FIFO ordering, and unprocessed-event
   carryover through continue-as-new are preserved.
