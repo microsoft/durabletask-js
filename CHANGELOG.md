@@ -43,6 +43,9 @@
 - Prevent shared or duplicate pending tasks from stranding `whenAll` orchestrations after all
   activities finish. Notify every dependent composite, preserve duplicate result positions,
   and detach completed `whenAny` groups from their remaining children.
+- Handle external event names such as `constructor` and `__proto__` without failing the
+  orchestration. Case-insensitive matching, per-name FIFO ordering, and unprocessed-event
+  carryover through continue-as-new are preserved.
 - Make the Durable Task activity execution span active while user activity code runs, so
   spans created by activities inherit the correct parent across awaits and concurrent executions.
 - Preserve received structured failure `properties` in task errors, retry callbacks, client
