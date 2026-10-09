@@ -434,9 +434,15 @@ const eternalOrchestrator: TOrchestrator = async function* (
 };
 ```
 
-The second argument controls whether unprocessed external events carry over. The optional third
-argument becomes the restarted orchestration's `ctx.version`; omit it to retain the existing
-continue-as-new behavior.
+The second argument controls whether unprocessed external events carry over. With `true`, events
+delivered later in the same work item after `continueAsNew()` are retained for the new execution,
+even if an abandoned listener in the previous execution was waiting for them. Events already
+consumed before the call are not carried over; `false` explicitly discards unprocessed events.
+Case-insensitive event-name matching, per-name FIFO ordering, and payload values are preserved.
+This corrects previously lost trailing events but cannot recover events discarded by an earlier worker.
+
+The optional third argument becomes the restarted orchestration's `ctx.version`; omit it to retain
+the existing continue-as-new version behavior.
 
 ### Durable entities
 

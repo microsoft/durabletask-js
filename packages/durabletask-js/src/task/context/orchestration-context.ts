@@ -171,6 +171,10 @@ export abstract class OrchestrationContext {
   /**
    * Continue the orchestration execution as a new instance
    *
+   * With saveEvents=true, unprocessed external events later in the same work item
+   * are carried over even if the previous execution registered a listener.
+   * Events consumed before this call are not carried over.
+   *
    * @param newInput {any} The new input to use for the new orchestration instance.
    * @param saveEvents {boolean} A flag indicating whether to add any unprocessed external events in the new orchestration history.
    * @param newVersion {string} The optional version to use for the new orchestration instance.
