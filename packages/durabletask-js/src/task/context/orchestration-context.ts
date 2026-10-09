@@ -34,6 +34,16 @@ export abstract class OrchestrationContext {
   abstract get instanceId(): string;
 
   /**
+   * The immediate source instance ID from which this orchestration was cloned by restart.
+   *
+   * This read-only lineage is independent of {@link parent}; sub-orchestrations do not
+   * inherit their parent's clone lineage. It is available during replay when supplied
+   * by the backend. Missing or null metadata returns `undefined`; strings are preserved
+   * verbatim, including empty strings. Backend support and metadata persistence are required.
+   */
+  abstract get sourceInstanceId(): string | undefined;
+
+  /**
    * Gets the parent orchestration instance, or `undefined` if this is not a sub-orchestration.
    *
    * This property is useful for determining if the current orchestration was started by another

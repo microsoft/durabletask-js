@@ -2,6 +2,10 @@
 
 ### New
 
+- Expose readonly `context.df.sourceInstanceId`, forwarding core clone lineage on
+  initial execution and replay. Null or missing metadata returns `undefined`.
+  Actual Functions lineage requires extension lineage support and provider tag persistence.
+  Restart APIs remain unchanged; destination-ID/version options are not supported by the protocol.
 - Add options-object overloads to `callSubOrchestrator()` and `callSubOrchestratorWithRetry()` so
   classic orchestrators can attach tags to child orchestration instances. Existing positional
   `instanceId` and `version` calls are unchanged.

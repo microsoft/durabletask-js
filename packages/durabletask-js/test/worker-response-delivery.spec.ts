@@ -5,6 +5,8 @@ import * as grpc from "@grpc/grpc-js";
 import { EventEmitter } from "events";
 import { Timestamp } from "google-protobuf/google/protobuf/timestamp_pb";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
+import { Value } from "google-protobuf/google/protobuf/struct_pb";
+import { newExecutionStartedEvent, newOrchestratorStartedEvent } from "../src/utils/pb-helper.util";
 import { TaskEntity } from "../src/entities/task-entity";
 import * as pb from "../src/proto/orchestrator_service_pb";
 import * as stubs from "../src/proto/orchestrator_service_grpc_pb";
@@ -53,6 +55,41 @@ describe("Worker response retries", () => {
     jest.useRealTimers();
     jest.restoreAllMocks();
   });
+
+  it.each([undefined, null, "", "Source:@Case/123"])(
+    "forwards source %s through streamed work-item dispatch without changing response identity",
+    async (sourceInstanceId) => {
+      const observed = jest.fn();
+      worker.addNamedOrchestrator("Flow", async (ctx) => {
+        observed(ctx.sourceInstanceId, ctx.instanceId, ctx.version);
+        return "done";
+      });
+      const send = jest.spyOn(stub, "completeOrchestratorTask").mockImplementation(
+        (_request, _metadata, optionsOrCallback: Partial<grpc.CallOptions> | Callback, callback?: Callback) => {
+          const respond = typeof optionsOrCallback === "function" ? optionsOrCallback : callback!;
+          respond(null, new pb.CompleteTaskResponse());
+          return unaryCall();
+        },
+      );
+      const request = new pb.OrchestratorRequest().setInstanceid("clone-id").setNeweventsList([
+        newOrchestratorStartedEvent(),
+        newExecutionStartedEvent("Flow", "clone-id", undefined, undefined, "execution-id", "1.0"),
+      ]);
+      request.setExecutionid(new StringValue().setValue("execution-id"));
+      if (sourceInstanceId !== undefined) request.getPropertiesMap().set("sourceInstanceId", Value.fromJavaScript(sourceInstanceId));
+      const item = new pb.WorkItem().setCompletiontoken("token").setOrchestratorrequest(request);
+      worker["_dispatchWorkItem"](pb.WorkItem.deserializeBinary(item.serializeBinary()), stub);
+      await Promise.all(worker["_pendingWorkItems"]);
+      expect(observed.mock.calls).toEqual([[sourceInstanceId ?? undefined, "clone-id", "1.0"]]);
+      expect(send).toHaveBeenCalledTimes(1);
+      const response = send.mock.calls[0][0];
+      expect(response.getInstanceid()).toBe("clone-id");
+      expect(response.getCompletiontoken()).toBe("token");
+      expect(response.getActionsList()[0].getCompleteorchestration()?.getOrchestrationstatus()).toBe(
+        pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED,
+      );
+    },
+  );
 
   it.each([grpc.status.UNAVAILABLE, grpc.status.UNKNOWN, grpc.status.DEADLINE_EXCEEDED, grpc.status.INTERNAL])(
     "retries transient status %s with the same request and fresh metadata",

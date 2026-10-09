@@ -40,6 +40,16 @@ const testLogger = new NoOpLogger();
 const TEST_INSTANCE_ID = "abc123";
 
 describe("Orchestration Context", () => {
+  it("exposes getter-only source lineage with an undefined manual default", () => {
+    const ctx = new RuntimeOrchestrationContext(TEST_INSTANCE_ID);
+    expect(ctx.sourceInstanceId).toBeUndefined();
+    expect(Object.getOwnPropertyDescriptor(RuntimeOrchestrationContext.prototype, "sourceInstanceId")).toMatchObject({
+      get: expect.any(Function),
+      set: undefined,
+    });
+    expect(Reflect.set(ctx, "sourceInstanceId", "changed")).toBe(false);
+  });
+
   it("keeps manual construction compatible with an empty, getter-only name", () => {
     const ctx = new RuntimeOrchestrationContext(TEST_INSTANCE_ID);
     expect(ctx).toMatchObject({ instanceId: TEST_INSTANCE_ID, name: "", version: "" });
@@ -52,6 +62,51 @@ describe("Orchestration Context", () => {
 });
 
 describe("Orchestration Executor", () => {
+  it.each([undefined, "", "Source:@Case/with.punctuation-123"])(
+    "preserves source %s independently of parent, identity, version, actions, and replay",
+    async (sourceInstanceId) => {
+      const parent = { name: "Parent", instanceId: "parent-id", taskScheduledId: 42 };
+      const observed = jest.fn();
+      const registry = new Registry();
+      registry.addNamedOrchestrator("Flow", async function* (ctx, input) {
+        observed(ctx.sourceInstanceId, ctx.parent, ctx.instanceId, ctx.version, ctx.isReplaying, input);
+        yield ctx.callActivity("Work");
+        observed(ctx.sourceInstanceId, ctx.parent, ctx.instanceId, ctx.version, ctx.isReplaying, input);
+        ctx.continueAsNew(input, true);
+      });
+      for (const parentMetadata of [undefined, parent]) {
+        observed.mockClear();
+        const startEvents = [
+          newOrchestratorStartedEvent(),
+          newExecutionStartedEvent("Flow", TEST_INSTANCE_ID, '"input"', parentMetadata, undefined, "1.0"),
+        ];
+        const initial = await new OrchestrationExecutor(registry, testLogger).execute(
+          TEST_INSTANCE_ID, [], startEvents, "execution-id", sourceInstanceId,
+        );
+        expect(observed).toHaveBeenCalledWith(sourceInstanceId, parentMetadata, TEST_INSTANCE_ID, "1.0", false, "input");
+        expect(initial.actions).toHaveLength(1);
+        expect(initial.actions[0].getId()).toBe(1);
+        expect(initial.actions[0].getScheduletask()?.getName()).toBe("Work");
+
+        observed.mockClear();
+        const replay = await new OrchestrationExecutor(registry, testLogger).execute(
+          TEST_INSTANCE_ID,
+          [...startEvents, newTaskScheduledEvent(1, "Work")],
+          [newTaskCompletedEvent(1, '"done"')],
+          "execution-id",
+          sourceInstanceId,
+        );
+        expect(observed.mock.calls).toEqual([
+          [sourceInstanceId, parentMetadata, TEST_INSTANCE_ID, "1.0", true, "input"],
+          [sourceInstanceId, parentMetadata, TEST_INSTANCE_ID, "1.0", false, "input"],
+        ]);
+        const completed = getAndValidateSingleCompleteOrchestrationAction(replay);
+        expect(completed?.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW);
+        expect(completed?.getResult()?.getValue()).toBe('"input"');
+      }
+    },
+  );
+
   it.each([undefined, "1.0.0"])(
     "preserves each logical name on initial execution and replay with registration version %s",
     async (registrationVersion) => {

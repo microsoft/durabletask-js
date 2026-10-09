@@ -70,6 +70,7 @@ export class OrchestrationExecutor {
     oldEvents: pb.HistoryEvent[],
     newEvents: pb.HistoryEvent[],
     executionId?: string,
+    sourceInstanceId?: string,
   ): Promise<OrchestrationExecutionResult> {
     if (!newEvents?.length) {
       throw new OrchestrationStateError("The new history event list must have at least one event in it");
@@ -92,7 +93,12 @@ export class OrchestrationExecutor {
       return buildRewindResult(oldEvents, newEvents);
     }
 
-    const ctx = new RuntimeOrchestrationContext(instanceId, this._maximumTimerIntervalMs, this._defaultVersion);
+    const ctx = new RuntimeOrchestrationContext(
+      instanceId,
+      this._maximumTimerIntervalMs,
+      this._defaultVersion,
+      sourceInstanceId,
+    );
     // Seed the execution ID from the authoritative source (the OrchestratorRequest on the gRPC path,
     // or the backend record on the in-memory path). The ExecutionStarted event replayed below may
     // also carry it; handleExecutionStarted reconciles the two.

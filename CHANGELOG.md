@@ -2,6 +2,11 @@
 
 ### New
 
+- Expose readonly `OrchestrationContext.sourceInstanceId` from the existing protobuf
+  request properties on initial execution and replay, independently of parent identity.
+  Strings are preserved verbatim; null or missing metadata returns `undefined`.
+  Malformed value kinds fail explicitly. Backend lineage emission is required and
+  standalone DTS/Dapr support is unverified; restart APIs and protocol are unchanged.
 - Expose optional `PurgeResult.isComplete` from the backend for single-instance and filtered purges:
   `true` means finished, `false` means partial, and `undefined` means completion was not reported.
   Existing `deletedInstanceCount` values and count-only construction are unchanged.
