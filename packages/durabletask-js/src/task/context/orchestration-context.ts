@@ -40,8 +40,11 @@ export abstract class OrchestrationContext {
    * inherit their parent's clone lineage. It is available during replay when supplied
    * by the backend. Missing or null metadata returns `undefined`; strings are preserved
    * verbatim, including empty strings. Backend support and metadata persistence are required.
+   * The default implementation returns `undefined` so existing subclasses need no override.
    */
-  abstract get sourceInstanceId(): string | undefined;
+  get sourceInstanceId(): string | undefined {
+    return undefined;
+  }
 
   /**
    * Gets the parent orchestration instance, or `undefined` if this is not a sub-orchestration.
