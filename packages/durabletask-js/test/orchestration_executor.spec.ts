@@ -1079,6 +1079,66 @@ describe("Orchestration Executor", () => {
     }
   });
 
+  it.each([true, false])(
+    "routes trailing events into the continue-as-new action with saveEvents=%s",
+    async (saveEvents) => {
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        yield whenAny([ctx.waitForExternalEvent("rotate"), ctx.waitForExternalEvent("message")]);
+        ctx.continueAsNew(2, saveEvents);
+      };
+      const registry = new Registry();
+      const name = registry.addOrchestrator(orchestrator);
+      const oldEvents = [newOrchestratorStartedEvent(), newExecutionStartedEvent(name, TEST_INSTANCE_ID)];
+      const newEvents = [
+        newEventRaisedEvent("rotate", "null"),
+        newEventRaisedEvent("MESSAGE", "false"),
+        newEventRaisedEvent("message", "0"),
+      ];
+      const result = await new OrchestrationExecutor(registry, testLogger).execute(
+        TEST_INSTANCE_ID,
+        oldEvents,
+        newEvents,
+      );
+      const complete = getAndValidateSingleCompleteOrchestrationAction(result);
+      expect(complete?.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW);
+      expect(complete?.getResult()?.getValue()).toBe("2");
+      expect(
+        complete
+          ?.getCarryovereventsList()
+          .map((event) => [event.getEventraised()?.getName(), event.getEventraised()?.getInput()?.getValue()]),
+      ).toEqual(
+        saveEvents
+          ? [
+              ["message", "false"],
+              ["message", "0"],
+            ]
+          : [],
+      );
+    },
+  );
+
+  it.each([true, false])(
+    "fails on a malformed trailing event after continue-as-new with saveEvents=%s",
+    async (saveEvents) => {
+      const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext): any {
+        yield whenAny([ctx.waitForExternalEvent("rotate"), ctx.waitForExternalEvent("message")]);
+        ctx.continueAsNew(2, saveEvents);
+      };
+      const registry = new Registry();
+      const name = registry.addOrchestrator(orchestrator);
+      const result = await new OrchestrationExecutor(registry, testLogger).execute(
+        TEST_INSTANCE_ID,
+        [newOrchestratorStartedEvent(), newExecutionStartedEvent(name, TEST_INSTANCE_ID)],
+        [newEventRaisedEvent("rotate", "null"), newEventRaisedEvent("message", "not-json")],
+      );
+      const complete = getAndValidateSingleCompleteOrchestrationAction(result);
+      expect(complete?.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+      expect(complete?.getFailuredetails()?.getErrortype()).toBe("Error");
+      expect(complete?.getFailuredetails()?.getErrormessage()).toContain("Failed to parse JSON from StringValue");
+      expect(complete?.getCarryovereventsList()).toEqual([]);
+    },
+  );
+
   it("should set the new version on a continue-as-new action", async () => {
     const orchestrator: TOrchestrator = async (ctx: OrchestrationContext, input: number) => {
       ctx.continueAsNew(input + 1, false, "2.0.0");

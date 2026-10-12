@@ -492,7 +492,8 @@ export class OrchestrationExecutor {
 
     let decodedResult;
 
-    if (taskList) {
+    // After continue-as-new, old listeners must not consume events for the next execution.
+    if (taskList && !ctx._isComplete) {
       const eventTask = taskList.shift();
 
       decodedResult = parseJsonField(event.getEventraised()?.getInput());
