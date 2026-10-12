@@ -2,11 +2,18 @@
 // Licensed under the MIT License.
 
 import { DurableFunctionsWorker } from "../../src/worker";
-import { NoOpLogger } from "@microsoft/durabletask-js";
+import { NoOpLogger, type OrchestrationContext, type TOrchestrator } from "@microsoft/durabletask-js";
+import { createRequire } from "module";
 import { ClassicOrchestrationContext, wrapOrchestrator } from "../../src/orchestration-context";
 import * as pb from "../../../durabletask-js/src/proto/orchestrator_service_pb";
 import * as ph from "../../../durabletask-js/src/utils/pb-helper.util";
 import { RetryOptions, TaskCancelledError, type SubOrchestrationOptions } from "../../src";
+
+// Match the generated stubs' protobuf runtime, not a potentially different tooling dependency.
+const { Value }: typeof import("google-protobuf/google/protobuf/struct_pb") =
+  createRequire(require.resolve("../../../durabletask-js/src/proto/orchestrator_service_pb"))(
+    "google-protobuf/google/protobuf/struct_pb",
+  );
 
 const DAY = 24 * 60 * 60 * 1000;
 const START = new Date("2026-01-01T00:00:00Z");
@@ -30,6 +37,92 @@ async function timerActions(worker: DurableFunctionsWorker) {
 }
 
 describe("DurableFunctionsWorker", () => {
+  it.each([
+    ["string", Value.fromJavaScript("Source:@Case/with.punctuation-123"), "Source:@Case/with.punctuation-123"],
+    ["empty string", Value.fromJavaScript(""), ""],
+    ["null", Value.fromJavaScript(null), undefined],
+    ["missing", undefined, undefined],
+  ] as const)("exposes %s lineage in classic and core-native protobuf handlers during replay", async (_, value, expected) => {
+    const observed = jest.fn();
+    const worker = new DurableFunctionsWorker({ logger: new NoOpLogger() });
+    const classic = wrapOrchestrator(function* (ctx: ClassicOrchestrationContext) {
+      observed(ctx.df.sourceInstanceId, ctx.df.parentInstanceId, ctx.df.isReplaying);
+      yield ctx.df.createTimer(new Date(START.getTime() + 1000));
+      observed(ctx.df.sourceInstanceId, ctx.df.parentInstanceId, ctx.df.isReplaying);
+      return "done";
+    });
+    const native: TOrchestrator = async function* (ctx: OrchestrationContext) {
+      observed(ctx.sourceInstanceId, ctx.parent?.instanceId, ctx.isReplaying);
+      yield ctx.createTimer(new Date(START.getTime() + 1000));
+      observed(ctx.sourceInstanceId, ctx.parent?.instanceId, ctx.isReplaying);
+      return "done";
+    };
+    worker.addNamedOrchestrator("classic", classic);
+    worker.addNamedOrchestrator("native", native);
+    for (const name of ["classic", "native"]) {
+      for (const parent of [undefined, { name: "Parent", instanceId: "parent-id", taskScheduledId: 42 }]) {
+        observed.mockClear();
+        const events = [
+          ph.newOrchestratorStartedEvent(START),
+          ph.newExecutionStartedEvent(name, "clone-id", undefined, parent),
+        ];
+        const request = new pb.OrchestratorRequest().setInstanceid("clone-id").setNeweventsList(events);
+        if (value !== undefined) request.getPropertiesMap().set("sourceInstanceId", value);
+        else expect(request.getPropertiesMap().has("sourceInstanceId")).toBe(false);
+        const execute = async () => {
+          const response = await worker.handleOrchestratorRequest(
+            Buffer.from(request.serializeBinary()).toString("base64"),
+          );
+          return pb.OrchestratorResponse.deserializeBinary(Buffer.from(response, "base64")).getActionsList();
+        };
+        const initial = await execute();
+        expect(observed.mock.calls).toEqual([[expected, parent?.instanceId, false]]);
+        expect(initial).toHaveLength(1);
+        expect(initial[0].getCreatetimer()?.getFireat()?.toDate()).toEqual(new Date(START.getTime() + 1000));
+        observed.mockClear();
+        request.setPasteventsList([...events, ph.newTimerCreatedEvent(1, new Date(START.getTime() + 1000))]);
+        request.setNeweventsList([ph.newTimerFiredEvent(1, new Date(START.getTime() + 1000))]);
+        const replay = await execute();
+        expect(observed.mock.calls).toEqual([
+          [expected, parent?.instanceId, true],
+          [expected, parent?.instanceId, false],
+        ]);
+        expect(replay).toHaveLength(1);
+        expect(replay[0].getCompleteorchestration()?.getOrchestrationstatus()).toBe(
+          pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED,
+        );
+      }
+    }
+  });
+
+  it.each([
+    Value.fromJavaScript(42),
+    Value.fromJavaScript(false),
+    Value.fromJavaScript({ source: "invalid" }),
+    Value.fromJavaScript(["invalid"]),
+    new Value(),
+  ])("logs and fails malformed lineage without invoking user code", async (value) => {
+    const logger = { error: jest.fn(), warn: jest.fn(), info: jest.fn(), debug: jest.fn() };
+    const worker = new DurableFunctionsWorker({ logger });
+    const handler = jest.fn();
+    worker.addNamedOrchestrator("Flow", handler);
+    const request = new pb.OrchestratorRequest().setInstanceid("instance").setNeweventsList([
+      ph.newExecutionStartedEvent("Flow", "instance"),
+    ]);
+    request.getPropertiesMap().set("sourceInstanceId", value);
+    const response = await worker.handleOrchestratorRequest(Buffer.from(request.serializeBinary()).toString("base64"));
+    const actions = pb.OrchestratorResponse.deserializeBinary(Buffer.from(response, "base64")).getActionsList();
+    expect(handler).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalled();
+    expect(actions).toHaveLength(1);
+    const completed = actions[0].getCompleteorchestration();
+    expect(completed?.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+    expect(completed?.getFailuredetails()?.getErrortype()).toBe("TypeError");
+    expect(completed?.getFailuredetails()?.getErrormessage()).toBe(
+      "OrchestratorRequest sourceInstanceId must be a string or null.",
+    );
+  });
+
   it("dispatches versioned registrations and child defaults through the classic wrapper", async () => {
     const worker = new DurableFunctionsWorker({
       logger: new NoOpLogger(),

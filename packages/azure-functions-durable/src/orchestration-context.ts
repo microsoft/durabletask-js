@@ -71,6 +71,16 @@ export class DurableOrchestrationContext {
     return this._ctx.instanceId;
   }
 
+  /**
+   * The immediate clone source ID, independent of {@link parentInstanceId}.
+   * Missing or null backend metadata returns `undefined`; supplied strings are preserved.
+   * Availability during execution and replay requires extension/backend lineage support
+   * and provider tag persistence. Sub-orchestrations do not inherit parent clone lineage.
+   */
+  get sourceInstanceId(): string | undefined {
+    return this._ctx.sourceInstanceId;
+  }
+
   /** The ID of the parent orchestration, or `undefined` if this is a top-level orchestration. */
   get parentInstanceId(): string | undefined {
     return this._ctx.parent?.instanceId;

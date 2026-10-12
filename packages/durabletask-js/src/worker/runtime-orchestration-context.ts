@@ -62,6 +62,7 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
     instanceId: string,
     maximumTimerIntervalMs?: number | null,
     private readonly _defaultVersion?: string,
+    private readonly _sourceInstanceId?: string,
   ) {
     super();
     this._maximumTimerIntervalMs = resolveMaximumTimerInterval(maximumTimerIntervalMs);
@@ -97,6 +98,10 @@ export class RuntimeOrchestrationContext extends OrchestrationContext {
 
   get instanceId(): string {
     return this._instanceId;
+  }
+
+  get sourceInstanceId(): string | undefined {
+    return this._sourceInstanceId;
   }
 
   get entities(): OrchestrationEntityFeature {
