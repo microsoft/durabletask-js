@@ -6,10 +6,11 @@ import { Task } from "./task";
 import { WhenAnyTask } from "./when-any-task";
 
 /**
- * Returns a task that completes when all of the provided tasks complete or when one of the tasks fail
+ * Returns a task that completes after every provided task completes or fails.
+ * Results preserve input order and duplicate task references. Tasks may be shared between groups.
  *
  * @param tasks the tasks to wait for
- * @returns {WhenAllTask} a task that completes when all of the provided tasks complete or when one of the tasks fail
+ * @returns {WhenAllTask} a task containing the ordered results, or an aggregate of child failures
  */
 export function whenAll<T>(tasks: Task<T>[]): WhenAllTask<T> {
   return new WhenAllTask(tasks);

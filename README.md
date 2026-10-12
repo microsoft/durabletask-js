@@ -55,7 +55,9 @@ a sibling's completion callback. Do not yield a canceled timer expecting success
 If that callback throws, do not catch it and reuse the `whenAll` group or its parents:
 the group can already be marked complete without a result and without notifying its parent.
 Like Python, `getResult()` rejects this uninitialized result instead of treating it as success.
-Parent notification is not resumed after the callback exception.
+That group does not notify its own parents, but other groups observing the same child
+are still notified. If multiple completion callbacks throw, their errors are surfaced
+together in an `AggregateError`.
 Custom `Task` subclasses now have their completed `getResult()` accessor called on each yield
 instead of reading the raw result field. Accessors must be replay-safe; thrown errors fail execution.
 
@@ -293,6 +295,10 @@ const orchestrator: TOrchestrator = async function* (ctx: OrchestrationContext):
 ```
 
 You can find the full sample at [examples/hello-world/fanout-fanin.ts](./examples/hello-world/fanout-fanin.ts).
+
+Tasks can be shared between `whenAll` and `whenAny` groups without scheduling the activity again.
+`whenAll` preserves every input position: `whenAll([task, task])` returns the task's result twice,
+whether the task is pending or already complete.
 
 ### Human interaction and durable timers
 

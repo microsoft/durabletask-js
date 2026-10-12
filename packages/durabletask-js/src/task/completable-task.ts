@@ -18,9 +18,7 @@ export class CompletableTask<T> extends Task<T> {
     this._result = result;
     this._isComplete = true;
 
-    if (this._parent) {
-      this._parent.onChildCompleted(this);
-    }
+    this.notifyParents();
   }
 
   fail(message: string, details?: pb.TaskFailureDetails): void {
@@ -33,9 +31,7 @@ export class CompletableTask<T> extends Task<T> {
     this._exception = new TaskFailedError(message, details);
     this._isComplete = true;
 
-    if (this._parent) {
-      this._parent.onChildCompleted(this);
-    }
+    this.notifyParents();
   }
 
   /**
@@ -51,8 +47,6 @@ export class CompletableTask<T> extends Task<T> {
     this._exception = error;
     this._isComplete = true;
 
-    if (this._parent) {
-      this._parent.onChildCompleted(this);
-    }
+    this.notifyParents();
   }
 }

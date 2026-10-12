@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { CompositeTask } from "./composite-task";
+import type { CompositeTask } from "./composite-task";
 
 /**
  * Abstract base class for asynchronous tasks in a durable orchestration.
@@ -9,13 +9,12 @@ import { CompositeTask } from "./composite-task";
 export class Task<T> {
   _result: T | undefined;
   _exception: Error | undefined;
-  _parent: CompositeTask<T> | undefined;
+  readonly _parents = new Set<CompositeTask<unknown>>();
   _isComplete: boolean = false;
 
   constructor() {
     this._isComplete = false;
     this._exception = undefined;
-    this._parent = undefined;
   }
 
   /**
@@ -82,5 +81,27 @@ export class Task<T> {
     }
 
     return this._exception;
+  }
+
+  protected notifyParents(): void {
+    const parents = [...this._parents];
+    this._parents.clear();
+    const errors: unknown[] = [];
+
+    // A canceled result can throw in one callback without preventing the other observers from completing.
+    for (const parent of parents) {
+      try {
+        parent.onChildCompleted(this);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "Multiple task completion callbacks failed");
+    }
   }
 }
