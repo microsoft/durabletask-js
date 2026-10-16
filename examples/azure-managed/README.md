@@ -4,17 +4,18 @@ Runnable samples demonstrating every major feature of the Durable Task JavaScrip
 
 ## Sample Index
 
-| Sample | Scenario | Key Features | Emulator Required |
-|--------|----------|-------------|-------------------|
-| [hello-orchestrations](hello-orchestrations/) | Core patterns | Activity sequence, fan-out/fan-in, sub-orchestrations, `whenAny` | Yes |
-| [retry-and-error-handling](retry-and-error-handling/) | Fault tolerance | `RetryPolicy`, `handleFailure`, `AsyncRetryHandler`, sub-orchestration retry, `raiseIfFailed()` | Yes |
-| [human-interaction](human-interaction/) | Event-driven workflows | External events, timers, `whenAny` race, `sendEvent`, custom status | Yes |
-| [lifecycle-management](lifecycle-management/) | Orchestration control | Terminate (recursive), suspend/resume, restart, continue-as-new, purge, tags | Yes |
-| [query-and-history](query-and-history/) | Monitoring & debugging | `getAllInstances`, pagination, `listInstanceIds`, `getOrchestrationHistory`, typed events | Yes |
-| [versioning](versioning/) | Safe deployments | Version match strategies, failure strategies, `ctx.version`, `ctx.compareVersionTo()` | Yes |
-| [unit-testing](unit-testing/) | Testing without infra | `InMemoryOrchestrationBackend`, `TestOrchestrationClient`, `TestOrchestrationWorker`, `ReplaySafeLogger` | **No** |
-| [basics](basics/) | Azure-managed basics | Connection strings, `DefaultAzureCredential`, `createAzureManagedClient` | Yes |
-| [distributed-tracing](distributed-tracing/) | OpenTelemetry tracing | `NodeSDK`, OTLP export, Jaeger, `DurableTaskAzureManagedClientBuilder` | Yes |
+| Sample                                                | Scenario               | Key Features                                                                                             | Emulator Required    |
+| ----------------------------------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------- | -------------------- |
+| [hello-orchestrations](hello-orchestrations/)         | Core patterns          | Activity sequence, fan-out/fan-in, sub-orchestrations, `whenAny`                                         | Yes                  |
+| [retry-and-error-handling](retry-and-error-handling/) | Fault tolerance        | `RetryPolicy`, `handleFailure`, `AsyncRetryHandler`, sub-orchestration retry, `raiseIfFailed()`          | Yes                  |
+| [human-interaction](human-interaction/)               | Event-driven workflows | External events, timers, `whenAny` race, `sendEvent`, custom status                                      | Yes                  |
+| [lifecycle-management](lifecycle-management/)         | Orchestration control  | Terminate (recursive), suspend/resume, restart, continue-as-new, purge, tags                             | Yes                  |
+| [query-and-history](query-and-history/)               | Monitoring & debugging | `getAllInstances`, pagination, `listInstanceIds`, `getOrchestrationHistory`, typed events                | Yes                  |
+| [large-payloads](large-payloads/)                     | External payloads      | Transparent UTF-8/gzip blob storage and large activity/orchestration inputs/results                      | DTS and Blob/Azurite |
+| [versioning](versioning/)                             | Safe deployments       | Version match strategies, failure strategies, `ctx.version`, `ctx.compareVersionTo()`                    | Yes                  |
+| [unit-testing](unit-testing/)                         | Testing without infra  | `InMemoryOrchestrationBackend`, `TestOrchestrationClient`, `TestOrchestrationWorker`, `ReplaySafeLogger` | **No**               |
+| [basics](basics/)                                     | Azure-managed basics   | Connection strings, `DefaultAzureCredential`, `createAzureManagedClient`                                 | Yes                  |
+| [distributed-tracing](distributed-tracing/)           | OpenTelemetry tracing  | `NodeSDK`, OTLP export, Jaeger, `DurableTaskAzureManagedClientBuilder`                                   | Yes                  |
 
 ### Quick Start (Local Emulator)
 
@@ -145,11 +146,11 @@ done
 
 ### Feature Coverage Map
 
-| Feature | Sample(s) |
-|---------|-----------|
-| `ctx.callActivity()` | hello-orchestrations, retry-and-error-handling |
-| `whenAll()` | hello-orchestrations, unit-testing |
-| `whenAny()` | hello-orchestrations, human-interaction |
+| Feature                     | Sample(s)                                                            |
+| --------------------------- | -------------------------------------------------------------------- |
+| `ctx.callActivity()`        | hello-orchestrations, retry-and-error-handling                       |
+| `whenAll()`                 | hello-orchestrations, unit-testing                                   |
+| `whenAny()`                 | hello-orchestrations, human-interaction                              |
 | `ctx.callSubOrchestrator()` | hello-orchestrations, retry-and-error-handling, lifecycle-management |
 
 | `ctx.waitForExternalEvent()` | human-interaction, unit-testing |
@@ -195,13 +196,13 @@ This example demonstrates **OpenTelemetry distributed tracing** with the Durable
 
 When you run this example, the SDK automatically produces [W3C Trace Context](https://www.w3.org/TR/trace-context/) spans for every stage of a durable orchestration:
 
-| Span | Kind | Description |
-|------|------|-------------|
-| `create_orchestration:<name>` | PRODUCER | Client scheduling a new orchestration |
-| `orchestration:<name>` | SERVER | Worker executing the orchestration |
-| `activity:<name>` (scheduling) | CLIENT | Orchestrator scheduling an activity |
-| `activity:<name>` (execution) | SERVER | Worker executing the activity |
-| `timer:<orchestrationName>` | INTERNAL | Timer created inside an orchestration |
+| Span                              | Kind     | Description                           |
+| --------------------------------- | -------- | ------------------------------------- |
+| `create_orchestration:<name>`     | PRODUCER | Client scheduling a new orchestration |
+| `orchestration:<name>`            | SERVER   | Worker executing the orchestration    |
+| `activity:<name>` (scheduling)    | CLIENT   | Orchestrator scheduling an activity   |
+| `activity:<name>` (execution)     | SERVER   | Worker executing the activity         |
+| `timer:<orchestrationName>`       | INTERNAL | Timer created inside an orchestration |
 | `orchestration_event:<eventName>` | PRODUCER | Event raised to another orchestration |
 
 All spans are linked via `traceparent` propagation, giving you a single end-to-end trace from the client all the way through parallel activity fan-out and back.
@@ -240,14 +241,15 @@ docker compose up -d
 
 This starts:
 
-| Service | Port | Purpose |
-|---------|------|---------|
-| **DTS Emulator** | `8080` | Local gRPC endpoint (no authentication) |
-| **Jaeger UI** | `16686` | Trace visualization dashboard |
-| **Jaeger OTLP (HTTP)** | `4318` | OpenTelemetry trace receiver |
-| **Jaeger OTLP (gRPC)** | `4317` | OpenTelemetry trace receiver (gRPC) |
+| Service                | Port    | Purpose                                 |
+| ---------------------- | ------- | --------------------------------------- |
+| **DTS Emulator**       | `8080`  | Local gRPC endpoint (no authentication) |
+| **Jaeger UI**          | `16686` | Trace visualization dashboard           |
+| **Jaeger OTLP (HTTP)** | `4318`  | OpenTelemetry trace receiver            |
+| **Jaeger OTLP (gRPC)** | `4317`  | OpenTelemetry trace receiver (gRPC)     |
 
 > **Tip:** You can also run just the DTS Emulator standalone:
+>
 > ```bash
 > docker run -d --name dts-emulator -p 8080:8080 -p 8082:8082 \
 >   mcr.microsoft.com/dts/dts-emulator:latest
@@ -378,12 +380,12 @@ const traceExporter = new AzureMonitorTraceExporter({
 
 ## DTS Emulator Docker Image Reference
 
-| Property | Value |
-|----------|-------|
-| **Image** | `should be mcr.microsoft.com/dts/dts-emulator:latest` |
-| **gRPC Port** | `8080` |
-| **Dashboard Port** | `8082` |
-| **Authentication** | `None` (no credentials required) |
+| Property              | Value                                                                |
+| --------------------- | -------------------------------------------------------------------- |
+| **Image**             | `should be mcr.microsoft.com/dts/dts-emulator:latest`                |
+| **gRPC Port**         | `8080`                                                               |
+| **Dashboard Port**    | `8082`                                                               |
+| **Authentication**    | `None` (no credentials required)                                     |
 | **Connection String** | `Endpoint=http://localhost:8080;Authentication=None;TaskHub=default` |
 
 ### Running the Emulator Standalone
@@ -432,10 +434,10 @@ docker compose down
 
 ## Files in This Example
 
-| File | Description |
-|------|-------------|
-| `distributed-tracing/` | Distributed tracing sample – OTel setup + orchestrations |
-| `basics/` | Basic sample – connection strings, DefaultAzureCredential |
-| `docker-compose.yml` | DTS Emulator + Jaeger stack |
-| `.env.emulator` | Pre-configured env vars for the local emulator |
-| `.env.example` | Template for Azure Managed DTS (cloud) |
+| File                   | Description                                               |
+| ---------------------- | --------------------------------------------------------- |
+| `distributed-tracing/` | Distributed tracing sample – OTel setup + orchestrations  |
+| `basics/`              | Basic sample – connection strings, DefaultAzureCredential |
+| `docker-compose.yml`   | DTS Emulator + Jaeger stack                               |
+| `.env.emulator`        | Pre-configured env vars for the local emulator            |
+| `.env.example`         | Template for Azure Managed DTS (cloud)                    |

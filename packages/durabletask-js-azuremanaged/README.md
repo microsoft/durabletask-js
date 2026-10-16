@@ -53,6 +53,14 @@ const worker = createAzureManagedWorkerBuilder("https://myservice.durabletask.io
 await worker.start();
 ```
 
+### Large payloads
+
+Both builders support `.useExternalizedPayloads({ store, thresholdBytes?, maxPayloadBytes? })`.
+The opt-in setting survives `.connectionString(...)` replacement. Configure the same payload
+storage on every participating client and worker; scheduler and storage credentials are separate.
+See [`@microsoft/durabletask-js-azureblob`](../durabletask-js-azureblob/README.md) for .NET-compatible
+blob storage, size defaults, authentication, and the separately enabled auto-purge lifecycle.
+
 ### Token Audience and Azure Government
 
 The optional `resourceId` is a **token audience URI**, not an Azure Resource Manager resource path.
@@ -60,11 +68,11 @@ Configure it with `.resourceId(value)` on either builder, `.setResourceId(value)
 the optional fourth argument to the explicit-parameter factory functions, or `ResourceId` in a connection string.
 Existing calls remain valid.
 
-| Configuration | Selected resource ID |
-| --- | --- |
-| Explicit nonempty `resourceId` / `ResourceId` | The normalized explicit value |
+| Configuration                                                                                  | Selected resource ID           |
+| ---------------------------------------------------------------------------------------------- | ------------------------------ |
+| Explicit nonempty `resourceId` / `ResourceId`                                                  | The normalized explicit value  |
 | Missing, `null`, or empty, and `REGION_NAME` starts with `usgov` or `usdod` (case-insensitive) | `https://durabletask.azure.us` |
-| Otherwise | `https://durabletask.io` |
+| Otherwise                                                                                      | `https://durabletask.io`       |
 
 The default is captured when the connection options are created, including when a builder is constructed or
 its `.connectionString(...)` replaces the options. It stays fixed across token refreshes, worker reconnects,
@@ -80,11 +88,11 @@ Explicit values have surrounding whitespace and trailing `/` characters trimmed,
 case-insensitive `/.default` suffix removed, followed by any remaining trailing `/` characters.
 The SDK requests `<normalized-resource-id>/.default` without changing the URI's casing:
 
-| Input | Requested scope |
-| --- | --- |
-| `https://durabletask.azure.us/` | `https://durabletask.azure.us/.default` |
-| `https://durabletask.azure.us//.DEFAULT//` | `https://durabletask.azure.us/.default` |
-| `api://CustomAudience/resource/.DEFAULT/` | `api://CustomAudience/resource/.default` |
+| Input                                      | Requested scope                          |
+| ------------------------------------------ | ---------------------------------------- |
+| `https://durabletask.azure.us/`            | `https://durabletask.azure.us/.default`  |
+| `https://durabletask.azure.us//.DEFAULT//` | `https://durabletask.azure.us/.default`  |
+| `api://CustomAudience/resource/.DEFAULT/`  | `api://CustomAudience/resource/.default` |
 
 Whitespace-only values, `///`, `/.default`, and `/.DEFAULT///` throw a configuration `Error`,
 even with anonymous authentication. `ResourceId=` selects the default, but `ResourceId=   ` is invalid.

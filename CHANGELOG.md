@@ -2,6 +2,12 @@
 
 ### New
 
+- Add opt-in `payloads` storage to gRPC clients/workers, with transparent UTF-8-size-based
+  externalization and awaited query/history/work-item hydration across orchestration, activity,
+  and entity V1/V2 payloads. Add the optional `@microsoft/durabletask-js-azureblob` storage package.
+- Add .NET-aligned `setLargePayloadAutoPurge()`, reserved replay-safe cleanup tasks, and DTS
+  lifecycle transport. Storage configuration alone does not enable deletion; cleanup checks
+  blob ownership and ETags, preserves uncertain outcomes, and leaves legacy v1 blobs untouched.
 - Expose readonly `OrchestrationContext.sourceInstanceId` from the existing protobuf
   request properties on initial execution and replay, independently of parent identity.
   Strings are preserved verbatim; null or missing metadata returns `undefined`.

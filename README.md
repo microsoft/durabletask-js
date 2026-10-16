@@ -23,17 +23,30 @@ const entityResponseBytes = await worker.processEntityBatchRequest(entityBatchRe
 
 `TaskHubGrpcClient` already exposes orchestration start/query/event/terminate/suspend/resume/purge APIs and entity signal/read/query/clean APIs through its existing `hostAddress` and `metadataGenerator` options. Host integrations that need task-hub routing metadata should provide it through `metadataGenerator`, keeping host-specific metadata policy outside the core client. Azure-managed scheduler connection strings remain in `@microsoft/durabletask-js-azuremanaged`.
 
+## Large payloads
+
+Clients and workers can opt into transparent external payload storage with the `payloads`
+option. The optional [`@microsoft/durabletask-js-azureblob`](./packages/durabletask-js-azureblob)
+package implements .NET-compatible Azure Blob tokens and UTF-8/gzip storage. The default
+externalization threshold is 256 KiB (inclusive); the maximum payload size is 10 MiB.
+Core users do not acquire Azure Storage dependencies, and disabled behavior is unchanged.
+
+Configure all participating clients and workers before storing externalized payloads.
+Azure-managed builders expose `.useExternalizedPayloads({ store })`. Cleanup is separately
+opt-in through `client.setLargePayloadAutoPurge(true)` and requires a supporting DTS backend.
+See the package's [configuration, interoperability, and cleanup contract](./packages/durabletask-js-azureblob/README.md).
+
 ## Long durable timers
 
 `createTimer(Date | seconds)` has no SDK-imposed total-duration cap. Like the Python SDK,
 core workers default to three-day backend segments, including durable retry delays. A ten-day
 timer uses 3 + 3 + 3 + 1 day segments but remains one logical `TimerTask`.
 
-| Entry point | Timer behavior |
-| --- | --- |
-| Core `TaskHubGrpcWorker` / `TestOrchestrationWorker` | Three-day default |
-| Azure-managed worker builder | Explicitly native timers; DTS supports long timers |
-| `durable-functions` worker / `runOrchestrator` | Inherits the core three-day default |
+| Entry point                                          | Timer behavior                                     |
+| ---------------------------------------------------- | -------------------------------------------------- |
+| Core `TaskHubGrpcWorker` / `TestOrchestrationWorker` | Three-day default                                  |
+| Azure-managed worker builder                         | Explicitly native timers; DTS supports long timers |
+| `durable-functions` worker / `runOrchestrator`       | Inherits the core three-day default                |
 
 Core `TaskHubGrpcWorker({ maximumTimerIntervalMs })` and
 `TestOrchestrationWorker(backend, { maximumTimerIntervalMs })` accept the Python-equivalent
@@ -344,13 +357,21 @@ const worker = new TaskHubGrpcWorker({
   versioning: { defaultVersion: "v2" },
   workItemFilters: "auto",
 });
-worker.addNamedOrchestrator("Order", async function* (ctx) {
-  yield ctx.callActivity("Price");
-}, "v1");
-worker.addNamedOrchestrator("Order", async function* (ctx) {
-  yield ctx.callActivity("Price");
-  yield ctx.callSubOrchestrator("Audit");
-}, "v2");
+worker.addNamedOrchestrator(
+  "Order",
+  async function* (ctx) {
+    yield ctx.callActivity("Price");
+  },
+  "v1",
+);
+worker.addNamedOrchestrator(
+  "Order",
+  async function* (ctx) {
+    yield ctx.callActivity("Price");
+    yield ctx.callSubOrchestrator("Audit");
+  },
+  "v2",
+);
 worker.addNamedActivity("Price", () => 100, "v1");
 worker.addNamedActivity("Price", () => 120, "v2");
 worker.addNamedOrchestrator("Audit", () => "audited", "v2");
@@ -381,11 +402,11 @@ versioned registration for that name disables this fallback: unknown versions fa
 existing not-registered error (including the requested version), marked non-retriable. An
 unversioned request never selects a versioned implementation.
 
-| Scheduled work | When `options.version` is omitted | Explicit `version: ""` |
-| --- | --- | --- |
-| Activity | Current orchestration instance's `ctx.version` | Unversioned |
-| Sub-orchestration | Worker's `versioning.defaultVersion`, or unversioned if unset | Unversioned |
-| Top-level orchestration | Client's `defaultVersion`, or unversioned if unset | Unversioned |
+| Scheduled work          | When `options.version` is omitted                             | Explicit `version: ""` |
+| ----------------------- | ------------------------------------------------------------- | ---------------------- |
+| Activity                | Current orchestration instance's `ctx.version`                | Unversioned            |
+| Sub-orchestration       | Worker's `versioning.defaultVersion`, or unversioned if unset | Unversioned            |
+| Top-level orchestration | Client's `defaultVersion`, or unversioned if unset            | Unversioned            |
 
 An explicit nonempty version overrides these defaults. Activities do **not** inherit the worker
 default, and children do **not** inherit the parent's version. Both policy and handler retries
@@ -431,10 +452,7 @@ Long-running orchestrations can restart with fresh history and optionally move t
 orchestration version:
 
 ```typescript
-const eternalOrchestrator: TOrchestrator = async function* (
-  ctx: OrchestrationContext,
-  iteration: number,
-): any {
+const eternalOrchestrator: TOrchestrator = async function* (ctx: OrchestrationContext, iteration: number): any {
   yield ctx.callActivity(processIteration, iteration);
   ctx.continueAsNew(iteration + 1, true, "2.0.0");
 };
