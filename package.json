@@ -15,6 +15,7 @@
     "build:azuremanaged": "npm run build -w @microsoft/durabletask-js-azuremanaged",
     "test": "npm run test --workspaces",
     "test:unit": "npm run test:unit --workspaces --if-present",
+    "test:payload-packages": "node scripts/test-payload-package-compatibility.js",
     "test:e2e": "./scripts/test-e2e.sh",
     "test:e2e:internal": "jest tests/e2e --runInBand --detectOpenHandles",
     "test:e2e:one": "jest tests/e2e --runInBand --detectOpenHandles --testNamePattern",

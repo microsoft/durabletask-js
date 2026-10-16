@@ -4,7 +4,7 @@
 # 1. Bumps the selected package's version in its own package.json
 # 2. Generates a changelog from git history since the package's last release tag
 # 3. Updates the package's changelog file and creates a release branch + package-scoped tag
-# Packages are versioned and tagged independently (tag prefixes: v, azuremanaged-v, durable-functions-v).
+# Packages are versioned and tagged independently (tag prefixes: v, azureblob-v, azuremanaged-v, durable-functions-v).
 # After the workflow completes, manually open a PR from the release branch to main, then publish
 # from the package directory using the npm command shown in the run summary (mind the dist-tag).
 
@@ -19,6 +19,7 @@ on:
         type: choice
         options:
           - durabletask-js
+          - durabletask-js-azureblob
           - durabletask-js-azuremanaged
           - azure-functions-durable
       version:
@@ -60,6 +61,12 @@ jobs:
               TAG_PREFIX="azuremanaged-v"
               CHANGELOG_PATH="packages/durabletask-js-azuremanaged/CHANGELOG.md"
               ;;
+            durabletask-js-azureblob)
+              PKG_DIR="packages/durabletask-js-azureblob"
+              NPM_NAME="@microsoft/durabletask-js-azureblob"
+              TAG_PREFIX="azureblob-v"
+              CHANGELOG_PATH="packages/durabletask-js-azureblob/CHANGELOG.md"
+              ;;
             azure-functions-durable)
               PKG_DIR="packages/azure-functions-durable"
               NPM_NAME="durable-functions"
@@ -67,7 +74,7 @@ jobs:
               CHANGELOG_PATH="packages/azure-functions-durable/CHANGELOG.md"
               ;;
             *)
-              echo "::error::Unknown package '$PACKAGE'. Expected one of: durabletask-js, durabletask-js-azuremanaged, azure-functions-durable."
+              echo "::error::Unknown package '$PACKAGE'. Expected one of: durabletask-js, durabletask-js-azureblob, durabletask-js-azuremanaged, azure-functions-durable."
               exit 1
               ;;
           esac
