@@ -39,6 +39,6 @@
     "@azure/storage-blob": "^12.26.0"
   },
   "peerDependencies": {
-    "@microsoft/durabletask-js": ">=0.4.0"
+    "@microsoft/durabletask-js": ">=0.4.1"
   }
 }

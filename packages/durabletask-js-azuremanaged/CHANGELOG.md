@@ -4,7 +4,7 @@
 
 - Add `.useExternalizedPayloads()` to client and worker builders, preserving payload settings
   across connection-option replacement and enabling transparent payload storage and reserved
-  auto-purge tasks in the core SDK.
+  auto-purge tasks in the core SDK. Require core `>=0.4.1` for the new public payload types.
 - Support the `ResourceId` token audience URI in connection strings and an optional final `resourceId`
   argument in the client/worker factory functions, alongside existing builder/options setters.
   Trim surrounding whitespace and trailing slashes, remove one case-insensitive `/.default` suffix,
