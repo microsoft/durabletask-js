@@ -2,6 +2,10 @@
 
 ### New
 
+- Add payload storage contracts and bounded protobuf payload processing, with inclusive UTF-8
+  thresholds, explicit storage/size failures, and non-retriable worker upload-failure conversion.
+  This is phase 1 of the external-payload feature; transport, providers, and cleanup follow separately.
+  Reserve core `0.4.1` for the new APIs; do not publish partial feature phases.
 - Expose readonly `OrchestrationContext.sourceInstanceId` from the existing protobuf
   request properties on initial execution and replay, independently of parent identity.
   Strings are preserved verbatim; null or missing metadata returns `undefined`.
