@@ -2,6 +2,9 @@
 
 ### New
 
+- Add the DTS payload-purge protocol and `setLargePayloadAutoPurge()` client lifecycle,
+  including setting-first enable/disable and reserved-instance identity verification.
+  A compatible .NET worker or the later cleanup-worker phase is required; do not publish partial phases.
 - Add payload storage contracts and bounded protobuf payload processing, with inclusive UTF-8
   thresholds, explicit storage/size failures, and non-retriable worker upload-failure conversion.
   This is phase 1 of the external-payload feature; transport, providers, and cleanup follow separately.
@@ -47,6 +50,8 @@
 
 ### Fixes
 
+- Determine single-instance purge routing from the instance ID regardless of payload configuration,
+  matching .NET management clients: ordinary IDs are orchestrations and `@name@key` IDs are entities.
 - Prevent shared or duplicate pending tasks from stranding `whenAll` orchestrations after all
   activities finish. Notify every dependent composite, preserve duplicate result positions,
   and detach completed `whenAny` groups from their remaining children.
