@@ -36,6 +36,22 @@ Azure-managed builders expose `.useExternalizedPayloads({ store })` and require 
 for the public payload types. This phase works with a custom/in-memory store and does not import
 an Azure Blob provider or register cleanup tasks. Complete the six-phase feature stack before release.
 
+### Payload cleanup client protocol
+
+`client.setLargePayloadAutoPurge(enabled, batchSize?, signal?)` manages the authenticated DTS
+task-hub cleanup setting. Enabling writes the setting first, starts/deduplicates and verifies
+the reserved Running orchestration, then signals its batch size. Disabling only writes the
+backend setting. These steps are not transactional; earlier successful steps are not rolled back.
+
+This client operation does not require blob credentials. It requires a backend implementing
+the DTS `LargePayloadPurge` service and a compatible worker (the existing .NET implementation
+or the later phase 5 JavaScript runner). This phase does not register worker cleanup tasks.
+Do not publish the feature until all six phases are complete.
+
+Single-instance purges now identify the instance kind even on management-only clients without
+payload storage: ordinary IDs set `isOrchestration=true`, while `@name@key` entity IDs set it false.
+The existing timeout and completion-status behavior is unchanged.
+
 ## Long durable timers
 
 `createTimer(Date | seconds)` has no SDK-imposed total-duration cap. Like the Python SDK,
