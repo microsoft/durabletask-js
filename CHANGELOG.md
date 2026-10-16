@@ -2,6 +2,9 @@
 
 ### New
 
+- Add reserved cleanup worker tasks with bounded deletion chunks, retry/quarantine handling,
+  configuration-preserving continue-as-new, authenticated current-channel RPCs and filter/version isolation.
+  This completes the cleanup runtime; aggregate release/consumer validation follows in phase 6.
 - Add the DTS payload-purge protocol and `setLargePayloadAutoPurge()` client lifecycle,
   including setting-first enable/disable and reserved-instance identity verification.
   A compatible .NET worker or the later cleanup-worker phase is required; do not publish partial phases.
