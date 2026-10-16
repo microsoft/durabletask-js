@@ -26,6 +26,9 @@ import { ExponentialBackoff, sleep, withTimeout } from "../utils/backoff.util";
 import { VersioningOptions, VersionMatchStrategy, VersionFailureStrategy } from "./versioning-options";
 import { WorkItemFilters, generateWorkItemFiltersFromRegistry, toGrpcWorkItemFilters } from "./work-item-filters";
 import { compareVersions } from "../utils/versioning.util";
+import { PayloadStorageOptions } from "../payloads/payload-store";
+import { PayloadProcessor } from "../payloads/payload-processor";
+import { readPayloadHistory, PayloadHydrationError } from "../payloads/history-stream";
 import * as WorkerLogs from "./logs";
 import { ConcurrencyOptions, ResolvedConcurrencyOptions, resolveConcurrencyOptions } from "./concurrency-options";
 import {
@@ -61,6 +64,8 @@ type WorkItemStreamResult = {
  * Options for creating a TaskHubGrpcWorker.
  */
 export interface TaskHubGrpcWorkerOptions {
+  /** Optional externalized payload storage. Disabled by default. */
+  payloads?: PayloadStorageOptions;
   /**
    * Maximum backend timer segment in milliseconds. Defaults to three days, like Python.
    * null, zero, or negative values disable segmentation. Must be finite; positive
@@ -139,6 +144,7 @@ export class TaskHubGrpcWorker {
   private _workerLoopPromise: Promise<void> | null;
   private _deferredStubCloseTimers: Map<stubs.TaskHubSidecarServiceClient, ReturnType<typeof setTimeout>>;
   private readonly _maximumTimerIntervalMs: number | null;
+  private readonly _payloads?: PayloadProcessor;
 
   /**
    * Creates a new TaskHubGrpcWorker instance.
@@ -207,6 +213,7 @@ export class TaskHubGrpcWorker {
       resolvedWorkItemFilters = hostAddressOrOptions.workItemFilters;
       resolvedConcurrency = hostAddressOrOptions.concurrency;
       resolvedMaximumTimerIntervalMs = hostAddressOrOptions.maximumTimerIntervalMs;
+      if (hostAddressOrOptions.payloads) this._payloads = new PayloadProcessor(hostAddressOrOptions.payloads);
     } else {
       // Deprecated positional parameters constructor
       resolvedHostAddress = hostAddressOrOptions;
@@ -857,6 +864,7 @@ export class TaskHubGrpcWorker {
   private _buildGetWorkItemsRequest(): pb.GetWorkItemsRequest {
     const request = new pb.GetWorkItemsRequest();
     request.setCapabilitiesList([pb.WorkerCapability.WORKER_CAPABILITY_HISTORY_STREAMING]);
+    if (this._payloads) request.addCapabilities(pb.WorkerCapability.WORKER_CAPABILITY_LARGE_PAYLOADS);
     request.setMaxconcurrentactivityworkitems(
       Math.min(this._concurrency.maximumConcurrentActivityWorkItems, MAX_PROTOCOL_CONCURRENCY),
     );
@@ -974,6 +982,7 @@ export class TaskHubGrpcWorker {
     request: TReq,
     signal?: AbortSignal,
   ): Promise<TRes> {
+    if (this._payloads) await this._payloads.externalize(request, signal);
     const backoff = new ExponentialBackoff({
       initialDelayMs: 200,
       maxDelayMs: 15000,
@@ -1059,6 +1068,13 @@ export class TaskHubGrpcWorker {
           if (settled) return;
           signal?.throwIfAborted();
           stream = stub.streamInstanceHistory(request, metadata);
+          if (this._payloads) {
+            readPayloadHistory(stream, this._payloads, signal).then((hydrated) => {
+              for (const event of hydrated) events.push(event);
+              finish();
+            }, onError);
+            return;
+          }
           stream.on("data", onData);
           stream.once("end", onEnd);
           stream.once("error", onError);
@@ -1079,6 +1095,8 @@ export class TaskHubGrpcWorker {
   ): Promise<void> {
     const instanceId = req.getInstanceid();
 
+    if (this._payloads) await this._payloads.resolve(req, retrySignal);
+
     if (!instanceId) {
       throw new Error(`Could not execute the orchestrator as the instanceId was not provided (${instanceId})`);
     }
@@ -1096,6 +1114,7 @@ export class TaskHubGrpcWorker {
         req.setPasteventsList(pastEvents);
       } catch (e: unknown) {
         if (retrySignal?.aborted) return;
+        if (e instanceof PayloadHydrationError) throw e.cause;
         const error = e instanceof Error ? e : new Error(String(e));
         WorkerLogs.executionError(this._logger, instanceId, error);
         const res = new pb.OrchestratorResponse();
@@ -1327,6 +1346,7 @@ export class TaskHubGrpcWorker {
     stub: stubs.TaskHubSidecarServiceClient,
     retrySignal?: AbortSignal,
   ): Promise<void> {
+    if (this._payloads) await this._payloads.resolve(req, retrySignal);
     const instanceId = req.getOrchestrationinstance()?.getInstanceid();
 
     if (!instanceId) {
@@ -1335,12 +1355,7 @@ export class TaskHubGrpcWorker {
 
     const versionCheck = this._checkVersionCompatibility(req.getVersion()?.getValue());
     if (!versionCheck.compatible && !versionCheck.shouldFail) {
-      WorkerLogs.versionMismatchAbandon(
-        this._logger,
-        instanceId,
-        versionCheck.errorType!,
-        versionCheck.errorMessage!,
-      );
+      WorkerLogs.versionMismatchAbandon(this._logger, instanceId, versionCheck.errorType!, versionCheck.errorMessage!);
       try {
         const abandon = new pb.AbandonActivityTaskRequest().setCompletiontoken(completionToken);
         await this._deliverResponse(stub.abandonTaskActivityWorkItem.bind(stub), abandon, retrySignal);
@@ -1444,6 +1459,7 @@ export class TaskHubGrpcWorker {
     operationInfos?: pb.OperationInfo[],
     retrySignal?: AbortSignal,
   ): Promise<void> {
+    if (this._payloads) await this._payloads.resolve(req, retrySignal);
     const instanceIdString = req.getInstanceid();
 
     if (!instanceIdString) {
@@ -1546,6 +1562,7 @@ export class TaskHubGrpcWorker {
     stub: stubs.TaskHubSidecarServiceClient,
     retrySignal?: AbortSignal,
   ): Promise<void> {
+    if (this._payloads) await this._payloads.resolve(req, retrySignal);
     // Convert EntityRequest (V2) to EntityBatchRequest (V1) format
     const batchRequest = new pb.EntityBatchRequest();
     batchRequest.setInstanceid(req.getInstanceid());

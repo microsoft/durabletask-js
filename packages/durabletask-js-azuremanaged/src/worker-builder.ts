@@ -15,6 +15,7 @@ import {
   ConsoleLogger,
   VersioningOptions,
   WorkItemFilters,
+  PayloadStorageOptions,
 } from "@microsoft/durabletask-js";
 
 /**
@@ -33,6 +34,7 @@ export class DurableTaskAzureManagedWorkerBuilder {
   private _channelRecreateFailureThreshold?: number;
   private _versioning?: VersioningOptions;
   private _workItemFilters?: WorkItemFilters | "auto";
+  private _payloads?: PayloadStorageOptions;
 
   /**
    * Creates a new instance of DurableTaskAzureManagedWorkerBuilder.
@@ -305,6 +307,12 @@ export class DurableTaskAzureManagedWorkerBuilder {
     return this;
   }
 
+  /** Enables payload hydration, externalization and the reserved auto-purge tasks. */
+  useExternalizedPayloads(options: PayloadStorageOptions): DurableTaskAzureManagedWorkerBuilder {
+    this._payloads = options;
+    return this;
+  }
+
   /**
    * Builds and returns a configured TaskHubGrpcWorker.
    *
@@ -339,6 +347,7 @@ export class DurableTaskAzureManagedWorkerBuilder {
       channelRecreateFailureThreshold: this._channelRecreateFailureThreshold,
       versioning: this._versioning,
       workItemFilters: this._workItemFilters,
+      payloads: this._payloads,
       // DTS natively supports long timers, matching the Python Azure-managed worker.
       maximumTimerIntervalMs: null,
     });

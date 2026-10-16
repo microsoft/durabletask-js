@@ -5,7 +5,7 @@ import { TokenCredential } from "@azure/identity";
 import * as grpc from "@grpc/grpc-js";
 import { DurableTaskAzureManagedClientOptions } from "./options";
 import { ClientRetryOptions } from "./retry-policy";
-import { TaskHubGrpcClient, Logger, ConsoleLogger } from "@microsoft/durabletask-js";
+import { TaskHubGrpcClient, Logger, ConsoleLogger, PayloadStorageOptions } from "@microsoft/durabletask-js";
 
 /**
  * Builder for creating DurableTaskClient instances that connect to Azure-managed Durable Task service.
@@ -15,6 +15,7 @@ export class DurableTaskAzureManagedClientBuilder {
   private _options: DurableTaskAzureManagedClientOptions;
   private _grpcChannelOptions: grpc.ChannelOptions = {};
   private _logger: Logger = new ConsoleLogger();
+  private _payloads?: PayloadStorageOptions;
 
   /**
    * Creates a new instance of DurableTaskAzureManagedClientBuilder.
@@ -142,6 +143,12 @@ export class DurableTaskAzureManagedClientBuilder {
     return this;
   }
 
+  /** Enables transparent externalized payloads using an independently configured payload store. */
+  useExternalizedPayloads(options: PayloadStorageOptions): DurableTaskAzureManagedClientBuilder {
+    this._payloads = options;
+    return this;
+  }
+
   /**
    * Builds and returns a configured TaskHubGrpcClient.
    *
@@ -164,14 +171,15 @@ export class DurableTaskAzureManagedClientBuilder {
     };
 
     // Use the core TaskHubGrpcClient with custom channel credentials and per-call metadata.
-    return new TaskHubGrpcClient(
+    return new TaskHubGrpcClient({
       hostAddress,
-      combinedOptions,
-      true,
-      channelCredentials,
+      options: combinedOptions,
+      useTLS: true,
+      credentials: channelCredentials,
       metadataGenerator,
-      this._logger,
-    );
+      logger: this._logger,
+      payloads: this._payloads,
+    });
   }
 }
 
