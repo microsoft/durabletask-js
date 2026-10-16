@@ -53,6 +53,15 @@ const worker = createAzureManagedWorkerBuilder("https://myservice.durabletask.io
 await worker.start();
 ```
 
+### Large payloads
+
+Both builders support `.useExternalizedPayloads({ store, thresholdBytes?, maxPayloadBytes? })`.
+This release requires core `@microsoft/durabletask-js >=0.4.1`, including its payload types.
+The opt-in setting survives `.connectionString(...)` replacement. Configure the same payload
+storage on every participating client and worker; scheduler and storage credentials are separate.
+See [`@microsoft/durabletask-js-azureblob`](../durabletask-js-azureblob/README.md) for .NET-compatible
+blob storage, size defaults, authentication, and the separately enabled auto-purge lifecycle.
+
 ### Token Audience and Azure Government
 
 The optional `resourceId` is a **token audience URI**, not an Azure Resource Manager resource path.
