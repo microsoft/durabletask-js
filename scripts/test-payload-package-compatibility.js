@@ -7,6 +7,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { spawnSync } = require("node:child_process");
+const ts = require("typescript");
 
 const root = path.resolve(__dirname, "..");
 const [oldCoreArgument, ...extraArguments] = process.argv.slice(2);
@@ -40,7 +41,7 @@ function pack(name) {
   return path.join(temporary, metadata.filename);
 }
 
-function install(name, dependencies) {
+function install(name, dependencies, devDependencies = {}) {
   const directory = path.join(temporary, name);
   fs.mkdirSync(directory);
   fs.writeFileSync(
@@ -52,6 +53,7 @@ function install(name, dependencies) {
       dependencies: Object.fromEntries(
         Object.entries(dependencies).map(([dependency, archive]) => [dependency, pathToFileURL(archive).href]),
       ),
+      devDependencies,
     }),
   );
   const result = npm(
@@ -79,8 +81,59 @@ try {
     assert.match(output, /@microsoft\/durabletask-js@0\.4\.0/, output);
     console.log(`${name}: npm rejected published core 0.4.0 with ERESOLVE.`);
   }
-  const result = install("accept-payload-capable-core", { [coreName]: core, [blobName]: blob, [managedName]: managed });
+  const result = install(
+    "accept-payload-capable-core",
+    { [coreName]: core, [blobName]: blob, [managedName]: managed },
+    {
+      "@types/node": require("@types/node/package.json").version,
+      "@types/google-protobuf": require("@types/google-protobuf/package.json").version,
+      "@opentelemetry/api": require(path.join(root, "package.json")).devDependencies["@opentelemetry/api"],
+      "@azure/storage-blob": require("@azure/storage-blob/package.json").version,
+    },
+  );
   assert.equal(result.status, 0, result.stderr || result.stdout);
+  const consumer = path.join(result.directory, "consumer.ts");
+  fs.writeFileSync(
+    consumer,
+    `
+    import { PayloadStorageException, PayloadStore } from "@microsoft/durabletask-js";
+    import { BlobPayloadStore } from "@microsoft/durabletask-js-azureblob";
+    import { DurableTaskAzureManagedClientBuilder } from "@microsoft/durabletask-js-azuremanaged";
+    const store: PayloadStore = new BlobPayloadStore({ connectionString: "UseDevelopmentStorage=true" });
+    new DurableTaskAzureManagedClientBuilder().useExternalizedPayloads({ store });
+    new PayloadStorageException("failure", { cause: new Error("cause") });
+  `,
+  );
+  const program = ts.createProgram([consumer], {
+    target: ts.ScriptTarget.ES2020,
+    lib: ["lib.es2020.d.ts"],
+    module: ts.ModuleKind.CommonJS,
+    moduleResolution: ts.ModuleResolutionKind.Node10,
+    typeRoots: [path.join(result.directory, "node_modules", "@types")],
+    types: ["node"],
+    strict: true,
+    skipLibCheck: false,
+    esModuleInterop: true,
+    noEmit: true,
+  });
+  assert.ok(
+    !program
+      .getTypeChecker()
+      .getSymbolsInScope(program.getSourceFile(consumer), ts.SymbolFlags.Type)
+      .some((symbol) => symbol.name === "ErrorOptions"),
+    "The ES2020 check must not inherit the global ES2022 ErrorOptions type.",
+  );
+  const diagnostics = ts.getPreEmitDiagnostics(program);
+  assert.equal(
+    diagnostics.length,
+    0,
+    ts.formatDiagnosticsWithColorAndContext(diagnostics, {
+      getCanonicalFileName: (name) => name,
+      getCurrentDirectory: () => result.directory,
+      getNewLine: () => "\n",
+    }),
+  );
+  console.log("Packed public declarations type-check against ES2020 with skipLibCheck=false.");
   const runtime = spawnSync(
     process.execPath,
     [
@@ -91,6 +144,8 @@ try {
     const { BlobPayloadStore } = require("@microsoft/durabletask-js-azureblob");
     const { DurableTaskAzureManagedClientBuilder } = require("@microsoft/durabletask-js-azuremanaged");
     assert.equal(typeof core.PayloadStore, "function");
+    const cause = new Error("cause");
+    assert.equal(new core.PayloadStorageException("failure", { cause }).cause, cause);
     assert.equal(typeof core.TaskHubGrpcClient.prototype.setLargePayloadAutoPurge, "function");
     assert.ok(new BlobPayloadStore({ connectionString: "UseDevelopmentStorage=true" }) instanceof core.PayloadStore);
     assert.equal(typeof DurableTaskAzureManagedClientBuilder.prototype.useExternalizedPayloads, "function");

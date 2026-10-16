@@ -154,4 +154,6 @@ npm run test:payload-packages -- <artifact-directory>/microsoft-durabletask-js-0
 This checks actual npm peer resolution against the published archive: both payload-enabled
 extensions must reject core `0.4.0` with `ERESOLVE`. It then installs the new packed core and
 extensions in an isolated consumer and loads their public APIs without contacting storage or DTS.
+It also type-checks the packed public declarations with `lib: ES2020`, strict checking, and
+`skipLibCheck: false`, without inheriting the ambient ES2022 `ErrorOptions` type.
 All temporary consumer installations are removed afterward.

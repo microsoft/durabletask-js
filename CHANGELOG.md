@@ -49,6 +49,8 @@
 
 ### Fixes
 
+- Keep `PayloadStorageException` cause options structural so its public declarations remain
+  usable by ES2020 consumers without the global ES2022 `ErrorOptions` type.
 - Prevent shared or duplicate pending tasks from stranding `whenAll` orchestrations after all
   activities finish. Notify every dependent composite, preserve duplicate result positions,
   and detach completed `whenAny` groups from their remaining children.

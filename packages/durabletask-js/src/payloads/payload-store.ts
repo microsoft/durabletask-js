@@ -23,7 +23,7 @@ export abstract class PayloadStore {
 
 /** A permanent payload storage or size-limit failure. */
 export class PayloadStorageException extends Error {
-  constructor(message: string, options?: ErrorOptions) {
+  constructor(message: string, options?: { cause?: unknown }) {
     super(message, options);
     this.name = "PayloadStorageException";
   }
