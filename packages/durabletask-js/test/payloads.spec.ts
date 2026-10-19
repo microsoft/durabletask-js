@@ -6,6 +6,14 @@ import * as pb from "../src/proto/orchestrator_service_pb";
 import { PayloadProcessor } from "../src/payloads/payload-processor";
 import { PayloadStore, PayloadStorageException } from "../src/payloads/payload-store";
 import { runBounded } from "../src/payloads/run-bounded";
+import { NoOpLogger } from "../src/types/logger.type";
+import {
+  newEventRaisedEvent,
+  newExecutionStartedEvent,
+  newOrchestratorStartedEvent,
+} from "../src/utils/pb-helper.util";
+import { OrchestrationExecutor } from "../src/worker/orchestration-executor";
+import { Registry } from "../src/worker/registry";
 
 class MemoryPayloadStore extends PayloadStore {
   readonly values = new Map<string, string>();
@@ -26,6 +34,38 @@ class MemoryPayloadStore extends PayloadStore {
 }
 
 const text = (value: string) => new StringValue().setValue(value);
+const MIB = 1024 * 1024;
+const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+function gate() {
+  let release!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
+}
+
+async function continueAsNewResponse(events: pb.HistoryEvent[]): Promise<pb.OrchestratorResponse> {
+  const registry = new Registry();
+  registry.addNamedOrchestrator("Carryover", async function* (context) {
+    yield context.waitForExternalEvent("continue");
+    context.continueAsNew("next", true, "next-version");
+  });
+  const result = await new OrchestrationExecutor(registry, new NoOpLogger()).execute(
+    "carryover-instance",
+    [],
+    [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent("Carryover", "carryover-instance"),
+      ...events,
+      newEventRaisedEvent("continue", "null"),
+    ],
+  );
+  return new pb.OrchestratorResponse()
+    .setInstanceid("carryover-instance")
+    .setCompletiontoken("completion")
+    .setActionsList(result.actions);
+}
 
 describe("externalized payloads", () => {
   let store: MemoryPayloadStore;
@@ -277,6 +317,418 @@ describe("externalized payloads", () => {
     };
     processor = new PayloadProcessor({ store, thresholdBytes: 1 });
     await expect(processor.externalize(new pb.ActivityResponse().setResult(text("large")))).rejects.toBe(error);
+  });
+
+  describe("continue-as-new carryover", () => {
+    it("externalizes five 1 MiB runtime events below the 4 MiB wire limit and preserves hydrated history", async () => {
+      const values = Array.from({ length: 5 }, (_, index) => `${index}${"x".repeat(MIB - 3)}`);
+      const response = await continueAsNewResponse(
+        values.map((value, index) => newEventRaisedEvent(index < 2 ? "FIRST" : "SECOND", JSON.stringify(value))),
+      );
+      const original = response.toObject();
+      const action = response.getActionsList()[0];
+      const completion = action.getCompleteorchestration()!;
+      const events = completion.getCarryovereventsList();
+      expect(action.getId()).toBe(1);
+      expect(completion.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW);
+      expect(events.map((event) => event.getEventraised()!.getName())).toEqual([
+        "first",
+        "first",
+        "second",
+        "second",
+        "second",
+      ]);
+      expect(events.map((event) => Buffer.byteLength(event.getEventraised()!.getInput()!.getValue(), "utf8"))).toEqual(
+        Array(5).fill(MIB),
+      );
+      expect(response.serializeBinary().byteLength).toBeGreaterThan(4 * MIB);
+
+      await processor.externalize(response);
+
+      const binary = response.serializeBinary();
+      expect(binary.byteLength).toBeLessThan(4 * MIB);
+      expect(store.uploads).toBe(5);
+      expect([...store.values.values()]).toEqual(values.map((value) => JSON.stringify(value)));
+      const wireResponse = pb.OrchestratorResponse.deserializeBinary(binary);
+      const carryover = wireResponse.getActionsList()[0].getCompleteorchestration()!.getCarryovereventsList();
+      expect(
+        carryover.every((event) => store.isKnownPayloadToken(event.getEventraised()!.getInput()!.getValue())),
+      ).toBe(true);
+
+      await processor.resolve(new pb.HistoryChunk().setEventsList(carryover));
+
+      expect(carryover.map((event) => JSON.parse(event.getEventraised()!.getInput()!.getValue()))).toEqual(values);
+      expect(wireResponse.toObject()).toEqual(original);
+    });
+
+    it.each([
+      ["below threshold", "\u00e9".repeat(131070) + "a", 262143, false],
+      ["at threshold", "\u00e9".repeat(131071), 262144, true],
+      ["above threshold", "\u00e9".repeat(131071) + "a", 262145, true],
+      ["below maximum", "\u00e9".repeat(524286) + "a", MIB - 1, true],
+      ["at maximum", "\u00e9".repeat(524287), MIB, true],
+    ])("applies serialized UTF-8 carryover boundaries %s", async (_label, value, size, externalized) => {
+      processor = new PayloadProcessor({ store, maxPayloadBytes: MIB });
+      const encoded = JSON.stringify(value);
+      expect(Buffer.byteLength(encoded, "utf8")).toBe(size);
+      const response = await continueAsNewResponse([newEventRaisedEvent("buffered", encoded)]);
+
+      await processor.externalize(response);
+
+      const completion = response.getActionsList()[0].getCompleteorchestration()!;
+      const input = completion.getCarryovereventsList()[0].getEventraised()!.getInput()!.getValue();
+      expect(completion.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW);
+      expect(store.uploads).toBe(externalized ? 1 : 0);
+      expect(store.isKnownPayloadToken(input)).toBe(externalized);
+      await processor.resolve(new pb.HistoryChunk().setEventsList(completion.getCarryovereventsList()));
+      expect(completion.getCarryovereventsList()[0].getEventraised()!.getInput()!.getValue()).toBe(encoded);
+    });
+
+    it.each([
+      ["configured maximum", "\u00e9".repeat(524287) + "a", MIB, MIB + 1],
+      ["default maximum", "x".repeat(10 * MIB - 1), undefined, 10 * MIB + 1],
+    ])("converts carryover above the %s to a non-retriable failure", async (_label, value, maximum, size) => {
+      processor = new PayloadProcessor({ store, maxPayloadBytes: maximum });
+      const encoded = JSON.stringify(value);
+      expect(Buffer.byteLength(encoded, "utf8")).toBe(size);
+      const response = await continueAsNewResponse([newEventRaisedEvent("buffered", encoded)]);
+
+      await processor.externalize(response);
+
+      expect(store.uploads).toBe(0);
+      expect(store.values.size).toBe(0);
+      expect(response.getActionsList()).toHaveLength(1);
+      const completion = response.getActionsList()[0].getCompleteorchestration()!;
+      expect(completion.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+      expect(completion.getCarryovereventsList()).toEqual([]);
+      expect(completion.getFailuredetails()!.getErrortype()).toBe("PayloadStorageException");
+      expect(completion.getFailuredetails()!.getIsnonretriable()).toBe(true);
+      expect(completion.getFailuredetails()!.getErrormessage()).toBe(
+        `Payload size ${size} bytes exceeds the configured maximum of ${maximum ?? 10 * MIB} bytes.`,
+      );
+      expect(response.getInstanceid()).toBe("carryover-instance");
+      expect(response.getCompletiontoken()).toBe("completion");
+    });
+  });
+
+  describe("whole-message size preflight", () => {
+    it("fails an oversized action before uploading or mutating a valid custom status", async () => {
+      processor = new PayloadProcessor({ store, maxPayloadBytes: MIB });
+      const status = text("s".repeat(262144));
+      const input = text("x".repeat(MIB + 1));
+      const response = new pb.OrchestratorResponse()
+        .setInstanceid("instance")
+        .setCompletiontoken("completion")
+        .setCustomstatus(status)
+        .setIspartial(true)
+        .setChunkindex(new Int32Value().setValue(7))
+        .setActionsList([new pb.OrchestratorAction().setScheduletask(new pb.ScheduleTaskAction().setInput(input))]);
+
+      await processor.externalize(response);
+
+      expect(store.uploads).toBe(0);
+      expect(store.values.size).toBe(0);
+      expect(status.getValue()).toBe("s".repeat(262144));
+      expect(input.getValue()).toBe("x".repeat(MIB + 1));
+      expect(response.hasCustomstatus()).toBe(false);
+      expect(response.getIspartial()).toBe(false);
+      expect(response.hasChunkindex()).toBe(false);
+      expect(response.getActionsList()).toHaveLength(1);
+      const completion = response.getActionsList()[0].getCompleteorchestration()!;
+      expect(completion.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+      expect(completion.getFailuredetails()!.getErrortype()).toBe("PayloadStorageException");
+      expect(completion.getFailuredetails()!.getIsnonretriable()).toBe(true);
+      expect(completion.getFailuredetails()!.getErrormessage()).toBe(
+        `Payload size ${MIB + 1} bytes exceeds the configured maximum of ${MIB} bytes.`,
+      );
+      expect(response.getInstanceid()).toBe("instance");
+      expect(response.getCompletiontoken()).toBe("completion");
+    });
+
+    it("rejects an oversized entity operation before uploading or mutating valid state", async () => {
+      processor = new PayloadProcessor({ store, maxPayloadBytes: MIB });
+      const request = new pb.EntityBatchRequest()
+        .setEntitystate(text("s".repeat(262144)))
+        .setOperationsList([new pb.OperationRequest().setInput(text("x".repeat(MIB + 1)))]);
+      const original = request.toObject();
+
+      await expect(processor.externalize(request)).rejects.toBeInstanceOf(PayloadStorageException);
+
+      expect(store.uploads).toBe(0);
+      expect(store.values.size).toBe(0);
+      expect(request.toObject()).toEqual(original);
+    });
+
+    it("rejects oversized client input without storage or field mutations", async () => {
+      processor = new PayloadProcessor({ store, maxPayloadBytes: MIB });
+      const request = new pb.CreateInstanceRequest().setInput(text("x".repeat(MIB + 1)));
+      const original = request.toObject();
+
+      await expect(processor.externalize(request)).rejects.toBeInstanceOf(PayloadStorageException);
+
+      expect(store.uploads).toBe(0);
+      expect(store.values.size).toBe(0);
+      expect(request.toObject()).toEqual(original);
+    });
+
+    it("converts oversized activity output while preserving completion metadata", async () => {
+      processor = new PayloadProcessor({ store, maxPayloadBytes: MIB });
+      const result = text("x".repeat(MIB + 1));
+      const response = new pb.ActivityResponse()
+        .setInstanceid("instance")
+        .setTaskid(17)
+        .setCompletiontoken("completion")
+        .setResult(result);
+
+      await processor.externalize(response);
+
+      expect(store.uploads).toBe(0);
+      expect(store.values.size).toBe(0);
+      expect(result.getValue()).toBe("x".repeat(MIB + 1));
+      expect(response.hasResult()).toBe(false);
+      expect(response.getFailuredetails()!.getErrortype()).toBe("PayloadStorageException");
+      expect(response.getFailuredetails()!.getIsnonretriable()).toBe(true);
+      expect(response.getFailuredetails()!.getErrormessage()).toBe(
+        `Payload size ${MIB + 1} bytes exceeds the configured maximum of ${MIB} bytes.`,
+      );
+      expect(response.getInstanceid()).toBe("instance");
+      expect(response.getTaskid()).toBe(17);
+      expect(response.getCompletiontoken()).toBe("completion");
+    });
+
+    it("detects invalid size before a hypothetical earlier transient upload failure", async () => {
+      processor = new PayloadProcessor({ store, maxPayloadBytes: MIB });
+      const upload = jest
+        .spyOn(store, "upload")
+        .mockRejectedValue(Object.assign(new Error("offline"), { statusCode: 503 }));
+      const response = new pb.OrchestratorResponse()
+        .setCustomstatus(text("s".repeat(262144)))
+        .setActionsList([
+          new pb.OrchestratorAction().setScheduletask(new pb.ScheduleTaskAction().setInput(text("x".repeat(MIB + 1)))),
+        ]);
+
+      await expect(processor.externalize(response)).resolves.toBeUndefined();
+
+      expect(upload).not.toHaveBeenCalled();
+      expect(store.values.size).toBe(0);
+      const completion = response.getActionsList()[0].getCompleteorchestration()!;
+      expect(completion.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+      expect(completion.getFailuredetails()!.getErrortype()).toBe("PayloadStorageException");
+      expect(completion.getFailuredetails()!.getIsnonretriable()).toBe(true);
+    });
+
+    it.each([
+      () => new pb.CreateInstanceRequest().setInput(text("x".repeat(MIB + 1))),
+      () => new pb.ActivityResponse().setResult(text("x".repeat(MIB + 1))),
+      () => new pb.EntityBatchRequest().setEntitystate(text("x".repeat(MIB + 1))),
+      () =>
+        new pb.OrchestratorResponse()
+          .setCustomstatus(text("s".repeat(262144)))
+          .setIspartial(true)
+          .setChunkindex(new Int32Value().setValue(7))
+          .setActionsList([
+            new pb.OrchestratorAction().setScheduletask(
+              new pb.ScheduleTaskAction().setInput(text("x".repeat(MIB + 1))),
+            ),
+          ]),
+    ])("honors precancellation before deterministic size failure (%#)", async (makeMessage) => {
+      processor = new PayloadProcessor({ store, maxPayloadBytes: MIB });
+      const abort = new AbortController();
+      abort.abort();
+      const message = makeMessage();
+      const original = message.toObject();
+
+      await expect(processor.externalize(message, abort.signal)).rejects.toBe(abort.signal.reason);
+
+      expect(abort.signal.reason.name).toBe("AbortError");
+      expect(store.uploads).toBe(0);
+      expect(store.values.size).toBe(0);
+      expect(message.toObject()).toEqual(original);
+    });
+
+    it.each([
+      () => new pb.CreateInstanceRequest(),
+      () => new pb.CreateInstanceRequest().setInput(text("")),
+      () => new pb.CreateInstanceRequest().setInput(text("abc")),
+    ])(
+      "keeps canceled no-op messages unchanged even when the maximum is below the threshold (%#)",
+      async (makeMessage) => {
+        processor = new PayloadProcessor({ store, thresholdBytes: 4, maxPayloadBytes: 2 });
+        const abort = new AbortController();
+        abort.abort();
+        const message = makeMessage();
+        const original = message.toObject();
+
+        await expect(processor.externalize(message, abort.signal)).resolves.toBeUndefined();
+
+        expect(store.uploads).toBe(0);
+        expect(message.toObject()).toEqual(original);
+      },
+    );
+
+    it("externalizes every eligible valid field and leaves inline, empty, and absent values untouched", async () => {
+      processor = new PayloadProcessor({ store, thresholdBytes: 4, maxPayloadBytes: 4 });
+      const request = new pb.EntityBatchRequest()
+        .setEntitystate(text("1234"))
+        .setOperationsList([
+          new pb.OperationRequest().setInput(text("\u00e9\u00e9")),
+          new pb.OperationRequest().setInput(text("abc")),
+          new pb.OperationRequest().setInput(text("")),
+          new pb.OperationRequest(),
+        ]);
+      const original = request.toObject();
+
+      await processor.externalize(request);
+
+      expect([...store.values.values()]).toEqual(["1234", "\u00e9\u00e9"]);
+      expect(request.getEntitystate()!.getValue()).toBe("test:1");
+      expect(request.getOperationsList()[0].getInput()!.getValue()).toBe("test:2");
+      expect(request.getOperationsList()[1].getInput()!.getValue()).toBe("abc");
+      expect(request.getOperationsList()[2].getInput()!.getValue()).toBe("");
+      expect(request.getOperationsList()[3].hasInput()).toBe(false);
+      await processor.resolve(request);
+      expect(request.toObject()).toEqual(original);
+    });
+  });
+
+  describe("in-flight payload I/O", () => {
+    it.each([false, true])(
+      "classifies the lowest-message-order failure after drainage (permanent: %s)",
+      async (permanent) => {
+        processor = new PayloadProcessor({ store, thresholdBytes: 1 });
+        const earlier = gate();
+        const later = gate();
+        const bothStarted = gate();
+        const laterFinished = gate();
+        const firstError = Object.assign(new Error("earlier failure"), { statusCode: permanent ? 403 : 503 });
+        const secondError = permanent
+          ? Object.assign(new Error("later transient failure"), { statusCode: 503 })
+          : new PayloadStorageException("later permanent failure");
+        const started: string[] = [];
+        const finished: string[] = [];
+        let active = 0;
+        let settled = false;
+        store.upload = async (value) => {
+          started.push(value);
+          active++;
+          if (started.length === 2) bothStarted.release();
+          try {
+            await (value === "earlier" ? earlier.promise : later.promise);
+            throw value === "earlier" ? firstError : secondError;
+          } finally {
+            finished.push(value);
+            active--;
+            if (value === "later") laterFinished.release();
+          }
+        };
+        const response = new pb.OrchestratorResponse()
+          .setCustomstatus(text("earlier"))
+          .setIspartial(true)
+          .setChunkindex(new Int32Value().setValue(2))
+          .setActionsList([
+            new pb.OrchestratorAction().setScheduletask(new pb.ScheduleTaskAction().setInput(text("later"))),
+          ]);
+        const original = response.toObject();
+        const pending = processor.externalize(response).then(
+          () => {
+            settled = true;
+          },
+          (error: unknown) => {
+            settled = true;
+            return error;
+          },
+        );
+        await bothStarted.promise;
+        later.release();
+        await laterFinished.promise;
+        await nextTurn();
+        const beforeDrain = { settled, active, finished: [...finished] };
+        earlier.release();
+        const error = await pending;
+
+        expect(beforeDrain).toEqual({ settled: false, active: 1, finished: ["later"] });
+        expect(started).toEqual(["earlier", "later"]);
+        expect(finished).toEqual(["later", "earlier"]);
+        expect(active).toBe(0);
+        if (permanent) {
+          expect(error).toBeUndefined();
+          expect(response.hasCustomstatus()).toBe(false);
+          expect(response.getIspartial()).toBe(false);
+          expect(response.hasChunkindex()).toBe(false);
+          expect(response.getActionsList()).toHaveLength(1);
+          const completion = response.getActionsList()[0].getCompleteorchestration()!;
+          expect(completion.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+          expect(completion.getFailuredetails()!.getErrormessage()).toBe("earlier failure");
+          expect(completion.getFailuredetails()!.getIsnonretriable()).toBe(true);
+        } else {
+          expect(error).toBe(firstError);
+          expect(response.toObject()).toEqual(original);
+        }
+        const atSettlement = response.toObject();
+        await nextTurn();
+        expect(response.toObject()).toEqual(atSettlement);
+      },
+    );
+
+    it.each(["externalize", "resolve"] as const)(
+      "drains started %s mutations before cancellation settles",
+      async (mode) => {
+        processor = new PayloadProcessor({ store, thresholdBytes: 1 });
+        const abort = new AbortController();
+        const started = gate();
+        const hold = gate();
+        const first = mode === "externalize" ? "first" : "test:first";
+        const second = mode === "externalize" ? "second" : "test:second";
+        store.values.set("test:first", "resolved-first");
+        store.values.set("test:second", "resolved-second");
+        const upload = store.upload.bind(store);
+        const download = store.download.bind(store);
+        const calls: string[] = [];
+        let active = 0;
+        let settled = false;
+        const io = async (value: string) => {
+          calls.push(value);
+          active++;
+          abort.abort();
+          started.release();
+          try {
+            await hold.promise;
+            return mode === "externalize" ? await upload(value) : await download(value);
+          } finally {
+            active--;
+          }
+        };
+        if (mode === "externalize") store.upload = io;
+        else store.download = io;
+        const request = new pb.EntityBatchRequest()
+          .setEntitystate(text(first))
+          .setOperationsList([new pb.OperationRequest().setInput(text(second))]);
+        const pending = processor[mode](request, abort.signal).then(
+          () => {
+            settled = true;
+          },
+          (error: unknown) => {
+            settled = true;
+            return error;
+          },
+        );
+        await started.promise;
+        await nextTurn();
+        const beforeDrain = { settled, active, state: request.getEntitystate()!.getValue() };
+        hold.release();
+        const error = await pending;
+
+        expect(beforeDrain).toEqual({ settled: false, active: 1, state: first });
+        expect(calls).toEqual([first]);
+        expect(error).toBe(abort.signal.reason);
+        expect(active).toBe(0);
+        expect(request.getEntitystate()!.getValue()).toBe(mode === "externalize" ? "test:1" : "resolved-first");
+        expect(request.getOperationsList()[0].getInput()!.getValue()).toBe(second);
+        const atSettlement = request.toObject();
+        await nextTurn();
+        expect(request.toObject()).toEqual(atSettlement);
+      },
+    );
   });
 });
 
