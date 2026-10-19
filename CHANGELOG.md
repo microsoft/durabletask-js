@@ -52,6 +52,12 @@
 
 - Determine single-instance purge routing from the instance ID regardless of payload configuration,
   matching .NET management clients: ordinary IDs are orchestrations and `@name@key` IDs are entities.
+- Apply payload externalization and UTF-8 size limits to native continue-as-new carryover history.
+  Event metadata, ordering, and hydrated payload values are preserved.
+- Validate every eligible payload's UTF-8 size before starting uploads, preventing storage writes
+  and token mutations for deterministically oversized messages. Precancellation, worker failure
+  conversion, and bounded I/O error handling are preserved; transient I/O or submission failures
+  can still leave stored payloads.
 - Prevent shared or duplicate pending tasks from stranding `whenAll` orchestrations after all
   activities finish. Notify every dependent composite, preserve duplicate result positions,
   and detach completed `whenAny` groups from their remaining children.

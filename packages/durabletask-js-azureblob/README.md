@@ -70,10 +70,14 @@ existing transport and payload behavior are unchanged.
 
 The SDK transparently externalizes client start/event/entity-signal inputs and management
 reasons/outputs, activity results, orchestration actions and custom status, continue-as-new
-inputs, rewritten history, and entity state/results/outgoing operations. State queries,
+inputs, carried-over events, rewritten history, and entity state/results/outgoing operations. State queries,
 waits, history streams, and orchestration/activity/entity V1/V2 work items are hydrated before
 conversion or user execution. Each message runs at most eight payload operations concurrently;
 failure/cancellation stops further dispatch and drains already-started operations.
+
+Every eligible payload's serialized UTF-8 size is validated across the whole message before
+any upload starts. A deterministically oversized message therefore creates no blobs; valid
+messages still use bounded I/O with cancellation and message-order storage failure handling.
 
 New blobs have 32-character GUID names and `managed_by=dts` metadata on compressed and
 uncompressed writes. Tokens are `blob:v2:{absoluteBlobUrl}`, without account keys or SAS.
@@ -88,6 +92,11 @@ Storage uses Azure SDK exponential retries: eight retries after the initial requ
 failures surface as `PayloadStorageException`. Permanent activity/orchestrator response
 upload failures become non-retriable task/orchestration failures; transient failures remain
 retryable. Entity upload failures and download failures propagate rather than fabricating success.
+
+Externalization and backend submission are not a transaction. Later I/O failures, cancellation,
+or uncertain submission can still leave unreferenced blobs; uploads are not automatically rolled
+back. Tombstone-based cleanup requires a reference recorded by the backend and cannot discover
+or recover existing orphan blobs.
 
 Custom stores can extend `PayloadStore` from the core package. They must honor `AbortSignal`,
 recognize only their own tokens, and return confirmed `PayloadDeleteOutcome` values for cleanup.
