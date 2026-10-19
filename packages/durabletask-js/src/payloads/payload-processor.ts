@@ -7,7 +7,7 @@ import { newFailureDetails } from "../utils/pb-helper.util";
 import { PayloadStorageException, PayloadStorageOptions } from "./payload-store";
 import { runBounded } from "./run-bounded";
 
-/** Explicit protobuf field mapping, aligned with the .NET AzureBlobPayloads SideCar interceptor. */
+/** Explicit protobuf field mapping based on the .NET AzureBlobPayloads SideCar interceptor. */
 export class PayloadProcessor {
   private readonly _threshold: number;
   private readonly _maximum: number;
@@ -55,6 +55,9 @@ export class PayloadProcessor {
           action.getSendentitymessage()?.getEntityoperationsignaled()?.getInput(),
           action.getSendentitymessage()?.getEntityoperationcalled()?.getInput(),
         );
+        for (const event of action.getCompleteorchestration()?.getCarryovereventsList() ?? []) {
+          this._historyFields(event, fields);
+        }
         for (const event of action.getRewindorchestration()?.getNewhistoryList() ?? []) {
           this._historyFields(event, fields);
         }

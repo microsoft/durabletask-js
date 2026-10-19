@@ -6,6 +6,14 @@ import * as pb from "../src/proto/orchestrator_service_pb";
 import { PayloadProcessor } from "../src/payloads/payload-processor";
 import { PayloadStore, PayloadStorageException } from "../src/payloads/payload-store";
 import { runBounded } from "../src/payloads/run-bounded";
+import { NoOpLogger } from "../src/types/logger.type";
+import {
+  newEventRaisedEvent,
+  newExecutionStartedEvent,
+  newOrchestratorStartedEvent,
+} from "../src/utils/pb-helper.util";
+import { OrchestrationExecutor } from "../src/worker/orchestration-executor";
+import { Registry } from "../src/worker/registry";
 
 class MemoryPayloadStore extends PayloadStore {
   readonly values = new Map<string, string>();
@@ -26,6 +34,29 @@ class MemoryPayloadStore extends PayloadStore {
 }
 
 const text = (value: string) => new StringValue().setValue(value);
+const MIB = 1024 * 1024;
+
+async function continueAsNewResponse(events: pb.HistoryEvent[]): Promise<pb.OrchestratorResponse> {
+  const registry = new Registry();
+  registry.addNamedOrchestrator("Carryover", async function* (context) {
+    yield context.waitForExternalEvent("continue");
+    context.continueAsNew("next", true, "next-version");
+  });
+  const result = await new OrchestrationExecutor(registry, new NoOpLogger()).execute(
+    "carryover-instance",
+    [],
+    [
+      newOrchestratorStartedEvent(),
+      newExecutionStartedEvent("Carryover", "carryover-instance"),
+      ...events,
+      newEventRaisedEvent("continue", "null"),
+    ],
+  );
+  return new pb.OrchestratorResponse()
+    .setInstanceid("carryover-instance")
+    .setCompletiontoken("completion")
+    .setActionsList(result.actions);
+}
 
 describe("externalized payloads", () => {
   let store: MemoryPayloadStore;
@@ -277,6 +308,98 @@ describe("externalized payloads", () => {
     };
     processor = new PayloadProcessor({ store, thresholdBytes: 1 });
     await expect(processor.externalize(new pb.ActivityResponse().setResult(text("large")))).rejects.toBe(error);
+  });
+
+  describe("continue-as-new carryover", () => {
+    it("externalizes five 1 MiB runtime events below the 4 MiB wire limit and preserves hydrated history", async () => {
+      const values = Array.from({ length: 5 }, (_, index) => `${index}${"x".repeat(MIB - 3)}`);
+      const response = await continueAsNewResponse(
+        values.map((value, index) => newEventRaisedEvent(index < 2 ? "FIRST" : "SECOND", JSON.stringify(value))),
+      );
+      const original = response.toObject();
+      const action = response.getActionsList()[0];
+      const completion = action.getCompleteorchestration()!;
+      const events = completion.getCarryovereventsList();
+      expect(action.getId()).toBe(1);
+      expect(completion.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW);
+      expect(events.map((event) => event.getEventraised()!.getName())).toEqual([
+        "first",
+        "first",
+        "second",
+        "second",
+        "second",
+      ]);
+      expect(events.map((event) => Buffer.byteLength(event.getEventraised()!.getInput()!.getValue(), "utf8"))).toEqual(
+        Array(5).fill(MIB),
+      );
+      expect(response.serializeBinary().byteLength).toBeGreaterThan(4 * MIB);
+
+      await processor.externalize(response);
+
+      const binary = response.serializeBinary();
+      expect(binary.byteLength).toBeLessThan(4 * MIB);
+      expect(store.uploads).toBe(5);
+      expect([...store.values.values()]).toEqual(values.map((value) => JSON.stringify(value)));
+      const wireResponse = pb.OrchestratorResponse.deserializeBinary(binary);
+      const carryover = wireResponse.getActionsList()[0].getCompleteorchestration()!.getCarryovereventsList();
+      expect(
+        carryover.every((event) => store.isKnownPayloadToken(event.getEventraised()!.getInput()!.getValue())),
+      ).toBe(true);
+
+      await processor.resolve(new pb.HistoryChunk().setEventsList(carryover));
+
+      expect(carryover.map((event) => JSON.parse(event.getEventraised()!.getInput()!.getValue()))).toEqual(values);
+      expect(wireResponse.toObject()).toEqual(original);
+    });
+
+    it.each([
+      ["below threshold", "\u00e9".repeat(131070) + "a", 262143, false],
+      ["at threshold", "\u00e9".repeat(131071), 262144, true],
+      ["above threshold", "\u00e9".repeat(131071) + "a", 262145, true],
+      ["below maximum", "\u00e9".repeat(524286) + "a", MIB - 1, true],
+      ["at maximum", "\u00e9".repeat(524287), MIB, true],
+    ])("applies serialized UTF-8 carryover boundaries %s", async (_label, value, size, externalized) => {
+      processor = new PayloadProcessor({ store, maxPayloadBytes: MIB });
+      const encoded = JSON.stringify(value);
+      expect(Buffer.byteLength(encoded, "utf8")).toBe(size);
+      const response = await continueAsNewResponse([newEventRaisedEvent("buffered", encoded)]);
+
+      await processor.externalize(response);
+
+      const completion = response.getActionsList()[0].getCompleteorchestration()!;
+      const input = completion.getCarryovereventsList()[0].getEventraised()!.getInput()!.getValue();
+      expect(completion.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW);
+      expect(store.uploads).toBe(externalized ? 1 : 0);
+      expect(store.isKnownPayloadToken(input)).toBe(externalized);
+      await processor.resolve(new pb.HistoryChunk().setEventsList(completion.getCarryovereventsList()));
+      expect(completion.getCarryovereventsList()[0].getEventraised()!.getInput()!.getValue()).toBe(encoded);
+    });
+
+    it.each([
+      ["configured maximum", "\u00e9".repeat(524287) + "a", MIB, MIB + 1],
+      ["default maximum", "x".repeat(10 * MIB - 1), undefined, 10 * MIB + 1],
+    ])("converts carryover above the %s to a non-retriable failure", async (_label, value, maximum, size) => {
+      processor = new PayloadProcessor({ store, maxPayloadBytes: maximum });
+      const encoded = JSON.stringify(value);
+      expect(Buffer.byteLength(encoded, "utf8")).toBe(size);
+      const response = await continueAsNewResponse([newEventRaisedEvent("buffered", encoded)]);
+
+      await processor.externalize(response);
+
+      expect(store.uploads).toBe(0);
+      expect(store.values.size).toBe(0);
+      expect(response.getActionsList()).toHaveLength(1);
+      const completion = response.getActionsList()[0].getCompleteorchestration()!;
+      expect(completion.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+      expect(completion.getCarryovereventsList()).toEqual([]);
+      expect(completion.getFailuredetails()!.getErrortype()).toBe("PayloadStorageException");
+      expect(completion.getFailuredetails()!.getIsnonretriable()).toBe(true);
+      expect(completion.getFailuredetails()!.getErrormessage()).toBe(
+        `Payload size ${size} bytes exceeds the configured maximum of ${maximum ?? 10 * MIB} bytes.`,
+      );
+      expect(response.getInstanceid()).toBe("carryover-instance");
+      expect(response.getCompletiontoken()).toBe("completion");
+    });
   });
 });
 

@@ -47,6 +47,8 @@
 
 ### Fixes
 
+- Apply payload externalization and UTF-8 size limits to native continue-as-new carryover history.
+  Event metadata, ordering, and hydrated payload values are preserved.
 - Prevent shared or duplicate pending tasks from stranding `whenAll` orchestrations after all
   activities finish. Notify every dependent composite, preserve duplicate result positions,
   and detach completed `whenAny` groups from their remaining children.
