@@ -74,23 +74,29 @@ export class PayloadProcessor {
     } else if (message instanceof pb.EntityRequest) {
       fields.push(message.getEntitystate());
     }
-    const operations: (() => Promise<void>)[] = [];
+    const candidates: { field: StringValue; value: string; size: number }[] = [];
     for (const field of fields) {
       const value = field?.getValue();
       if (!field || !value) continue;
       const size = Buffer.byteLength(value, "utf8");
       if (size < this._threshold) continue;
-      operations.push(async () => {
+      candidates.push({ field, value, size });
+    }
+    try {
+      if (candidates.length) signal?.throwIfAborted();
+      for (const { size } of candidates) {
         if (size > this._maximum) {
           throw new PayloadStorageException(
             `Payload size ${size} bytes exceeds the configured maximum of ${this._maximum} bytes.`,
           );
         }
-        field.setValue(await this._options.store.upload(value, signal));
-      });
-    }
-    try {
-      await runBounded(operations, signal);
+      }
+      await runBounded(
+        candidates.map(({ field, value }) => async () => {
+          field.setValue(await this._options.store.upload(value, signal));
+        }),
+        signal,
+      );
     } catch (error) {
       if (
         !isPermanentStorageFailure(error) ||
