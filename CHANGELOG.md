@@ -53,6 +53,12 @@
   matching .NET management clients without changing purge timeout/completion semantics.
 - Keep `PayloadStorageException` cause options structural so its public declarations remain
   usable by ES2020 consumers without the global ES2022 `ErrorOptions` type.
+- Apply payload externalization and UTF-8 size limits to native continue-as-new carryover history.
+  Event metadata, ordering, and hydrated payload values are preserved.
+- Validate every eligible payload's UTF-8 size before starting uploads, preventing storage writes
+  and token mutations for deterministically oversized messages. Precancellation, worker failure
+  conversion, and bounded I/O error handling are preserved; transient I/O or submission failures
+  can still leave stored payloads.
 - Prevent shared or duplicate pending tasks from stranding `whenAll` orchestrations after all
   activities finish. Notify every dependent composite, preserve duplicate result positions,
   and detach completed `whenAny` groups from their remaining children.
