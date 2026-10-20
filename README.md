@@ -32,6 +32,13 @@ Requests are externalized before sending; queries, history chunks and work items
 before conversion or execution. Empty payloads remain inline, and disabling the option preserves
 the existing transport behavior.
 
+Workers abandon acquired queue work items when payload downloads or unconverted output storage/size
+checks fail. Release is awaited with bounded gRPC retries and the original work item's cancellation
+signal; release failures are logged, and shutdown prevents late sends. Permanent activity and
+orchestration output failures still produce non-retriable failed completions. Tokenless host APIs
+(`processOrchestratorRequest` and `processEntityBatchRequest`) instead reject with the original
+unconverted storage error so the host can apply its own retry policy.
+
 Azure-managed builders expose `.useExternalizedPayloads({ store })` and require core `>=0.4.1`
 for the public payload types. This phase works with a custom/in-memory store and does not import
 an Azure Blob provider or register cleanup tasks. Complete the six-phase feature stack before release.

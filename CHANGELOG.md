@@ -47,6 +47,9 @@
 
 ### Fixes
 
+- Abandon acquired worker work items when enabled payload hydration or unconverted output storage
+  processing fails, awaiting shutdown-aware bounded release retries without creating fake business
+  failures. Tokenless host processing preserves unconverted storage errors.
 - Apply payload externalization and UTF-8 size limits to native continue-as-new carryover history.
   Event metadata, ordering, and hydrated payload values are preserved.
 - Validate every eligible payload's UTF-8 size before starting uploads, preventing storage writes
