@@ -18,7 +18,7 @@ import { Registry } from "../src/worker/registry";
 class MemoryPayloadStore extends PayloadStore {
   readonly values = new Map<string, string>();
   uploads = 0;
-  async upload(value: string): Promise<string> {
+  async upload(value: string, _signal?: AbortSignal): Promise<string> {
     const token = `test:${++this.uploads}`;
     this.values.set(token, value);
     return token;
@@ -711,6 +711,173 @@ describe("externalized payloads", () => {
       await processor.resolve(request);
       expect(request.toObject()).toEqual(original);
     });
+  });
+
+  describe("worker response cancellation", () => {
+    describe.each([
+      {
+        name: "activity",
+        makeResponse: () =>
+          new pb.ActivityResponse()
+            .setInstanceid("instance")
+            .setTaskid(17)
+            .setCompletiontoken("completion")
+            .setResult(text("result")),
+      },
+      {
+        name: "orchestrator",
+        makeResponse: () =>
+          new pb.OrchestratorResponse()
+            .setInstanceid("instance")
+            .setCompletiontoken("completion")
+            .setCustomstatus(text("status"))
+            .setIspartial(true)
+            .setChunkindex(new Int32Value().setValue(2))
+            .setActionsList([
+              new pb.OrchestratorAction().setScheduletask(new pb.ScheduleTaskAction().setInput(text("input"))),
+            ]),
+      },
+    ])("$name", ({ makeResponse }) => {
+      describe.each([
+        { name: "storage exception", makeReason: () => new PayloadStorageException("canceled") },
+        { name: "HTTP 403", makeReason: () => Object.assign(new Error("canceled"), { statusCode: 403 }) },
+      ])("$name", ({ makeReason }) => {
+        it.each(["pre-aborted", "in-flight"] as const)(
+          "rethrows the original %s reason without converting the response",
+          async (stage) => {
+            processor = new PayloadProcessor({
+              store,
+              thresholdBytes: 1,
+              maxPayloadBytes: stage === "pre-aborted" ? 1 : 1024,
+            });
+            const response = makeResponse();
+            const original = response.toObject();
+            const abort = new AbortController();
+            const reason = makeReason();
+            const started = gate();
+            let active = 0;
+            const upload = jest.spyOn(store, "upload").mockImplementation(async (_value, signal) => {
+              active++;
+              started.release();
+              try {
+                return await new Promise<string>((_resolve, reject) => {
+                  signal!.addEventListener("abort", () => reject(signal!.reason), { once: true });
+                });
+              } finally {
+                active--;
+              }
+            });
+            if (stage === "pre-aborted") abort.abort(reason);
+
+            const pending = expect(processor.externalize(response, abort.signal)).rejects.toBe(reason);
+            if (stage === "in-flight") {
+              await started.promise;
+              abort.abort(reason);
+            }
+            await pending;
+
+            expect(active).toBe(0);
+            if (stage === "pre-aborted") expect(upload).not.toHaveBeenCalled();
+            else expect(upload).toHaveBeenCalled();
+            expect(store.values.size).toBe(0);
+            expect(response.toObject()).toEqual(original);
+            await nextTurn();
+            expect(response.toObject()).toEqual(original);
+          },
+        );
+
+        it("still converts a genuine permanent upload failure when the signal is not aborted", async () => {
+          processor = new PayloadProcessor({ store, thresholdBytes: 1 });
+          const response = makeResponse();
+          const error = makeReason();
+          jest.spyOn(store, "upload").mockRejectedValue(error);
+          const abort = new AbortController();
+
+          await expect(processor.externalize(response, abort.signal)).resolves.toBeUndefined();
+
+          const details =
+            response instanceof pb.ActivityResponse
+              ? response.getFailuredetails()
+              : response.getActionsList()[0].getCompleteorchestration()!.getFailuredetails();
+          expect(details!.getIsnonretriable()).toBe(true);
+          expect(details!.getErrortype()).toBe(error.name);
+          expect(details!.getErrormessage()).toBe(error.message);
+          expect(abort.signal.aborted).toBe(false);
+        });
+
+        it("leaves canceled no-op responses unchanged", async () => {
+          processor = new PayloadProcessor({ store, thresholdBytes: 1024 });
+          const response = makeResponse();
+          const original = response.toObject();
+          const abort = new AbortController();
+          abort.abort(makeReason());
+
+          await expect(processor.externalize(response, abort.signal)).resolves.toBeUndefined();
+
+          expect(response.toObject()).toEqual(original);
+          expect(store.uploads).toBe(0);
+        });
+      });
+    });
+
+    it.each([403, 503])(
+      "rethrows the earlier I/O error %s rather than a later abort reason after drainage",
+      async (statusCode) => {
+        processor = new PayloadProcessor({ store, thresholdBytes: 1 });
+        const response = new pb.OrchestratorResponse()
+          .setCustomstatus(text("earlier"))
+          .setActionsList([
+            new pb.OrchestratorAction().setScheduletask(new pb.ScheduleTaskAction().setInput(text("later"))),
+          ]);
+        const original = response.toObject();
+        const abort = new AbortController();
+        const firstError = Object.assign(new Error("independent earlier I/O failure"), { statusCode });
+        const laterReason = new PayloadStorageException("later cancellation");
+        const hold = gate();
+        const laterStarted = gate();
+        let active = 0;
+        let settled = false;
+        const started: string[] = [];
+        store.upload = async (value) => {
+          started.push(value);
+          active++;
+          try {
+            if (value === "earlier") {
+              await hold.promise;
+              throw firstError;
+            }
+            abort.abort(laterReason);
+            laterStarted.release();
+            throw abort.signal.reason;
+          } finally {
+            active--;
+          }
+        };
+        const pending = processor.externalize(response, abort.signal).then(
+          () => {
+            settled = true;
+          },
+          (error: unknown) => {
+            settled = true;
+            return error;
+          },
+        );
+        await laterStarted.promise;
+        await nextTurn();
+        const beforeDrain = { settled, active };
+        hold.release();
+        const error = await pending;
+
+        expect(beforeDrain).toEqual({ settled: false, active: 1 });
+        expect(active).toBe(0);
+        expect(started).toEqual(["earlier", "later"]);
+        expect(error).toBe(firstError);
+        expect(error).not.toBe(laterReason);
+        expect(response.toObject()).toEqual(original);
+        await nextTurn();
+        expect(response.toObject()).toEqual(original);
+      },
+    );
   });
 
   describe("in-flight payload I/O", () => {

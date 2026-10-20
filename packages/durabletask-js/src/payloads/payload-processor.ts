@@ -99,6 +99,7 @@ export class PayloadProcessor {
       );
     } catch (error) {
       if (
+        signal?.aborted ||
         !isPermanentStorageFailure(error) ||
         !(message instanceof pb.ActivityResponse || message instanceof pb.OrchestratorResponse)
       )
