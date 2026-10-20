@@ -8,6 +8,7 @@ import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 import { Value } from "google-protobuf/google/protobuf/struct_pb";
 import { newExecutionStartedEvent, newOrchestratorStartedEvent } from "../src/utils/pb-helper.util";
 import { TaskEntity } from "../src/entities/task-entity";
+import { PayloadStore } from "../src/payloads/payload-store";
 import * as pb from "../src/proto/orchestrator_service_pb";
 import * as stubs from "../src/proto/orchestrator_service_grpc_pb";
 import { TaskHubGrpcWorker } from "../src/worker/task-hub-grpc-worker";
@@ -31,6 +32,14 @@ function activityRequest() {
   return new pb.ActivityRequest()
     .setName("answer")
     .setOrchestrationinstance(new pb.OrchestrationInstance().setInstanceid("instance"));
+}
+
+class WorkerPayloadStore extends PayloadStore {
+  upload = jest.fn(async (_value: string, _signal?: AbortSignal) => "payload:output");
+  download = jest.fn(async (_token: string, _signal?: AbortSignal) => '"input"');
+  isKnownPayloadToken(value: string): boolean {
+    return value.startsWith("payload:");
+  }
 }
 
 describe("Worker response retries", () => {
@@ -64,19 +73,24 @@ describe("Worker response retries", () => {
         observed(ctx.sourceInstanceId, ctx.instanceId, ctx.version);
         return "done";
       });
-      const send = jest.spyOn(stub, "completeOrchestratorTask").mockImplementation(
-        (_request, _metadata, optionsOrCallback: Partial<grpc.CallOptions> | Callback, callback?: Callback) => {
-          const respond = typeof optionsOrCallback === "function" ? optionsOrCallback : callback!;
-          respond(null, new pb.CompleteTaskResponse());
-          return unaryCall();
-        },
-      );
-      const request = new pb.OrchestratorRequest().setInstanceid("clone-id").setNeweventsList([
-        newOrchestratorStartedEvent(),
-        newExecutionStartedEvent("Flow", "clone-id", undefined, undefined, "execution-id", "1.0"),
-      ]);
+      const send = jest
+        .spyOn(stub, "completeOrchestratorTask")
+        .mockImplementation(
+          (_request, _metadata, optionsOrCallback: Partial<grpc.CallOptions> | Callback, callback?: Callback) => {
+            const respond = typeof optionsOrCallback === "function" ? optionsOrCallback : callback!;
+            respond(null, new pb.CompleteTaskResponse());
+            return unaryCall();
+          },
+        );
+      const request = new pb.OrchestratorRequest()
+        .setInstanceid("clone-id")
+        .setNeweventsList([
+          newOrchestratorStartedEvent(),
+          newExecutionStartedEvent("Flow", "clone-id", undefined, undefined, "execution-id", "1.0"),
+        ]);
       request.setExecutionid(new StringValue().setValue("execution-id"));
-      if (sourceInstanceId !== undefined) request.getPropertiesMap().set("sourceInstanceId", Value.fromJavaScript(sourceInstanceId));
+      if (sourceInstanceId !== undefined)
+        request.getPropertiesMap().set("sourceInstanceId", Value.fromJavaScript(sourceInstanceId));
       const item = new pb.WorkItem().setCompletiontoken("token").setOrchestratorrequest(request);
       worker["_dispatchWorkItem"](pb.WorkItem.deserializeBinary(item.serializeBinary()), stub);
       await Promise.all(worker["_pendingWorkItems"]);
@@ -390,5 +404,222 @@ describe("Worker response retries", () => {
       await jest.runAllTimersAsync();
       await stoppingNewRun;
     }
+  });
+
+  describe("payload failure release", () => {
+    let store: WorkerPayloadStore;
+    let abandon: jest.SpiedFunction<stubs.TaskHubSidecarServiceClient["abandonTaskActivityWorkItem"]>;
+    let complete: jest.SpiedFunction<stubs.TaskHubSidecarServiceClient["completeActivityTask"]>;
+    let onAbandon: (request: pb.AbandonActivityTaskRequest, callback: Callback<pb.AbandonActivityTaskResponse>) => void;
+    let cancel: jest.Mock;
+    const failure = Object.assign(new Error("payload storage unavailable"), { statusCode: 503 });
+
+    beforeEach(() => {
+      store = new WorkerPayloadStore();
+      worker = new TaskHubGrpcWorker({ payloads: { store, thresholdBytes: 1 }, logger, shutdownTimeoutMs: 100 });
+      worker["_abortController"] = controller;
+      worker["_stub"] = stub;
+      worker.addNamedActivity("answer", () => 42);
+      cancel = jest.fn();
+      onAbandon = (_request, callback) => callback(null, new pb.AbandonActivityTaskResponse());
+      abandon = jest
+        .spyOn(stub, "abandonTaskActivityWorkItem")
+        .mockImplementation(
+          (
+            request,
+            _metadata,
+            optionsOrCallback: Partial<grpc.CallOptions> | Callback<pb.AbandonActivityTaskResponse>,
+            callback?: Callback<pb.AbandonActivityTaskResponse>,
+          ) => {
+            onAbandon(request, typeof optionsOrCallback === "function" ? optionsOrCallback : callback!);
+            return unaryCall(cancel);
+          },
+        );
+      complete = jest
+        .spyOn(stub, "completeActivityTask")
+        .mockImplementation(
+          (_request, _metadata, optionsOrCallback: Partial<grpc.CallOptions> | Callback, callback?: Callback) => {
+            (typeof optionsOrCallback === "function" ? optionsOrCallback : callback!)(
+              null,
+              new pb.CompleteTaskResponse(),
+            );
+            return unaryCall();
+          },
+        );
+    });
+
+    function dispatch(): void {
+      worker["_dispatchWorkItem"](
+        new pb.WorkItem()
+          .setCompletiontoken("payload-token")
+          .setActivityrequest(activityRequest().setInput(new StringValue().setValue("payload:input"))),
+        stub,
+      );
+    }
+
+    it("awaits abandon and retries transient release errors with the same token and fresh metadata", async () => {
+      store.download.mockRejectedValueOnce(failure);
+      const metadata = jest.fn(async () => new grpc.Metadata());
+      worker["_metadataGenerator"] = metadata;
+      let finish!: () => void;
+      onAbandon = (_request, callback) => {
+        if (abandon.mock.calls.length === 1)
+          callback(grpcError(grpc.status.UNAVAILABLE), new pb.AbandonActivityTaskResponse());
+        else finish = () => callback(null, new pb.AbandonActivityTaskResponse());
+      };
+      dispatch();
+      await jest.advanceTimersByTimeAsync(200);
+      expect(abandon).toHaveBeenCalledTimes(2);
+      expect(worker["_pendingWorkItems"].size).toBe(1);
+      expect(abandon.mock.calls[0][0].getCompletiontoken()).toBe("payload-token");
+      expect(abandon.mock.calls[1][0]).toBe(abandon.mock.calls[0][0]);
+      expect(abandon.mock.calls[1][1]).not.toBe(abandon.mock.calls[0][1]);
+      finish();
+      await Promise.all(worker["_pendingWorkItems"]);
+      expect(metadata).toHaveBeenCalledTimes(2);
+      expect(store.download).toHaveBeenCalledTimes(1);
+      expect(complete).not.toHaveBeenCalled();
+      expect(worker["_pendingWorkItems"].size).toBe(0);
+      expect(logger.error).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([grpc.status.PERMISSION_DENIED, grpc.status.UNAVAILABLE])(
+      "logs terminal abandon failure %s without an unhandled rejection",
+      async (status) => {
+        store.download.mockRejectedValueOnce(failure);
+        onAbandon = (_request, callback) => callback(grpcError(status), new pb.AbandonActivityTaskResponse());
+        dispatch();
+        await jest.runAllTimersAsync();
+        await Promise.all(worker["_pendingWorkItems"]);
+        expect(abandon).toHaveBeenCalledTimes(status === grpc.status.UNAVAILABLE ? 10 : 1);
+        expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("payload storage unavailable"));
+        expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("delivery failed"));
+        expect(complete).not.toHaveBeenCalled();
+        expect(worker["_pendingWorkItems"].size).toBe(0);
+        expect(jest.getTimerCount()).toBe(0);
+      },
+    );
+
+    it("releases through the captured stub even if the worker replaces its current stub", async () => {
+      let reject!: (error: Error) => void;
+      store.download.mockReturnValueOnce(new Promise((_resolve, fail) => (reject = fail)));
+      const replacement = new stubs.TaskHubSidecarServiceClient("localhost:2", grpc.credentials.createInsecure());
+      const replacementAbandon = jest.spyOn(replacement, "abandonTaskActivityWorkItem");
+      try {
+        dispatch();
+        await jest.advanceTimersByTimeAsync(0);
+        worker["_stub"] = replacement;
+        reject(failure);
+        await jest.runAllTimersAsync();
+        await Promise.all(worker["_pendingWorkItems"]);
+        expect(abandon).toHaveBeenCalledTimes(1);
+        expect(replacementAbandon).not.toHaveBeenCalled();
+        expect(complete).not.toHaveBeenCalled();
+      } finally {
+        replacement.close();
+      }
+    });
+
+    it.each(["download", "upload"] as const)(
+      "does not abandon a late %s failure with a replacement run's signal",
+      async (phase) => {
+        let reject!: (error: Error) => void;
+        store[phase].mockReturnValueOnce(new Promise((_resolve, fail) => (reject = fail)));
+        dispatch();
+        await jest.advanceTimersByTimeAsync(0);
+        expect(store[phase]).toHaveBeenCalledTimes(1);
+        controller.abort();
+        worker["_abortController"] = new AbortController();
+        reject(failure);
+        await jest.runAllTimersAsync();
+        await Promise.all(worker["_pendingWorkItems"]);
+        expect(abandon).not.toHaveBeenCalled();
+        expect(complete).not.toHaveBeenCalled();
+        expect(worker["_pendingWorkItems"].size).toBe(0);
+        expect(worker["_abortController"]!.signal.aborted).toBe(false);
+      },
+    );
+
+    it.each(["metadata", "retry", "RPC"] as const)(
+      "shutdown cancels abandon while awaiting %s without sending in a new run",
+      async (phase) => {
+        store.download.mockRejectedValueOnce(failure);
+        let finishMetadata!: (value: grpc.Metadata) => void;
+        const metadata = jest.fn(async () => new grpc.Metadata());
+        if (phase === "metadata")
+          metadata.mockImplementation(() => new Promise((resolve) => (finishMetadata = resolve)));
+        worker["_metadataGenerator"] = metadata;
+        onAbandon = (_request, callback) => {
+          if (phase === "retry") callback(grpcError(grpc.status.UNAVAILABLE), new pb.AbandonActivityTaskResponse());
+        };
+        worker["_isRunning"] = true;
+        dispatch();
+        await jest.advanceTimersByTimeAsync(0);
+        expect(metadata).toHaveBeenCalledTimes(1);
+        const stopping = worker.stop();
+        await jest.advanceTimersByTimeAsync(1100);
+        await stopping;
+        worker["_abortController"] = new AbortController();
+        if (phase === "metadata") finishMetadata(new grpc.Metadata());
+        await jest.runAllTimersAsync();
+        await Promise.all(worker["_pendingWorkItems"]);
+        expect(abandon).toHaveBeenCalledTimes(phase === "metadata" ? 0 : 1);
+        expect(cancel).toHaveBeenCalledTimes(phase === "RPC" ? 1 : 0);
+        expect(complete).not.toHaveBeenCalled();
+        expect(worker["_pendingWorkItems"].size).toBe(0);
+        expect(jest.getTimerCount()).toBe(0);
+      },
+    );
+
+    it.each([undefined, grpc.status.PERMISSION_DENIED])(
+      "does not double abandon an explicit version rejection (release status=%s)",
+      async (status) => {
+        worker = new TaskHubGrpcWorker({
+          payloads: { store },
+          logger,
+          versioning: {
+            version: "2",
+            matchStrategy: VersionMatchStrategy.Strict,
+            failureStrategy: VersionFailureStrategy.Reject,
+          },
+        });
+        worker["_abortController"] = controller;
+        const reject = jest
+          .spyOn(stub, "abandonTaskOrchestratorWorkItem")
+          .mockImplementation(
+            (
+              _request,
+              _metadata,
+              optionsOrCallback: Partial<grpc.CallOptions> | Callback<pb.AbandonOrchestrationTaskResponse>,
+              callback?: Callback<pb.AbandonOrchestrationTaskResponse>,
+            ) => {
+              (typeof optionsOrCallback === "function" ? optionsOrCallback : callback!)(
+                status === undefined ? null : grpcError(status),
+                new pb.AbandonOrchestrationTaskResponse(),
+              );
+              return unaryCall();
+            },
+          );
+        worker["_dispatchWorkItem"](
+          new pb.WorkItem()
+            .setCompletiontoken("version-token")
+            .setOrchestratorrequest(
+              new pb.OrchestratorRequest()
+                .setInstanceid("instance")
+                .setNeweventsList([
+                  newOrchestratorStartedEvent(),
+                  newExecutionStartedEvent("flow", "instance", undefined, undefined, undefined, "1"),
+                ]),
+            ),
+          stub,
+        );
+        await jest.runAllTimersAsync();
+        await Promise.all(worker["_pendingWorkItems"]);
+        expect(reject).toHaveBeenCalledTimes(1);
+        expect(reject.mock.calls[0][0].getCompletiontoken()).toBe("version-token");
+        expect(abandon).not.toHaveBeenCalled();
+        expect(complete).not.toHaveBeenCalled();
+      },
+    );
   });
 });
