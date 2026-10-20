@@ -55,6 +55,11 @@
 
 - Determine single-instance purge routing from the instance ID regardless of payload configuration,
   matching .NET management clients: ordinary IDs are orchestrations and `@name@key` IDs are entities.
+- Limit completion-wait deadline retries to scheduler RPC failures. Payload download errors,
+  including custom-store gRPC deadlines, propagate unchanged after the successful wait response.
+- Abandon acquired worker work items when enabled payload hydration or unconverted output storage
+  processing fails, awaiting shutdown-aware bounded release retries without creating fake business
+  failures. Tokenless host processing preserves unconverted storage errors.
 - Apply payload externalization and UTF-8 size limits to native continue-as-new carryover history.
   Event metadata, ordering, and hydrated payload values are preserved.
 - Validate every eligible payload's UTF-8 size before starting uploads, preventing storage writes

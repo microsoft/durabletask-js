@@ -982,11 +982,23 @@ export class TaskHubGrpcWorker {
     return undefined;
   }
 
-  private _trackPendingWorkItem(workPromise: Promise<void>, onError: (error: Error) => void): void {
+  private _trackPendingWorkItem(
+    workPromise: Promise<void>,
+    onError: (error: Error) => void,
+    abandon: () => Promise<unknown>,
+    signal?: AbortSignal,
+  ): void {
     const handledPromise = workPromise
-      .catch((e: unknown) => {
+      .catch(async (e: unknown) => {
         const error = e instanceof Error ? e : new Error(String(e));
         onError(error);
+        if (this._payloads && !signal?.aborted) {
+          try {
+            await abandon();
+          } catch (error: unknown) {
+            WorkerLogs.workerError(this._logger, error);
+          }
+        }
       })
       .finally(() => {
         this._pendingWorkItems.delete(handledPromise);
@@ -1000,7 +1012,6 @@ export class TaskHubGrpcWorker {
     request: TReq,
     signal?: AbortSignal,
   ): Promise<TRes> {
-    if (this._payloads) await this._payloads.externalize(request, signal);
     const backoff = new ExponentialBackoff({
       initialDelayMs: 200,
       maxDelayMs: 15000,
@@ -1037,9 +1048,17 @@ export class TaskHubGrpcWorker {
   ): void {
     const retrySignal = this._abortController?.signal;
     const workPromise = this._executeOrchestratorInternal(req, completionToken, stub, retrySignal);
-    this._trackPendingWorkItem(workPromise, (error) => {
-      WorkerLogs.executionError(this._logger, req.getInstanceid() || "(unknown)", error);
-    });
+    this._trackPendingWorkItem(
+      workPromise,
+      (error) => WorkerLogs.executionError(this._logger, req.getInstanceid() || "(unknown)", error),
+      () =>
+        this._deliverResponse(
+          stub.abandonTaskOrchestratorWorkItem.bind(stub),
+          new pb.AbandonOrchestrationTaskRequest().setCompletiontoken(completionToken),
+          retrySignal,
+        ),
+      retrySignal,
+    );
   }
 
   private async _streamOrchestrationHistory(
@@ -1336,6 +1355,8 @@ export class TaskHubGrpcWorker {
       endSpan(tracingResult?.span);
     }
 
+    // Storage failures must reach the queue boundary, not become failed business completions.
+    if (this._payloads) await this._payloads.externalize(res, retrySignal);
     try {
       await this._deliverResponse(stub.completeOrchestratorTask.bind(stub), res, retrySignal);
     } catch (e: unknown) {
@@ -1354,9 +1375,17 @@ export class TaskHubGrpcWorker {
   ): void {
     const retrySignal = this._abortController?.signal;
     const workPromise = this._executeActivityInternal(req, completionToken, stub, retrySignal);
-    this._trackPendingWorkItem(workPromise, (error) => {
-      WorkerLogs.workerError(this._logger, error);
-    });
+    this._trackPendingWorkItem(
+      workPromise,
+      (error) => WorkerLogs.workerError(this._logger, error),
+      () =>
+        this._deliverResponse(
+          stub.abandonTaskActivityWorkItem.bind(stub),
+          new pb.AbandonActivityTaskRequest().setCompletiontoken(completionToken),
+          retrySignal,
+        ),
+      retrySignal,
+    );
   }
 
   /**
@@ -1438,6 +1467,7 @@ export class TaskHubGrpcWorker {
       endSpan(activitySpan);
     }
 
+    if (this._payloads) await this._payloads.externalize(res, retrySignal);
     try {
       await this._deliverResponse(stub.completeActivityTask.bind(stub), res, retrySignal);
     } catch (e: unknown) {
@@ -1457,9 +1487,17 @@ export class TaskHubGrpcWorker {
   ): void {
     const retrySignal = this._abortController?.signal;
     const workPromise = this._executeEntityInternal(req, completionToken, stub, operationInfos, retrySignal);
-    this._trackPendingWorkItem(workPromise, (error) => {
-      WorkerLogs.workerError(this._logger, error);
-    });
+    this._trackPendingWorkItem(
+      workPromise,
+      (error) => WorkerLogs.workerError(this._logger, error),
+      () =>
+        this._deliverResponse(
+          stub.abandonTaskEntityWorkItem.bind(stub),
+          new pb.AbandonEntityTaskRequest().setCompletiontoken(completionToken),
+          retrySignal,
+        ),
+      retrySignal,
+    );
   }
 
   /**
@@ -1561,9 +1599,17 @@ export class TaskHubGrpcWorker {
   ): void {
     const retrySignal = this._abortController?.signal;
     const workPromise = this._executeEntityV2Internal(req, completionToken, stub, retrySignal);
-    this._trackPendingWorkItem(workPromise, (error) => {
-      WorkerLogs.workerError(this._logger, error);
-    });
+    this._trackPendingWorkItem(
+      workPromise,
+      (error) => WorkerLogs.workerError(this._logger, error),
+      () =>
+        this._deliverResponse(
+          stub.abandonTaskEntityWorkItem.bind(stub),
+          new pb.AbandonEntityTaskRequest().setCompletiontoken(completionToken),
+          retrySignal,
+        ),
+      retrySignal,
+    );
   }
 
   /**
@@ -1719,6 +1765,7 @@ export class TaskHubGrpcWorker {
     stub: stubs.TaskHubSidecarServiceClient,
     retrySignal?: AbortSignal,
   ): Promise<void> {
+    if (this._payloads) await this._payloads.externalize(batchResult, retrySignal);
     try {
       await this._deliverResponse(stub.completeEntityTask.bind(stub), batchResult, retrySignal);
     } catch (e: any) {

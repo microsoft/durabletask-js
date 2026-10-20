@@ -461,6 +461,7 @@ export class TaskHubGrpcClient {
    *
    * If an orchestrator instance is already in a terminal state when this method is called, it returns immediately.
    * Server deadline errors are retried with backoff within the original total timeout.
+   * Payload storage errors propagate without retrying the successful wait RPC.
    *
    * @param {string} instanceId - The unique identifier of the orchestrator instance to wait for.
    * @param {boolean} fetchPayloads - Indicates whether to fetch the orchestrator instance's
@@ -512,25 +513,30 @@ export class TaskHubGrpcClient {
 
   private async _waitForCompletion(req: pb.GetInstanceRequest, signal: AbortSignal): Promise<pb.GetInstanceResponse> {
     const backoff = new ExponentialBackoff({ initialDelayMs: 100, maxDelayMs: 1000, jitterFactor: 0 });
+    const waitSignal = this._payloads ? AbortSignal.any([signal, this._payloadCancellation.signal]) : signal;
     while (true) {
-      signal.throwIfAborted();
+      waitSignal.throwIfAborted();
       // Metadata failures must not enter the remote-deadline retry path.
       const metadata = this._metadataGenerator ? await this._metadataGenerator() : new grpc.Metadata();
+      let response: pb.GetInstanceResponse;
       try {
-        return await this._call(
+        // GetInstanceRequest has no externalizable fields; isolate RPC errors from response hydration.
+        response = await callWithMetadata(
           this._stub.waitForInstanceCompletion.bind(this._stub),
           req,
           async () => metadata,
-          signal,
+          waitSignal,
         );
       } catch (error) {
-        signal.throwIfAborted();
+        waitSignal.throwIfAborted();
         if (error instanceof Error && "code" in error && error.code === grpc.status.DEADLINE_EXCEEDED) {
-          await backoff.wait(signal);
+          await backoff.wait(waitSignal);
           continue;
         }
         throw error;
       }
+      if (this._payloads) await this._payloads.resolve(response, waitSignal);
+      return response;
     }
   }
 
