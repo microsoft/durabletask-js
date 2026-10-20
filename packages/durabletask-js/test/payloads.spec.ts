@@ -18,7 +18,7 @@ import { Registry } from "../src/worker/registry";
 class MemoryPayloadStore extends PayloadStore {
   readonly values = new Map<string, string>();
   uploads = 0;
-  async upload(value: string): Promise<string> {
+  async upload(value: string, _signal?: AbortSignal): Promise<string> {
     const token = `test:${++this.uploads}`;
     this.values.set(token, value);
     return token;
@@ -102,6 +102,128 @@ describe("externalized payloads", () => {
     await processor.externalize(request);
     expect(request.hasInput()).toBe(false);
     expect(store.uploads).toBe(0);
+  });
+
+  describe("recognized payload tokens", () => {
+    it("externalizes a message repeatedly without uploading tokens and hydrates it once", async () => {
+      processor = new PayloadProcessor({ store, thresholdBytes: 1 });
+      const request = new pb.EntityBatchRequest()
+        .setEntitystate(text("original state"))
+        .setOperationsList([new pb.OperationRequest().setInput(text("original input"))]);
+      const original = request.toObject();
+      const upload = jest.spyOn(store, "upload");
+
+      await processor.externalize(request);
+      const externalized = request.toObject();
+      await processor.externalize(request);
+      await processor.externalize(request);
+      await processor.resolve(request);
+
+      expect(request.toObject()).toEqual(original);
+      expect(upload.mock.calls.map(([value]) => value)).toEqual(["original state", "original input"]);
+      expect(store.uploads).toBe(2);
+      expect(externalized.entitystate!.value).toBe("test:1");
+      expect(externalized.operationsList[0].input!.value).toBe("test:2");
+    });
+
+    it("retries a partially externalized message without wrapping the successful token", async () => {
+      processor = new PayloadProcessor({ store, thresholdBytes: 1 });
+      const request = new pb.EntityBatchRequest()
+        .setEntitystate(text("original state"))
+        .setOperationsList([new pb.OperationRequest().setInput(text("original input"))]);
+      const original = request.toObject();
+      const failure = Object.assign(new Error("retry input"), { statusCode: 503 });
+      const uploadValue = store.upload.bind(store);
+      let failInput = true;
+      const upload = jest.spyOn(store, "upload").mockImplementation(async (value) => {
+        if (value === "original input" && failInput) {
+          failInput = false;
+          throw failure;
+        }
+        return uploadValue(value);
+      });
+
+      await expect(processor.externalize(request)).rejects.toBe(failure);
+      expect(request.getEntitystate()!.getValue()).toBe("test:1");
+      expect(request.getOperationsList()[0].getInput()!.getValue()).toBe("original input");
+      await processor.externalize(request);
+      await processor.resolve(request);
+
+      expect(request.toObject()).toEqual(original);
+      expect(upload.mock.calls.map(([value]) => value)).toEqual(["original state", "original input", "original input"]);
+      expect([...store.values.values()]).toEqual(["original state", "original input"]);
+    });
+
+    it("uses the configured store's recognition rather than a token-prefix assumption", async () => {
+      const token = "opaque-owned-reference";
+      store.values.set(token, "original state");
+      store.isKnownPayloadToken = (value) => store.values.has(value);
+      processor = new PayloadProcessor({ store, thresholdBytes: 1 });
+      const request = new pb.EntityBatchRequest()
+        .setEntitystate(text(token))
+        .setOperationsList([new pb.OperationRequest().setInput(text("test:literal input"))]);
+      const upload = jest.spyOn(store, "upload");
+
+      await processor.externalize(request);
+      await processor.resolve(request);
+
+      expect(request.getEntitystate()!.getValue()).toBe("original state");
+      expect(request.getOperationsList()[0].getInput()!.getValue()).toBe("test:literal input");
+      expect(upload.mock.calls.map(([value]) => value)).toEqual(["test:literal input"]);
+    });
+
+    it("excludes known tokens from maximum validation while externalizing eligible raw fields", async () => {
+      const token = "test:reference-longer-than-the-maximum";
+      store.values.set(token, "original state");
+      processor = new PayloadProcessor({ store, thresholdBytes: 1, maxPayloadBytes: 1 });
+      const request = new pb.EntityBatchRequest()
+        .setEntitystate(text(token))
+        .setOperationsList([new pb.OperationRequest().setInput(text("x"))]);
+
+      await expect(processor.externalize(request)).resolves.toBeUndefined();
+      expect(request.getEntitystate()!.getValue()).toBe(token);
+      expect([...store.values.values()]).toEqual(["original state", "x"]);
+      await processor.resolve(request);
+      expect(request.getEntitystate()!.getValue()).toBe("original state");
+      expect(request.getOperationsList()[0].getInput()!.getValue()).toBe("x");
+    });
+
+    it("still preflights every raw field before uploading when a message already contains tokens", async () => {
+      const token = "test:reference-longer-than-the-maximum";
+      store.values.set(token, "original state");
+      processor = new PayloadProcessor({ store, thresholdBytes: 1, maxPayloadBytes: 1 });
+      const request = new pb.EntityBatchRequest()
+        .setEntitystate(text(token))
+        .setOperationsList([
+          new pb.OperationRequest().setInput(text("x")),
+          new pb.OperationRequest().setInput(text("xx")),
+        ]);
+      const original = request.toObject();
+
+      await expect(processor.externalize(request)).rejects.toThrow(
+        "Payload size 2 bytes exceeds the configured maximum of 1 bytes.",
+      );
+      expect(store.uploads).toBe(0);
+      expect([...store.values.values()]).toEqual(["original state"]);
+      expect(request.toObject()).toEqual(original);
+    });
+
+    it("treats an all-token message as a canceled no-op", async () => {
+      store.values.set("test:state", "original state");
+      store.values.set("test:input", "original input");
+      processor = new PayloadProcessor({ store, thresholdBytes: 1 });
+      const request = new pb.EntityBatchRequest()
+        .setEntitystate(text("test:state"))
+        .setOperationsList([new pb.OperationRequest().setInput(text("test:input"))]);
+      const original = request.toObject();
+      const abort = new AbortController();
+      abort.abort();
+
+      await expect(processor.externalize(request, abort.signal)).resolves.toBeUndefined();
+
+      expect(store.uploads).toBe(0);
+      expect(request.toObject()).toEqual(original);
+    });
   });
 
   it("maps large entity batches without the JavaScript variadic argument limit", async () => {
@@ -589,6 +711,173 @@ describe("externalized payloads", () => {
       await processor.resolve(request);
       expect(request.toObject()).toEqual(original);
     });
+  });
+
+  describe("worker response cancellation", () => {
+    describe.each([
+      {
+        name: "activity",
+        makeResponse: () =>
+          new pb.ActivityResponse()
+            .setInstanceid("instance")
+            .setTaskid(17)
+            .setCompletiontoken("completion")
+            .setResult(text("result")),
+      },
+      {
+        name: "orchestrator",
+        makeResponse: () =>
+          new pb.OrchestratorResponse()
+            .setInstanceid("instance")
+            .setCompletiontoken("completion")
+            .setCustomstatus(text("status"))
+            .setIspartial(true)
+            .setChunkindex(new Int32Value().setValue(2))
+            .setActionsList([
+              new pb.OrchestratorAction().setScheduletask(new pb.ScheduleTaskAction().setInput(text("input"))),
+            ]),
+      },
+    ])("$name", ({ makeResponse }) => {
+      describe.each([
+        { name: "storage exception", makeReason: () => new PayloadStorageException("canceled") },
+        { name: "HTTP 403", makeReason: () => Object.assign(new Error("canceled"), { statusCode: 403 }) },
+      ])("$name", ({ makeReason }) => {
+        it.each(["pre-aborted", "in-flight"] as const)(
+          "rethrows the original %s reason without converting the response",
+          async (stage) => {
+            processor = new PayloadProcessor({
+              store,
+              thresholdBytes: 1,
+              maxPayloadBytes: stage === "pre-aborted" ? 1 : 1024,
+            });
+            const response = makeResponse();
+            const original = response.toObject();
+            const abort = new AbortController();
+            const reason = makeReason();
+            const started = gate();
+            let active = 0;
+            const upload = jest.spyOn(store, "upload").mockImplementation(async (_value, signal) => {
+              active++;
+              started.release();
+              try {
+                return await new Promise<string>((_resolve, reject) => {
+                  signal!.addEventListener("abort", () => reject(signal!.reason), { once: true });
+                });
+              } finally {
+                active--;
+              }
+            });
+            if (stage === "pre-aborted") abort.abort(reason);
+
+            const pending = expect(processor.externalize(response, abort.signal)).rejects.toBe(reason);
+            if (stage === "in-flight") {
+              await started.promise;
+              abort.abort(reason);
+            }
+            await pending;
+
+            expect(active).toBe(0);
+            if (stage === "pre-aborted") expect(upload).not.toHaveBeenCalled();
+            else expect(upload).toHaveBeenCalled();
+            expect(store.values.size).toBe(0);
+            expect(response.toObject()).toEqual(original);
+            await nextTurn();
+            expect(response.toObject()).toEqual(original);
+          },
+        );
+
+        it("still converts a genuine permanent upload failure when the signal is not aborted", async () => {
+          processor = new PayloadProcessor({ store, thresholdBytes: 1 });
+          const response = makeResponse();
+          const error = makeReason();
+          jest.spyOn(store, "upload").mockRejectedValue(error);
+          const abort = new AbortController();
+
+          await expect(processor.externalize(response, abort.signal)).resolves.toBeUndefined();
+
+          const details =
+            response instanceof pb.ActivityResponse
+              ? response.getFailuredetails()
+              : response.getActionsList()[0].getCompleteorchestration()!.getFailuredetails();
+          expect(details!.getIsnonretriable()).toBe(true);
+          expect(details!.getErrortype()).toBe(error.name);
+          expect(details!.getErrormessage()).toBe(error.message);
+          expect(abort.signal.aborted).toBe(false);
+        });
+
+        it("leaves canceled no-op responses unchanged", async () => {
+          processor = new PayloadProcessor({ store, thresholdBytes: 1024 });
+          const response = makeResponse();
+          const original = response.toObject();
+          const abort = new AbortController();
+          abort.abort(makeReason());
+
+          await expect(processor.externalize(response, abort.signal)).resolves.toBeUndefined();
+
+          expect(response.toObject()).toEqual(original);
+          expect(store.uploads).toBe(0);
+        });
+      });
+    });
+
+    it.each([403, 503])(
+      "rethrows the earlier I/O error %s rather than a later abort reason after drainage",
+      async (statusCode) => {
+        processor = new PayloadProcessor({ store, thresholdBytes: 1 });
+        const response = new pb.OrchestratorResponse()
+          .setCustomstatus(text("earlier"))
+          .setActionsList([
+            new pb.OrchestratorAction().setScheduletask(new pb.ScheduleTaskAction().setInput(text("later"))),
+          ]);
+        const original = response.toObject();
+        const abort = new AbortController();
+        const firstError = Object.assign(new Error("independent earlier I/O failure"), { statusCode });
+        const laterReason = new PayloadStorageException("later cancellation");
+        const hold = gate();
+        const laterStarted = gate();
+        let active = 0;
+        let settled = false;
+        const started: string[] = [];
+        store.upload = async (value) => {
+          started.push(value);
+          active++;
+          try {
+            if (value === "earlier") {
+              await hold.promise;
+              throw firstError;
+            }
+            abort.abort(laterReason);
+            laterStarted.release();
+            throw abort.signal.reason;
+          } finally {
+            active--;
+          }
+        };
+        const pending = processor.externalize(response, abort.signal).then(
+          () => {
+            settled = true;
+          },
+          (error: unknown) => {
+            settled = true;
+            return error;
+          },
+        );
+        await laterStarted.promise;
+        await nextTurn();
+        const beforeDrain = { settled, active };
+        hold.release();
+        const error = await pending;
+
+        expect(beforeDrain).toEqual({ settled: false, active: 1 });
+        expect(active).toBe(0);
+        expect(started).toEqual(["earlier", "later"]);
+        expect(error).toBe(firstError);
+        expect(error).not.toBe(laterReason);
+        expect(response.toObject()).toEqual(original);
+        await nextTurn();
+        expect(response.toObject()).toEqual(original);
+      },
+    );
   });
 
   describe("in-flight payload I/O", () => {
