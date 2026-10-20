@@ -58,6 +58,11 @@
   and token mutations for deterministically oversized messages. Precancellation, worker failure
   conversion, and bounded I/O error handling are preserved; transient I/O or submission failures
   can still leave stored payloads.
+- Skip store-recognized payload tokens before externalization size checks and uploads, so retries
+  of already or partially externalized messages hydrate back to the original data in one pass.
+- Preserve canceled payload processing as an error instead of a permanent worker failure, even
+  when the abort reason resembles a storage failure. Rethrow the drained runner's original error
+  without replacing earlier I/O failures with a later cancellation reason.
 - Prevent shared or duplicate pending tasks from stranding `whenAll` orchestrations after all
   activities finish. Notify every dependent composite, preserve duplicate result positions,
   and detach completed `whenAny` groups from their remaining children.
