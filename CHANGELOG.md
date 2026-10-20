@@ -53,6 +53,8 @@
   and token mutations for deterministically oversized messages. Precancellation, worker failure
   conversion, and bounded I/O error handling are preserved; transient I/O or submission failures
   can still leave stored payloads.
+- Skip store-recognized payload tokens before externalization size checks and uploads, so retries
+  of already or partially externalized messages hydrate back to the original data in one pass.
 - Prevent shared or duplicate pending tasks from stranding `whenAll` orchestrations after all
   activities finish. Notify every dependent composite, preserve duplicate result positions,
   and detach completed `whenAny` groups from their remaining children.

@@ -77,7 +77,7 @@ export class PayloadProcessor {
     const candidates: { field: StringValue; value: string; size: number }[] = [];
     for (const field of fields) {
       const value = field?.getValue();
-      if (!field || !value) continue;
+      if (!field || !value || this._options.store.isKnownPayloadToken(value)) continue;
       const size = Buffer.byteLength(value, "utf8");
       if (size < this._threshold) continue;
       candidates.push({ field, value, size });

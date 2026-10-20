@@ -104,6 +104,128 @@ describe("externalized payloads", () => {
     expect(store.uploads).toBe(0);
   });
 
+  describe("recognized payload tokens", () => {
+    it("externalizes a message repeatedly without uploading tokens and hydrates it once", async () => {
+      processor = new PayloadProcessor({ store, thresholdBytes: 1 });
+      const request = new pb.EntityBatchRequest()
+        .setEntitystate(text("original state"))
+        .setOperationsList([new pb.OperationRequest().setInput(text("original input"))]);
+      const original = request.toObject();
+      const upload = jest.spyOn(store, "upload");
+
+      await processor.externalize(request);
+      const externalized = request.toObject();
+      await processor.externalize(request);
+      await processor.externalize(request);
+      await processor.resolve(request);
+
+      expect(request.toObject()).toEqual(original);
+      expect(upload.mock.calls.map(([value]) => value)).toEqual(["original state", "original input"]);
+      expect(store.uploads).toBe(2);
+      expect(externalized.entitystate!.value).toBe("test:1");
+      expect(externalized.operationsList[0].input!.value).toBe("test:2");
+    });
+
+    it("retries a partially externalized message without wrapping the successful token", async () => {
+      processor = new PayloadProcessor({ store, thresholdBytes: 1 });
+      const request = new pb.EntityBatchRequest()
+        .setEntitystate(text("original state"))
+        .setOperationsList([new pb.OperationRequest().setInput(text("original input"))]);
+      const original = request.toObject();
+      const failure = Object.assign(new Error("retry input"), { statusCode: 503 });
+      const uploadValue = store.upload.bind(store);
+      let failInput = true;
+      const upload = jest.spyOn(store, "upload").mockImplementation(async (value) => {
+        if (value === "original input" && failInput) {
+          failInput = false;
+          throw failure;
+        }
+        return uploadValue(value);
+      });
+
+      await expect(processor.externalize(request)).rejects.toBe(failure);
+      expect(request.getEntitystate()!.getValue()).toBe("test:1");
+      expect(request.getOperationsList()[0].getInput()!.getValue()).toBe("original input");
+      await processor.externalize(request);
+      await processor.resolve(request);
+
+      expect(request.toObject()).toEqual(original);
+      expect(upload.mock.calls.map(([value]) => value)).toEqual(["original state", "original input", "original input"]);
+      expect([...store.values.values()]).toEqual(["original state", "original input"]);
+    });
+
+    it("uses the configured store's recognition rather than a token-prefix assumption", async () => {
+      const token = "opaque-owned-reference";
+      store.values.set(token, "original state");
+      store.isKnownPayloadToken = (value) => store.values.has(value);
+      processor = new PayloadProcessor({ store, thresholdBytes: 1 });
+      const request = new pb.EntityBatchRequest()
+        .setEntitystate(text(token))
+        .setOperationsList([new pb.OperationRequest().setInput(text("test:literal input"))]);
+      const upload = jest.spyOn(store, "upload");
+
+      await processor.externalize(request);
+      await processor.resolve(request);
+
+      expect(request.getEntitystate()!.getValue()).toBe("original state");
+      expect(request.getOperationsList()[0].getInput()!.getValue()).toBe("test:literal input");
+      expect(upload.mock.calls.map(([value]) => value)).toEqual(["test:literal input"]);
+    });
+
+    it("excludes known tokens from maximum validation while externalizing eligible raw fields", async () => {
+      const token = "test:reference-longer-than-the-maximum";
+      store.values.set(token, "original state");
+      processor = new PayloadProcessor({ store, thresholdBytes: 1, maxPayloadBytes: 1 });
+      const request = new pb.EntityBatchRequest()
+        .setEntitystate(text(token))
+        .setOperationsList([new pb.OperationRequest().setInput(text("x"))]);
+
+      await expect(processor.externalize(request)).resolves.toBeUndefined();
+      expect(request.getEntitystate()!.getValue()).toBe(token);
+      expect([...store.values.values()]).toEqual(["original state", "x"]);
+      await processor.resolve(request);
+      expect(request.getEntitystate()!.getValue()).toBe("original state");
+      expect(request.getOperationsList()[0].getInput()!.getValue()).toBe("x");
+    });
+
+    it("still preflights every raw field before uploading when a message already contains tokens", async () => {
+      const token = "test:reference-longer-than-the-maximum";
+      store.values.set(token, "original state");
+      processor = new PayloadProcessor({ store, thresholdBytes: 1, maxPayloadBytes: 1 });
+      const request = new pb.EntityBatchRequest()
+        .setEntitystate(text(token))
+        .setOperationsList([
+          new pb.OperationRequest().setInput(text("x")),
+          new pb.OperationRequest().setInput(text("xx")),
+        ]);
+      const original = request.toObject();
+
+      await expect(processor.externalize(request)).rejects.toThrow(
+        "Payload size 2 bytes exceeds the configured maximum of 1 bytes.",
+      );
+      expect(store.uploads).toBe(0);
+      expect([...store.values.values()]).toEqual(["original state"]);
+      expect(request.toObject()).toEqual(original);
+    });
+
+    it("treats an all-token message as a canceled no-op", async () => {
+      store.values.set("test:state", "original state");
+      store.values.set("test:input", "original input");
+      processor = new PayloadProcessor({ store, thresholdBytes: 1 });
+      const request = new pb.EntityBatchRequest()
+        .setEntitystate(text("test:state"))
+        .setOperationsList([new pb.OperationRequest().setInput(text("test:input"))]);
+      const original = request.toObject();
+      const abort = new AbortController();
+      abort.abort();
+
+      await expect(processor.externalize(request, abort.signal)).resolves.toBeUndefined();
+
+      expect(store.uploads).toBe(0);
+      expect(request.toObject()).toEqual(original);
+    });
+  });
+
   it("maps large entity batches without the JavaScript variadic argument limit", async () => {
     const request = new pb.EntityBatchRequest().setOperationsList(
       Array.from({ length: 150000 }, () => new pb.OperationRequest().setInput(text("x"))),
