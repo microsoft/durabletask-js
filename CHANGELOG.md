@@ -47,6 +47,8 @@
 
 ### Fixes
 
+- Limit completion-wait deadline retries to scheduler RPC failures. Payload download errors,
+  including custom-store gRPC deadlines, propagate unchanged after the successful wait response.
 - Abandon acquired worker work items when enabled payload hydration or unconverted output storage
   processing fails, awaiting shutdown-aware bounded release retries without creating fake business
   failures. Tokenless host processing preserves unconverted storage errors.

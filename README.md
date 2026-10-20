@@ -39,6 +39,9 @@ orchestration output failures still produce non-retriable failed completions. To
 (`processOrchestratorRequest` and `processEntityBatchRequest`) instead reject with the original
 unconverted storage error so the host can apply its own retry policy.
 
+Completion waits retry scheduler RPC deadline failures, not payload download failures. Storage
+errors propagate unchanged, including gRPC deadline errors from custom stores.
+
 Azure-managed builders expose `.useExternalizedPayloads({ store })` and require core `>=0.4.1`
 for the public payload types. This phase works with a custom/in-memory store and does not import
 an Azure Blob provider or register cleanup tasks. Complete the six-phase feature stack before release.
