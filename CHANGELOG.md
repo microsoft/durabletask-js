@@ -53,6 +53,11 @@
   matching .NET management clients without changing purge timeout/completion semantics.
 - Keep `PayloadStorageException` cause options structural so its public declarations remain
   usable by ES2020 consumers without the global ES2022 `ErrorOptions` type.
+- Limit completion-wait deadline retries to scheduler RPC failures. Payload download errors,
+  including custom-store gRPC deadlines, propagate unchanged after the successful wait response.
+- Abandon acquired worker work items when enabled payload hydration or unconverted output storage
+  processing fails, awaiting shutdown-aware bounded release retries without creating fake business
+  failures. Tokenless host processing preserves unconverted storage errors.
 - Apply payload externalization and UTF-8 size limits to native continue-as-new carryover history.
   Event metadata, ordering, and hydrated payload values are preserved.
 - Validate every eligible payload's UTF-8 size before starting uploads, preventing storage writes

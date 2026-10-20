@@ -37,6 +37,16 @@ opt-in through `client.setLargePayloadAutoPurge(true)` and requires a supporting
 Single-instance purges now route ordinary/entity IDs correctly even without payload storage.
 See the package's [configuration, interoperability, and cleanup contract](./packages/durabletask-js-azureblob/README.md).
 
+Workers abandon acquired queue work items when payload downloads or unconverted output storage/size
+checks fail. Release is awaited with bounded gRPC retries and the original work item's cancellation
+signal; release failures are logged, and shutdown prevents late sends. Permanent activity and
+orchestration output failures still produce non-retriable failed completions. Tokenless host APIs
+(`processOrchestratorRequest` and `processEntityBatchRequest`) instead reject with the original
+unconverted storage error so the host can apply its own retry policy.
+
+Completion waits retry scheduler RPC deadline failures, not payload download failures. Storage
+errors propagate unchanged, including gRPC deadline errors from custom stores.
+
 This feature is reviewed as a six-phase dependency stack. Merge all phases before preparing
 a release; publish the completed core `0.4.1` before the dependent packages.
 
