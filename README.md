@@ -39,8 +39,10 @@ orchestration output failures still produce non-retriable failed completions. To
 (`processOrchestratorRequest` and `processEntityBatchRequest`) instead reject with the original
 unconverted storage error so the host can apply its own retry policy.
 
-Completion waits retry scheduler RPC deadline failures, not payload download failures. Storage
-errors propagate unchanged, including gRPC deadline errors from custom stores.
+All unary client operations share the same payload and metadata pipeline. Only actual scheduler
+RPC failures enter operation-specific error translation or retry; storage and metadata errors
+propagate unchanged. Completion waits retry scheduler deadlines with fresh metadata, without
+re-uploading the request or retrying response hydration. Cancellation stops RPCs and retry backoff.
 
 Azure-managed builders expose `.useExternalizedPayloads({ store })` and require core `>=0.4.1`
 for the public payload types. A custom/in-memory store or the optional Azure Blob provider can
