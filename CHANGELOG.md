@@ -53,6 +53,11 @@
   matching .NET management clients without changing purge timeout/completion semantics.
 - Keep `PayloadStorageException` cause options structural so its public declarations remain
   usable by ES2020 consumers without the global ES2022 `ErrorOptions` type.
+- Deduplicate auto-purge runner startup only after an actual scheduler RPC duplicate response.
+  Preserve upload/metadata error identity, including matching semantic error types, and cancellation.
+- Share the unary client payload/metadata/RPC/hydration pipeline across scheduling, waits, rewind,
+  and restart. Only actual RPC failures enter operation-specific error translation or retry;
+  storage and metadata failures keep their original identity, and cancellation prevents retries.
 - Restrict scheduling error translation to `startInstance` RPC failures. Payload upload and
   metadata errors retain their original identity instead of becoming duplicate-ID or argument errors.
 - Limit completion-wait deadline retries to scheduler RPC failures. Payload download errors,
