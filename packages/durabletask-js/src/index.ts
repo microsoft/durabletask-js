@@ -8,6 +8,7 @@ export {
   PayloadStorageException,
   PayloadDeleteOutcome,
 } from "./payloads/payload-store";
+export { LargePayloadPurgeDisposition, LargePayloadTombstone, LargePayloadPurgeResult } from "./payloads/purge";
 export { TaskHubGrpcClient, TaskHubGrpcClientOptions, MetadataGenerator } from "./client/client";
 export { TaskHubGrpcWorker, TaskHubGrpcWorkerOptions } from "./worker/task-hub-grpc-worker";
 export { ConcurrencyOptions } from "./worker/concurrency-options";

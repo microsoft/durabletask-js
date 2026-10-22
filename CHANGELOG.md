@@ -2,6 +2,9 @@
 
 ### New
 
+- Add the DTS payload-purge protocol and `setLargePayloadAutoPurge()` client lifecycle,
+  including setting-first enable/disable and reserved-instance identity verification.
+  A compatible .NET worker or the later cleanup-worker phase is required; do not publish partial phases.
 - Add payload storage contracts and bounded protobuf payload processing, with inclusive UTF-8
   thresholds, explicit storage/size failures, and non-retriable worker upload-failure conversion.
   This is phase 1 of the external-payload feature; transport, providers, and cleanup follow separately.
@@ -47,6 +50,10 @@
 
 ### Fixes
 
+- Deduplicate auto-purge runner startup only after an actual scheduler RPC duplicate response.
+  Preserve upload/metadata error identity, including matching semantic error types, and cancellation.
+- Determine single-instance purge routing from the instance ID regardless of payload configuration,
+  matching .NET management clients: ordinary IDs are orchestrations and `@name@key` IDs are entities.
 - Share the unary client payload/metadata/RPC/hydration pipeline across scheduling, waits, rewind,
   and restart. Only actual RPC failures enter operation-specific error translation or retry;
   storage and metadata failures keep their original identity, and cancellation prevents retries.

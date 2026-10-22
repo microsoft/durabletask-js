@@ -40,6 +40,10 @@ import { SignalEntityOptions } from "../entities/signal-entity-options";
 import { PayloadStorageOptions } from "../payloads/payload-store";
 import { PayloadProcessor } from "../payloads/payload-processor";
 import { readPayloadHistory, PayloadHydrationError } from "../payloads/history-stream";
+import * as lp from "../proto/large_payload_purge_pb";
+import { LargePayloadPurgeService } from "../proto/large_payload_purge_grpc_pb";
+import { callPayloadPurge } from "../payloads/purge-transport";
+import { BlobPurgeConstants, validatePurgeBatchSize } from "../payloads/purge";
 import {
   CleanEntityStorageRequest,
   CleanEntityStorageResult,
@@ -205,6 +209,87 @@ export class TaskHubGrpcClient {
       if (this._payloads) await this._payloads.resolve(response, effectiveSignal);
       return response;
     }
+  }
+
+  /**
+   * Enables or pauses DTS large-payload cleanup. Enabling starts/verifies the reserved singleton
+   * and enqueues its batch size (1..1000, default 500). Disabling only writes the backend setting.
+   * Steps are not transactional; errors and cancellation do not roll back an earlier successful step.
+   * A payload-enabled worker is required. Legacy v1 references are not deleted.
+   */
+  async setLargePayloadAutoPurge(enabled: boolean, batchSize = 500, signal?: AbortSignal): Promise<void> {
+    if (enabled) validatePurgeBatchSize(batchSize);
+    const cancellation = signal
+      ? AbortSignal.any([signal, this._payloadCancellation.signal])
+      : this._payloadCancellation.signal;
+    await callPayloadPurge(
+      this._stub,
+      LargePayloadPurgeService.setLargePayloadAutoPurge,
+      new lp.SetLargePayloadAutoPurgeRequest().setEnabled(enabled),
+      this._metadataGenerator,
+      cancellation,
+    );
+    if (!enabled) return;
+    const request = new pb.CreateInstanceRequest()
+      .setInstanceid(BlobPurgeConstants.instanceId)
+      .setName(BlobPurgeConstants.orchestrator)
+      .setVersion(new StringValue().setValue(""))
+      .setInput(new StringValue().setValue(JSON.stringify({ PurgeBatchSize: batchSize, PurgedCount: 0 })))
+      .setOrchestrationidreusepolicy(
+        new pb.OrchestrationIdReusePolicy().setReplaceablestatusList([
+          pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED,
+          pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED,
+          pb.OrchestrationStatus.ORCHESTRATION_STATUS_CANCELED,
+          pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED,
+        ]),
+      );
+    let runnerAlreadyExists = false;
+    try {
+      const response = await this._call<pb.CreateInstanceRequest, pb.CreateInstanceResponse>(
+        this._stub.startInstance.bind(this._stub),
+        request,
+        this._metadataGenerator,
+        cancellation,
+        (error) => {
+          if (error instanceof Error && "code" in error && error.code === grpc.status.ALREADY_EXISTS) {
+            runnerAlreadyExists = true;
+          }
+          return false;
+        },
+      );
+      if (response.getInstanceid() !== BlobPurgeConstants.instanceId) {
+        throw new Error("The backend returned an unexpected auto-purge instance ID.");
+      }
+    } catch (error) {
+      cancellation.throwIfAborted();
+      if (!runnerAlreadyExists) throw error;
+    }
+    const started = await this._call<pb.GetInstanceRequest, pb.GetInstanceResponse>(
+      this._stub.waitForInstanceStart.bind(this._stub),
+      new pb.GetInstanceRequest().setInstanceid(BlobPurgeConstants.instanceId).setGetinputsandoutputs(false),
+      this._metadataGenerator,
+      cancellation,
+    );
+    const state = started.getOrchestrationstate();
+    if (
+      !started.getExists() ||
+      state?.getInstanceid() !== BlobPurgeConstants.instanceId ||
+      state?.getName() !== BlobPurgeConstants.orchestrator
+    ) {
+      throw new Error("The reserved auto-purge instance ID belongs to a different orchestration.");
+    }
+    if (state.getOrchestrationstatus() !== pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING) {
+      throw new Error("Auto-purge did not start in Running status.");
+    }
+    await this._call(
+      this._stub.raiseEvent.bind(this._stub),
+      new pb.RaiseEventRequest()
+        .setInstanceid(BlobPurgeConstants.instanceId)
+        .setName(BlobPurgeConstants.configurationEvent)
+        .setInput(new StringValue().setValue(JSON.stringify(batchSize))),
+      this._metadataGenerator,
+      cancellation,
+    );
   }
 
   /**
@@ -815,6 +900,7 @@ export class TaskHubGrpcClient {
       const req = new pb.PurgeInstancesRequest();
       req.setInstanceid(instanceId);
       req.setRecursive(options?.recursive ?? false);
+      req.setIsorchestration(!instanceId.startsWith("@"));
 
       ClientLogs.purgingInstanceMetadata(this._logger, instanceId);
 
