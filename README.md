@@ -45,8 +45,8 @@ propagate unchanged. Completion waits retry scheduler deadlines with fresh metad
 re-uploading the request or retrying response hydration. Cancellation stops RPCs and retry backoff.
 
 Azure-managed builders expose `.useExternalizedPayloads({ store })` and require core `>=0.4.1`
-for the public payload types. This phase works with a custom/in-memory store and does not import
-an Azure Blob provider or register cleanup tasks. Complete the six-phase feature stack before release.
+for the public payload types. A custom/in-memory store or the optional Azure Blob provider can
+implement storage independently of the transport. Complete the six-phase feature stack before release.
 
 ### Payload cleanup client protocol
 
@@ -56,8 +56,11 @@ the reserved Running orchestration, then signals its batch size. Disabling only 
 backend setting. These steps are not transactional; earlier successful steps are not rolled back.
 
 This client operation does not require blob credentials. It requires a backend implementing
-the DTS `LargePayloadPurge` service and a compatible worker (the existing .NET implementation
-or the later phase 5 JavaScript runner). This phase does not register worker cleanup tasks.
+the DTS `LargePayloadPurge` service and a compatible worker. Payload-enabled JavaScript workers
+now register the reserved cleanup orchestrator and activities automatically, preserve their
+wildcard filters and bypass business version policy without changing customer filters.
+Deletion verifies ownership and ETags, batches 50 tokens per activity and limits concurrency;
+the runner backs off empty/retry-only batches and preserves configuration through continue-as-new.
 Do not publish the feature until all six phases are complete.
 
 Single-instance purges now identify the instance kind even on management-only clients without
