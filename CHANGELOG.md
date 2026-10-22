@@ -65,6 +65,8 @@
 - Preserve canceled payload processing as an error instead of a permanent worker failure, even
   when the abort reason resembles a storage failure. Rethrow the drained runner's original error
   without replacing earlier I/O failures with a later cancellation reason.
+- Include rewind-history input in payload hydration, externalization, and UTF-8 size preflight,
+  preserving the rewind reason and metadata.
 - Prevent shared or duplicate pending tasks from stranding `whenAll` orchestrations after all
   activities finish. Notify every dependent composite, preserve duplicate result positions,
   and detach completed `whenAny` groups from their remaining children.
