@@ -47,6 +47,8 @@
 
 ### Fixes
 
+- Restrict scheduling error translation to `startInstance` RPC failures. Payload upload and
+  metadata errors retain their original identity instead of becoming duplicate-ID or argument errors.
 - Limit completion-wait deadline retries to scheduler RPC failures. Payload download errors,
   including custom-store gRPC deadlines, propagate unchanged after the successful wait response.
 - Abandon acquired worker work items when enabled payload hydration or unconverted output storage

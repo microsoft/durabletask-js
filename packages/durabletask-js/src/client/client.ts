@@ -281,27 +281,32 @@ export class TaskHubGrpcClient {
     ClientLogs.schedulingOrchestration(this._logger, req.getInstanceid(), name, inputSizeInBytes);
 
     try {
-      const res = await this._call<pb.CreateInstanceRequest, pb.CreateInstanceResponse>(
-        this._stub.startInstance.bind(this._stub),
-        req,
-        this._metadataGenerator,
-      );
+      const signal = this._payloads ? this._payloadCancellation.signal : undefined;
+      if (this._payloads) await this._payloads.externalize(req, signal);
+      const metadata = this._metadataGenerator ? await this._metadataGenerator() : new grpc.Metadata();
+      let res: pb.CreateInstanceResponse;
+      try {
+        res = await callWithMetadata(this._stub.startInstance.bind(this._stub), req, async () => metadata, signal);
+      } catch (e: unknown) {
+        if (e instanceof Error && "code" in e) {
+          const grpcError = e as grpc.ServiceError;
+          const message = grpcError.details || grpcError.message;
+          if (grpcError.code === grpc.status.ALREADY_EXISTS) {
+            throw new OrchestrationAlreadyExistsError(message, { cause: e });
+          }
+          if (grpcError.code === grpc.status.INVALID_ARGUMENT) {
+            throw new TypeError(message, { cause: e });
+          }
+          // The JS SDK has no named cancellation error contract, so preserve CANCELLED as a ServiceError.
+        }
+        throw e;
+      }
+      if (this._payloads) await this._payloads.resolve(res, signal);
 
       setSpanOk(span);
       return res.getInstanceid();
     } catch (e: unknown) {
       setSpanError(span, e);
-      if (e instanceof Error && "code" in e) {
-        const grpcError = e as grpc.ServiceError;
-        const message = grpcError.details || grpcError.message;
-        if (grpcError.code === grpc.status.ALREADY_EXISTS) {
-          throw new OrchestrationAlreadyExistsError(message, { cause: e });
-        }
-        if (grpcError.code === grpc.status.INVALID_ARGUMENT) {
-          throw new TypeError(message, { cause: e });
-        }
-        // The JS SDK has no named cancellation error contract, so preserve CANCELLED as a ServiceError.
-      }
       throw e;
     } finally {
       endSpan(span);
