@@ -1,0 +1,44 @@
+{
+  "name": "@microsoft/durabletask-js-azureblob",
+  "version": "0.4.0",
+  "description": "Azure Blob externalized payload storage for the Durable Task JavaScript SDK",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "CHANGELOG.md",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('dist', {recursive:true, force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "test": "jest --runInBand --detectOpenHandles",
+    "test:unit": "jest test --runInBand --detectOpenHandles",
+    "test:azurite": "jest test/azurite.spec.ts --runInBand --detectOpenHandles",
+    "prepublishOnly": "npm run build && npm run test"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/microsoft/durabletask-js.git",
+    "directory": "packages/durabletask-js-azureblob"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@azure/core-auth": "^1.10.0",
+    "@azure/storage-blob": "^12.26.0"
+  },
+  "peerDependencies": {
+    "@microsoft/durabletask-js": ">=0.4.1"
+  }
+}
