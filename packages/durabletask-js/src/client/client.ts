@@ -37,6 +37,9 @@ import { EntityInstanceId } from "../entities/entity-instance-id";
 import { EntityMetadata, createEntityMetadata, createEntityMetadataWithoutState } from "../entities/entity-metadata";
 import { EntityQuery, normalizeInstanceIdPrefix } from "../entities/entity-query";
 import { SignalEntityOptions } from "../entities/signal-entity-options";
+import { PayloadStorageOptions } from "../payloads/payload-store";
+import { PayloadProcessor } from "../payloads/payload-processor";
+import { readPayloadHistory, PayloadHydrationError } from "../payloads/history-stream";
 import {
   CleanEntityStorageRequest,
   CleanEntityStorageResult,
@@ -59,6 +62,8 @@ export { MetadataGenerator } from "../utils/grpc-helper.util";
  * Options for creating a TaskHubGrpcClient.
  */
 export interface TaskHubGrpcClientOptions {
+  /** Optional externalized payload storage. Disabled by default. */
+  payloads?: PayloadStorageOptions;
   /** The host address to connect to. Defaults to "localhost:4001". */
   hostAddress?: string;
   /** gRPC channel options. */
@@ -84,6 +89,8 @@ export class TaskHubGrpcClient {
   private _metadataGenerator?: MetadataGenerator;
   private _logger: Logger;
   private _defaultVersion?: string;
+  private readonly _payloads?: PayloadProcessor;
+  private readonly _payloadCancellation = new AbortController();
 
   /**
    * Creates a new TaskHubGrpcClient instance.
@@ -137,6 +144,7 @@ export class TaskHubGrpcClient {
       resolvedMetadataGenerator = hostAddressOrOptions.metadataGenerator;
       resolvedLogger = hostAddressOrOptions.logger;
       resolvedDefaultVersion = hostAddressOrOptions.defaultVersion;
+      if (hostAddressOrOptions.payloads) this._payloads = new PayloadProcessor(hostAddressOrOptions.payloads);
     } else {
       // Deprecated positional parameters constructor
       resolvedHostAddress = hostAddressOrOptions;
@@ -154,11 +162,49 @@ export class TaskHubGrpcClient {
   }
 
   async stop(): Promise<void> {
+    this._payloadCancellation.abort();
     await this._stub.close();
 
     // Brief pause to allow gRPC cleanup - this is a known issue with grpc-node
     // https://github.com/grpc/grpc-node/issues/1563#issuecomment-829483711
     await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+
+  // The RPC-only handler may throw a mapped error, return true to retry the RPC,
+  // or return false to rethrow the original error.
+  private async _call<TReq, TRes>(
+    method: Parameters<typeof callWithMetadata<TReq, TRes>>[0],
+    request: TReq,
+    metadataGenerator?: MetadataGenerator,
+    signal?: AbortSignal,
+    handleRpcError?: (error: unknown, effectiveSignal?: AbortSignal) => boolean | Promise<boolean>,
+  ): Promise<TRes> {
+    const effectiveSignal = this._payloads
+      ? signal
+        ? AbortSignal.any([signal, this._payloadCancellation.signal])
+        : this._payloadCancellation.signal
+      : signal;
+    effectiveSignal?.throwIfAborted();
+    if (this._payloads) await this._payloads.externalize(request, effectiveSignal);
+    while (true) {
+      effectiveSignal?.throwIfAborted();
+      let attemptMetadata: MetadataGenerator | undefined;
+      if (metadataGenerator) {
+        const metadata = await metadataGenerator();
+        attemptMetadata = async () => metadata;
+      }
+      let response: TRes;
+      try {
+        response = await callWithMetadata(method, request, attemptMetadata, effectiveSignal);
+      } catch (error) {
+        effectiveSignal?.throwIfAborted();
+        if ((await handleRpcError?.(error, effectiveSignal)) === true) continue;
+        throw error;
+      }
+      effectiveSignal?.throwIfAborted();
+      if (this._payloads) await this._payloads.resolve(response, effectiveSignal);
+      return response;
+    }
   }
 
   /**
@@ -256,27 +302,31 @@ export class TaskHubGrpcClient {
     ClientLogs.schedulingOrchestration(this._logger, req.getInstanceid(), name, inputSizeInBytes);
 
     try {
-      const res = await callWithMetadata<pb.CreateInstanceRequest, pb.CreateInstanceResponse>(
+      const res = await this._call<pb.CreateInstanceRequest, pb.CreateInstanceResponse>(
         this._stub.startInstance.bind(this._stub),
         req,
         this._metadataGenerator,
+        undefined,
+        (e: unknown) => {
+          if (e instanceof Error && "code" in e) {
+            const grpcError = e as grpc.ServiceError;
+            const message = grpcError.details || grpcError.message;
+            if (grpcError.code === grpc.status.ALREADY_EXISTS) {
+              throw new OrchestrationAlreadyExistsError(message, { cause: e });
+            }
+            if (grpcError.code === grpc.status.INVALID_ARGUMENT) {
+              throw new TypeError(message, { cause: e });
+            }
+            // The JS SDK has no named cancellation error contract, so preserve CANCELLED as a ServiceError.
+          }
+          return false;
+        },
       );
 
       setSpanOk(span);
       return res.getInstanceid();
     } catch (e: unknown) {
       setSpanError(span, e);
-      if (e instanceof Error && "code" in e) {
-        const grpcError = e as grpc.ServiceError;
-        const message = grpcError.details || grpcError.message;
-        if (grpcError.code === grpc.status.ALREADY_EXISTS) {
-          throw new OrchestrationAlreadyExistsError(message, { cause: e });
-        }
-        if (grpcError.code === grpc.status.INVALID_ARGUMENT) {
-          throw new TypeError(message, { cause: e });
-        }
-        // The JS SDK has no named cancellation error contract, so preserve CANCELLED as a ServiceError.
-      }
       throw e;
     } finally {
       endSpan(span);
@@ -301,7 +351,7 @@ export class TaskHubGrpcClient {
     req.setInstanceid(instanceId);
     req.setGetinputsandoutputs(fetchPayloads);
 
-    const res = await callWithMetadata<pb.GetInstanceRequest, pb.GetInstanceResponse>(
+    const res = await this._call<pb.GetInstanceRequest, pb.GetInstanceResponse>(
       this._stub.getInstance.bind(this._stub),
       req,
       this._metadataGenerator,
@@ -343,7 +393,7 @@ export class TaskHubGrpcClient {
       signal,
       `Timed out waiting for orchestration '${instanceId}' to start after ${timeout}s`,
       (waitSignal) =>
-        callWithMetadata(this._stub.waitForInstanceStart.bind(this._stub), req, this._metadataGenerator, waitSignal),
+        this._call(this._stub.waitForInstanceStart.bind(this._stub), req, this._metadataGenerator, waitSignal),
     );
 
     return newOrchestrationState(req.getInstanceid(), res);
@@ -359,6 +409,7 @@ export class TaskHubGrpcClient {
    *
    * If an orchestrator instance is already in a terminal state when this method is called, it returns immediately.
    * Server deadline errors are retried with backoff within the original total timeout.
+   * Payload storage errors propagate without retrying the successful wait RPC.
    *
    * @param {string} instanceId - The unique identifier of the orchestrator instance to wait for.
    * @param {boolean} fetchPayloads - Indicates whether to fetch the orchestrator instance's
@@ -410,26 +461,19 @@ export class TaskHubGrpcClient {
 
   private async _waitForCompletion(req: pb.GetInstanceRequest, signal: AbortSignal): Promise<pb.GetInstanceResponse> {
     const backoff = new ExponentialBackoff({ initialDelayMs: 100, maxDelayMs: 1000, jitterFactor: 0 });
-    while (true) {
-      signal.throwIfAborted();
-      // Metadata failures must not enter the remote-deadline retry path.
-      const metadata = this._metadataGenerator ? await this._metadataGenerator() : new grpc.Metadata();
-      try {
-        return await callWithMetadata(
-          this._stub.waitForInstanceCompletion.bind(this._stub),
-          req,
-          async () => metadata,
-          signal,
-        );
-      } catch (error) {
-        signal.throwIfAborted();
+    return this._call(
+      this._stub.waitForInstanceCompletion.bind(this._stub),
+      req,
+      this._metadataGenerator,
+      signal,
+      async (error, effectiveSignal) => {
         if (error instanceof Error && "code" in error && error.code === grpc.status.DEADLINE_EXCEEDED) {
-          await backoff.wait(signal);
-          continue;
+          await backoff.wait(effectiveSignal);
+          return true;
         }
-        throw error;
-      }
-    }
+        return false;
+      },
+    );
   }
 
   private async _withWaitCancellation(
@@ -498,7 +542,7 @@ export class TaskHubGrpcClient {
     ClientLogs.raisingEvent(this._logger, instanceId, eventName);
 
     try {
-      await callWithMetadata<pb.RaiseEventRequest, pb.RaiseEventResponse>(
+      await this._call<pb.RaiseEventRequest, pb.RaiseEventResponse>(
         this._stub.raiseEvent.bind(this._stub),
         req,
         this._metadataGenerator,
@@ -565,7 +609,7 @@ export class TaskHubGrpcClient {
 
     ClientLogs.terminatingInstance(this._logger, instanceId);
 
-    await callWithMetadata<pb.TerminateRequest, pb.TerminateResponse>(
+    await this._call<pb.TerminateRequest, pb.TerminateResponse>(
       this._stub.terminateInstance.bind(this._stub),
       req,
       this._metadataGenerator,
@@ -591,7 +635,7 @@ export class TaskHubGrpcClient {
 
     ClientLogs.suspendingInstance(this._logger, instanceId);
 
-    await callWithMetadata<pb.SuspendRequest, pb.SuspendResponse>(
+    await this._call<pb.SuspendRequest, pb.SuspendResponse>(
       this._stub.suspendInstance.bind(this._stub),
       req,
       this._metadataGenerator,
@@ -617,7 +661,7 @@ export class TaskHubGrpcClient {
 
     ClientLogs.resumingInstance(this._logger, instanceId);
 
-    await callWithMetadata<pb.ResumeRequest, pb.ResumeResponse>(
+    await this._call<pb.ResumeRequest, pb.ResumeResponse>(
       this._stub.resumeInstance.bind(this._stub),
       req,
       this._metadataGenerator,
@@ -655,35 +699,34 @@ export class TaskHubGrpcClient {
 
     ClientLogs.rewindingInstance(this._logger, instanceId, reason);
 
-    try {
-      await callWithMetadata<pb.RewindInstanceRequest, pb.RewindInstanceResponse>(
-        this._stub.rewindInstance.bind(this._stub),
-        req,
-        this._metadataGenerator,
-      );
-    } catch (e) {
-      // Handle gRPC errors and convert them to appropriate errors
-      if (e instanceof Error && "code" in e) {
-        const grpcError = e as grpc.ServiceError;
-        if (grpcError.code === grpc.status.NOT_FOUND) {
-          throw new Error(`An orchestration with the instanceId '${instanceId}' was not found.`, { cause: e });
+    await this._call<pb.RewindInstanceRequest, pb.RewindInstanceResponse>(
+      this._stub.rewindInstance.bind(this._stub),
+      req,
+      this._metadataGenerator,
+      undefined,
+      (e: unknown) => {
+        if (e instanceof Error && "code" in e) {
+          const grpcError = e as grpc.ServiceError;
+          if (grpcError.code === grpc.status.NOT_FOUND) {
+            throw new Error(`An orchestration with the instanceId '${instanceId}' was not found.`, { cause: e });
+          }
+          if (grpcError.code === grpc.status.FAILED_PRECONDITION) {
+            throw new Error(
+              grpcError.details ||
+                `Cannot rewind orchestration '${instanceId}': it is in a state that does not allow rewinding.`,
+              { cause: e },
+            );
+          }
+          if (grpcError.code === grpc.status.UNIMPLEMENTED) {
+            throw new Error(grpcError.details || `The rewind operation is not supported by the backend.`, { cause: e });
+          }
+          if (grpcError.code === grpc.status.CANCELLED) {
+            throw new Error(`The rewind operation for '${instanceId}' was canceled.`, { cause: e });
+          }
         }
-        if (grpcError.code === grpc.status.FAILED_PRECONDITION) {
-          throw new Error(
-            grpcError.details ||
-              `Cannot rewind orchestration '${instanceId}': it is in a state that does not allow rewinding.`,
-            { cause: e },
-          );
-        }
-        if (grpcError.code === grpc.status.UNIMPLEMENTED) {
-          throw new Error(grpcError.details || `The rewind operation is not supported by the backend.`, { cause: e });
-        }
-        if (grpcError.code === grpc.status.CANCELLED) {
-          throw new Error(`The rewind operation for '${instanceId}' was canceled.`, { cause: e });
-        }
-      }
-      throw e;
-    }
+        return false;
+      },
+    );
   }
 
   /**
@@ -720,28 +763,28 @@ export class TaskHubGrpcClient {
 
     ClientLogs.restartingInstance(this._logger, instanceId, restartWithNewInstanceId);
 
-    try {
-      const res = await callWithMetadata<pb.RestartInstanceRequest, pb.RestartInstanceResponse>(
-        this._stub.restartInstance.bind(this._stub),
-        req,
-        this._metadataGenerator,
-      );
-      return res.getInstanceid();
-    } catch (e) {
-      if (e instanceof Error && "code" in e) {
-        const grpcError = e as grpc.ServiceError;
-        if (grpcError.code === grpc.status.NOT_FOUND) {
-          throw new Error(`An orchestration with the instanceId '${instanceId}' was not found.`, { cause: e });
+    const res = await this._call<pb.RestartInstanceRequest, pb.RestartInstanceResponse>(
+      this._stub.restartInstance.bind(this._stub),
+      req,
+      this._metadataGenerator,
+      undefined,
+      (e: unknown) => {
+        if (e instanceof Error && "code" in e) {
+          const grpcError = e as grpc.ServiceError;
+          if (grpcError.code === grpc.status.NOT_FOUND) {
+            throw new Error(`An orchestration with the instanceId '${instanceId}' was not found.`, { cause: e });
+          }
+          if (grpcError.code === grpc.status.FAILED_PRECONDITION) {
+            throw new Error(`An orchestration with the instanceId '${instanceId}' cannot be restarted.`, { cause: e });
+          }
+          if (grpcError.code === grpc.status.CANCELLED) {
+            throw new Error(`The restartOrchestration operation was canceled.`, { cause: e });
+          }
         }
-        if (grpcError.code === grpc.status.FAILED_PRECONDITION) {
-          throw new Error(`An orchestration with the instanceId '${instanceId}' cannot be restarted.`, { cause: e });
-        }
-        if (grpcError.code === grpc.status.CANCELLED) {
-          throw new Error(`The restartOrchestration operation was canceled.`, { cause: e });
-        }
-      }
-      throw e;
-    }
+        return false;
+      },
+    );
+    return res.getInstanceid();
   }
 
   /**
@@ -775,7 +818,7 @@ export class TaskHubGrpcClient {
 
       ClientLogs.purgingInstanceMetadata(this._logger, instanceId);
 
-      res = await callWithMetadata<pb.PurgeInstancesRequest, pb.PurgeInstancesResponse>(
+      res = await this._call<pb.PurgeInstancesRequest, pb.PurgeInstancesResponse>(
         this._stub.purgeInstances.bind(this._stub),
         req,
         this._metadataGenerator,
@@ -811,7 +854,7 @@ export class TaskHubGrpcClient {
         runtimeStatusList.map(String).join(", "),
       );
 
-      const callPromise = callWithMetadata<pb.PurgeInstancesRequest, pb.PurgeInstancesResponse>(
+      const callPromise = this._call<pb.PurgeInstancesRequest, pb.PurgeInstancesResponse>(
         this._stub.purgeInstances.bind(this._stub),
         req,
         this._metadataGenerator,
@@ -915,7 +958,7 @@ export class TaskHubGrpcClient {
 
         req.setQuery(query);
 
-        const response = await callWithMetadata<pb.QueryInstancesRequest, pb.QueryInstancesResponse>(
+        const response = await this._call<pb.QueryInstancesRequest, pb.QueryInstancesResponse>(
           this._stub.queryInstances.bind(this._stub),
           req,
           this._metadataGenerator,
@@ -1001,7 +1044,7 @@ export class TaskHubGrpcClient {
       req.setCompletedtimeto(timestamp);
     }
 
-    const response = await callWithMetadata<pb.ListInstanceIdsRequest, pb.ListInstanceIdsResponse>(
+    const response = await this._call<pb.ListInstanceIdsRequest, pb.ListInstanceIdsResponse>(
       this._stub.listInstanceIds.bind(this._stub),
       req,
       this._metadataGenerator,
@@ -1048,6 +1091,26 @@ export class TaskHubGrpcClient {
 
     const metadata = this._metadataGenerator ? await this._metadataGenerator() : new grpc.Metadata();
     const stream = this._stub.streamInstanceHistory(req, metadata);
+
+    if (this._payloads) {
+      try {
+        const events = await readPayloadHistory(stream, this._payloads, this._payloadCancellation.signal);
+        return events.map(convertProtoHistoryEvent).filter((event): event is HistoryEvent => event !== undefined);
+      } catch (error) {
+        if (error instanceof PayloadHydrationError) throw error.cause;
+        if (error instanceof Error && "code" in error) {
+          if (error.code === grpc.status.NOT_FOUND) return [];
+          if (error.code === grpc.status.CANCELLED)
+            throw new Error("The getOrchestrationHistory operation was canceled.");
+          if (error.code === grpc.status.INTERNAL) {
+            throw new Error(
+              `An error occurred while retrieving the history for orchestration with instanceId '${instanceId}'.`,
+            );
+          }
+        }
+        throw error;
+      }
+    }
 
     return new Promise<HistoryEvent[]>((resolve, reject) => {
       const historyEvents: HistoryEvent[] = [];
@@ -1147,7 +1210,7 @@ export class TaskHubGrpcClient {
     ClientLogs.signalingEntity(this._logger, id.toString(), operationName);
 
     try {
-      await callWithMetadata<pb.SignalEntityRequest, pb.SignalEntityResponse>(
+      await this._call<pb.SignalEntityRequest, pb.SignalEntityResponse>(
         this._stub.signalEntity.bind(this._stub),
         req,
         this._metadataGenerator,
@@ -1183,7 +1246,7 @@ export class TaskHubGrpcClient {
 
     ClientLogs.gettingEntity(this._logger, id.toString());
 
-    const res = await callWithMetadata<pb.GetEntityRequest, pb.GetEntityResponse>(
+    const res = await this._call<pb.GetEntityRequest, pb.GetEntityResponse>(
       this._stub.getEntity.bind(this._stub),
       req,
       this._metadataGenerator,
@@ -1271,7 +1334,7 @@ export class TaskHubGrpcClient {
 
       req.setQuery(protoQuery);
 
-      const res = await callWithMetadata<pb.QueryEntitiesRequest, pb.QueryEntitiesResponse>(
+      const res = await this._call<pb.QueryEntitiesRequest, pb.QueryEntitiesResponse>(
         this._stub.queryEntities.bind(this._stub),
         req,
         this._metadataGenerator,
@@ -1311,7 +1374,7 @@ export class TaskHubGrpcClient {
         protoReq.setContinuationtoken(token);
       }
 
-      const res = await callWithMetadata<pb.CleanEntityStorageRequest, pb.CleanEntityStorageResponse>(
+      const res = await this._call<pb.CleanEntityStorageRequest, pb.CleanEntityStorageResponse>(
         this._stub.cleanEntityStorage.bind(this._stub),
         protoReq,
         this._metadataGenerator,

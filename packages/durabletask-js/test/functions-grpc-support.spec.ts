@@ -3,6 +3,8 @@
 
 import {
   OrchestrationContext,
+  PayloadStore,
+  PayloadStorageException,
   TaskEntity,
   TaskHubGrpcWorker,
   TOrchestrator,
@@ -12,6 +14,7 @@ import {
 import * as pb from "../src/proto/orchestrator_service_pb";
 import { newExecutionStartedEvent, newOrchestratorStartedEvent } from "../src/utils/pb-helper.util";
 import { NoOpLogger } from "../src/types/logger.type";
+import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
 
 const TEST_INSTANCE_ID = "functions-grpc-instance";
 
@@ -87,6 +90,50 @@ describe("Functions gRPC support surface", () => {
     expect(response.getResultsList()).toHaveLength(1);
     expect(response.getResultsList()[0].getSuccess()?.getResult()?.getValue()).toBe("1");
     expect(response.getEntitystate()?.getValue()).toBe("1");
+  });
+
+  it.each([
+    { kind: "orchestrator", phase: "download" },
+    { kind: "entity", phase: "download" },
+    { kind: "orchestrator", phase: "upload" },
+    { kind: "entity", phase: "upload" },
+    { kind: "entity", phase: "maximum" },
+  ])("preserves the original $phase failure for a tokenless $kind host invocation", async ({ kind, phase }) => {
+    const failure = Object.assign(new Error("storage unavailable"), { statusCode: 503 });
+    class Store extends PayloadStore {
+      async upload(): Promise<string> {
+        throw failure;
+      }
+      async download(): Promise<string> {
+        throw failure;
+      }
+      isKnownPayloadToken(value: string): boolean {
+        return value.startsWith("payload:");
+      }
+    }
+    const worker = new TaskHubGrpcWorker({
+      payloads: { store: new Store(), thresholdBytes: 1, maxPayloadBytes: phase === "maximum" ? 1 : undefined },
+      logger: new NoOpLogger(),
+    });
+    worker.addNamedOrchestrator("flow", async () => "output");
+    worker.addNamedEntity("counter", () => new CounterEntity());
+    const input = new StringValue().setValue(phase === "download" ? "payload:input" : "10");
+    const request =
+      kind === "orchestrator"
+        ? new pb.OrchestratorRequest()
+            .setInstanceid(TEST_INSTANCE_ID)
+            .setNeweventsList([
+              newOrchestratorStartedEvent(),
+              newExecutionStartedEvent("flow", TEST_INSTANCE_ID, input.getValue()),
+            ])
+        : createEntityBatchRequest("counter", "key").setEntitystate(input);
+    const processing =
+      kind === "orchestrator"
+        ? worker.processOrchestratorRequest(request.serializeBinary())
+        : worker.processEntityBatchRequest(request.serializeBinary());
+    if (phase === "maximum") await expect(processing).rejects.toBeInstanceOf(PayloadStorageException);
+    else await expect(processing).rejects.toBe(failure);
+    expect(worker["_pendingWorkItems"].size).toBe(0);
   });
 });
 
