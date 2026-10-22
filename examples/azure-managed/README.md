@@ -11,6 +11,7 @@ Runnable samples demonstrating every major feature of the Durable Task JavaScrip
 | [human-interaction](human-interaction/) | Event-driven workflows | External events, timers, `whenAny` race, `sendEvent`, custom status | Yes |
 | [lifecycle-management](lifecycle-management/) | Orchestration control | Terminate (recursive), suspend/resume, restart, continue-as-new, purge, tags | Yes |
 | [query-and-history](query-and-history/) | Monitoring & debugging | `getAllInstances`, pagination, `listInstanceIds`, `getOrchestrationHistory`, typed events | Yes |
+| [large-payloads](large-payloads/) | External payloads | Transparent UTF-8/gzip blob storage and large activity/orchestration inputs/results | DTS and Blob/Azurite |
 | [versioning](versioning/) | Safe deployments | Version match strategies, failure strategies, `ctx.version`, `ctx.compareVersionTo()` | Yes |
 | [unit-testing](unit-testing/) | Testing without infra | `InMemoryOrchestrationBackend`, `TestOrchestrationClient`, `TestOrchestrationWorker`, `ReplaySafeLogger` | **No** |
 | [basics](basics/) | Azure-managed basics | Connection strings, `DefaultAzureCredential`, `createAzureManagedClient` | Yes |
