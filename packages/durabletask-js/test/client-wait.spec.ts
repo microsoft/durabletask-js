@@ -8,6 +8,7 @@ import { TaskHubGrpcClient } from "../src/client/client";
 import { OrchestrationState } from "../src/orchestration/orchestration-state";
 import { TimeoutError } from "../src/exception/timeout-error";
 import { NoOpLogger } from "../src/types/logger.type";
+import { PayloadStore } from "../src/payloads/payload-store";
 import * as pb from "../src/proto/orchestrator_service_pb";
 
 type Wait = (
@@ -32,6 +33,152 @@ function completedResponse(): pb.GetInstanceResponse {
   response.setOrchestrationstate(state);
   return response;
 }
+
+class UnaryWaitPayloadStore extends PayloadStore {
+  upload = jest.fn(async (_value: string, _signal?: AbortSignal) => "payload:input");
+  download = jest.fn(async (_token: string, _signal?: AbortSignal) => '"done"');
+  isKnownPayloadToken(value: string): boolean {
+    return value.startsWith("payload:");
+  }
+}
+
+describe("payload-enabled unary completion pipeline", () => {
+  let client: TaskHubGrpcClient;
+  let store: UnaryWaitPayloadStore;
+  let callback: Callback;
+  const cancel = jest.fn();
+  const call: grpc.ClientUnaryCall = Object.assign(new EventEmitter(), {
+    cancel,
+    getPeer: () => "test",
+    getAuthContext: () => null,
+  });
+
+  const rpc = jest.fn<grpc.ClientUnaryCall, [pb.GetInstanceRequest, grpc.Metadata, Callback]>();
+  const metadataGenerator = jest.fn<Promise<grpc.Metadata>, []>();
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    cancel.mockReset();
+    store = new UnaryWaitPayloadStore();
+    metadataGenerator.mockReset().mockImplementation(async () => {
+      const metadata = new grpc.Metadata();
+      metadata.set("attempt", String(metadataGenerator.mock.calls.length));
+      return metadata;
+    });
+    rpc.mockReset().mockImplementation((_req, _metadata, cb) => {
+      callback = cb;
+      return call;
+    });
+    client = new TaskHubGrpcClient({
+      payloads: { store, thresholdBytes: 1 },
+      metadataGenerator,
+      logger: new NoOpLogger(),
+    });
+    Object.defineProperty(client["_stub"], "waitForInstanceCompletion", { value: rpc });
+  });
+
+  afterEach(() => {
+    client["_stub"].close();
+    jest.useRealTimers();
+  });
+
+  it("does not retry a frozen metadata deadline after a real RPC retry", async () => {
+    const failure = Object.freeze(grpcError(grpc.status.DEADLINE_EXCEEDED));
+    metadataGenerator.mockResolvedValueOnce(new grpc.Metadata()).mockRejectedValue(failure);
+    const pending = client.waitForOrchestrationCompletion("instance", true, 5);
+    const assertion = expect(pending).rejects.toBe(failure);
+    await jest.advanceTimersByTimeAsync(0);
+    callback(grpcError(grpc.status.DEADLINE_EXCEEDED), new pb.GetInstanceResponse());
+    await jest.advanceTimersByTimeAsync(100);
+    await assertion;
+    await jest.advanceTimersByTimeAsync(1000);
+
+    expect(metadataGenerator).toHaveBeenCalledTimes(2);
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(store.upload).not.toHaveBeenCalled();
+    expect(store.download).not.toHaveBeenCalled();
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it("reuses the request across RPC retries, regenerates metadata, and hydrates only the successful response", async () => {
+    const pending = client.waitForOrchestrationCompletion("instance", true, 5);
+    await jest.advanceTimersByTimeAsync(0);
+    const response = completedResponse();
+    response.getOrchestrationstate()!.setOutput(new StringValue().setValue("payload:output"));
+    callback(grpcError(grpc.status.DEADLINE_EXCEEDED), response);
+    await jest.advanceTimersByTimeAsync(100);
+    callback(grpcError(grpc.status.DEADLINE_EXCEEDED), response);
+    await jest.advanceTimersByTimeAsync(200);
+    callback(null, response);
+    await expect(pending).resolves.toMatchObject({ serializedOutput: '"done"' });
+
+    expect(rpc).toHaveBeenCalledTimes(3);
+    expect(rpc.mock.calls.every(([request]) => request === rpc.mock.calls[0][0])).toBe(true);
+    expect(rpc.mock.calls.map(([, metadata]) => metadata.get("attempt"))).toEqual([["1"], ["2"], ["3"]]);
+    expect(store.upload).not.toHaveBeenCalled();
+    expect(store.download).toHaveBeenCalledTimes(1);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it.each(["metadata", "rpc", "backoff", "hydration"] as const)(
+    "stop cancels %s without starting later metadata or RPC attempts",
+    async (stage) => {
+      let resolveMetadata: ((metadata: grpc.Metadata) => void) | undefined;
+      if (stage === "metadata") {
+        metadataGenerator.mockImplementation(() => new Promise((resolve) => (resolveMetadata = resolve)));
+      }
+      if (stage === "hydration") {
+        store.download.mockImplementation(
+          (_token, signal) =>
+            new Promise<string>((_resolve, reject) => {
+              signal!.addEventListener("abort", () => reject(signal!.reason), { once: true });
+            }),
+        );
+      }
+      const pending = client.waitForOrchestrationCompletion("instance", true, 5);
+      const rejected = pending.catch((error: unknown) => error);
+      await jest.advanceTimersByTimeAsync(0);
+      if (stage === "backoff") {
+        callback(grpcError(grpc.status.DEADLINE_EXCEEDED), new pb.GetInstanceResponse());
+      } else if (stage === "hydration") {
+        const response = completedResponse();
+        response.getOrchestrationstate()!.setOutput(new StringValue().setValue("payload:output"));
+        callback(null, response);
+      }
+      await jest.advanceTimersByTimeAsync(0);
+      const stopping = client.stop();
+      resolveMetadata?.(new grpc.Metadata());
+      await jest.advanceTimersByTimeAsync(10000);
+      await stopping;
+
+      expect(await rejected).toBe(client["_payloadCancellation"].signal.reason);
+      expect(metadataGenerator).toHaveBeenCalledTimes(1);
+      expect(rpc).toHaveBeenCalledTimes(stage === "metadata" ? 0 : 1);
+      expect(cancel).toHaveBeenCalledTimes(stage === "rpc" ? 1 : 0);
+      expect(store.download).toHaveBeenCalledTimes(stage === "hydration" ? 1 : 0);
+      expect(jest.getTimerCount()).toBe(0);
+    },
+  );
+
+  it.each(["abort", "timeout"] as const)("does not restart after %s in payload-enabled backoff", async (cause) => {
+    const controller = new AbortController();
+    const reason = Object.freeze(grpcError(grpc.status.DEADLINE_EXCEEDED));
+    const pending = client.waitForOrchestrationCompletion("instance", true, 0.05, controller.signal);
+    const rejected = pending.catch((error: unknown) => error);
+    await jest.advanceTimersByTimeAsync(0);
+    callback(grpcError(grpc.status.DEADLINE_EXCEEDED), new pb.GetInstanceResponse());
+    await jest.advanceTimersByTimeAsync(0);
+    if (cause === "abort") controller.abort(reason);
+    await jest.advanceTimersByTimeAsync(10000);
+
+    if (cause === "abort") expect(await rejected).toBe(reason);
+    else expect(await rejected).toBeInstanceOf(TimeoutError);
+    expect(metadataGenerator).toHaveBeenCalledTimes(1);
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(cancel).not.toHaveBeenCalled();
+    expect(jest.getTimerCount()).toBe(0);
+  });
+});
 
 describe.each([
   ["waitForOrchestrationStart", "waitForInstanceStart", false, "start"],
