@@ -53,6 +53,8 @@
   matching .NET management clients without changing purge timeout/completion semantics.
 - Keep `PayloadStorageException` cause options structural so its public declarations remain
   usable by ES2020 consumers without the global ES2022 `ErrorOptions` type.
+- Restrict scheduling error translation to `startInstance` RPC failures. Payload upload and
+  metadata errors retain their original identity instead of becoming duplicate-ID or argument errors.
 - Limit completion-wait deadline retries to scheduler RPC failures. Payload download errors,
   including custom-store gRPC deadlines, propagate unchanged after the successful wait response.
 - Abandon acquired worker work items when enabled payload hydration or unconverted output storage
@@ -69,6 +71,8 @@
 - Preserve canceled payload processing as an error instead of a permanent worker failure, even
   when the abort reason resembles a storage failure. Rethrow the drained runner's original error
   without replacing earlier I/O failures with a later cancellation reason.
+- Include rewind-history input in payload hydration, externalization, and UTF-8 size preflight,
+  preserving the rewind reason and metadata.
 - Prevent shared or duplicate pending tasks from stranding `whenAll` orchestrations after all
   activities finish. Notify every dependent composite, preserve duplicate result positions,
   and detach completed `whenAny` groups from their remaining children.

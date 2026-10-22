@@ -190,6 +190,7 @@ export class PayloadProcessor {
       event.getExecutionsuspended()?.getInput(),
       event.getExecutionresumed()?.getInput(),
       event.getExecutionrewound()?.getReason(),
+      event.getExecutionrewound()?.getInput(),
       event.getEntityoperationsignaled()?.getInput(),
       event.getEntityoperationcalled()?.getInput(),
       event.getEntityoperationcompleted()?.getOutput(),
