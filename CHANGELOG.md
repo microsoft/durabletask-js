@@ -47,6 +47,9 @@
 
 ### Fixes
 
+- Share the unary client payload/metadata/RPC/hydration pipeline across scheduling, waits, rewind,
+  and restart. Only actual RPC failures enter operation-specific error translation or retry;
+  storage and metadata failures keep their original identity, and cancellation prevents retries.
 - Restrict scheduling error translation to `startInstance` RPC failures. Payload upload and
   metadata errors retain their original identity instead of becoming duplicate-ID or argument errors.
 - Limit completion-wait deadline retries to scheduler RPC failures. Payload download errors,
