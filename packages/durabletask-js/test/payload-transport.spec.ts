@@ -4,7 +4,15 @@
 import * as grpc from "@grpc/grpc-js";
 import { Empty } from "google-protobuf/google/protobuf/empty_pb";
 import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
-import { TaskHubGrpcClient, TaskHubGrpcWorker, PayloadStore, NoOpLogger, TaskEntity } from "../src";
+import {
+  TaskHubGrpcClient,
+  TaskHubGrpcWorker,
+  PayloadStore,
+  NoOpLogger,
+  TaskEntity,
+  OrchestrationAlreadyExistsError,
+  OrchestrationStatus,
+} from "../src";
 import * as pb from "../src/proto/orchestrator_service_pb";
 import * as stubs from "../src/proto/orchestrator_service_grpc_pb";
 import * as pbh from "../src/utils/pb-helper.util";
@@ -98,6 +106,9 @@ describe("transparent payload transport over gRPC", () => {
   let onCompleteActivity: stubs.ITaskHubSidecarServiceServer["completeActivityTask"];
   let errors: jest.Mock;
   let historyEvents: pb.HistoryEvent[];
+  let startCalls: grpc.ServerUnaryCall<pb.CreateInstanceRequest, pb.CreateInstanceResponse>[];
+  let onStartInstance: stubs.ITaskHubSidecarServiceServer["startInstance"];
+  let clientStopped: boolean;
 
   beforeEach(async () => {
     store = new MemoryStore();
@@ -111,6 +122,10 @@ describe("transparent payload transport over gRPC", () => {
     entityResponses = [];
     abandonments = [];
     errors = jest.fn();
+    clientStopped = false;
+    startCalls = [];
+    onStartInstance = (call, callback) =>
+      callback(null, new pb.CreateInstanceResponse().setInstanceid(call.request.getInstanceid()));
     onCompleteActivity = (_call, callback) => callback(null, new pb.CompleteTaskResponse());
     historyEvents = [pbh.newExecutionStartedEvent("flow", "instance", input)];
     server = new grpc.Server();
@@ -124,8 +139,9 @@ describe("transparent payload transport over gRPC", () => {
     const service = {
       hello: (_call, callback) => callback(null, new Empty()),
       startInstance: (call, callback) => {
+        startCalls.push(call);
         requestedInput = call.request.getInput()?.getValue();
-        callback(null, new pb.CreateInstanceResponse().setInstanceid(call.request.getInstanceid()));
+        onStartInstance(call, callback);
       },
       getInstance: (_call, callback) =>
         callback(null, new pb.GetInstanceResponse().setExists(true).setOrchestrationstate(state())),
@@ -200,7 +216,7 @@ describe("transparent payload transport over gRPC", () => {
 
   afterEach(async () => {
     if (worker["_isRunning"]) await worker.stop();
-    await client.stop();
+    if (!clientStopped) await client.stop();
     server.forceShutdown();
     jest.restoreAllMocks();
   });
@@ -239,6 +255,152 @@ describe("transparent payload transport over gRPC", () => {
     expect(states[0].serializedInput).toBe('{"message":"hydrated"}');
     const history = await client.getOrchestrationHistory("instance");
     expect(history[0]).toMatchObject({ input: '{"message":"hydrated"}' });
+  });
+
+  describe("scheduling error domains", () => {
+    it.each([grpc.status.ALREADY_EXISTS, grpc.status.INVALID_ARGUMENT])(
+      "preserves upload status %s without scheduling",
+      async (code) => {
+        const failure = Object.assign(new Error("storage rejected upload"), {
+          code,
+          details: "storage rejected upload",
+          metadata: new grpc.Metadata(),
+        });
+        const upload = jest.spyOn(store, "upload").mockRejectedValue(failure);
+        const metadata = jest.fn(async () => new grpc.Metadata());
+        client["_metadataGenerator"] = metadata;
+
+        await expect(client.scheduleNewOrchestration("workflow", { message: "request" })).rejects.toBe(failure);
+        expect(upload).toHaveBeenCalledTimes(1);
+        expect(metadata).not.toHaveBeenCalled();
+        expect(startCalls).toHaveLength(0);
+      },
+    );
+
+    describe.each([true, false])("with payloads enabled=%s", (payloadsEnabled) => {
+      beforeEach(async () => {
+        await client.stop();
+        client = new TaskHubGrpcClient({
+          hostAddress,
+          payloads: payloadsEnabled ? { store, thresholdBytes: 1 } : undefined,
+          defaultVersion: "default-version",
+          logger: new NoOpLogger(),
+        });
+      });
+
+      it.each([grpc.status.ALREADY_EXISTS, grpc.status.INVALID_ARGUMENT])(
+        "preserves metadata status %s without scheduling",
+        async (code) => {
+          const failure = Object.assign(new Error("metadata rejected request"), { code });
+          const upload = jest.spyOn(store, "upload");
+          const metadata = jest.fn(async () => {
+            throw failure;
+          });
+          client["_metadataGenerator"] = metadata;
+
+          await expect(client.scheduleNewOrchestration("workflow", { message: "request" })).rejects.toBe(failure);
+          expect(metadata).toHaveBeenCalledTimes(1);
+          expect(upload).toHaveBeenCalledTimes(payloadsEnabled ? 1 : 0);
+          expect(startCalls).toHaveLength(0);
+        },
+      );
+
+      it.each([
+        [grpc.status.ALREADY_EXISTS, OrchestrationAlreadyExistsError],
+        [grpc.status.INVALID_ARGUMENT, TypeError],
+      ])("translates actual startInstance status %s with its cause and details", async (code, expectedError) => {
+        onStartInstance = (_call, callback) => callback({ code, details: "scheduler rejected start" });
+
+        const scheduled = client.scheduleNewOrchestration("workflow", { message: "request" });
+        await expect(scheduled).rejects.toBeInstanceOf(expectedError);
+        await expect(scheduled).rejects.toMatchObject({
+          message: "scheduler rejected start",
+          cause: expect.objectContaining({ code, details: "scheduler rejected start" }),
+        });
+        expect(startCalls).toHaveLength(1);
+      });
+
+      it.each([undefined, "explicit-version"])(
+        "preserves successful scheduling options (version=%s)",
+        async (version) => {
+          const metadata = new grpc.Metadata();
+          metadata.set("taskhub", "scheduling-error-domains");
+          const generateMetadata = jest.fn(async () => metadata);
+          client["_metadataGenerator"] = generateMetadata;
+          onStartInstance = (_call, callback) =>
+            callback(null, new pb.CreateInstanceResponse().setInstanceid("scheduled-instance"));
+          const upload = jest.spyOn(store, "upload");
+          const startAt = new Date("2026-10-22T15:00:00.000Z");
+          const input = { message: "request \u4f60\u597d" };
+
+          await expect(
+            client.scheduleNewOrchestration("workflow", input, {
+              instanceId: "requested-instance",
+              startAt,
+              tags: { owner: "scheduling-error-domains" },
+              version,
+              dedupeStatuses: [OrchestrationStatus.COMPLETED],
+            }),
+          ).resolves.toBe("scheduled-instance");
+
+          expect(startCalls).toHaveLength(1);
+          const { request, metadata: receivedMetadata } = startCalls[0];
+          expect(request.getName()).toBe("workflow");
+          expect(request.getInstanceid()).toBe("requested-instance");
+          expect(request.getScheduledstarttimestamp()?.toDate()).toEqual(startAt);
+          expect(request.getVersion()?.getValue()).toBe(version ?? "default-version");
+          expect(request.getTagsMap().get("owner")).toBe("scheduling-error-domains");
+          expect(request.getOrchestrationidreusepolicy()?.getReplaceablestatusList()).toHaveLength(6);
+          expect(request.getOrchestrationidreusepolicy()?.getReplaceablestatusList()).not.toContain(
+            pb.OrchestrationStatus.ORCHESTRATION_STATUS_COMPLETED,
+          );
+          expect(receivedMetadata.get("taskhub")).toEqual(["scheduling-error-domains"]);
+          expect(generateMetadata).toHaveBeenCalledTimes(1);
+          expect(upload).toHaveBeenCalledTimes(payloadsEnabled ? 1 : 0);
+          const wireInput = request.getInput()!.getValue();
+          expect(payloadsEnabled ? await store.download(wireInput) : wireInput).toBe(JSON.stringify(input));
+        },
+      );
+    });
+
+    it("preserves stop cancellation during upload without starting the scheduling RPC", async () => {
+      let uploadSignal: AbortSignal | undefined;
+      const upload = jest.spyOn(store, "upload").mockImplementation(
+        (_value: string, signal?: AbortSignal) =>
+          new Promise<string>((_resolve, reject) => {
+            uploadSignal = signal;
+            signal!.addEventListener("abort", () => reject(signal!.reason), { once: true });
+          }),
+      );
+      const pending = client.scheduleNewOrchestration("workflow", { message: "request" });
+      const rejected = pending.catch((error: unknown) => error);
+      await waitFor(() => !!uploadSignal);
+      clientStopped = true;
+      await client.stop();
+
+      expect(await rejected).toBe(uploadSignal!.reason);
+      expect(uploadSignal!.aborted).toBe(true);
+      expect(upload).toHaveBeenCalledTimes(1);
+      expect(startCalls).toHaveLength(0);
+    });
+
+    it("preserves stop cancellation of the pending scheduling RPC", async () => {
+      let canceled = false;
+      onStartInstance = (call) => {
+        call.on("cancelled", () => {
+          canceled = true;
+        });
+      };
+      const pending = client.scheduleNewOrchestration("workflow", { message: "request" });
+      const rejected = pending.catch((error: unknown) => error);
+      await waitFor(() => startCalls.length === 1);
+      clientStopped = true;
+      await client.stop();
+      await waitFor(() => canceled);
+
+      expect(await rejected).toBe(client["_payloadCancellation"].signal.reason);
+      expect(startCalls).toHaveLength(1);
+    });
   });
 
   it("advertises support, awaits input hydration and externalizes worker output", async () => {

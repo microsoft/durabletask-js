@@ -383,6 +383,7 @@ describe("externalized payloads", () => {
       new pb.HistoryEvent().setExecutionsuspended(new pb.ExecutionSuspendedEvent().setInput(value)),
     (value: StringValue) => new pb.HistoryEvent().setExecutionresumed(new pb.ExecutionResumedEvent().setInput(value)),
     (value: StringValue) => new pb.HistoryEvent().setExecutionrewound(new pb.ExecutionRewoundEvent().setReason(value)),
+    (value: StringValue) => new pb.HistoryEvent().setExecutionrewound(new pb.ExecutionRewoundEvent().setInput(value)),
     (value: StringValue) =>
       new pb.HistoryEvent().setEntityoperationsignaled(new pb.EntityOperationSignaledEvent().setInput(value)),
     (value: StringValue) =>
@@ -401,6 +402,119 @@ describe("externalized payloads", () => {
     await processor.externalize(response);
     expect([...store.values.values()]).toEqual(["payload", "payload"]);
     expect(event.getEventtypeCase()).toBe(originalCase);
+  });
+
+  describe("rewind input payloads", () => {
+    const makeEvent = (input: string) =>
+      new pb.HistoryEvent()
+        .setEventid(42)
+        .setExecutionrewound(
+          new pb.ExecutionRewoundEvent()
+            .setReason(text("rewind reason"))
+            .setParentexecutionid(text("previous-execution"))
+            .setInstanceid(text("rewound-instance"))
+            .setName(text("RewoundFlow"))
+            .setVersion(text("v2"))
+            .setInput(text(input)),
+        );
+
+    it.each([
+      { name: "history chunk", message: (event: pb.HistoryEvent) => new pb.HistoryChunk().setEventsList([event]) },
+      {
+        name: "past history",
+        message: (event: pb.HistoryEvent) => new pb.OrchestratorRequest().setPasteventsList([event]),
+      },
+      {
+        name: "new history",
+        message: (event: pb.HistoryEvent) => new pb.OrchestratorRequest().setNeweventsList([event]),
+      },
+    ])("hydrates rewind input once in $name without changing metadata or reason", async ({ message }) => {
+      const value = '{"original":"input"}';
+      const token = await store.upload(value);
+      const event = makeEvent(token);
+      const download = jest.spyOn(store, "download");
+
+      await processor.resolve(message(event));
+
+      expect(event.toObject()).toEqual(makeEvent(value).toObject());
+      expect(download.mock.calls).toEqual([[token, undefined]]);
+    });
+
+    describe.each(["rewritten", "carryover"] as const)("%s history", (surface) => {
+      const responseFor = (event: pb.HistoryEvent) =>
+        new pb.OrchestratorResponse()
+          .setInstanceid("rewound-instance")
+          .setCompletiontoken("completion")
+          .setActionsList([
+            surface === "rewritten"
+              ? new pb.OrchestratorAction()
+                  .setId(7)
+                  .setRewindorchestration(new pb.RewindOrchestrationAction().setNewhistoryList([event]))
+              : new pb.OrchestratorAction()
+                  .setId(7)
+                  .setCompleteorchestration(
+                    new pb.CompleteOrchestrationAction()
+                      .setOrchestrationstatus(pb.OrchestrationStatus.ORCHESTRATION_STATUS_CONTINUED_AS_NEW)
+                      .setCarryovereventsList([event]),
+                  ),
+          ]);
+
+      it.each([
+        ["below threshold", "\u00e9".repeat(131070) + "a", 262143, false],
+        ["at threshold", "\u00e9".repeat(131071), 262144, true],
+        ["above threshold", "\u00e9".repeat(131071) + "a", 262145, true],
+      ])(
+        "externalizes rewind input %s and round-trips metadata after one hydration",
+        async (_name, value, bytes, eligible) => {
+          const input = JSON.stringify(value);
+          expect(Buffer.byteLength(input, "utf8")).toBe(bytes);
+          const response = responseFor(makeEvent(input));
+          const original = response.toObject();
+
+          await processor.externalize(response);
+          await processor.externalize(response);
+
+          expect(store.uploads).toBe(eligible ? 1 : 0);
+          expect([...store.values.values()]).toEqual(eligible ? [input] : []);
+          const wire = pb.OrchestratorResponse.deserializeBinary(response.serializeBinary());
+          const action = wire.getActionsList()[0];
+          const events =
+            action.getRewindorchestration()?.getNewhistoryList() ??
+            action.getCompleteorchestration()!.getCarryovereventsList();
+          expect(store.isKnownPayloadToken(events[0].getExecutionrewound()!.getInput()!.getValue())).toBe(eligible);
+          const download = jest.spyOn(store, "download");
+
+          await processor.resolve(new pb.HistoryChunk().setEventsList(events));
+
+          expect(download).toHaveBeenCalledTimes(eligible ? 1 : 0);
+          expect(wire.toObject()).toEqual(original);
+        },
+      );
+
+      it("preflights oversized rewind input before uploading a valid status or mutating payload fields", async () => {
+        processor = new PayloadProcessor({ store, maxPayloadBytes: MIB });
+        const event = makeEvent("\u00e9".repeat(MIB / 2) + "a");
+        const originalEvent = event.toObject();
+        const status = text("s".repeat(262144));
+        const response = responseFor(event).setCustomstatus(status);
+
+        await processor.externalize(response);
+
+        expect(store.uploads).toBe(0);
+        expect(store.values.size).toBe(0);
+        expect(status.getValue()).toBe("s".repeat(262144));
+        expect(event.toObject()).toEqual(originalEvent);
+        expect(response.hasCustomstatus()).toBe(false);
+        expect(response.getActionsList()).toHaveLength(1);
+        const completion = response.getActionsList()[0].getCompleteorchestration()!;
+        expect(completion.getOrchestrationstatus()).toBe(pb.OrchestrationStatus.ORCHESTRATION_STATUS_FAILED);
+        expect(completion.getFailuredetails()!.getErrortype()).toBe("PayloadStorageException");
+        expect(completion.getFailuredetails()!.getIsnonretriable()).toBe(true);
+        expect(completion.getFailuredetails()!.getErrormessage()).toBe(
+          `Payload size ${MIB + 1} bytes exceeds the configured maximum of ${MIB} bytes.`,
+        );
+      });
+    });
   });
 
   it("converts permanent activity upload failures without sending the result", async () => {
