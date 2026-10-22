@@ -243,18 +243,26 @@ export class TaskHubGrpcClient {
           pb.OrchestrationStatus.ORCHESTRATION_STATUS_TERMINATED,
         ]),
       );
+    let runnerAlreadyExists = false;
     try {
       const response = await this._call<pb.CreateInstanceRequest, pb.CreateInstanceResponse>(
         this._stub.startInstance.bind(this._stub),
         request,
         this._metadataGenerator,
         cancellation,
+        (error) => {
+          if (error instanceof Error && "code" in error && error.code === grpc.status.ALREADY_EXISTS) {
+            runnerAlreadyExists = true;
+          }
+          return false;
+        },
       );
       if (response.getInstanceid() !== BlobPurgeConstants.instanceId) {
         throw new Error("The backend returned an unexpected auto-purge instance ID.");
       }
     } catch (error) {
-      if (!(error instanceof Error && "code" in error && error.code === grpc.status.ALREADY_EXISTS)) throw error;
+      cancellation.throwIfAborted();
+      if (!runnerAlreadyExists) throw error;
     }
     const started = await this._call<pb.GetInstanceRequest, pb.GetInstanceResponse>(
       this._stub.waitForInstanceStart.bind(this._stub),
