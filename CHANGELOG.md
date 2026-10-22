@@ -53,6 +53,8 @@
 
 ### Fixes
 
+- Deduplicate auto-purge runner startup only after an actual scheduler RPC duplicate response.
+  Preserve upload/metadata error identity, including matching semantic error types, and cancellation.
 - Determine single-instance purge routing from the instance ID regardless of payload configuration,
   matching .NET management clients: ordinary IDs are orchestrations and `@name@key` IDs are entities.
 - Share the unary client payload/metadata/RPC/hydration pipeline across scheduling, waits, rewind,
