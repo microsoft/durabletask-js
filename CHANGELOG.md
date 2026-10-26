@@ -2,6 +2,10 @@
 
 ### New
 
+- Add payload storage contracts and bounded protobuf payload processing, with inclusive UTF-8
+  thresholds, explicit storage/size failures, and non-retriable worker upload-failure conversion.
+  This is phase 1 of the external-payload feature; transport, providers, and cleanup follow separately.
+  Reserve core `0.4.1` for the new APIs; do not publish partial feature phases.
 - Expose readonly `OrchestrationContext.sourceInstanceId` from the existing protobuf
   request properties on initial execution and replay, independently of parent identity.
   Strings are preserved verbatim; null or missing metadata returns `undefined`.
@@ -43,6 +47,19 @@
 
 ### Fixes
 
+- Apply payload externalization and UTF-8 size limits to native continue-as-new carryover history.
+  Event metadata, ordering, and hydrated payload values are preserved.
+- Validate every eligible payload's UTF-8 size before starting uploads, preventing storage writes
+  and token mutations for deterministically oversized messages. Precancellation, worker failure
+  conversion, and bounded I/O error handling are preserved; transient I/O or submission failures
+  can still leave stored payloads.
+- Skip store-recognized payload tokens before externalization size checks and uploads, so retries
+  of already or partially externalized messages hydrate back to the original data in one pass.
+- Preserve canceled payload processing as an error instead of a permanent worker failure, even
+  when the abort reason resembles a storage failure. Rethrow the drained runner's original error
+  without replacing earlier I/O failures with a later cancellation reason.
+- Include rewind-history input in payload hydration, externalization, and UTF-8 size preflight,
+  preserving the rewind reason and metadata.
 - Prevent shared or duplicate pending tasks from stranding `whenAll` orchestrations after all
   activities finish. Notify every dependent composite, preserve duplicate result positions,
   and detach completed `whenAny` groups from their remaining children.
