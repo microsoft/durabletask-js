@@ -10,7 +10,7 @@ export function createLocalAzuriteClient(
   if (!connectionString) return undefined;
   const service = BlobServiceClient.fromConnectionString(connectionString, options);
   if (
-    !/(?:^|;)BlobEndpoint=/.test(connectionString) ||
+    !/(?:^|;)\s*BlobEndpoint=/.test(connectionString) ||
     !["127.0.0.1", "localhost", "[::1]"].includes(new URL(service.url).hostname)
   ) {
     throw new Error("Azurite tests require an explicit local-only BlobEndpoint.");

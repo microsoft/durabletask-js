@@ -233,7 +233,7 @@ describe("BlobPayloadStore real network/read deadlines", () => {
       const operation = store.download(token(), controller.signal);
       try {
         await expect(operation).rejects.toMatchObject({ code: "Z_DATA_ERROR" });
-        await new Promise<void>((resolve) => setTimeout(resolve, 75));
+        await closed;
         expect({
           responseClosed,
           socketClosed,

@@ -36,6 +36,11 @@ describe("Azurite effective local-only endpoint guard", () => {
     expect(new URL(client!.url).hostname).toBe("localhost");
   });
 
+  it("allows whitespace before an explicit canonical local endpoint as the SDK does", () => {
+    const client = createLocalAzuriteClient(`${prefix} BlobEndpoint=http://localhost:10000/account`, options);
+    expect(new URL(client!.url).hostname).toBe("localhost");
+  });
+
   it("rejects a lowercase local hint when the SDK actually selects a remote endpoint", () => {
     expect(() =>
       createLocalAzuriteClient(
