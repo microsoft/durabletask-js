@@ -185,7 +185,13 @@ export class BlobPayloadStore extends PayloadStore {
       return container.getBlobClient(decoded.name);
     }
     if (this._options.credential)
-      return new BlobClient(url.href, createPayloadPipeline(this._options.credential, this._clientOptions));
+      return new BlobClient(
+        url.href,
+        createPayloadPipeline(this._options.credential, {
+          ...this._clientOptions,
+          retryOptions: { ...this._clientOptions.retryOptions, secondaryHost: undefined },
+        }),
+      );
     throw new PayloadStorageException(
       "Cross-account or cross-endpoint payload access requires identity authentication.",
     );
