@@ -449,6 +449,44 @@ describe("BlobPayloadStore", () => {
       expect(jest.getTimerCount()).toBe(0);
     });
 
+    it("removes the default pending-read timer and caller listener after downstream gzip failure", async () => {
+      let written = false;
+      const source = new Readable({
+        read() {
+          if (!written) {
+            written = true;
+            this.push("notgzip");
+          }
+        },
+      });
+      http.encoding = "gzip";
+      const send = http.sendRequest.bind(http);
+      http.sendRequest = async (request) => {
+        const response = await send(request);
+        response.headers.set("content-length", "100");
+        response.readableStreamBody = source;
+        return response;
+      };
+      const controller = new AbortController();
+      const pending = make(http, { maxTries: 1 }).download(token, controller.signal);
+      try {
+        await expect(pending).rejects.toMatchObject({ code: "Z_DATA_ERROR" });
+        await jest.advanceTimersByTimeAsync(0);
+        expect({
+          inputDestroyed: source.destroyed,
+          callerAborted: controller.signal.aborted,
+          callerListeners: getEventListeners(controller.signal, "abort").length,
+          timers: jest.getTimerCount(),
+        }).toEqual({ inputDestroyed: true, callerAborted: false, callerListeners: 0, timers: 0 });
+        expect(http.requests).toHaveLength(1);
+      } finally {
+        controller.abort();
+        source.destroy();
+        await pending.catch(() => {});
+        await jest.advanceTimersByTimeAsync(0);
+      }
+    });
+
     it("removes timers and caller abort listeners after successful I/O", async () => {
       const controller = new AbortController();
       const store = make(http);

@@ -3,6 +3,7 @@
 
 import { createServer, IncomingMessage, ServerResponse, Server } from "http";
 import { Socket } from "net";
+import { getEventListeners } from "events";
 import { gzipSync } from "zlib";
 import { BlobPayloadStore } from "../src";
 
@@ -200,6 +201,79 @@ describe("BlobPayloadStore real network/read deadlines", () => {
     };
     await expect(make(3).download(token())).rejects.toMatchObject({ code: "Z_DATA_ERROR" });
     expect(requests).toHaveLength(1);
+  });
+
+  it.each([0, undefined])(
+    "eagerly closes a corrupt gzip response with an open tail (timeout=%s)",
+    async (tryTimeoutInMs) => {
+      let responseClosed = false;
+      let socketClosed = false;
+      let socketClose!: () => void;
+      const closed = new Promise<void>((resolve) => (socketClose = resolve));
+      handler = (_request, response) => {
+        response.once("close", () => {
+          responseClosed = true;
+        });
+        response.socket!.once("close", () => {
+          socketClosed = true;
+          socketClose();
+        });
+        headers(response, 100, 200, "gzip");
+        response.write("notgzip");
+      };
+      const controller = new AbortController();
+      const watchdog = setTimeout(
+        () => controller.abort(new Error("test watchdog: gzip failure did not settle")),
+        1000,
+      );
+      const store = new BlobPayloadStore({
+        connectionString: `DefaultEndpointsProtocol=http;AccountName=account;AccountKey=${accountKey};BlobEndpoint=${endpoint}`,
+        clientOptions: { retryOptions: { tryTimeoutInMs, maxTries: 1 } },
+      });
+      const operation = store.download(token(), controller.signal);
+      try {
+        await expect(operation).rejects.toMatchObject({ code: "Z_DATA_ERROR" });
+        await new Promise<void>((resolve) => setTimeout(resolve, 75));
+        expect({
+          responseClosed,
+          socketClosed,
+          openSockets: sockets.size,
+          callerAborted: controller.signal.aborted,
+          callerListeners: getEventListeners(controller.signal, "abort").length,
+          gets: requests.filter((request) => request.method === "GET").length,
+        }).toEqual({
+          responseClosed: true,
+          socketClosed: true,
+          openSockets: 0,
+          callerAborted: false,
+          callerListeners: 0,
+          gets: 1,
+        });
+      } finally {
+        clearTimeout(watchdog);
+        controller.abort(new Error("test-only final cleanup after observation"));
+        server.closeAllConnections();
+        if (requests.length) await closed;
+        await operation.catch(() => {});
+      }
+    },
+  );
+
+  it("keeps a normally completed response connection available for the next download", async () => {
+    const connections: Socket[] = [];
+    handler = (request, response) => {
+      connections.push(request.socket);
+      response.setHeader("connection", "keep-alive");
+      headers(response, 7);
+      response.end("payload");
+    };
+    const store = make();
+    await expect(store.download(token())).resolves.toBe("payload");
+    expect(connections[0].destroyed).toBe(false);
+    await expect(store.download(token())).resolves.toBe("payload");
+    expect(connections).toHaveLength(2);
+    expect(connections[1]).toBe(connections[0]);
+    expect(connections[1].destroyed).toBe(false);
   });
 
   it.each(["headers", "body", "initialization"] as const)(
