@@ -23,6 +23,31 @@ const entityResponseBytes = await worker.processEntityBatchRequest(entityBatchRe
 
 `TaskHubGrpcClient` already exposes orchestration start/query/event/terminate/suspend/resume/purge APIs and entity signal/read/query/clean APIs through its existing `hostAddress` and `metadataGenerator` options. Host integrations that need task-hub routing metadata should provide it through `metadataGenerator`, keeping host-specific metadata policy outside the core client. Azure-managed scheduler connection strings remain in `@microsoft/durabletask-js-azuremanaged`.
 
+## External payload transport
+
+Core clients and workers accept opt-in `payloads: { store }` options, where `store` implements
+the exported `PayloadStore` contract. The same store must be configured on every participant.
+The default threshold is 256 KiB of serialized UTF-8 bytes (inclusive), with a 10 MiB maximum.
+Requests are externalized before sending; queries, history chunks and work items are hydrated
+before conversion or execution. Empty payloads remain inline, and disabling the option preserves
+the existing transport behavior.
+
+Workers abandon acquired queue work items when payload downloads or unconverted output storage/size
+checks fail. Release is awaited with bounded gRPC retries and the original work item's cancellation
+signal; release failures are logged, and shutdown prevents late sends. Permanent activity and
+orchestration output failures still produce non-retriable failed completions. Tokenless host APIs
+(`processOrchestratorRequest` and `processEntityBatchRequest`) instead reject with the original
+unconverted storage error so the host can apply its own retry policy.
+
+All unary client operations share the same payload and metadata pipeline. Only actual scheduler
+RPC failures enter operation-specific error translation or retry; storage and metadata errors
+propagate unchanged. Completion waits retry scheduler deadlines with fresh metadata, without
+re-uploading the request or retrying response hydration. Cancellation stops RPCs and retry backoff.
+
+Azure-managed builders expose `.useExternalizedPayloads({ store })` and require core `>=0.4.1`
+for the public payload types. This phase works with a custom/in-memory store and does not import
+an Azure Blob provider or register cleanup tasks. Complete the six-phase feature stack before release.
+
 ## Long durable timers
 
 `createTimer(Date | seconds)` has no SDK-imposed total-duration cap. Like the Python SDK,
