@@ -85,6 +85,7 @@ Readers also recognize `blob:v1:{container}:{blobName}` in the configured contai
 Same-service v2 reads preserve the configured credential/pipeline across containers,
 including path-style/Azurite endpoints. Another account or endpoint requires an explicit
 `TokenCredential`; account keys and configured SAS credentials are never forwarded there.
+Account-specific `secondaryHost` failover is not forwarded to a cross-endpoint identity client.
 
 Storage uses one provider HTTP retry policy in the Azure SDK's public pipeline, preserving
 SDK authentication, proxy, user agent and custom HTTP transport options. Like the pinned .NET
@@ -106,7 +107,9 @@ A failed ETag condition does not mix payload versions.
 `clientOptions.retryOptions` retains `maxTries` (total HTTP attempts, minimum 1),
 `retryDelayInMs`, `maxRetryDelayInMs`, `retryPolicyType` (exponential/fixed),
 `tryTimeoutInMs` (the network/read timeout as well as the SDK server timeout hint; explicit
-zero disables it), and `secondaryHost` (read failover, stopping secondary use after its 404).
+zero disables it), and `secondaryHost` (same-account read failover, stopping secondary use after
+its 404). A secondary 404 is not confirmed primary absence: when the attempt budget is exhausted,
+the preceding actual primary failure propagates rather than reporting missing/deleted data.
 Durations must be finite and nonnegative; `maxTries` must be a positive safe integer. The SDK's
 own HTTP retry loop is limited to one attempt so it cannot multiply this retry budget.
 Custom HTTP transports must honor the provided abort signal and return Node-readable bodies.
