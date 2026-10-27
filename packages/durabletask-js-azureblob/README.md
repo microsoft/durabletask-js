@@ -96,6 +96,8 @@ starts at 250 ms, applies 0.8-1.2 jitter and caps the computed delay at 10 secon
 `retry-after-ms`, `x-ms-retry-after-ms` or `Retry-After` delay can increase that wait beyond
 the cap; it never shortens the computed backoff. Waiting is cancellable, including large
 server-specified delays. Ordinary permanent statuses and corrupt gzip are not HTTP-retried.
+For `FIXED`, jittered default waits are capped at `retryDelayInMs`, independently of
+`maxRetryDelayInMs`; a valid server Retry-After can still increase the wait.
 
 The default two-minute **network/read** timeout aborts stalled response headers or a pending
 body read, resetting for each read; it is not a two-minute whole-payload/operation limit.

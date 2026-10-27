@@ -117,7 +117,9 @@ export function createPayloadPipeline(credential: Credential, options: StoragePi
           const base =
             retry.retryDelayInMs *
             (retry.retryPolicyType === StorageRetryPolicyType.FIXED ? 1 : Math.pow(2, attempt - 1));
-          const defaultDelay = Math.min(base * (0.8 + Math.random() * 0.4), retry.maxRetryDelayInMs);
+          const cap =
+            retry.retryPolicyType === StorageRetryPolicyType.FIXED ? retry.retryDelayInMs : retry.maxRetryDelayInMs;
+          const defaultDelay = Math.min(base * (0.8 + Math.random() * 0.4), cap);
           await wait(Math.max(defaultDelay, retryAfter(headers)), signal);
         }
       },
