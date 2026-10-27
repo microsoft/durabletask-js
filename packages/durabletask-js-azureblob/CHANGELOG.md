@@ -2,6 +2,8 @@
 
 ### Fixes
 
+- Release raw response I/O, timers and caller listeners immediately on downstream stream failure.
+- Validate the opt-in Azurite test endpoint using the SDK-selected URL before any storage I/O.
 - Keep account-specific secondary failover off cross-endpoint identity requests and preserve
   the preceding primary failure when a lagging secondary's 404 exhausts the retry budget.
 - Enforce the default two-minute client network/pending-read timeout at the shared Azure

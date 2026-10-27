@@ -2,25 +2,21 @@
 // Licensed under the MIT License.
 
 import { randomUUID, createHash } from "crypto";
-import { BlobServiceClient, ContainerClient } from "@azure/storage-blob";
+import { ContainerClient } from "@azure/storage-blob";
 import { PayloadDeleteOutcome } from "@microsoft/durabletask-js";
 import { BlobPayloadStore } from "../src";
 import fixtures from "./dotnet-payload-fixtures.json";
+import { createLocalAzuriteClient } from "./local-azurite-client";
 
 const connectionString = process.env.DURABLETASK_BLOB_TEST_CONNECTION_STRING;
-const localOnly = connectionString?.match(/BlobEndpoint=([^;]+)/i)?.[1];
-if (connectionString && (!localOnly || !["127.0.0.1", "localhost", "[::1]"].includes(new URL(localOnly).hostname))) {
-  throw new Error("Azurite tests require an explicit local-only BlobEndpoint.");
-}
+const service = createLocalAzuriteClient(connectionString);
 
-(connectionString ? describe : describe.skip)("BlobPayloadStore with local Azurite", () => {
-  let service: BlobServiceClient;
+(service ? describe : describe.skip)("BlobPayloadStore with local Azurite", () => {
   let container: ContainerClient;
   let containerName: string;
   beforeEach(() => {
-    service = BlobServiceClient.fromConnectionString(connectionString!);
     containerName = `payloads-${randomUUID()}`;
-    container = service.getContainerClient(containerName);
+    container = service!.getContainerClient(containerName);
   });
   afterEach(async () => {
     await container.deleteIfExists();
