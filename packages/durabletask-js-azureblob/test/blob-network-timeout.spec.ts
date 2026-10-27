@@ -39,6 +39,7 @@ describe("BlobPayloadStore real network/read deadlines", () => {
 
   beforeAll(async () => {
     server = createServer((request, response) => {
+      response.setHeader("connection", "close");
       requests.push(request);
       handler(request, response);
     });
@@ -56,16 +57,40 @@ describe("BlobPayloadStore real network/read deadlines", () => {
     requests = [];
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     for (const timer of timers) clearTimeout(timer);
     timers.clear();
+    const closed = [...sockets].map((socket) => new Promise<void>((resolve) => socket.once("close", resolve)));
     server.closeAllConnections();
+    await Promise.all(closed);
   });
 
   afterAll(async () => {
     for (const socket of sockets) socket.destroy();
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
   });
+
+  async function waitForRequest(started: Promise<void>, operation: Promise<unknown>): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        started,
+        operation.then(
+          () => {
+            throw new Error("The operation completed before the server received the request.");
+          },
+          (error: unknown) => {
+            throw error;
+          },
+        ),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error("The server did not receive the request.")), 1000);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   async function guardedDownload(store: BlobPayloadStore): Promise<{ error: unknown; watchdogFired: boolean }> {
     const controller = new AbortController();
@@ -199,7 +224,7 @@ describe("BlobPayloadStore real network/read deadlines", () => {
           ? make(3).upload("owner", controller.signal)
           : make(3).download(token(), controller.signal);
       const rejected = pending.catch((error: unknown) => error);
-      await started;
+      await waitForRequest(started, pending);
       controller.abort(reason);
       expect(await rejected).toBe(reason);
       await finished;
@@ -224,7 +249,7 @@ describe("BlobPayloadStore real network/read deadlines", () => {
     const store = make();
     const leader = store.upload("leader");
     const leaderSettled = leader.catch((error: unknown) => error);
-    await started;
+    await waitForRequest(started, leader);
     const controller = new AbortController();
     const reason = Object.freeze(new Error("cancel only the initialization waiter"));
     const waiter = store.upload("waiter", controller.signal).catch((error: unknown) => error);
@@ -250,15 +275,33 @@ describe("BlobPayloadStore real network/read deadlines", () => {
       clientOptions: { retryOptions: { tryTimeoutInMs: 0, maxTries: 1 } },
     });
     let settled = false;
-    const pending = store.download(token(), controller.signal).catch((error: unknown) => {
-      settled = true;
-      return error;
-    });
-    await started;
-    await new Promise<void>((resolve) => timers.add(setTimeout(resolve, timeout * 2)));
-    expect(settled).toBe(false);
-    controller.abort(reason);
-    expect(await pending).toBe(reason);
-    expect(requests).toHaveLength(1);
+    const operation = store.download(token(), controller.signal);
+    const pending = operation.then(
+      (value) => {
+        settled = true;
+        return value;
+      },
+      (error: unknown) => {
+        settled = true;
+        return error;
+      },
+    );
+    try {
+      await waitForRequest(started, operation);
+      await new Promise<void>((resolve) => timers.add(setTimeout(resolve, timeout * 2)));
+      expect(settled).toBe(false);
+      controller.abort(reason);
+      expect(await pending).toBe(reason);
+      expect(requests).toHaveLength(1);
+    } finally {
+      controller.abort(reason);
+      await pending;
+    }
+  });
+
+  it("surfaces early operation failures instead of hanging at the server-receipt gate", async () => {
+    const neverReceived = new Promise<void>(() => {});
+    await expect(waitForRequest(neverReceived, make().download("blob:v2:invalid"))).rejects.toBeInstanceOf(TypeError);
+    expect(requests).toHaveLength(0);
   });
 });

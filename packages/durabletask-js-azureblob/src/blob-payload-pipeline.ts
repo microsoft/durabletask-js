@@ -66,6 +66,7 @@ export function createPayloadPipeline(credential: Credential, options: StoragePi
         const secondary = retry.secondaryHost ? new URL(primary) : undefined;
         if (secondary) secondary.host = retry.secondaryHost!;
         let secondaryNotFound = false;
+        let primaryFailure: { response?: HttpOperationResponse; error: unknown } | undefined;
         for (let attempt = 1; ; attempt++) {
           throwIfAborted(signal);
           const useSecondary =
@@ -96,10 +97,19 @@ export function createPayloadPipeline(credential: Credential, options: StoragePi
               "code" in error &&
               typeof error.code === "string" &&
               RETRY_NETWORK_CODES.has(error.code));
-          if (
-            attempt === retry.maxTries ||
-            !(secondary404 || serviceError || networkError || (status !== undefined && RETRY_STATUSES.has(status)))
-          ) {
+          const retryable =
+            secondary404 || serviceError || networkError || (status !== undefined && RETRY_STATUSES.has(status));
+          if (!useSecondary && retryable) primaryFailure = { response, error };
+          if (attempt === retry.maxTries || !retryable) {
+            if (secondary404) {
+              if (!primaryFailure) {
+                throw new RestError("The secondary response did not confirm primary payload absence.", {
+                  code: RestError.REQUEST_SEND_ERROR,
+                });
+              }
+              if (primaryFailure.response) return primaryFailure.response;
+              throw primaryFailure.error;
+            }
             if (response) return response;
             throw error;
           }

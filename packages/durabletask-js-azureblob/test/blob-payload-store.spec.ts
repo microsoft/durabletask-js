@@ -293,6 +293,93 @@ describe("BlobPayloadStore", () => {
       expect(hosts).toEqual(["account.invalid", "secondary.invalid", "account.invalid"]);
     });
 
+    it("does not redirect a cross-account identity retry to the configured account's secondary", async () => {
+      const hosts: string[] = [];
+      const send = http.sendRequest.bind(http);
+      http.sendRequest = async (request) => {
+        hosts.push(new URL(request.url).host);
+        return send(request);
+      };
+      http.failures.push({ status: 503, code: "ServerBusy" });
+      const store = new BlobPayloadStore({
+        connectionString,
+        credential: { getToken: async () => ({ token: "synthetic-token", expiresOnTimestamp: Date.now() + 3600000 }) },
+        clientOptions: { httpClient: http, retryOptions: { maxTries: 2, secondaryHost: "account-secondary.invalid" } },
+      });
+      const pending = store.download("blob:v2:https://other.invalid/durabletask-payloads/blob");
+      const assertion = expect(pending).resolves.toBe("payload");
+      await jest.runAllTimersAsync();
+      await assertion;
+      expect(hosts).toEqual(["other.invalid", "other.invalid"]);
+    });
+
+    it.each(["download", "delete"] as const)(
+      "preserves a primary transient when secondary absence exhausts the %s budget",
+      async (operation) => {
+        const hosts: string[] = [];
+        const send = http.sendRequest.bind(http);
+        http.sendRequest = async (request) => {
+          hosts.push(new URL(request.url).host);
+          return send(request);
+        };
+        http.failures.push({ status: 503, code: "ServerBusy" }, { status: 404, code: "BlobNotFound" });
+        const pending = make(http, { maxTries: 2, secondaryHost: "secondary.invalid" })[operation](token);
+        const assertion = expect(pending).rejects.toMatchObject({ statusCode: 503 });
+        void assertion.catch(() => {});
+        await jest.runAllTimersAsync();
+        await assertion;
+        expect(hosts).toEqual(["account.invalid", "secondary.invalid"]);
+        expect(http.requests).toHaveLength(2);
+        expect(http.requests.some((request) => request.method === "DELETE")).toBe(false);
+      },
+    );
+
+    it.each(["download", "delete"] as const)(
+      "keeps a successful same-account secondary usable with maxTries2 for %s",
+      async (operation) => {
+        const hosts: string[] = [];
+        const send = http.sendRequest.bind(http);
+        http.sendRequest = async (request) => {
+          hosts.push(new URL(request.url).host);
+          return send(request);
+        };
+        http.failures.push({ status: 503, code: "ServerBusy" });
+        const pending = make(http, { maxTries: 2, secondaryHost: "secondary.invalid" })[operation](token);
+        const assertion = expect(pending).resolves.toBe(
+          operation === "download" ? "payload" : PayloadDeleteOutcome.Deleted,
+        );
+        await jest.runAllTimersAsync();
+        await assertion;
+        expect(hosts).toEqual(
+          operation === "download"
+            ? ["account.invalid", "secondary.invalid"]
+            : ["account.invalid", "secondary.invalid", "account.invalid"],
+        );
+      },
+    );
+
+    it.each(["download", "delete"] as const)(
+      "preserves the original primary transport error when secondary 404 exhausts %s",
+      async (operation) => {
+        const failure = Object.freeze(new RestError("primary socket failure", { code: "ECONNRESET" }));
+        http.failures.push(failure, { status: 404, code: "BlobNotFound" });
+        const pending = make(http, { maxTries: 2, secondaryHost: "secondary.invalid" })[operation](token);
+        const assertion = expect(pending).rejects.toBe(failure);
+        await jest.runAllTimersAsync();
+        await assertion;
+        expect(http.requests).toHaveLength(2);
+      },
+    );
+
+    it("still confirms a primary BlobNotFound without a secondary read", async () => {
+      http.error = { status: 404, code: "BlobNotFound" };
+      const pending = make(http, { maxTries: 2, secondaryHost: "secondary.invalid" }).delete(token);
+      const assertion = expect(pending).resolves.toBe(PayloadDeleteOutcome.AlreadyAbsent);
+      await jest.runAllTimersAsync();
+      await assertion;
+      expect(http.requests).toHaveLength(1);
+    });
+
     it("uses the same retry boundary for credentialed cross-account and same-account reads", async () => {
       const store = new BlobPayloadStore({
         connectionString,
