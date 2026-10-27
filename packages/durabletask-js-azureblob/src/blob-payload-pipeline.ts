@@ -193,34 +193,38 @@ async function sendAttempt(next: RequestPolicy, request: WebResource, timeout: n
     if (streamed && response.readableStreamBody instanceof Readable) {
       source = response.readableStreamBody;
       const input = source;
-      body = Readable.from(
-        (async function* () {
-          const iterator = input[Symbol.asyncIterator]();
-          try {
-            while (true) {
-              arm();
-              let chunk: IteratorResult<unknown>;
-              try {
-                chunk = await iterator.next();
-              } catch (error) {
-                throwIfAborted(callerSignal);
-                throw timedOut ?? normalizeInternalAbort(error);
-              } finally {
-                clear();
-              }
-              if (chunk.done) return;
-              yield chunk.value;
-            }
-          } finally {
+      const iterator = input[Symbol.asyncIterator]();
+      let reading = false;
+      body = new Readable({
+        read() {
+          if (reading) return;
+          reading = true;
+          arm();
+          void iterator.next().then(
+            (chunk) => {
+              clear();
+              reading = false;
+              if (!this.destroyed) this.push(chunk.done ? null : chunk.value);
+            },
+            (error: unknown) => {
+              clear();
+              reading = false;
+              if (this.destroyed) return;
+              const failure = timedOut ?? normalizeInternalAbort(error);
+              this.destroy(
+                failure instanceof Error ? failure : new Error("Payload response read failed.", { cause: failure }),
+              );
+            },
+          );
+        },
+        destroy(error, callback) {
+          cleanup();
+          if (!input.readableEnded) {
+            controller.abort();
             input.destroy();
-            cleanup();
           }
-        })(),
-        { objectMode: false },
-      );
-      body.once("close", () => {
-        input.destroy();
-        cleanup();
+          callback(error);
+        },
       });
       response.readableStreamBody = body;
     } else {
