@@ -236,6 +236,29 @@ describe("BlobPayloadStore", () => {
       expect(http.times[1] - http.times[0]).toBe(Math.floor(250 * (0.8 + random * 0.4)));
     });
 
+    it.each([
+      { maximum: 5, random: 0.5, expected: 30 },
+      { maximum: 100, random: 0.999, expected: 30 },
+      { maximum: 100, random: 0, expected: 24 },
+    ])(
+      "caps FIXED jitter at Delay independently of MaxDelay ($maximum/$random)",
+      async ({ maximum, random, expected }) => {
+        jest.mocked(Math.random).mockReturnValue(random);
+        http.failures.push({ status: 503, code: "ServerBusy" });
+        const pending = make(http, {
+          maxTries: 2,
+          retryDelayInMs: 30,
+          maxRetryDelayInMs: maximum,
+          retryPolicyType: StorageRetryPolicyType.FIXED,
+        }).download(token);
+        const assertion = expect(pending).resolves.toBe("payload");
+        await jest.runAllTimersAsync();
+        await assertion;
+        expect(http.requests).toHaveLength(2);
+        expect(http.times[1] - http.times[0]).toBe(expected);
+      },
+    );
+
     it("preserves explicit retry count, delay, cap, and fixed-policy overrides", async () => {
       http.error = { status: 503, code: "ServerBusy" };
       const pending = make(http, {
