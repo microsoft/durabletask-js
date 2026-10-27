@@ -2,8 +2,16 @@
 // Licensed under the MIT License.
 
 import { Readable } from "stream";
+import { getEventListeners } from "events";
 import { gunzipSync, gzipSync } from "zlib";
-import { IHttpClient, HttpOperationResponse, WebResource } from "@azure/storage-blob";
+import {
+  IHttpClient,
+  HttpOperationResponse,
+  WebResource,
+  RestError,
+  StorageRetryOptions,
+  StorageRetryPolicyType,
+} from "@azure/storage-blob";
 import { PayloadDeleteOutcome, PayloadStorageException } from "@microsoft/durabletask-js";
 import { BlobPayloadStore } from "../src";
 import fixtures from "./dotnet-payload-fixtures.json";
@@ -13,6 +21,8 @@ const connectionString = `DefaultEndpointsProtocol=https;AccountName=account;Acc
 
 class RecordingClient implements IHttpClient {
   requests: WebResource[] = [];
+  times: number[] = [];
+  failures: (Error | { status: number; code: string; headers?: Record<string, string> } | undefined)[] = [];
   bodies: Buffer[] = [];
   content = Buffer.from("payload");
   encoding = "";
@@ -21,6 +31,7 @@ class RecordingClient implements IHttpClient {
   failFirstUpload = false;
   async sendRequest(request: WebResource): Promise<HttpOperationResponse> {
     this.requests.push(request);
+    this.times.push(Date.now());
     const headers = request.headers.clone();
     for (const header of headers.headersArray()) headers.remove(header.name);
     headers.set("x-ms-request-id", "offline");
@@ -30,14 +41,18 @@ class RecordingClient implements IHttpClient {
     for (const [key, value] of Object.entries(this.metadata)) headers.set(`x-ms-meta-${key}`, value);
     if (this.encoding) headers.set("content-encoding", this.encoding);
     const container = new URL(request.url).searchParams.get("restype") === "container";
-    const error =
-      this.failFirstUpload && request.method === "PUT" && !container
+    const injected = this.failures.shift();
+    if (injected instanceof Error) throw injected;
+    const error: { status: number; code: string; headers?: Record<string, string> } | undefined =
+      injected ??
+      (this.failFirstUpload && request.method === "PUT" && !container
         ? { status: 404, code: "ContainerNotFound" }
-        : this.error;
+        : this.error);
     if (error) {
       this.failFirstUpload = false;
       headers.set("x-ms-error-code", error.code);
       headers.set("content-type", "application/xml");
+      for (const [name, value] of Object.entries(error.headers ?? {})) headers.set(name, value);
       return {
         request,
         status: error.status,
@@ -66,6 +81,427 @@ describe("BlobPayloadStore", () => {
   let http: RecordingClient;
   beforeEach(() => {
     http = new RecordingClient();
+  });
+
+  describe("BlobPayloadStore shared HTTP resilience", () => {
+    let http: RecordingClient;
+    const token = "blob:v2:https://account.invalid/durabletask-payloads/blob";
+    const make = (http: RecordingClient, retryOptions?: StorageRetryOptions) =>
+      new BlobPayloadStore({
+        connectionString,
+        compressionEnabled: false,
+        clientOptions: { httpClient: http, retryOptions },
+      });
+
+    beforeEach(() => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date("2030-01-01T00:00:00Z"));
+      jest.spyOn(Math, "random").mockReturnValue(0.5);
+      http = new RecordingClient();
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+      jest.useRealTimers();
+    });
+
+    it.each([408, 429, 500, 502, 503, 504])(
+      "recovers from ordinary HTTP %s through the real SDK pipeline",
+      async (status) => {
+        http.failures.push({ status, code: "Transient" });
+        const pending = make(http).download(token);
+        const assertion = expect(pending).resolves.toBe("payload");
+        await jest.advanceTimersByTimeAsync(249);
+        expect(http.requests).toHaveLength(1);
+        await jest.advanceTimersByTimeAsync(1);
+        await assertion;
+        expect(http.requests).toHaveLength(2);
+        expect(http.times[1] - http.times[0]).toBe(250);
+        expect(jest.getTimerCount()).toBe(0);
+      },
+    );
+
+    it.each(["InternalError", "OperationTimedOut", "ServerBusy"])(
+      "retries service/copy-source code %s",
+      async (code) => {
+        for (const name of ["x-ms-error-code", "x-ms-copy-source-error-code"]) {
+          http.failures.push({
+            status: 400,
+            code: name === "x-ms-error-code" ? code : "Other",
+            headers: { [name]: code },
+          });
+          const pending = make(http).download(token);
+          const assertion = expect(pending).resolves.toBe("payload");
+          await jest.runAllTimersAsync();
+          await assertion;
+        }
+        expect(http.requests).toHaveLength(4);
+      },
+    );
+
+    it("uses eight retries with jittered exponential delay capped at ten seconds", async () => {
+      http.error = { status: 503, code: "ServerBusy" };
+      const pending = make(http).download(token);
+      const assertion = expect(pending).rejects.toMatchObject({ statusCode: 503 });
+      await jest.runAllTimersAsync();
+      await assertion;
+      expect(http.requests).toHaveLength(9);
+      expect(http.times.slice(1).map((time, index) => time - http.times[index])).toEqual([
+        250, 500, 1000, 2000, 4000, 8000, 10000, 10000,
+      ]);
+      expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it.each([400, 401, 403, 404, 409, 412])("does not retry ordinary HTTP %s", async (status) => {
+      http.error = { status, code: "Permanent" };
+      const pending = make(http).download(token);
+      const assertion = expect(pending).rejects.toThrow();
+      await jest.runAllTimersAsync();
+      await assertion;
+      expect(http.requests).toHaveLength(1);
+      expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it("retries recognized network failures without repeating the upload invocation or changing its GUID/content", async () => {
+      http.failures.push(undefined, new RestError("socket disconnected", { code: "ECONNRESET" }));
+      const pending = make(http).upload("same payload");
+      const assertion = expect(pending).resolves.toMatch(/^blob:v2:/);
+      await jest.runAllTimersAsync();
+      await assertion;
+      const uploads = http.requests.filter((request) => !request.url.includes("restype=container"));
+      expect(uploads).toHaveLength(2);
+      expect(uploads[0].url).toBe(uploads[1].url);
+      expect(http.bodies.map((body) => body.toString())).toEqual(["same payload"]);
+    });
+
+    it.each(["initialize", "upload", "download", "ownership", "delete"] as const)(
+      "applies one HTTP retry policy to %s",
+      async (operation) => {
+        if (operation === "upload" || operation === "delete") http.failures.push(undefined);
+        http.failures.push({ status: 429, code: "Throttled" });
+        const store = make(http);
+        const pending =
+          operation === "initialize" || operation === "upload"
+            ? store.upload("payload")
+            : operation === "download"
+              ? store.download(token)
+              : store.delete(token);
+        const assertion = expect(pending).resolves.toBeDefined();
+        await jest.runAllTimersAsync();
+        await assertion;
+        expect(http.requests).toHaveLength(operation === "download" ? 2 : 3);
+      },
+    );
+
+    it.each([
+      [{ "retry-after-ms": "1300", "x-ms-retry-after-ms": "2200", "Retry-After": "3" }, 1300],
+      [{ "x-ms-retry-after-ms": "1700", "Retry-After": "3" }, 1700],
+      [{ "retry-after-ms": "invalid", "x-ms-retry-after-ms": "1000", "Retry-After": "2" }, 2000],
+      [{ "Retry-After": "Tue, 01 Jan 2030 00:00:03 GMT" }, 3000],
+      [{ "Retry-After": "20" }, 20000],
+      [{ "Retry-After": "0" }, 250],
+      [{ "retry-after-ms": "1.5", "Retry-After": "invalid" }, 250],
+    ] as const)("honors .NET Retry-After precedence/default lower bound (%#)", async (headers, delay) => {
+      http.failures.push({ status: 503, code: "ServerBusy", headers });
+      const pending = make(http).download(token);
+      const assertion = expect(pending).resolves.toBe("payload");
+      await jest.advanceTimersByTimeAsync(delay - 1);
+      expect(http.requests).toHaveLength(1);
+      await jest.advanceTimersByTimeAsync(1);
+      await assertion;
+      expect(http.times[1] - http.times[0]).toBe(delay);
+    });
+
+    it("keeps a server delay above Node's timer limit delayed and cancellable", async () => {
+      http.failures.push({ status: 503, code: "ServerBusy", headers: { "Retry-After": "2147484" } });
+      const controller = new AbortController();
+      const reason = Object.freeze(new Error("cancel long retry-after"));
+      const pending = make(http).download(token, controller.signal);
+      const rejected = pending.catch((error: unknown) => error);
+      await jest.advanceTimersByTimeAsync(1000);
+      expect(http.requests).toHaveLength(1);
+      controller.abort(reason);
+      await jest.advanceTimersByTimeAsync(0);
+      expect(await rejected).toBe(reason);
+      expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it.each([0, 0.999])("jitter stays in the .NET 0.8..1.2 range (random=%s)", async (random) => {
+      jest.mocked(Math.random).mockReturnValue(random);
+      http.failures.push({ status: 503, code: "ServerBusy" });
+      const pending = make(http).download(token);
+      const assertion = expect(pending).resolves.toBe("payload");
+      await jest.runAllTimersAsync();
+      await assertion;
+      expect(http.times[1] - http.times[0]).toBe(Math.floor(250 * (0.8 + random * 0.4)));
+    });
+
+    it("preserves explicit retry count, delay, cap, and fixed-policy overrides", async () => {
+      http.error = { status: 503, code: "ServerBusy" };
+      const pending = make(http, {
+        maxTries: 3,
+        retryDelayInMs: 30,
+        maxRetryDelayInMs: 30,
+        retryPolicyType: StorageRetryPolicyType.FIXED,
+      }).download(token);
+      const assertion = expect(pending).rejects.toMatchObject({ statusCode: 503 });
+      await jest.runAllTimersAsync();
+      await assertion;
+      expect(http.requests).toHaveLength(3);
+      expect(http.times.slice(1).map((time, index) => time - http.times[index])).toEqual([30, 30]);
+    });
+
+    it("preserves caller abort identity while canceling retry backoff", async () => {
+      http.error = { status: 503, code: "ServerBusy" };
+      const controller = new AbortController();
+      const reason = Object.freeze(new Error("caller canceled storage"));
+      const pending = make(http).download(token, controller.signal);
+      const rejected = pending.catch((error: unknown) => error);
+      await jest.advanceTimersByTimeAsync(0);
+      controller.abort(reason);
+      await jest.runAllTimersAsync();
+      expect(await rejected).toBe(reason);
+      expect(http.requests).toHaveLength(1);
+      expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it.each([
+      new RestError("network status zero", { statusCode: 0 }),
+      Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
+    ])("recovers from a transient I/O failure %#", async (failure) => {
+      http.failures.push(failure);
+      const pending = make(http).download(token);
+      const assertion = expect(pending).resolves.toBe("payload");
+      void assertion.catch(() => {});
+      await jest.runAllTimersAsync();
+      await assertion;
+      expect(http.requests).toHaveLength(2);
+    });
+
+    it("preserves configured read failover and stops using a secondary after its 404", async () => {
+      const hosts: string[] = [];
+      const send = http.sendRequest.bind(http);
+      http.sendRequest = async (request) => {
+        hosts.push(new URL(request.url).host);
+        return send(request);
+      };
+      http.failures.push({ status: 503, code: "ServerBusy" }, { status: 404, code: "BlobNotFound" });
+      const pending = make(http, { secondaryHost: "secondary.invalid" }).download(token);
+      const assertion = expect(pending).resolves.toBe("payload");
+      await jest.runAllTimersAsync();
+      await assertion;
+      expect(hosts).toEqual(["account.invalid", "secondary.invalid", "account.invalid"]);
+    });
+
+    it("uses the same retry boundary for credentialed cross-account and same-account reads", async () => {
+      const store = new BlobPayloadStore({
+        connectionString,
+        credential: { getToken: async () => ({ token: "synthetic-token", expiresOnTimestamp: Date.now() + 3600000 }) },
+        clientOptions: {
+          httpClient: http,
+          userAgentOptions: { userAgentPrefix: "payload-resilience-test" },
+          retryOptions: { maxTries: 2 },
+        },
+      });
+      for (const endpoint of ["account.invalid/other/blob", "other.invalid/other/blob"]) {
+        http.failures.push({ status: 429, code: "Throttled" });
+        const assertion = expect(store.download(`blob:v2:https://${endpoint}`)).resolves.toBe("payload");
+        await jest.runAllTimersAsync();
+        await assertion;
+      }
+      expect(http.requests).toHaveLength(4);
+      for (const request of http.requests)
+        expect(request.headers.get("user-agent")).toContain("payload-resilience-test");
+    });
+
+    it("enforces the actual two-minute default without waiting two minutes in the test", async () => {
+      let actualSignal: WebResource["abortSignal"];
+      http.sendRequest = async (request) => {
+        http.requests.push(request);
+        actualSignal = request.abortSignal;
+        return new Promise((_resolve, reject) => {
+          actualSignal!.addEventListener("abort", () =>
+            reject(Object.assign(new Error("transport aborted"), { name: "AbortError" })),
+          );
+        });
+      };
+      const controller = new AbortController();
+      const pending = make(http, { maxTries: 1 }).download(token, controller.signal);
+      const assertion = expect(pending).rejects.toMatchObject({ code: "ETIMEDOUT" });
+      void assertion.catch(() => {});
+      await jest.advanceTimersByTimeAsync(119999);
+      expect(actualSignal!.aborted).toBe(false);
+      await jest.advanceTimersByTimeAsync(1);
+      await assertion;
+      expect(actualSignal!.aborted).toBe(true);
+      expect(controller.signal.aborted).toBe(false);
+      expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+      expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it("removes timers and caller abort listeners after successful I/O", async () => {
+      const controller = new AbortController();
+      const store = make(http);
+      const download = store.download(token, controller.signal);
+      await jest.runAllTimersAsync();
+      await expect(download).resolves.toBe("payload");
+      await expect(store.delete(token, controller.signal)).resolves.toBe(PayloadDeleteOutcome.Deleted);
+      expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+      expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it("does not turn custom non-network failures into retries", async () => {
+      const failure = Object.freeze(new TypeError("invalid custom transport configuration"));
+      http.failures.push(failure);
+      await expect(make(http).download(token)).rejects.toBe(failure);
+      expect(http.requests).toHaveLength(1);
+      expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it("does not overflow a long network timeout into an immediate abort", async () => {
+      let actualSignal: WebResource["abortSignal"];
+      http.sendRequest = async (request) => {
+        http.requests.push(request);
+        actualSignal = request.abortSignal;
+        return new Promise((_resolve, reject) => {
+          actualSignal!.addEventListener("abort", () =>
+            reject(Object.assign(new Error("transport aborted"), { name: "AbortError" })),
+          );
+        });
+      };
+      const controller = new AbortController();
+      const reason = new Error("cancel long network timeout");
+      const pending = make(http, { maxTries: 1, tryTimeoutInMs: 2147484000 }).download(token, controller.signal);
+      const rejected = pending.catch((error: unknown) => error);
+      await jest.advanceTimersByTimeAsync(1000);
+      expect(actualSignal!.aborted).toBe(false);
+      expect(http.requests).toHaveLength(1);
+      controller.abort(reason);
+      await jest.advanceTimersByTimeAsync(0);
+      expect(await rejected).toBe(reason);
+      expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it("preserves finite fractional-millisecond retry and timeout options", async () => {
+      http.failures.push({ status: 503, code: "ServerBusy" });
+      const pending = make(http, {
+        maxTries: 2,
+        retryDelayInMs: 10.5,
+        maxRetryDelayInMs: 20.5,
+        tryTimeoutInMs: 100.5,
+      }).download(token);
+      const assertion = expect(pending).resolves.toBe("payload");
+      await jest.runAllTimersAsync();
+      await assertion;
+      expect(http.requests).toHaveLength(2);
+      expect(http.times[1] - http.times[0]).toBe(10);
+    });
+
+    it.each([
+      "maxTries",
+      "retryDelayInMs",
+      "maxRetryDelayInMs",
+      "tryTimeoutInMs",
+      "retryPolicyType",
+      "secondaryHost",
+    ] as const)("accepts explicit undefined for optional %s", async (option) => {
+      const pending = make(http, { [option]: undefined }).download(token);
+      await jest.runAllTimersAsync();
+      await expect(pending).resolves.toBe("payload");
+      expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it("retries a transport-internal AbortError while the caller remains live", async () => {
+      const failure = Object.freeze(
+        Object.assign(new Error("internal transport cancellation"), { name: "AbortError" }),
+      );
+      http.failures.push(failure);
+      const controller = new AbortController();
+      const pending = make(http).download(token, controller.signal);
+      const assertion = expect(pending).resolves.toBe("payload");
+      void assertion.catch(() => {});
+      await jest.runAllTimersAsync();
+      await assertion;
+      expect(http.requests).toHaveLength(2);
+      expect(controller.signal.aborted).toBe(false);
+    });
+
+    it("allows the SDK to resume a body-internal AbortError without treating it as caller cancellation", async () => {
+      const failure = Object.freeze(Object.assign(new Error("internal body cancellation"), { name: "AbortError" }));
+      const send = http.sendRequest.bind(http);
+      http.sendRequest = async (request) => {
+        const response = await send(request);
+        if (http.requests.length === 1) {
+          response.readableStreamBody = new Readable({
+            read() {
+              this.destroy(failure);
+            },
+          });
+        }
+        return response;
+      };
+      const pending = make(http).download(token);
+      const assertion = expect(pending).resolves.toBe("payload");
+      void assertion.catch(() => {});
+      await jest.runAllTimersAsync();
+      await assertion;
+      expect(http.requests).toHaveLength(2);
+      expect(http.requests[1].headers.get("if-match")).toBe('"owned-etag"');
+      expect(http.requests[1].headers.get("range") ?? http.requests[1].headers.get("x-ms-range")).toBe("bytes=0-6");
+    });
+
+    it.each(["AbortError", "ETIMEDOUT"])("never retries a caller's retryable-looking %s abort reason", async (kind) => {
+      const controller = new AbortController();
+      const reason = Object.freeze(Object.assign(new Error("caller cancellation"), { name: kind, code: "ETIMEDOUT" }));
+      http.sendRequest = async (request) => {
+        http.requests.push(request);
+        controller.abort(reason);
+        throw reason;
+      };
+      await expect(make(http).download(token, controller.signal)).rejects.toBe(reason);
+      expect(http.requests).toHaveLength(1);
+      expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it.each(["BlobNotFound", "ContainerNotFound"])(
+      "does not convert a caller abort shaped like %s into deletion success",
+      async (code) => {
+        const controller = new AbortController();
+        const reason = Object.freeze(
+          Object.assign(new Error("caller abort with a storage-shaped reason"), { code, statusCode: 404 }),
+        );
+        http.sendRequest = async (request) => {
+          http.requests.push(request);
+          controller.abort(reason);
+          throw reason;
+        };
+        await expect(make(http).delete(token, controller.signal)).rejects.toBe(reason);
+        expect(http.requests).toHaveLength(1);
+      },
+    );
+
+    it("does not invalidate a healthy container generation for a storage-shaped caller abort", async () => {
+      const store = make(http);
+      await store.upload("warm container");
+      const controller = new AbortController();
+      const reason = Object.freeze(
+        Object.assign(new Error("caller abort"), { code: "ContainerNotFound", statusCode: 404 }),
+      );
+      const send = http.sendRequest.bind(http);
+      let abortNext = true;
+      http.sendRequest = async (request) => {
+        if (abortNext && !request.url.includes("restype=container")) {
+          abortNext = false;
+          http.requests.push(request);
+          controller.abort(reason);
+          throw reason;
+        }
+        return send(request);
+      };
+      await expect(store.upload("canceled", controller.signal)).rejects.toBe(reason);
+      await store.upload("after cancellation");
+      expect(http.requests.filter((request) => request.url.includes("restype=container"))).toHaveLength(1);
+    });
   });
   const make = (http: RecordingClient, options: Partial<ConstructorParameters<typeof BlobPayloadStore>[0]> = {}) =>
     new BlobPayloadStore({
