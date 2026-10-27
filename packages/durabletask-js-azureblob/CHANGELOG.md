@@ -1,5 +1,14 @@
 ## Upcoming
 
+### Fixes
+
+- Enforce the default two-minute client network/pending-read timeout at the shared Azure
+  pipeline boundary; preserve healthy progressive reads, caller cancellation and SDK
+  ETag-bound body recovery.
+- Align the bounded HTTP retry classification, jittered exponential backoff and Retry-After
+  precedence with the pinned .NET provider. Preserve custom retry/transport options without
+  multiplying the SDK's HTTP retry loop or retrying permanent responses/corrupt gzip.
+
 ### New
 
 - Require core SDK `>=0.4.1`, excluding published `0.4.0`, which does not export the payload APIs.
