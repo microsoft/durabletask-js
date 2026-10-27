@@ -2,6 +2,8 @@
 
 ### Fixes
 
+- Keep account-specific secondary failover off cross-endpoint identity requests and preserve
+  the preceding primary failure when a lagging secondary's 404 exhausts the retry budget.
 - Enforce the default two-minute client network/pending-read timeout at the shared Azure
   pipeline boundary; preserve healthy progressive reads, caller cancellation and SDK
   ETag-bound body recovery.
