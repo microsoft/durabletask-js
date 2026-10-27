@@ -86,9 +86,33 @@ Same-service v2 reads preserve the configured credential/pipeline across contain
 including path-style/Azurite endpoints. Another account or endpoint requires an explicit
 `TokenCredential`; account keys and configured SAS credentials are never forwarded there.
 
-Storage uses Azure SDK exponential retries: eight retries after the initial request,
-250 ms initial delay, 10-second maximum delay, and two-minute request timeout. Optional
-`clientOptions` accepts Azure SDK pipeline/retry overrides. Missing blobs and store/size
+Storage uses one provider HTTP retry policy in the Azure SDK's public pipeline, preserving
+SDK authentication, proxy, user agent and custom HTTP transport options. Like the pinned .NET
+provider, each HTTP request has up to eight retries (nine attempts). Ordinary
+408/429/500/502/503/504 responses, recognized network failures, and the storage/copy-source
+codes `InternalError`, `OperationTimedOut` and `ServerBusy` are transient. Exponential backoff
+starts at 250 ms, applies 0.8-1.2 jitter and caps the computed delay at 10 seconds. A valid
+`retry-after-ms`, `x-ms-retry-after-ms` or `Retry-After` delay can increase that wait beyond
+the cap; it never shortens the computed backoff. Waiting is cancellable, including large
+server-specified delays. Ordinary permanent statuses and corrupt gzip are not HTTP-retried.
+
+The default two-minute **network/read** timeout aborts stalled response headers or a pending
+body read, resetting for each read; it is not a two-minute whole-payload/operation limit.
+Healthy progressive reads can take longer. Internal timeouts are transient, not caller
+cancellation. SDK body recovery remains separate: up to five additional ranged GETs use
+the original ETag/`If-Match`, and each such HTTP request has the same HTTP retry policy.
+A failed ETag condition does not mix payload versions.
+
+`clientOptions.retryOptions` retains `maxTries` (total HTTP attempts, minimum 1),
+`retryDelayInMs`, `maxRetryDelayInMs`, `retryPolicyType` (exponential/fixed),
+`tryTimeoutInMs` (the network/read timeout as well as the SDK server timeout hint; explicit
+zero disables it), and `secondaryHost` (read failover, stopping secondary use after its 404).
+Durations must be finite and nonnegative; `maxTries` must be a positive safe integer. The SDK's
+own HTTP retry loop is limited to one attempt so it cannot multiply this retry budget.
+Custom HTTP transports must honor the provided abort signal and return Node-readable bodies.
+Caller cancellation takes precedence and preserves the original reason.
+
+Missing blobs and store/size
 failures surface as `PayloadStorageException`. Permanent activity/orchestrator response
 upload failures become non-retriable task/orchestration failures; transient failures remain
 retryable. Entity upload failures and download failures propagate rather than fabricating success.

@@ -2,19 +2,14 @@
 // Licensed under the MIT License.
 
 import { TokenCredential } from "@azure/core-auth";
-import {
-  BlobClient,
-  BlobServiceClient,
-  ContainerClient,
-  StoragePipelineOptions,
-  StorageRetryPolicyType,
-} from "@azure/storage-blob";
+import { BlobClient, BlobServiceClient, ContainerClient, StoragePipelineOptions } from "@azure/storage-blob";
 import { PayloadStore, PayloadStorageException, PayloadDeleteOutcome } from "@microsoft/durabletask-js";
 import { randomUUID } from "crypto";
 import { Writable } from "stream";
 import { pipeline } from "stream/promises";
 import { promisify } from "util";
 import { createGunzip, gzip } from "zlib";
+import { createPayloadPipeline } from "./blob-payload-pipeline";
 
 const compress = promisify(gzip);
 
@@ -42,21 +37,15 @@ export class BlobPayloadStore extends PayloadStore {
     super();
     const containerName = _options.containerName ?? "durabletask-payloads";
     if (!containerName) throw new TypeError("containerName must not be empty.");
-    this._clientOptions = {
-      ..._options.clientOptions,
-      retryOptions: {
-        retryPolicyType: StorageRetryPolicyType.EXPONENTIAL,
-        maxTries: 9,
-        retryDelayInMs: 250,
-        maxRetryDelayInMs: 10000,
-        tryTimeoutInMs: 120000,
-        ..._options.clientOptions?.retryOptions,
-      },
-    };
+    this._clientOptions = _options.clientOptions ?? {};
     if (_options.accountUri && _options.credential) {
-      this._service = new BlobServiceClient(String(_options.accountUri), _options.credential, this._clientOptions);
+      this._service = new BlobServiceClient(
+        String(_options.accountUri),
+        createPayloadPipeline(_options.credential, this._clientOptions),
+      );
     } else if (_options.connectionString) {
-      this._service = BlobServiceClient.fromConnectionString(_options.connectionString, this._clientOptions);
+      const parsed = BlobServiceClient.fromConnectionString(_options.connectionString);
+      this._service = new BlobServiceClient(parsed.url, createPayloadPipeline(parsed.credential, this._clientOptions));
     } else {
       throw new TypeError("Provide connectionString or both accountUri and credential.");
     }
@@ -83,6 +72,7 @@ export class BlobPayloadStore extends PayloadStore {
           blobHTTPHeaders: compressed ? { blobContentEncoding: "gzip" } : undefined,
         });
       } catch (error) {
+        signal?.throwIfAborted();
         if (attempt === 0 && storageCode(error) === "ContainerNotFound") {
           if (this._generation === generation) this._generation = undefined;
           continue;
@@ -121,6 +111,7 @@ export class BlobPayloadStore extends PayloadStore {
         .toString("utf8")
         .replace(/^\uFEFF/, "");
     } catch (error) {
+      signal?.throwIfAborted();
       if (storageStatus(error) === 404) {
         throw new PayloadStorageException("The payload blob was not found. It may have been deleted.", {
           cause: error,
@@ -147,6 +138,7 @@ export class BlobPayloadStore extends PayloadStore {
       });
       return PayloadDeleteOutcome.Deleted;
     } catch (error) {
+      signal?.throwIfAborted();
       if (
         storageStatus(error) === 404 &&
         (storageCode(error) === "BlobNotFound" || storageCode(error) === "ContainerNotFound")
@@ -192,7 +184,8 @@ export class BlobPayloadStore extends PayloadStore {
     ) {
       return container.getBlobClient(decoded.name);
     }
-    if (this._options.credential) return new BlobClient(url.href, this._options.credential, this._clientOptions);
+    if (this._options.credential)
+      return new BlobClient(url.href, createPayloadPipeline(this._options.credential, this._clientOptions));
     throw new PayloadStorageException(
       "Cross-account or cross-endpoint payload access requires identity authentication.",
     );
