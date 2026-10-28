@@ -8,6 +8,23 @@ import * as grpc from "@grpc/grpc-js";
  */
 export type MetadataGenerator = () => Promise<grpc.Metadata>;
 
+/** Cancels only the consumer's wait; the generator's eventual outcome remains observed. */
+export async function getMetadata(generator: MetadataGenerator, signal?: AbortSignal): Promise<grpc.Metadata> {
+  signal?.throwIfAborted();
+  if (!signal) return generator();
+
+  let onAbort = () => {};
+  try {
+    return await new Promise<grpc.Metadata>((resolve, reject) => {
+      onAbort = () => reject(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+      void generator().then(resolve, reject);
+    });
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
+
 /**
  * Promisifies a gRPC unary call with metadata support.
  *
@@ -27,7 +44,7 @@ export async function callWithMetadata<TReq, TRes>(
   metadataGenerator?: MetadataGenerator,
   signal?: AbortSignal,
 ): Promise<TRes> {
-  const metadata = metadataGenerator ? await metadataGenerator() : new grpc.Metadata();
+  const metadata = metadataGenerator ? await getMetadata(metadataGenerator, signal) : new grpc.Metadata();
   if (signal?.aborted) {
     throw signal.reason;
   }
