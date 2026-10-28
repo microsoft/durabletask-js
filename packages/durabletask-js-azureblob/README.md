@@ -87,37 +87,44 @@ including path-style/Azurite endpoints. Another account or endpoint requires an 
 `TokenCredential`; account keys and configured SAS credentials are never forwarded there.
 Account-specific `secondaryHost` failover is not forwarded to a cross-endpoint identity client.
 
-Storage uses one provider HTTP retry policy in the Azure SDK's public pipeline, preserving
-SDK authentication, proxy, user agent and custom HTTP transport options. Like the pinned .NET
-provider, each HTTP request has up to eight retries (nine attempts). Ordinary
-408/429/500/502/503/504 responses, recognized network failures, and the storage/copy-source
-codes `InternalError`, `OperationTimedOut` and `ServerBusy` are transient. Exponential backoff
-starts at 250 ms, applies 0.8-1.2 jitter and caps the computed delay at 10 seconds. A valid
-`retry-after-ms`, `x-ms-retry-after-ms` or `Retry-After` delay can increase that wait beyond
-the cap; it never shortens the computed backoff. Waiting is cancellable, including large
-server-specified delays. Ordinary permanent statuses and corrupt gzip are not HTTP-retried.
-For `FIXED`, jittered default waits are capped at `retryDelayInMs`, independently of
-`maxRetryDelayInMs`; a valid server Retry-After can still increase the wait.
+The Azure Storage JavaScript SDK owns the only HTTP retry loop, including endpoint selection,
+error classification and retry delays. The provider supplies defaults of nine total attempts,
+`retryDelayInMs: 250` and `maxRetryDelayInMs: 10000`, and preserves SDK authentication, proxy,
+user agent and custom HTTP transport options. Retry behavior deliberately follows the installed
+JavaScript SDK, **not** the pinned .NET provider; payload tokens and storage representation remain
+interoperable.
+
+For example, the tested Blob SDK 12.31.0 retries ordinary HTTP 500/503 and its recognized
+transport/copy-source failures, but not ordinary 408/429/502/504. Its first exponential retry is
+immediate; subsequent primary delays follow the SDK's exponential formula without .NET jitter
+or Retry-After parsing. `FIXED` uses the SDK's configured delay. These are native SDK behaviors,
+not additional provider policies.
 
 The default two-minute **network/read** timeout aborts stalled response headers or a pending
 body read, resetting for each read; it is not a two-minute whole-payload/operation limit.
-Healthy progressive reads can take longer. Internal timeouts are transient, not caller
-cancellation. SDK body recovery remains separate: up to five additional ranged GETs use
-the original ETag/`If-Match`, and each such HTTP request has the same HTTP retry policy.
-A failed ETag condition does not mix payload versions.
+Healthy progressive reads can take longer. A small public HTTP transport adapter enforces this
+deadline separately for **each native SDK attempt**, not across retry backoff or the entire
+operation. Internal timeouts are transient, not caller cancellation. SDK body recovery remains
+separate: up to five additional ranged GETs use the original ETag/`If-Match`, and each such HTTP
+request uses the native retry policy. A failed ETag condition does not mix payload versions.
+Corrupt gzip is not hidden by whole-download retries.
 
 `clientOptions.retryOptions` retains `maxTries` (total HTTP attempts, minimum 1),
 `retryDelayInMs`, `maxRetryDelayInMs`, `retryPolicyType` (exponential/fixed),
 `tryTimeoutInMs` (the network/read timeout as well as the SDK server timeout hint; explicit
-zero disables it), and `secondaryHost` (same-account read failover, stopping secondary use after
-its 404). A secondary 404 is not confirmed primary absence: when the attempt budget is exhausted,
-the preceding actual primary failure propagates rather than reporting missing/deleted data.
-Durations must be finite and nonnegative; `maxTries` must be a positive safe integer. The SDK's
-own HTTP retry loop is limited to one attempt so it cannot multiply this retry budget.
+zero disables it), and `secondaryHost` (native same-account read failover). A final secondary
+404 is not confirmed primary absence: the provider checks the actual SDK error's request
+endpoint and raises a retryable `RestError` with the original 404 as its cause, rather than
+reporting missing/deleted data. It does not add attempts or fabricate an HTTP status.
+An actual primary 404 still confirms absence, including after the SDK stops using a lagging
+secondary. Durations must be finite and nonnegative; `maxTries` must be a positive safe integer.
+No provider retry loop multiplies the SDK budget.
 Custom HTTP transports must honor the provided abort signal and return Node-readable bodies.
 Caller cancellation takes precedence and preserves the original reason.
 Downstream stream failures immediately release the raw response and its timers/listeners,
 including when the network/read timeout is explicitly disabled.
+The optional provider directly declares the already-used Azure core pipeline/compatibility
+packages to adapt the default transport through public APIs; core SDK users do not acquire them.
 
 Missing blobs and store/size
 failures surface as `PayloadStorageException`. Permanent activity/orchestrator response

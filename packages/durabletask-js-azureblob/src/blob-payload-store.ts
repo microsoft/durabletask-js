@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 import { TokenCredential } from "@azure/core-auth";
-import { BlobClient, BlobServiceClient, ContainerClient, StoragePipelineOptions } from "@azure/storage-blob";
+import { BlobClient, BlobServiceClient, ContainerClient, RestError, StoragePipelineOptions } from "@azure/storage-blob";
 import { PayloadStore, PayloadStorageException, PayloadDeleteOutcome } from "@microsoft/durabletask-js";
 import { randomUUID } from "crypto";
 import { Writable } from "stream";
@@ -112,6 +112,7 @@ export class BlobPayloadStore extends PayloadStore {
         .replace(/^\uFEFF/, "");
     } catch (error) {
       signal?.throwIfAborted();
+      throwIfSecondaryNotFound(error, blob.url);
       if (storageStatus(error) === 404) {
         throw new PayloadStorageException("The payload blob was not found. It may have been deleted.", {
           cause: error,
@@ -139,6 +140,7 @@ export class BlobPayloadStore extends PayloadStore {
       return PayloadDeleteOutcome.Deleted;
     } catch (error) {
       signal?.throwIfAborted();
+      throwIfSecondaryNotFound(error, blob.url);
       if (
         storageStatus(error) === 404 &&
         (storageCode(error) === "BlobNotFound" || storageCode(error) === "ContainerNotFound")
@@ -260,4 +262,20 @@ function storageCode(error: unknown): unknown {
 
 function storageStatus(error: unknown): unknown {
   return error !== null && typeof error === "object" && "statusCode" in error ? error.statusCode : undefined;
+}
+
+function throwIfSecondaryNotFound(error: unknown, primaryUrl: string): void {
+  if (
+    error instanceof RestError &&
+    error.statusCode === 404 &&
+    error.request &&
+    new URL(error.request.url).host !== new URL(primaryUrl).host
+  ) {
+    throw Object.assign(
+      new RestError("A secondary response did not confirm whether the primary payload exists.", {
+        code: RestError.REQUEST_SEND_ERROR,
+      }),
+      { cause: error },
+    );
+  }
 }
