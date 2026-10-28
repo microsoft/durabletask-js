@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 import * as grpc from "@grpc/grpc-js";
-import { EventEmitter } from "events";
+import { EventEmitter, getEventListeners } from "events";
 import { NoOpLogger, OrchestrationAlreadyExistsError, PayloadStore, TaskHubGrpcClient } from "../src";
 import * as pb from "../src/proto/orchestrator_service_pb";
 import * as stubs from "../src/proto/orchestrator_service_grpc_pb";
@@ -22,6 +22,8 @@ describe("large payload auto-purge lifecycle transport", () => {
   let collision: boolean;
   let hostAddress: string;
   let rpcError: grpc.status | undefined;
+  let metadataGenerator: jest.Mock<Promise<grpc.Metadata>, []>;
+  let stopping: Promise<void> | undefined;
 
   beforeEach(async () => {
     calls = [];
@@ -32,6 +34,7 @@ describe("large payload auto-purge lifecycle transport", () => {
     status = pb.OrchestrationStatus.ORCHESTRATION_STATUS_RUNNING;
     collision = false;
     rpcError = undefined;
+    stopping = undefined;
     server = new grpc.Server();
     const sidecar = {
       startInstance: (call, callback) => {
@@ -100,18 +103,19 @@ describe("large payload auto-purge lifecycle transport", () => {
       ),
     );
     hostAddress = `127.0.0.1:${port}`;
+    metadataGenerator = jest.fn(async () => {
+      const metadata = new grpc.Metadata();
+      metadata.set("taskhub", "payload-test");
+      return metadata;
+    });
     client = new TaskHubGrpcClient({
       hostAddress,
       defaultVersion: "business",
-      metadataGenerator: async () => {
-        const metadata = new grpc.Metadata();
-        metadata.set("taskhub", "payload-test");
-        return metadata;
-      },
+      metadataGenerator,
     });
   });
   afterEach(async () => {
-    await client.stop();
+    await (stopping ?? client.stop());
     server.forceShutdown();
   });
 
@@ -135,6 +139,126 @@ describe("large payload auto-purge lifecycle transport", () => {
   it("disables without validating batch, starting, waiting, or signaling", async () => {
     await client.setLargePayloadAutoPurge(false, NaN);
     expect(calls).toEqual(["setting:false"]);
+  });
+
+  describe.each([false, true])("metadata cancellation while enabled=%s", (enabled) => {
+    it.each(["throw", "pending"] as const)("does not invoke pre-aborted metadata that would %s", async (kind) => {
+      let release!: (value: grpc.Metadata) => void;
+      const metadata = new Promise<grpc.Metadata>((resolve) => (release = resolve));
+      metadataGenerator.mockImplementation(() => {
+        if (kind === "throw") throw new Error("metadata must not run");
+        return metadata;
+      });
+      const controller = new AbortController();
+      const reason = Object.freeze(new Error("cancel before auto-purge metadata"));
+      controller.abort(reason);
+      const pending = client.setLargePayloadAutoPurge(enabled, undefined, controller.signal);
+      void pending.catch(() => {});
+      try {
+        expect(metadataGenerator).not.toHaveBeenCalled();
+        await expect(pending).rejects.toBe(reason);
+        expect(calls).toEqual([]);
+      } finally {
+        release(new grpc.Metadata());
+        await pending.catch(() => {});
+      }
+    });
+  });
+
+  it.each([
+    ["abort", "resolve"],
+    ["abort", "reject"],
+    ["stop", "resolve"],
+    ["stop", "reject"],
+  ] as const)("settles on %s before initial metadata can %s", async (cancellation, outcome) => {
+    let release!: (value: grpc.Metadata) => void;
+    let fail!: (error: Error) => void;
+    const metadata = new Promise<grpc.Metadata>((resolve, reject) => {
+      release = resolve;
+      fail = reject;
+    });
+    metadataGenerator.mockReturnValue(metadata);
+    const controller = new AbortController();
+    const reason = Object.freeze(new Error("cancel initial auto-purge metadata"));
+    let settled = false;
+    let observed: unknown;
+    const pending = client.setLargePayloadAutoPurge(false, undefined, controller.signal).then(
+      () => {
+        settled = true;
+      },
+      (error: unknown) => {
+        observed = error;
+        settled = true;
+      },
+    );
+    try {
+      expect(metadataGenerator).toHaveBeenCalledTimes(1);
+      if (cancellation === "abort") controller.abort(reason);
+      else stopping = client.stop();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(settled).toBe(true);
+      if (cancellation === "abort") expect(observed).toBe(reason);
+      else expect(observed).toMatchObject({ name: "AbortError" });
+      expect(calls).toEqual([]);
+      expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+      if (outcome === "resolve") release(new grpc.Metadata());
+      else fail(new Error("late initial metadata failure"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(calls).toEqual([]);
+    } finally {
+      release(new grpc.Metadata());
+      await metadata.catch(() => {});
+      await pending;
+    }
+  });
+
+  it.each([2, 3, 4])("does not continue the lifecycle after cancellation during metadata step %s", async (step) => {
+    let release!: (value: grpc.Metadata) => void;
+    const metadata = new Promise<grpc.Metadata>((resolve) => (release = resolve));
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => (entered = resolve));
+    const originalGenerator = metadataGenerator.getMockImplementation()!;
+    metadataGenerator.mockImplementation(() => {
+      if (metadataGenerator.mock.calls.length !== step) return originalGenerator();
+      entered();
+      return metadata;
+    });
+    const controller = new AbortController();
+    const reason = Object.freeze(new Error("cancel runner lifecycle metadata"));
+    let settled = false;
+    let observed: unknown;
+    const pending = client.setLargePayloadAutoPurge(true, 500, controller.signal).then(
+      () => {
+        settled = true;
+      },
+      (error: unknown) => {
+        settled = true;
+        observed = error;
+      },
+    );
+    try {
+      await Promise.race([
+        started,
+        pending.then(() => {
+          throw new Error("Auto-purge completed before the expected metadata step");
+        }),
+      ]);
+      const expected = ["setting:true", "start", "wait"].slice(0, step - 1);
+      expect(calls).toEqual(expected);
+      controller.abort(reason);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(settled).toBe(true);
+      expect(observed).toBe(reason);
+      expect(metadataGenerator).toHaveBeenCalledTimes(step);
+      expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+      release(new grpc.Metadata());
+      await pending;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(calls).toEqual(expected);
+    } finally {
+      release(new grpc.Metadata());
+      await pending;
+    }
   });
 
   it.each([0, 1001, NaN, 1.5])("rejects invalid enabling batch %s before mutating the backend", async (batch) => {

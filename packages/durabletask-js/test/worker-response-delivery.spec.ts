@@ -194,12 +194,13 @@ describe("Worker response retries", () => {
       const stopping = worker.stop();
       await jest.advanceTimersByTimeAsync(1100);
       await stopping;
+      expect(worker["_pendingWorkItems"].size).toBe(0);
       finishMetadata(new grpc.Metadata());
       await jest.runAllTimersAsync();
       await Promise.all(worker["_pendingWorkItems"]);
       expect(send).toHaveBeenCalledTimes(phase === "RPC" ? 2 : 1);
       expect(cancel).toHaveBeenCalledTimes(phase === "RPC" ? 1 : 0);
-      expect(logger.warn).toHaveBeenCalledTimes(phase === "metadata" ? 1 : 0);
+      expect(logger.warn).not.toHaveBeenCalled();
       expect(worker["_pendingWorkItems"].size).toBe(0);
       expect(jest.getTimerCount()).toBe(0);
     },

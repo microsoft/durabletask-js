@@ -49,6 +49,9 @@
 
 ### Fixes
 
+- Cancel metadata acquisition waits before dispatch and preserve the original cancellation reason,
+  including auto-purge setting and runner lifecycle calls. Cancellation detaches the SDK wait;
+  third-party metadata generation may finish later, but cannot dispatch a canceled RPC.
 - Determine single-instance purge routing from ordinary/entity IDs regardless of payload storage,
   matching .NET management clients without changing purge timeout/completion semantics.
 - Keep `PayloadStorageException` cause options structural so its public declarations remain

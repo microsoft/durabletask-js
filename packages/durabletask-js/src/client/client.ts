@@ -21,7 +21,7 @@ import { PurgeResult } from "../orchestration/orchestration-purge-result";
 import { PurgeInstanceCriteria } from "../orchestration/orchestration-purge-criteria";
 import { PurgeInstanceOptions } from "../orchestration/orchestration-purge-options";
 import { TerminateInstanceOptions, isTerminateInstanceOptions } from "../orchestration/orchestration-terminate-options";
-import { callWithMetadata, MetadataGenerator } from "../utils/grpc-helper.util";
+import { callWithMetadata, getMetadata, MetadataGenerator } from "../utils/grpc-helper.util";
 import { OrchestrationQuery, ListInstanceIdsOptions, DEFAULT_PAGE_SIZE } from "../orchestration/orchestration-query";
 import { Page, AsyncPageable, createAsyncPageable } from "../orchestration/page";
 import { convertFailureDetails } from "../utils/failure-details.util";
@@ -194,7 +194,7 @@ export class TaskHubGrpcClient {
       effectiveSignal?.throwIfAborted();
       let attemptMetadata: MetadataGenerator | undefined;
       if (metadataGenerator) {
-        const metadata = await metadataGenerator();
+        const metadata = await getMetadata(metadataGenerator, effectiveSignal);
         attemptMetadata = async () => metadata;
       }
       let response: TRes;
