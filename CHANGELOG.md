@@ -53,6 +53,9 @@
 
 ### Fixes
 
+- Cancel metadata acquisition waits before dispatch and preserve the original cancellation reason,
+  including auto-purge setting and runner lifecycle calls. Cancellation detaches the SDK wait;
+  third-party metadata generation may finish later, but cannot dispatch a canceled RPC.
 - Deduplicate auto-purge runner startup only after an actual scheduler RPC duplicate response.
   Preserve upload/metadata error identity, including matching semantic error types, and cancellation.
 - Determine single-instance purge routing from the instance ID regardless of payload configuration,
