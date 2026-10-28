@@ -5,7 +5,10 @@ import { createServer, IncomingMessage, ServerResponse, Server } from "http";
 import { Socket } from "net";
 import { getEventListeners } from "events";
 import { gzipSync } from "zlib";
+import { Readable } from "stream";
+import { BlobClient, BlobServiceClient } from "@azure/storage-blob";
 import { BlobPayloadStore } from "../src";
+import { createPayloadPipeline } from "../src/blob-payload-pipeline";
 
 describe("BlobPayloadStore real network/read deadlines", () => {
   let server: Server;
@@ -161,8 +164,8 @@ describe("BlobPayloadStore real network/read deadlines", () => {
           headers(response, bytes.length, 200, "gzip");
           response.write(bytes.subarray(0, split));
         } else if (retryResponse && requests.length === 2) {
-          response.writeHead(429, { "content-type": "application/xml", "x-ms-error-code": "Throttled" });
-          response.end("<Error><Code>Throttled</Code><Message>Retry resumed GET</Message></Error>");
+          response.writeHead(503, { "content-type": "application/xml", "x-ms-error-code": "ServerBusy" });
+          response.end("<Error><Code>ServerBusy</Code><Message>Retry resumed GET</Message></Error>");
         } else {
           expect(range(request)).toBe(`bytes=${split}-${bytes.length - 1}`);
           expect(request.headers["if-match"]).toBe(etag);
@@ -274,6 +277,61 @@ describe("BlobPayloadStore real network/read deadlines", () => {
     expect(connections).toHaveLength(2);
     expect(connections[1]).toBe(connections[0]);
     expect(connections[1].destroyed).toBe(false);
+  });
+
+  it("matches the native SDK's disabled keep-alive behavior through the default transport bridge", async () => {
+    const connections: Socket[] = [];
+    handler = (request, response) => {
+      connections.push(request.socket);
+      response.setHeader("connection", "keep-alive");
+      headers(response, 7);
+      response.end("payload");
+    };
+    const localConnection = `DefaultEndpointsProtocol=http;AccountName=account;AccountKey=${accountKey};BlobEndpoint=${endpoint}`;
+    const native = BlobServiceClient.fromConnectionString(localConnection, {
+      keepAliveOptions: { enable: false },
+      retryOptions: { maxTries: 1 },
+    })
+      .getContainerClient("durabletask-payloads")
+      .getBlobClient("blob");
+    for (let i = 0; i < 2; i++) {
+      const { readableStreamBody: body } = await native.download();
+      if (!(body instanceof Readable)) throw new Error("Expected the SDK's Node-readable download body");
+      const chunks: Buffer[] = [];
+      for await (const chunk of body) chunks.push(chunk);
+      expect(Buffer.concat(chunks).toString()).toBe("payload");
+    }
+    const store = new BlobPayloadStore({
+      connectionString: localConnection,
+      clientOptions: {
+        keepAliveOptions: { enable: false },
+        retryOptions: { maxTries: 1, tryTimeoutInMs: timeout },
+      },
+    });
+    await expect(store.download(token())).resolves.toBe("payload");
+    await expect(store.download(token())).resolves.toBe("payload");
+    expect(connections).toHaveLength(4);
+    expect(connections[2] === connections[3]).toBe(connections[0] === connections[1]);
+  });
+
+  it("preserves SDK download progress through the public default transport bridge", async () => {
+    handler = (_request, response) => {
+      headers(response, 7);
+      response.end("payload");
+    };
+    const progress: number[] = [];
+    const blob = new BlobClient(
+      token().slice("blob:v2:".length),
+      createPayloadPipeline(undefined, { retryOptions: { maxTries: 1, tryTimeoutInMs: timeout } }),
+    );
+    const response = await blob.download(0, undefined, { onProgress: (event) => progress.push(event.loadedBytes) });
+    const body = response.readableStreamBody;
+    if (!(body instanceof Readable)) throw new Error("Expected the SDK's Node-readable download body");
+    const chunks: Buffer[] = [];
+    for await (const chunk of body) chunks.push(chunk);
+    expect(Buffer.concat(chunks).toString()).toBe("payload");
+    expect(progress.at(-1)).toBe(7);
+    expect(requests).toHaveLength(1);
   });
 
   it.each(["headers", "body", "initialization"] as const)(
