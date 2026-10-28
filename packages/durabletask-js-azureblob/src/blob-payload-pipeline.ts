@@ -1,11 +1,13 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+import { toHttpHeadersLike } from "@azure/core-http-compat";
+import { createDefaultHttpClient, createHttpHeaders } from "@azure/core-rest-pipeline";
 import {
   HttpOperationResponse,
+  IHttpClient,
   newPipeline,
   Pipeline,
-  RequestPolicy,
   RestError,
   StoragePipelineOptions,
   StorageRetryPolicyType,
@@ -14,26 +16,12 @@ import {
 import { Readable } from "stream";
 
 type Signal = WebResource["abortSignal"];
-type Headers = Pick<HttpOperationResponse["headers"], "get">;
 type Credential = Parameters<typeof newPipeline>[0];
 
-const RETRY_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
-const RETRY_SERVICE_CODES = new Set(["InternalError", "OperationTimedOut", "ServerBusy"]);
-const RETRY_NETWORK_CODES = new Set([
-  "ETIMEDOUT",
-  "ESOCKETTIMEDOUT",
-  "ECONNREFUSED",
-  "ECONNRESET",
-  "ENOENT",
-  "ENOTFOUND",
-  "EAI_AGAIN",
-  "TIMEOUT",
-  "EPIPE",
-  "REQUEST_SEND_ERROR",
-]);
 const MAX_TIMER_MS = 2147483647;
+const DEFAULT_HTTP_CLIENT = createDefaultHttpClient();
 
-/** One HTTP retry policy; the Blob SDK separately owns its ETag-bound body resumptions. */
+/** The SDK owns retries; the transport adapter bounds each send and pending body read. */
 export function createPayloadPipeline(credential: Credential, options: StoragePipelineOptions): Pipeline {
   const retry = {
     ...options.retryOptions,
@@ -54,81 +42,25 @@ export function createPayloadPipeline(credential: Credential, options: StoragePi
     if (!Number.isFinite(value) || value < 0)
       throw new RangeError(`retryOptions.${name} must be finite and nonnegative.`);
   }
-  const pipeline = newPipeline(credential, {
+  const transport: IHttpClient = options.httpClient ?? {
+    async sendRequest(request) {
+      const response = await DEFAULT_HTTP_CLIENT.sendRequest({
+        ...request,
+        headers: createHttpHeaders(request.headers.toJson({ preserveCase: true })),
+        disableKeepAlive: options.keepAliveOptions?.enable === false,
+        allowInsecureConnection: true,
+      });
+      return { ...response, request, headers: toHttpHeadersLike(response.headers) };
+    },
+  };
+  return newPipeline(credential, {
     ...options,
-    retryOptions: { ...retry, maxTries: 1 },
+    retryOptions: retry,
+    httpClient: { sendRequest: (request) => sendAttempt(transport, request, retry.tryTimeoutInMs) },
   });
-  pipeline.factories.push({
-    create: (next) => ({
-      async sendRequest(request) {
-        const signal = request.abortSignal;
-        const primary = new URL(request.url);
-        const secondary = retry.secondaryHost ? new URL(primary) : undefined;
-        if (secondary) secondary.host = retry.secondaryHost!;
-        let secondaryNotFound = false;
-        let primaryFailure: { response?: HttpOperationResponse; error: unknown } | undefined;
-        for (let attempt = 1; ; attempt++) {
-          throwIfAborted(signal);
-          const useSecondary =
-            secondary && !secondaryNotFound && ["GET", "HEAD", "OPTIONS"].includes(request.method) && attempt % 2 === 0;
-          request.url = (useSecondary ? secondary : primary).href;
-          let response: HttpOperationResponse | undefined;
-          let error: unknown;
-          try {
-            response = await sendAttempt(next, request, retry.tryTimeoutInMs);
-          } catch (failure) {
-            throwIfAborted(signal);
-            error = failure;
-          }
-          const status = response?.status ?? (error instanceof RestError ? error.statusCode : undefined);
-          const headers = response?.headers ?? (error instanceof RestError ? error.response?.headers : undefined);
-          const secondary404 = !!useSecondary && status === 404;
-          if (secondary404) secondaryNotFound = true;
-          const serviceError =
-            status !== undefined &&
-            status >= 400 &&
-            headers &&
-            [headers.get("x-ms-error-code"), headers.get("x-ms-copy-source-error-code")].some(
-              (code) => code !== undefined && RETRY_SERVICE_CODES.has(code),
-            );
-          const networkError =
-            (error instanceof RestError && error.statusCode === 0) ||
-            (error instanceof Error &&
-              "code" in error &&
-              typeof error.code === "string" &&
-              RETRY_NETWORK_CODES.has(error.code));
-          const retryable =
-            secondary404 || serviceError || networkError || (status !== undefined && RETRY_STATUSES.has(status));
-          if (!useSecondary && retryable) primaryFailure = { response, error };
-          if (attempt === retry.maxTries || !retryable) {
-            if (secondary404) {
-              if (!primaryFailure) {
-                throw new RestError("The secondary response did not confirm primary payload absence.", {
-                  code: RestError.REQUEST_SEND_ERROR,
-                });
-              }
-              if (primaryFailure.response) return primaryFailure.response;
-              throw primaryFailure.error;
-            }
-            if (response) return response;
-            throw error;
-          }
-          if (response?.readableStreamBody instanceof Readable) response.readableStreamBody.destroy();
-          const base =
-            retry.retryDelayInMs *
-            (retry.retryPolicyType === StorageRetryPolicyType.FIXED ? 1 : Math.pow(2, attempt - 1));
-          const cap =
-            retry.retryPolicyType === StorageRetryPolicyType.FIXED ? retry.retryDelayInMs : retry.maxRetryDelayInMs;
-          const defaultDelay = Math.min(base * (0.8 + Math.random() * 0.4), cap);
-          await wait(Math.max(defaultDelay, retryAfter(headers)), signal);
-        }
-      },
-    }),
-  });
-  return pipeline;
 }
 
-async function sendAttempt(next: RequestPolicy, request: WebResource, timeout: number): Promise<HttpOperationResponse> {
+async function sendAttempt(next: IHttpClient, request: WebResource, timeout: number): Promise<HttpOperationResponse> {
   const callerSignal = request.abortSignal;
   throwIfAborted(callerSignal);
   const controller = new AbortController();
@@ -237,7 +169,7 @@ async function sendAttempt(next: RequestPolicy, request: WebResource, timeout: n
     controller.abort();
     source?.destroy();
     throwIfAborted(callerSignal);
-    throw timedOut ?? normalizeInternalAbort(error);
+    throw timedOut ?? error;
   }
 }
 
@@ -252,51 +184,4 @@ function throwIfAborted(signal: Signal): void {
       ? signal.reason
       : Object.assign(new Error("The payload request was aborted."), { name: "AbortError" });
   }
-}
-
-function retryAfter(headers?: Headers): number {
-  if (!headers) return 0;
-  const milliseconds = headers.get("retry-after-ms") ?? headers.get("x-ms-retry-after-ms");
-  const parseInteger = (value: string | undefined) => {
-    if (value === undefined || !/^[+-]?\d+$/.test(value.trim())) return undefined;
-    const parsed = Number(value);
-    return Number.isInteger(parsed) && parsed >= -2147483648 && parsed <= 2147483647 ? parsed : undefined;
-  };
-  const ms = parseInteger(milliseconds);
-  if (ms !== undefined) return ms;
-  const value = headers.get("retry-after");
-  const seconds = parseInteger(value);
-  if (seconds !== undefined) return seconds * 1000;
-  return value && Number.isFinite(Date.parse(value)) ? Date.parse(value) - Date.now() : 0;
-}
-
-async function wait(delay: number, signal: Signal): Promise<void> {
-  // Retry-After can exceed Node's timer limit. Chunk it instead of overflowing to 1 ms.
-  let remaining = delay;
-  while (remaining > 0) {
-    throwIfAborted(signal);
-    const duration = Math.min(remaining, MAX_TIMER_MS);
-    let timer: NodeJS.Timeout | undefined;
-    let onAbort = () => {};
-    try {
-      await new Promise<void>((resolve, reject) => {
-        onAbort = () => {
-          clearTimeout(timer);
-          try {
-            throwIfAborted(signal);
-          } catch (error) {
-            reject(error);
-          }
-        };
-        timer = setTimeout(resolve, duration);
-        signal?.addEventListener("abort", onAbort, { once: true });
-        if (signal?.aborted) onAbort();
-      });
-    } finally {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-    }
-    remaining -= duration;
-  }
-  throwIfAborted(signal);
 }

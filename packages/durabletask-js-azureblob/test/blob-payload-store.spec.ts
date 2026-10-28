@@ -5,6 +5,7 @@ import { Readable } from "stream";
 import { getEventListeners } from "events";
 import { gunzipSync, gzipSync } from "zlib";
 import {
+  BlobClient,
   IHttpClient,
   HttpOperationResponse,
   WebResource,
@@ -83,7 +84,7 @@ describe("BlobPayloadStore", () => {
     http = new RecordingClient();
   });
 
-  describe("BlobPayloadStore shared HTTP resilience", () => {
+  describe("BlobPayloadStore native SDK retries and per-attempt deadlines", () => {
     let http: RecordingClient;
     const token = "blob:v2:https://account.invalid/durabletask-payloads/blob";
     const make = (http: RecordingClient, retryOptions?: StorageRetryOptions) =>
@@ -105,24 +106,19 @@ describe("BlobPayloadStore", () => {
       jest.useRealTimers();
     });
 
-    it.each([408, 429, 500, 502, 503, 504])(
-      "recovers from ordinary HTTP %s through the real SDK pipeline",
-      async (status) => {
-        http.failures.push({ status, code: "Transient" });
-        const pending = make(http).download(token);
-        const assertion = expect(pending).resolves.toBe("payload");
-        await jest.advanceTimersByTimeAsync(249);
-        expect(http.requests).toHaveLength(1);
-        await jest.advanceTimersByTimeAsync(1);
-        await assertion;
-        expect(http.requests).toHaveLength(2);
-        expect(http.times[1] - http.times[0]).toBe(250);
-        expect(jest.getTimerCount()).toBe(0);
-      },
-    );
+    it.each([500, 503])("uses the native immediate first retry for ordinary HTTP %s", async (status) => {
+      http.failures.push({ status, code: "Transient" });
+      const pending = make(http).download(token);
+      const assertion = expect(pending).resolves.toBe("payload");
+      await jest.runAllTimersAsync();
+      await assertion;
+      expect(http.requests).toHaveLength(2);
+      expect(http.times[1] - http.times[0]).toBe(0);
+      expect(jest.getTimerCount()).toBe(0);
+    });
 
     it.each(["InternalError", "OperationTimedOut", "ServerBusy"])(
-      "retries service/copy-source code %s",
+      "uses native copy-source classification, not ordinary service code %s",
       async (code) => {
         for (const name of ["x-ms-error-code", "x-ms-copy-source-error-code"]) {
           http.failures.push({
@@ -131,34 +127,62 @@ describe("BlobPayloadStore", () => {
             headers: { [name]: code },
           });
           const pending = make(http).download(token);
-          const assertion = expect(pending).resolves.toBe("payload");
+          const assertion =
+            name === "x-ms-copy-source-error-code"
+              ? expect(pending).resolves.toBe("payload")
+              : expect(pending).rejects.toMatchObject({ statusCode: 400 });
+          void assertion.catch(() => {});
           await jest.runAllTimersAsync();
           await assertion;
         }
-        expect(http.requests).toHaveLength(4);
+        expect(http.requests).toHaveLength(3);
       },
     );
 
-    it("uses eight retries with jittered exponential delay capped at ten seconds", async () => {
+    it("uses exactly nine native attempts with the same timing as the raw SDK, without nested retries", async () => {
       http.error = { status: 503, code: "ServerBusy" };
       const pending = make(http).download(token);
       const assertion = expect(pending).rejects.toMatchObject({ statusCode: 503 });
       await jest.runAllTimersAsync();
       await assertion;
       expect(http.requests).toHaveLength(9);
-      expect(http.times.slice(1).map((time, index) => time - http.times[index])).toEqual([
-        250, 500, 1000, 2000, 4000, 8000, 10000, 10000,
-      ]);
+      const raw = new RecordingClient();
+      raw.error = http.error;
+      const native = new BlobClient(token.slice("blob:v2:".length), undefined, {
+        httpClient: raw,
+        retryOptions: { maxTries: 9, retryDelayInMs: 250, maxRetryDelayInMs: 10000 },
+      }).download();
+      const nativeAssertion = expect(native).rejects.toMatchObject({ statusCode: 503 });
+      await jest.runAllTimersAsync();
+      await nativeAssertion;
+      const delays = (times: number[]) => times.slice(1).map((time, index) => time - times[index]);
+      expect(raw.requests).toHaveLength(9);
+      expect(delays(raw.times)).toEqual([0, 250, 750, 1750, 3750, 7750, 10000, 10000]);
+      expect(delays(http.times)).toEqual(delays(raw.times));
       expect(jest.getTimerCount()).toBe(0);
     });
 
-    it.each([400, 401, 403, 404, 409, 412])("does not retry ordinary HTTP %s", async (status) => {
-      http.error = { status, code: "Permanent" };
-      const pending = make(http).download(token);
-      const assertion = expect(pending).rejects.toThrow();
+    it.each([400, 401, 403, 404, 408, 409, 412, 429, 502, 504])(
+      "uses the SDK's terminal classification for ordinary HTTP %s",
+      async (status) => {
+        http.error = { status, code: "Permanent" };
+        const pending = make(http).download(token);
+        const assertion = expect(pending).rejects.toThrow();
+        await jest.runAllTimersAsync();
+        await assertion;
+        expect(http.requests).toHaveLength(1);
+        expect(jest.getTimerCount()).toBe(0);
+      },
+    );
+
+    it.each([1, 2])("honors caller maxTries=%s as a non-nested HTTP attempt budget", async (maxTries) => {
+      http.error = { status: 503, code: "ServerBusy" };
+      const assertion = expect(make(http, { maxTries, retryDelayInMs: 0 }).download(token)).rejects.toMatchObject({
+        statusCode: 503,
+      });
       await jest.runAllTimersAsync();
       await assertion;
-      expect(http.requests).toHaveLength(1);
+      expect(http.requests).toHaveLength(maxTries);
       expect(jest.getTimerCount()).toBe(0);
     });
 
@@ -178,7 +202,7 @@ describe("BlobPayloadStore", () => {
       "applies one HTTP retry policy to %s",
       async (operation) => {
         if (operation === "upload" || operation === "delete") http.failures.push(undefined);
-        http.failures.push({ status: 429, code: "Throttled" });
+        http.failures.push({ status: 503, code: "ServerBusy" });
         const store = make(http);
         const pending =
           operation === "initialize" || operation === "upload"
@@ -193,71 +217,49 @@ describe("BlobPayloadStore", () => {
       },
     );
 
-    it.each([
-      [{ "retry-after-ms": "1300", "x-ms-retry-after-ms": "2200", "Retry-After": "3" }, 1300],
-      [{ "x-ms-retry-after-ms": "1700", "Retry-After": "3" }, 1700],
-      [{ "retry-after-ms": "invalid", "x-ms-retry-after-ms": "1000", "Retry-After": "2" }, 2000],
-      [{ "Retry-After": "Tue, 01 Jan 2030 00:00:03 GMT" }, 3000],
-      [{ "Retry-After": "20" }, 20000],
-      [{ "Retry-After": "0" }, 250],
-      [{ "retry-after-ms": "1.5", "Retry-After": "invalid" }, 250],
-    ] as const)("honors .NET Retry-After precedence/default lower bound (%#)", async (headers, delay) => {
+    it.each<Record<string, string>>([
+      { "retry-after-ms": "1300", "x-ms-retry-after-ms": "2200", "Retry-After": "3" },
+      { "Retry-After": "Tue, 01 Jan 2030 00:00:03 GMT" },
+      { "Retry-After": "2147484" },
+    ])("leaves Retry-After behavior to the native SDK (%#)", async (headers) => {
       http.failures.push({ status: 503, code: "ServerBusy", headers });
-      const pending = make(http).download(token);
-      const assertion = expect(pending).resolves.toBe("payload");
-      await jest.advanceTimersByTimeAsync(delay - 1);
-      expect(http.requests).toHaveLength(1);
-      await jest.advanceTimersByTimeAsync(1);
-      await assertion;
-      expect(http.times[1] - http.times[0]).toBe(delay);
-    });
-
-    it("keeps a server delay above Node's timer limit delayed and cancellable", async () => {
-      http.failures.push({ status: 503, code: "ServerBusy", headers: { "Retry-After": "2147484" } });
-      const controller = new AbortController();
-      const reason = Object.freeze(new Error("cancel long retry-after"));
-      const pending = make(http).download(token, controller.signal);
-      const rejected = pending.catch((error: unknown) => error);
-      await jest.advanceTimersByTimeAsync(1000);
-      expect(http.requests).toHaveLength(1);
-      controller.abort(reason);
-      await jest.advanceTimersByTimeAsync(0);
-      expect(await rejected).toBe(reason);
-      expect(jest.getTimerCount()).toBe(0);
-    });
-
-    it.each([0, 0.999])("jitter stays in the .NET 0.8..1.2 range (random=%s)", async (random) => {
-      jest.mocked(Math.random).mockReturnValue(random);
-      http.failures.push({ status: 503, code: "ServerBusy" });
       const pending = make(http).download(token);
       const assertion = expect(pending).resolves.toBe("payload");
       await jest.runAllTimersAsync();
       await assertion;
-      expect(http.times[1] - http.times[0]).toBe(Math.floor(250 * (0.8 + random * 0.4)));
+      expect(http.times[1] - http.times[0]).toBe(0);
+      expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it.each([0, 0.999])("uses native primary exponential delay without custom jitter (random=%s)", async (random) => {
+      jest.mocked(Math.random).mockReturnValue(random);
+      http.failures.push({ status: 503, code: "ServerBusy" }, { status: 503, code: "ServerBusy" });
+      const pending = make(http).download(token);
+      const assertion = expect(pending).resolves.toBe("payload");
+      await jest.runAllTimersAsync();
+      await assertion;
+      expect(http.times.slice(1).map((time, index) => time - http.times[index])).toEqual([0, 250]);
     });
 
     it.each([
-      { maximum: 5, random: 0.5, expected: 30 },
-      { maximum: 100, random: 0.999, expected: 30 },
-      { maximum: 100, random: 0, expected: 24 },
-    ])(
-      "caps FIXED jitter at Delay independently of MaxDelay ($maximum/$random)",
-      async ({ maximum, random, expected }) => {
-        jest.mocked(Math.random).mockReturnValue(random);
-        http.failures.push({ status: 503, code: "ServerBusy" });
-        const pending = make(http, {
-          maxTries: 2,
-          retryDelayInMs: 30,
-          maxRetryDelayInMs: maximum,
-          retryPolicyType: StorageRetryPolicyType.FIXED,
-        }).download(token);
-        const assertion = expect(pending).resolves.toBe("payload");
-        await jest.runAllTimersAsync();
-        await assertion;
-        expect(http.requests).toHaveLength(2);
-        expect(http.times[1] - http.times[0]).toBe(expected);
-      },
-    );
+      { maximum: 5, random: 0.5 },
+      { maximum: 100, random: 0.999 },
+      { maximum: 100, random: 0 },
+    ])("preserves native FIXED delay without custom caps or jitter ($maximum/$random)", async ({ maximum, random }) => {
+      jest.mocked(Math.random).mockReturnValue(random);
+      http.failures.push({ status: 503, code: "ServerBusy" });
+      const pending = make(http, {
+        maxTries: 2,
+        retryDelayInMs: 30,
+        maxRetryDelayInMs: maximum,
+        retryPolicyType: StorageRetryPolicyType.FIXED,
+      }).download(token);
+      const assertion = expect(pending).resolves.toBe("payload");
+      await jest.runAllTimersAsync();
+      await assertion;
+      expect(http.requests).toHaveLength(2);
+      expect(http.times[1] - http.times[0]).toBe(30);
+    });
 
     it("preserves explicit retry count, delay, cap, and fixed-policy overrides", async () => {
       http.error = { status: 503, code: "ServerBusy" };
@@ -278,7 +280,10 @@ describe("BlobPayloadStore", () => {
       http.error = { status: 503, code: "ServerBusy" };
       const controller = new AbortController();
       const reason = Object.freeze(new Error("caller canceled storage"));
-      const pending = make(http).download(token, controller.signal);
+      const pending = make(http, {
+        retryPolicyType: StorageRetryPolicyType.FIXED,
+        retryDelayInMs: 1000,
+      }).download(token, controller.signal);
       const rejected = pending.catch((error: unknown) => error);
       await jest.advanceTimersByTimeAsync(0);
       controller.abort(reason);
@@ -289,8 +294,8 @@ describe("BlobPayloadStore", () => {
     });
 
     it.each([
-      new RestError("network status zero", { statusCode: 0 }),
-      Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
+      new RestError("socket reset", { code: "ECONNRESET" }),
+      new RestError("transport send failed", { code: RestError.REQUEST_SEND_ERROR }),
     ])("recovers from a transient I/O failure %#", async (failure) => {
       http.failures.push(failure);
       const pending = make(http).download(token);
@@ -299,6 +304,19 @@ describe("BlobPayloadStore", () => {
       await jest.runAllTimersAsync();
       await assertion;
       expect(http.requests).toHaveLength(2);
+    });
+
+    it.each([
+      new RestError("status zero without a native retry code", { statusCode: 0 }),
+      Object.assign(new Error("custom transport failure"), { code: "ECONNRESET" }),
+    ])("leaves non-native I/O classifications to the SDK (%#)", async (failure) => {
+      http.failures.push(failure);
+      const assertion = expect(make(http).download(token)).rejects.toBe(failure);
+      void assertion.catch(() => {});
+      await jest.runAllTimersAsync();
+      await assertion;
+      expect(http.requests).toHaveLength(1);
+      expect(jest.getTimerCount()).toBe(0);
     });
 
     it("preserves configured read failover and stops using a secondary after its 404", async () => {
@@ -337,7 +355,7 @@ describe("BlobPayloadStore", () => {
     });
 
     it.each(["download", "delete"] as const)(
-      "preserves a primary transient when secondary absence exhausts the %s budget",
+      "rejects ambiguous secondary absence with its real cause when the native %s budget is exhausted",
       async (operation) => {
         const hosts: string[] = [];
         const send = http.sendRequest.bind(http);
@@ -347,15 +365,39 @@ describe("BlobPayloadStore", () => {
         };
         http.failures.push({ status: 503, code: "ServerBusy" }, { status: 404, code: "BlobNotFound" });
         const pending = make(http, { maxTries: 2, secondaryHost: "secondary.invalid" })[operation](token);
-        const assertion = expect(pending).rejects.toMatchObject({ statusCode: 503 });
+        const assertion = expect(pending).rejects.toMatchObject({
+          code: RestError.REQUEST_SEND_ERROR,
+          cause: { statusCode: 404 },
+        });
         void assertion.catch(() => {});
         await jest.runAllTimersAsync();
         await assertion;
+        const failure: unknown = await pending.catch((error: unknown) => error);
+        if (!(failure instanceof RestError)) throw new Error("Expected an uncertain-primary transport error");
+        expect(failure.statusCode).toBeUndefined();
+        expect(failure).toMatchObject({
+          cause: { request: { url: expect.stringContaining("secondary.invalid") }, statusCode: 404 },
+        });
         expect(hosts).toEqual(["account.invalid", "secondary.invalid"]);
         expect(http.requests).toHaveLength(2);
         expect(http.requests.some((request) => request.method === "DELETE")).toBe(false);
       },
     );
+
+    it("observes the raw SDK's secondary 404 at maxTries2 without claiming primary absence", async () => {
+      http.failures.push({ status: 503, code: "ServerBusy" }, { status: 404, code: "BlobNotFound" });
+      const pending = new BlobClient(token.slice("blob:v2:".length), undefined, {
+        httpClient: http,
+        retryOptions: { maxTries: 2, secondaryHost: "secondary.invalid" },
+      }).download();
+      const assertion = expect(pending).rejects.toMatchObject({
+        statusCode: 404,
+        request: { url: expect.stringContaining("secondary.invalid") },
+      });
+      await jest.runAllTimersAsync();
+      await assertion;
+      expect(http.requests).toHaveLength(2);
+    });
 
     it.each(["download", "delete"] as const)(
       "keeps a successful same-account secondary usable with maxTries2 for %s",
@@ -382,25 +424,48 @@ describe("BlobPayloadStore", () => {
     );
 
     it.each(["download", "delete"] as const)(
-      "preserves the original primary transport error when secondary 404 exhausts %s",
+      "does not report absence after a primary transport error and final secondary 404 during %s",
       async (operation) => {
         const failure = Object.freeze(new RestError("primary socket failure", { code: "ECONNRESET" }));
         http.failures.push(failure, { status: 404, code: "BlobNotFound" });
         const pending = make(http, { maxTries: 2, secondaryHost: "secondary.invalid" })[operation](token);
-        const assertion = expect(pending).rejects.toBe(failure);
+        const assertion = expect(pending).rejects.toMatchObject({
+          code: RestError.REQUEST_SEND_ERROR,
+          cause: { statusCode: 404 },
+        });
+        void assertion.catch(() => {});
         await jest.runAllTimersAsync();
         await assertion;
         expect(http.requests).toHaveLength(2);
       },
     );
 
-    it("still confirms a primary BlobNotFound without a secondary read", async () => {
-      http.error = { status: 404, code: "BlobNotFound" };
-      const pending = make(http, { maxTries: 2, secondaryHost: "secondary.invalid" }).delete(token);
+    it.each(["download", "delete"] as const)(
+      "still confirms primary BlobNotFound without a secondary read for %s",
+      async (operation) => {
+        http.error = { status: 404, code: "BlobNotFound" };
+        const pending = make(http, { maxTries: 2, secondaryHost: "secondary.invalid" })[operation](token);
+        const assertion =
+          operation === "delete"
+            ? expect(pending).resolves.toBe(PayloadDeleteOutcome.AlreadyAbsent)
+            : expect(pending).rejects.toBeInstanceOf(PayloadStorageException);
+        await jest.runAllTimersAsync();
+        await assertion;
+        expect(http.requests).toHaveLength(1);
+      },
+    );
+
+    it("confirms a subsequent primary 404 after the SDK stops using a lagging secondary", async () => {
+      http.failures.push(
+        { status: 503, code: "ServerBusy" },
+        { status: 404, code: "BlobNotFound" },
+        { status: 404, code: "BlobNotFound" },
+      );
+      const pending = make(http, { maxTries: 3, secondaryHost: "secondary.invalid" }).delete(token);
       const assertion = expect(pending).resolves.toBe(PayloadDeleteOutcome.AlreadyAbsent);
       await jest.runAllTimersAsync();
       await assertion;
-      expect(http.requests).toHaveLength(1);
+      expect(http.requests).toHaveLength(3);
     });
 
     it("uses the same retry boundary for credentialed cross-account and same-account reads", async () => {
@@ -409,19 +474,25 @@ describe("BlobPayloadStore", () => {
         credential: { getToken: async () => ({ token: "synthetic-token", expiresOnTimestamp: Date.now() + 3600000 }) },
         clientOptions: {
           httpClient: http,
+          proxyOptions: { host: "http://127.0.0.1", port: 8080 },
+          keepAliveOptions: { enable: false },
           userAgentOptions: { userAgentPrefix: "payload-resilience-test" },
           retryOptions: { maxTries: 2 },
         },
       });
       for (const endpoint of ["account.invalid/other/blob", "other.invalid/other/blob"]) {
-        http.failures.push({ status: 429, code: "Throttled" });
+        http.failures.push({ status: 503, code: "ServerBusy" });
         const assertion = expect(store.download(`blob:v2:https://${endpoint}`)).resolves.toBe("payload");
         await jest.runAllTimersAsync();
         await assertion;
       }
       expect(http.requests).toHaveLength(4);
-      for (const request of http.requests)
+      for (const request of http.requests) {
         expect(request.headers.get("user-agent")).toContain("payload-resilience-test");
+        expect(request.headers.get("authorization")).toMatch(/^(SharedKey account:|Bearer synthetic-token)/);
+        expect(request.agent).toBeDefined();
+        expect(request.keepAlive).toBe(true);
+      }
     });
 
     it("enforces the actual two-minute default without waiting two minutes in the test", async () => {
@@ -444,6 +515,74 @@ describe("BlobPayloadStore", () => {
       await jest.advanceTimersByTimeAsync(1);
       await assertion;
       expect(actualSignal!.aborted).toBe(true);
+      expect(controller.signal.aborted).toBe(false);
+      expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+      expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it("gives each native HTTP attempt a fresh timeout rather than timing the entire operation", async () => {
+      const signals: WebResource["abortSignal"][] = [];
+      const send = http.sendRequest.bind(http);
+      http.sendRequest = async (request) => {
+        signals.push(request.abortSignal);
+        if (signals.length === 1) {
+          http.requests.push(request);
+          return new Promise((_resolve, reject) => {
+            request.abortSignal!.addEventListener(
+              "abort",
+              () => reject(Object.assign(new Error("timed-out transport"), { name: "AbortError" })),
+              { once: true },
+            );
+          });
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 75));
+        return send(request);
+      };
+      const controller = new AbortController();
+      const pending = make(http, { maxTries: 2, tryTimeoutInMs: 100 }).download(token, controller.signal);
+      const assertion = expect(pending).resolves.toBe("payload");
+      void assertion.catch(() => {});
+      await jest.runAllTimersAsync();
+      await assertion;
+      expect(http.requests).toHaveLength(2);
+      expect(signals[0]).not.toBe(signals[1]);
+      expect(signals[0]!.aborted).toBe(true);
+      expect(signals[1]!.aborted).toBe(false);
+      expect(controller.signal.aborted).toBe(false);
+      expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+      expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it("does not run the network deadline during native retry spacing longer than that deadline", async () => {
+      const signals: WebResource["abortSignal"][] = [];
+      const send = http.sendRequest.bind(http);
+      http.failures.push({ status: 503, code: "ServerBusy" });
+      http.sendRequest = async (request) => {
+        signals.push(request.abortSignal);
+        if (signals.length === 2) await new Promise<void>((resolve) => setTimeout(resolve, 75));
+        return send(request);
+      };
+      const controller = new AbortController();
+      const pending = make(http, {
+        maxTries: 2,
+        tryTimeoutInMs: 100,
+        retryDelayInMs: 200,
+        retryPolicyType: StorageRetryPolicyType.FIXED,
+      }).download(token, controller.signal);
+      const assertion = expect(pending).resolves.toBe("payload");
+      void assertion.catch(() => {});
+      await jest.advanceTimersByTimeAsync(199);
+      expect(http.requests).toHaveLength(1);
+      expect(signals).toHaveLength(1);
+      expect(signals[0]!.aborted).toBe(false);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(signals).toHaveLength(2);
+      await jest.advanceTimersByTimeAsync(75);
+      await assertion;
+      expect(http.requests).toHaveLength(2);
+      expect(http.times[1] - http.times[0]).toBe(275);
+      expect(signals[0]).not.toBe(signals[1]);
+      expect(signals.every((signal) => !signal!.aborted)).toBe(true);
       expect(controller.signal.aborted).toBe(false);
       expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
       expect(jest.getTimerCount()).toBe(0);
@@ -542,7 +681,7 @@ describe("BlobPayloadStore", () => {
       await jest.runAllTimersAsync();
       await assertion;
       expect(http.requests).toHaveLength(2);
-      expect(http.times[1] - http.times[0]).toBe(10);
+      expect(http.times[1] - http.times[0]).toBe(0);
     });
 
     it.each([
@@ -559,18 +698,18 @@ describe("BlobPayloadStore", () => {
       expect(jest.getTimerCount()).toBe(0);
     });
 
-    it("retries a transport-internal AbortError while the caller remains live", async () => {
+    it("leaves a transport's non-timeout AbortError terminal under the native SDK", async () => {
       const failure = Object.freeze(
         Object.assign(new Error("internal transport cancellation"), { name: "AbortError" }),
       );
       http.failures.push(failure);
       const controller = new AbortController();
       const pending = make(http).download(token, controller.signal);
-      const assertion = expect(pending).resolves.toBe("payload");
+      const assertion = expect(pending).rejects.toBe(failure);
       void assertion.catch(() => {});
       await jest.runAllTimersAsync();
       await assertion;
-      expect(http.requests).toHaveLength(2);
+      expect(http.requests).toHaveLength(1);
       expect(controller.signal.aborted).toBe(false);
     });
 
