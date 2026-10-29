@@ -2,18 +2,19 @@
 
 ### Fixes
 
-- Release raw response I/O, timers and caller listeners immediately on downstream stream failure.
+- Remove the custom HTTP/response-stream transport adapter. Use native Azure SDK abort and
+  stream handling without injected progress callbacks or additional transport controllers;
+  active download cancellation no longer emits the adapter's unhandled AbortError, and socket
+  failures are no longer stranded behind its progress stream.
 - Validate the opt-in Azurite test endpoint using the SDK-selected URL before any storage I/O.
 - Keep account-specific secondary failover off cross-endpoint identity requests and reject a
   final secondary 404 as unknown primary absence, preserving the actual SDK failure as its cause.
-- Enforce the default two-minute client network/pending-read timeout at the shared Azure
-  pipeline boundary; preserve healthy progressive reads, caller cancellation and SDK
-  ETag-bound body recovery.
 - Delegate HTTP retries entirely to the Azure JavaScript SDK, with nine total attempts,
   250 ms retry delay and a 10 s exponential cap by default. Remove custom retry classification,
   backoff/jitter and Retry-After emulation; network behavior intentionally follows JavaScript
-  rather than exact .NET retry semantics. Preserve caller options and per-attempt deadlines
-  through a public HTTP transport adapter, without nested HTTP retries or whole-download retries.
+  rather than exact .NET retry semantics. Preserve public caller options and SDK ETag-bound
+  body recovery without nested HTTP retries or whole-download retries. `tryTimeoutInMs` is
+  only the native server-side hint; no additional client network/read deadline is enforced.
 
 ### New
 

@@ -84,7 +84,7 @@ describe("BlobPayloadStore", () => {
     http = new RecordingClient();
   });
 
-  describe("BlobPayloadStore native SDK retries and per-attempt deadlines", () => {
+  describe("BlobPayloadStore native SDK retries and options", () => {
     let http: RecordingClient;
     const token = "blob:v2:https://account.invalid/durabletask-payloads/blob";
     const make = (http: RecordingClient, retryOptions?: StorageRetryOptions) =>
@@ -495,100 +495,23 @@ describe("BlobPayloadStore", () => {
       }
     });
 
-    it("enforces the actual two-minute default without waiting two minutes in the test", async () => {
-      let actualSignal: WebResource["abortSignal"];
-      http.sendRequest = async (request) => {
-        http.requests.push(request);
-        actualSignal = request.abortSignal;
-        return new Promise((_resolve, reject) => {
-          actualSignal!.addEventListener("abort", () =>
-            reject(Object.assign(new Error("transport aborted"), { name: "AbortError" })),
-          );
-        });
-      };
-      const controller = new AbortController();
-      const pending = make(http, { maxTries: 1 }).download(token, controller.signal);
-      const assertion = expect(pending).rejects.toMatchObject({ code: "ETIMEDOUT" });
-      void assertion.catch(() => {});
-      await jest.advanceTimersByTimeAsync(119999);
-      expect(actualSignal!.aborted).toBe(false);
-      await jest.advanceTimersByTimeAsync(1);
-      await assertion;
-      expect(actualSignal!.aborted).toBe(true);
-      expect(controller.signal.aborted).toBe(false);
-      expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
-      expect(jest.getTimerCount()).toBe(0);
-    });
+    it.each([undefined, 0, 100.5])(
+      "passes the caller signal directly without injecting progress or a deadline (server timeout=%s)",
+      async (tryTimeoutInMs) => {
+        const controller = new AbortController();
+        await expect(make(http, { tryTimeoutInMs }).download(token, controller.signal)).resolves.toBe("payload");
+        expect(http.requests).toHaveLength(1);
+        const request = http.requests[0];
+        expect(request.abortSignal).toBe(controller.signal);
+        expect(request.onDownloadProgress).toBeUndefined();
+        expect(new URL(request.url).searchParams.get("timeout")).toBe(
+          tryTimeoutInMs === 0 ? null : String(Math.floor((tryTimeoutInMs ?? 120000) / 1000)),
+        );
+        expect(jest.getTimerCount()).toBe(0);
+      },
+    );
 
-    it("gives each native HTTP attempt a fresh timeout rather than timing the entire operation", async () => {
-      const signals: WebResource["abortSignal"][] = [];
-      const send = http.sendRequest.bind(http);
-      http.sendRequest = async (request) => {
-        signals.push(request.abortSignal);
-        if (signals.length === 1) {
-          http.requests.push(request);
-          return new Promise((_resolve, reject) => {
-            request.abortSignal!.addEventListener(
-              "abort",
-              () => reject(Object.assign(new Error("timed-out transport"), { name: "AbortError" })),
-              { once: true },
-            );
-          });
-        }
-        await new Promise<void>((resolve) => setTimeout(resolve, 75));
-        return send(request);
-      };
-      const controller = new AbortController();
-      const pending = make(http, { maxTries: 2, tryTimeoutInMs: 100 }).download(token, controller.signal);
-      const assertion = expect(pending).resolves.toBe("payload");
-      void assertion.catch(() => {});
-      await jest.runAllTimersAsync();
-      await assertion;
-      expect(http.requests).toHaveLength(2);
-      expect(signals[0]).not.toBe(signals[1]);
-      expect(signals[0]!.aborted).toBe(true);
-      expect(signals[1]!.aborted).toBe(false);
-      expect(controller.signal.aborted).toBe(false);
-      expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
-      expect(jest.getTimerCount()).toBe(0);
-    });
-
-    it("does not run the network deadline during native retry spacing longer than that deadline", async () => {
-      const signals: WebResource["abortSignal"][] = [];
-      const send = http.sendRequest.bind(http);
-      http.failures.push({ status: 503, code: "ServerBusy" });
-      http.sendRequest = async (request) => {
-        signals.push(request.abortSignal);
-        if (signals.length === 2) await new Promise<void>((resolve) => setTimeout(resolve, 75));
-        return send(request);
-      };
-      const controller = new AbortController();
-      const pending = make(http, {
-        maxTries: 2,
-        tryTimeoutInMs: 100,
-        retryDelayInMs: 200,
-        retryPolicyType: StorageRetryPolicyType.FIXED,
-      }).download(token, controller.signal);
-      const assertion = expect(pending).resolves.toBe("payload");
-      void assertion.catch(() => {});
-      await jest.advanceTimersByTimeAsync(199);
-      expect(http.requests).toHaveLength(1);
-      expect(signals).toHaveLength(1);
-      expect(signals[0]!.aborted).toBe(false);
-      await jest.advanceTimersByTimeAsync(1);
-      expect(signals).toHaveLength(2);
-      await jest.advanceTimersByTimeAsync(75);
-      await assertion;
-      expect(http.requests).toHaveLength(2);
-      expect(http.times[1] - http.times[0]).toBe(275);
-      expect(signals[0]).not.toBe(signals[1]);
-      expect(signals.every((signal) => !signal!.aborted)).toBe(true);
-      expect(controller.signal.aborted).toBe(false);
-      expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
-      expect(jest.getTimerCount()).toBe(0);
-    });
-
-    it("removes the default pending-read timer and caller listener after downstream gzip failure", async () => {
+    it("lets the SDK release a failed gzip body without adding timers or caller listeners", async () => {
       let written = false;
       const source = new Readable({
         read() {
@@ -645,7 +568,7 @@ describe("BlobPayloadStore", () => {
       expect(jest.getTimerCount()).toBe(0);
     });
 
-    it("does not overflow a long network timeout into an immediate abort", async () => {
+    it("passes a long native server timeout hint without creating a client timer", async () => {
       let actualSignal: WebResource["abortSignal"];
       http.sendRequest = async (request) => {
         http.requests.push(request);
@@ -662,6 +585,8 @@ describe("BlobPayloadStore", () => {
       const rejected = pending.catch((error: unknown) => error);
       await jest.advanceTimersByTimeAsync(1000);
       expect(actualSignal!.aborted).toBe(false);
+      expect(actualSignal).toBe(controller.signal);
+      expect(new URL(http.requests[0].url).searchParams.get("timeout")).toBe("2147484");
       expect(http.requests).toHaveLength(1);
       controller.abort(reason);
       await jest.advanceTimersByTimeAsync(0);
@@ -713,8 +638,8 @@ describe("BlobPayloadStore", () => {
       expect(controller.signal.aborted).toBe(false);
     });
 
-    it("allows the SDK to resume a body-internal AbortError without treating it as caller cancellation", async () => {
-      const failure = Object.freeze(Object.assign(new Error("internal body cancellation"), { name: "AbortError" }));
+    it("allows the SDK to resume a retryable body error using the original ETag", async () => {
+      const failure = Object.freeze(Object.assign(new Error("body disconnected"), { code: "ECONNRESET" }));
       const send = http.sendRequest.bind(http);
       http.sendRequest = async (request) => {
         const response = await send(request);
@@ -736,6 +661,83 @@ describe("BlobPayloadStore", () => {
       expect(http.requests[1].headers.get("if-match")).toBe('"owned-etag"');
       expect(http.requests[1].headers.get("range") ?? http.requests[1].headers.get("x-ms-range")).toBe("bytes=0-6");
     });
+
+    it("preserves the SDK's terminal body AbortError without normalizing or retrying it", async () => {
+      const failure = Object.freeze(Object.assign(new Error("native body aborted"), { name: "AbortError" }));
+      const send = http.sendRequest.bind(http);
+      http.sendRequest = async (request) => {
+        const response = await send(request);
+        response.readableStreamBody = new Readable({
+          read() {
+            this.destroy(failure);
+          },
+        });
+        return response;
+      };
+      await expect(make(http).download(token)).rejects.toBe(failure);
+      expect(http.requests).toHaveLength(1);
+    });
+
+    it("retains the SDK's separate five-resumption body budget", async () => {
+      const send = http.sendRequest.bind(http);
+      http.sendRequest = async (request) => {
+        const response = await send(request);
+        response.readableStreamBody = new Readable({
+          read() {
+            this.destroy(new Error("interrupted SDK response"));
+          },
+        });
+        return response;
+      };
+      await expect(make(http, { maxTries: 1 }).download(token)).rejects.toThrow("retries: 5, max retries: 5");
+      expect(http.requests).toHaveLength(6);
+      for (const request of http.requests.slice(1)) {
+        expect(request.headers.get("if-match")).toBe('"owned-etag"');
+        expect(request.headers.get("range") ?? request.headers.get("x-ms-range")).toBe("bytes=0-6");
+      }
+    });
+
+    it.each([false, true])(
+      "resumes compressed UTF-8 bytes without changing ETag/offset (changed=%s)",
+      async (changed) => {
+        const text = "\u00e9\ud83d\ude80".repeat(200);
+        const bytes = gzipSync(Buffer.from(text));
+        const split = 11;
+        http.encoding = "gzip";
+        http.content = bytes;
+        const send = http.sendRequest.bind(http);
+        http.sendRequest = async (request) => {
+          const response = await send(request);
+          if (http.requests.length === 1) {
+            response.readableStreamBody = Readable.from(
+              (async function* () {
+                yield bytes.subarray(0, split);
+                throw new Error("interrupted compressed body");
+              })(),
+            );
+          } else if (changed) {
+            response.status = 412;
+            response.headers.set("x-ms-error-code", "ConditionNotMet");
+            response.headers.set("content-type", "application/xml");
+            response.readableStreamBody = undefined;
+            response.bodyAsText = "<Error><Code>ConditionNotMet</Code><Message>Changed ETag</Message></Error>";
+          } else {
+            response.status = 206;
+            response.headers.set("content-length", String(bytes.length - split));
+            response.readableStreamBody = Readable.from([bytes.subarray(split)]);
+          }
+          return response;
+        };
+        const pending = make(http).download(token);
+        if (changed) await expect(pending).rejects.toMatchObject({ statusCode: 412 });
+        else await expect(pending).resolves.toBe(text);
+        expect(http.requests).toHaveLength(2);
+        expect(http.requests[1].headers.get("if-match")).toBe('"owned-etag"');
+        expect(http.requests[1].headers.get("range") ?? http.requests[1].headers.get("x-ms-range")).toBe(
+          `bytes=${split}-${bytes.length - 1}`,
+        );
+      },
+    );
 
     it.each(["AbortError", "ETIMEDOUT"])("never retries a caller's retryable-looking %s abort reason", async (kind) => {
       const controller = new AbortController();

@@ -97,31 +97,28 @@ immediate; subsequent primary delays follow the SDK's exponential formula withou
 or Retry-After parsing. `FIXED` uses the SDK's configured delay. These are native SDK behaviors,
 not additional provider policies.
 
-The default two-minute **network/read** timeout aborts stalled response headers or a pending
-body read, resetting for each read; it is not a two-minute whole-payload/operation limit.
-Healthy progressive reads can take longer. A small public HTTP transport adapter enforces this
-deadline separately for **each native SDK attempt**, not across retry backoff or the entire
-operation. Internal timeouts are transient, not caller cancellation. SDK body recovery remains
-separate: up to five additional ranged GETs use the original ETag/`If-Match`, and each such HTTP
-request uses the native retry policy. A failed ETag condition does not mix payload versions.
-Corrupt gzip is not hidden by whole-download retries.
+The SDK also owns HTTP sends, abort handling and response-stream lifetime. The provider passes
+the caller's `AbortSignal` directly to storage and the Node pipeline that consumes/decompresses
+the payload. It does not inject progress callbacks, wrap response streams, create transport
+abort controllers or enforce a client-side network/pending-read deadline.
 
 `clientOptions.retryOptions` retains `maxTries` (total HTTP attempts, minimum 1),
 `retryDelayInMs`, `maxRetryDelayInMs`, `retryPolicyType` (exponential/fixed),
-`tryTimeoutInMs` (the network/read timeout as well as the SDK server timeout hint; explicit
-zero disables it), and `secondaryHost` (native same-account read failover). A final secondary
-404 is not confirmed primary absence: the provider checks the actual SDK error's request
+`tryTimeoutInMs` (native server-side timeout hint, default 120000 ms, not a local deadline),
+and `secondaryHost` (native same-account read failover). An explicit zero disables that hint.
+Other SDK options, including caller-provided `httpClient`, are passed through unchanged.
+Custom transports must honor the SDK's abort signal and return Node-readable bodies.
+Caller cancellation preserves the original reason. SDK-native network/body errors propagate
+without custom normalization or whole-download retries; native resumable failures can use up
+to five additional ranged GETs with the original ETag/`If-Match`. Some errors, including native
+body `AbortError`, are terminal rather than resumable. A failed ETag condition does not mix
+payload versions, and corrupt gzip is not hidden by HTTP retries.
+
+A final secondary 404 is not confirmed primary absence: the provider checks the actual SDK error's request
 endpoint and raises a retryable `RestError` with the original 404 as its cause, rather than
 reporting missing/deleted data. It does not add attempts or fabricate an HTTP status.
 An actual primary 404 still confirms absence, including after the SDK stops using a lagging
-secondary. Durations must be finite and nonnegative; `maxTries` must be a positive safe integer.
-No provider retry loop multiplies the SDK budget.
-Custom HTTP transports must honor the provided abort signal and return Node-readable bodies.
-Caller cancellation takes precedence and preserves the original reason.
-Downstream stream failures immediately release the raw response and its timers/listeners,
-including when the network/read timeout is explicitly disabled.
-The optional provider directly declares the already-used Azure core pipeline/compatibility
-packages to adapt the default transport through public APIs; core SDK users do not acquire them.
+secondary. No provider retry loop multiplies the SDK budget.
 
 Missing blobs and store/size
 failures surface as `PayloadStorageException`. Permanent activity/orchestrator response
