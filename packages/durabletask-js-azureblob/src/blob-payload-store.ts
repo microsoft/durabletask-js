@@ -2,14 +2,20 @@
 // Licensed under the MIT License.
 
 import { TokenCredential } from "@azure/core-auth";
-import { BlobClient, BlobServiceClient, ContainerClient, RestError, StoragePipelineOptions } from "@azure/storage-blob";
+import {
+  BlobClient,
+  BlobServiceClient,
+  ContainerClient,
+  newPipeline,
+  RestError,
+  StoragePipelineOptions,
+} from "@azure/storage-blob";
 import { PayloadStore, PayloadStorageException, PayloadDeleteOutcome } from "@microsoft/durabletask-js";
 import { randomUUID } from "crypto";
 import { Writable } from "stream";
 import { pipeline } from "stream/promises";
 import { promisify } from "util";
 import { createGunzip, gzip } from "zlib";
-import { createPayloadPipeline } from "./blob-payload-pipeline";
 
 const compress = promisify(gzip);
 
@@ -37,15 +43,25 @@ export class BlobPayloadStore extends PayloadStore {
     super();
     const containerName = _options.containerName ?? "durabletask-payloads";
     if (!containerName) throw new TypeError("containerName must not be empty.");
-    this._clientOptions = _options.clientOptions ?? {};
+    const retryOptions = _options.clientOptions?.retryOptions;
+    this._clientOptions = {
+      ..._options.clientOptions,
+      retryOptions: {
+        ...retryOptions,
+        maxTries: retryOptions?.maxTries ?? 9,
+        retryDelayInMs: retryOptions?.retryDelayInMs ?? 250,
+        maxRetryDelayInMs: retryOptions?.maxRetryDelayInMs ?? 10000,
+        tryTimeoutInMs: retryOptions?.tryTimeoutInMs ?? 120000,
+      },
+    };
     if (_options.accountUri && _options.credential) {
       this._service = new BlobServiceClient(
         String(_options.accountUri),
-        createPayloadPipeline(_options.credential, this._clientOptions),
+        newPipeline(_options.credential, this._clientOptions),
       );
     } else if (_options.connectionString) {
       const parsed = BlobServiceClient.fromConnectionString(_options.connectionString);
-      this._service = new BlobServiceClient(parsed.url, createPayloadPipeline(parsed.credential, this._clientOptions));
+      this._service = new BlobServiceClient(parsed.url, newPipeline(parsed.credential, this._clientOptions));
     } else {
       throw new TypeError("Provide connectionString or both accountUri and credential.");
     }
@@ -189,7 +205,7 @@ export class BlobPayloadStore extends PayloadStore {
     if (this._options.credential)
       return new BlobClient(
         url.href,
-        createPayloadPipeline(this._options.credential, {
+        newPipeline(this._options.credential, {
           ...this._clientOptions,
           retryOptions: { ...this._clientOptions.retryOptions, secondaryHost: undefined },
         }),
