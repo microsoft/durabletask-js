@@ -4,13 +4,13 @@
 import { createServer, IncomingMessage, ServerResponse, Server } from "http";
 import { Socket } from "net";
 import { getEventListeners } from "events";
-import { gzipSync } from "zlib";
 import { Readable } from "stream";
-import { BlobClient, BlobServiceClient } from "@azure/storage-blob";
+import { BlobServiceClient } from "@azure/storage-blob";
 import { BlobPayloadStore } from "../src";
-import { createPayloadPipeline } from "../src/blob-payload-pipeline";
+import { fork } from "child_process";
+import { join } from "path";
 
-describe("BlobPayloadStore real network/read deadlines", () => {
+describe("BlobPayloadStore native SDK networking", () => {
   let server: Server;
   let endpoint: string;
   let handler: (request: IncomingMessage, response: ServerResponse) => void;
@@ -39,7 +39,6 @@ describe("BlobPayloadStore real network/read deadlines", () => {
     });
     response.flushHeaders();
   };
-  const range = (request: IncomingMessage) => request.headers.range ?? request.headers["x-ms-range"];
 
   beforeAll(async () => {
     server = createServer((request, response) => {
@@ -96,49 +95,81 @@ describe("BlobPayloadStore real network/read deadlines", () => {
     }
   }
 
-  async function guardedDownload(store: BlobPayloadStore): Promise<{ error: unknown; watchdogFired: boolean }> {
-    const controller = new AbortController();
-    let watchdogFired = false;
-    const timer = setTimeout(() => {
-      watchdogFired = true;
-      controller.abort(new Error("test watchdog: network timeout did not settle"));
-    }, 1200);
-    try {
-      const error = await store.download(token(), controller.signal).then(
-        () => undefined,
-        (error: unknown) => error,
+  it.each(["abort", "reset"] as const)(
+    "lets the native SDK settle an active body on %s without crashing or hanging",
+    async (action) => {
+      let active!: ServerResponse;
+      handler = (_request, response) => {
+        active = response;
+        headers(response, 100);
+      };
+      const child = fork(join(__dirname, "fixtures", "active-download.js"), [endpoint], {
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
+      });
+      child.stdout!.resume();
+      let stderr = "";
+      child.stderr!.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+      let watchdog: NodeJS.Timeout | undefined;
+      let observationTimer: NodeJS.Timeout | undefined;
+      let watchdogFired = false;
+      let bytes = 0;
+      let complete = true;
+      let observation:
+        | {
+            result?: { outcome: string; originalReason?: boolean; name: string };
+            callerAborted: boolean;
+            callerListeners: number;
+            rawClosed: boolean;
+          }
+        | undefined;
+      child.on(
+        "message",
+        (message: NonNullable<typeof observation> & { type: string; bytes: number; complete: boolean }) => {
+          if (message.type === "ready") {
+            watchdog = setTimeout(() => {
+              watchdogFired = true;
+              child.kill();
+            }, 1000);
+          } else if (message.type === "headers") active.write("prefix");
+          else if (message.type === "body") {
+            bytes = message.bytes;
+            complete = message.complete;
+            if (action === "abort") child.send("abort");
+            else active.socket!.destroy();
+            observationTimer = setTimeout(() => {
+              if (child.connected) child.send("observe");
+            }, 150);
+          } else if (message.type === "observation") {
+            observation = message;
+            child.send("cleanup");
+          }
+        },
       );
-      return { error, watchdogFired };
-    } finally {
-      clearTimeout(timer);
-    }
-  }
+      try {
+        const code = await new Promise<number | null>((resolve, reject) => {
+          child.once("error", reject);
+          child.once("close", resolve);
+        });
+        expect({ code, stderr, watchdogFired }).toEqual({ code: 0, stderr: "", watchdogFired: false });
+        expect(bytes).toBe(6);
+        expect(complete).toBe(false);
+        expect(observation?.result).toMatchObject({
+          outcome: "rejected",
+          originalReason: action === "abort",
+        });
+        expect(observation?.callerAborted).toBe(action === "abort");
+        expect(observation?.callerListeners).toBe(0);
+        expect(observation?.rawClosed).toBe(true);
+        expect(requests).toHaveLength(1);
+      } finally {
+        clearTimeout(watchdog);
+        clearTimeout(observationTimer);
+        if (child.exitCode === null && child.signalCode === null) child.kill();
+      }
+    },
+  );
 
-  it("aborts stalled response headers within the per-attempt timeout and HTTP retry budget", async () => {
-    handler = () => {};
-    const { error, watchdogFired } = await guardedDownload(make(2));
-    expect(watchdogFired).toBe(false);
-    expect(error).toMatchObject({ code: "ETIMEDOUT" });
-    expect(requests).toHaveLength(2);
-  });
-
-  it("times out stalled reads with the SDK's distinct bounded Range/If-Match resumption budget", async () => {
-    handler = (_request, response) => {
-      headers(response, requests.length === 1 ? 7 : 6);
-      if (requests.length === 1) response.write("p");
-    };
-    const { error, watchdogFired } = await guardedDownload(make());
-    expect(watchdogFired).toBe(false);
-    expect(error).toBeInstanceOf(Error);
-    expect(error).not.toMatchObject({ name: "AbortError" });
-    expect(requests).toHaveLength(6);
-    for (const request of requests.slice(1)) {
-      expect(range(request)).toBe("bytes=1-6");
-      expect(request.headers["if-match"]).toBe(etag);
-    }
-  });
-
-  it("allows healthy progressive reads that exceed one network timeout in total", async () => {
+  it("reads a progressive response through the native SDK", async () => {
     handler = (_request, response) => {
       headers(response, 8);
       let written = 0;
@@ -151,50 +182,6 @@ describe("BlobPayloadStore real network/read deadlines", () => {
     };
     await expect(make().download(token())).resolves.toBe("xxxxxxxx");
     expect(requests).toHaveLength(1);
-  });
-
-  it.each([false, true])(
-    "resumes a timed-out compressed body with unchanged ETag/offset (HTTP retry=%s)",
-    async (retryResponse) => {
-      const text = "\u00e9\ud83d\ude80".repeat(200);
-      const bytes = gzipSync(Buffer.from(text));
-      const split = 11;
-      handler = (request, response) => {
-        if (requests.length === 1) {
-          headers(response, bytes.length, 200, "gzip");
-          response.write(bytes.subarray(0, split));
-        } else if (retryResponse && requests.length === 2) {
-          response.writeHead(503, { "content-type": "application/xml", "x-ms-error-code": "ServerBusy" });
-          response.end("<Error><Code>ServerBusy</Code><Message>Retry resumed GET</Message></Error>");
-        } else {
-          expect(range(request)).toBe(`bytes=${split}-${bytes.length - 1}`);
-          expect(request.headers["if-match"]).toBe(etag);
-          headers(response, bytes.length - split, 206, "gzip");
-          response.end(bytes.subarray(split));
-        }
-      };
-      const controller = new AbortController();
-      timers.add(setTimeout(() => controller.abort(new Error("test watchdog: stalled gzip body")), 1200));
-      await expect(make(2).download(token(), controller.signal)).resolves.toBe(text);
-      expect(requests).toHaveLength(retryResponse ? 3 : 2);
-    },
-  );
-
-  it("does not mix content or retry when the resumed ETag condition fails", async () => {
-    handler = (_request, response) => {
-      if (requests.length === 1) {
-        headers(response, 7);
-        response.write("p");
-      } else {
-        response.writeHead(412, { "content-type": "application/xml", "x-ms-error-code": "ConditionNotMet" });
-        response.end("<Error><Code>ConditionNotMet</Code><Message>Changed ETag</Message></Error>");
-      }
-    };
-    const controller = new AbortController();
-    timers.add(setTimeout(() => controller.abort(new Error("test watchdog: stalled ETag body")), 1200));
-    await expect(make(2).download(token(), controller.signal)).rejects.toMatchObject({ statusCode: 412 });
-    expect(requests).toHaveLength(2);
-    expect(requests[1].headers["if-match"]).toBe(etag);
   });
 
   it("does not HTTP-retry corrupt gzip after a complete response", async () => {
@@ -279,7 +266,7 @@ describe("BlobPayloadStore real network/read deadlines", () => {
     expect(connections[1].destroyed).toBe(false);
   });
 
-  it("matches the native SDK's disabled keep-alive behavior through the default transport bridge", async () => {
+  it("matches the native SDK's disabled keep-alive behavior", async () => {
     const connections: Socket[] = [];
     handler = (request, response) => {
       connections.push(request.socket);
@@ -312,26 +299,6 @@ describe("BlobPayloadStore real network/read deadlines", () => {
     await expect(store.download(token())).resolves.toBe("payload");
     expect(connections).toHaveLength(4);
     expect(connections[2] === connections[3]).toBe(connections[0] === connections[1]);
-  });
-
-  it("preserves SDK download progress through the public default transport bridge", async () => {
-    handler = (_request, response) => {
-      headers(response, 7);
-      response.end("payload");
-    };
-    const progress: number[] = [];
-    const blob = new BlobClient(
-      token().slice("blob:v2:".length),
-      createPayloadPipeline(undefined, { retryOptions: { maxTries: 1, tryTimeoutInMs: timeout } }),
-    );
-    const response = await blob.download(0, undefined, { onProgress: (event) => progress.push(event.loadedBytes) });
-    const body = response.readableStreamBody;
-    if (!(body instanceof Readable)) throw new Error("Expected the SDK's Node-readable download body");
-    const chunks: Buffer[] = [];
-    for await (const chunk of body) chunks.push(chunk);
-    expect(Buffer.concat(chunks).toString()).toBe("payload");
-    expect(progress.at(-1)).toBe(7);
-    expect(requests).toHaveLength(1);
   });
 
   it.each(["headers", "body", "initialization"] as const)(
@@ -396,7 +363,7 @@ describe("BlobPayloadStore real network/read deadlines", () => {
     expect(requests).toHaveLength(3);
   });
 
-  it("honors an explicit zero network timeout while remaining caller-cancellable", async () => {
+  it("leaves a stalled SDK request caller-cancellable with a zero server timeout hint", async () => {
     let received!: () => void;
     const started = new Promise<void>((resolve) => (received = resolve));
     handler = () => received();
