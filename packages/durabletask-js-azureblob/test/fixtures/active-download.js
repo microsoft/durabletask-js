@@ -4,11 +4,29 @@
 const path = require("node:path");
 const { channel } = require("node:diagnostics_channel");
 const { getEventListeners } = require("node:events");
+const swc = require("@swc/core");
+const { compilerOptions } = require("../../../../tsconfig.base.json");
 
 require("ts-node").register({
   project: path.join(__dirname, "..", "..", "tsconfig.json"),
   transpileOnly: true,
-  swc: true,
+  transpiler: [
+    "ts-node/transpilers/swc",
+    {
+      swc: {
+        transformSync(source, options) {
+          return swc.transformSync(source, {
+            ...options,
+            jsc: {
+              ...options.jsc,
+              baseUrl: path.join(__dirname, "../../../.."),
+              paths: compilerOptions.paths,
+            },
+          });
+        },
+      },
+    },
+  ],
 });
 const { BlobPayloadStore } = require("../../src/blob-payload-store.ts");
 const endpoint = process.argv[2];
