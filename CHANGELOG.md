@@ -2,16 +2,12 @@
 
 ### New
 
-- Add reserved cleanup worker tasks with bounded deletion chunks, retry/quarantine handling,
-  configuration-preserving continue-as-new, authenticated current-channel RPCs and filter/version isolation.
-  This completes the cleanup runtime; aggregate release/consumer validation follows in phase 6.
-- Add the DTS payload-purge protocol and `setLargePayloadAutoPurge()` client lifecycle,
-  including setting-first enable/disable and reserved-instance identity verification.
-  A compatible .NET worker or the later cleanup-worker phase is required; do not publish partial phases.
-- Add payload storage contracts and bounded protobuf payload processing, with inclusive UTF-8
-  thresholds, explicit storage/size failures, and non-retriable worker upload-failure conversion.
-  This is phase 1 of the external-payload feature; transport, providers, and cleanup follow separately.
-  Reserve core `0.4.1` for the new APIs; do not publish partial feature phases.
+- Add opt-in `payloads` storage to gRPC clients/workers, with transparent UTF-8-size-based
+  externalization and awaited query/history/work-item hydration across orchestration, activity,
+  and entity V1/V2 payloads. Add the optional `@microsoft/durabletask-js-azureblob` storage package.
+- Add .NET-aligned `setLargePayloadAutoPurge()`, reserved replay-safe cleanup tasks, and DTS
+  lifecycle transport. Storage configuration alone does not enable deletion; cleanup checks
+  blob ownership and ETags, preserves uncertain outcomes, and leaves legacy v1 blobs untouched.
 - Expose readonly `OrchestrationContext.sourceInstanceId` from the existing protobuf
   request properties on initial execution and replay, independently of parent identity.
   Strings are preserved verbatim; null or missing metadata returns `undefined`.
@@ -56,10 +52,12 @@
 - Cancel metadata acquisition waits before dispatch and preserve the original cancellation reason,
   including auto-purge setting and runner lifecycle calls. Cancellation detaches the SDK wait;
   third-party metadata generation may finish later, but cannot dispatch a canceled RPC.
+- Determine single-instance purge routing from ordinary/entity IDs regardless of payload storage,
+  matching .NET management clients without changing purge timeout/completion semantics.
+- Keep `PayloadStorageException` cause options structural so its public declarations remain
+  usable by ES2020 consumers without the global ES2022 `ErrorOptions` type.
 - Deduplicate auto-purge runner startup only after an actual scheduler RPC duplicate response.
   Preserve upload/metadata error identity, including matching semantic error types, and cancellation.
-- Determine single-instance purge routing from the instance ID regardless of payload configuration,
-  matching .NET management clients: ordinary IDs are orchestrations and `@name@key` IDs are entities.
 - Share the unary client payload/metadata/RPC/hydration pipeline across scheduling, waits, rewind,
   and restart. Only actual RPC failures enter operation-specific error translation or retry;
   storage and metadata failures keep their original identity, and cancellation prevents retries.
