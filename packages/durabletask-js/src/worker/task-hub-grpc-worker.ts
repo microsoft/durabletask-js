@@ -29,6 +29,7 @@ import { compareVersions } from "../utils/versioning.util";
 import { PayloadStorageOptions } from "../payloads/payload-store";
 import { PayloadProcessor } from "../payloads/payload-processor";
 import { readPayloadHistory, PayloadHydrationError } from "../payloads/history-stream";
+import { registerPayloadPurge, withPayloadPurgeFilters, isPayloadPurgeTask } from "../payloads/purge-worker";
 import * as WorkerLogs from "./logs";
 import { ConcurrencyOptions, ResolvedConcurrencyOptions, resolveConcurrencyOptions } from "./concurrency-options";
 import {
@@ -266,6 +267,19 @@ export class TaskHubGrpcWorker {
     this._abortController = null;
     this._workerLoopPromise = null;
     this._deferredStubCloseTimers = new Map();
+    if (typeof hostAddressOrOptions === "object" && hostAddressOrOptions?.payloads) {
+      registerPayloadPurge(
+        this._registry,
+        hostAddressOrOptions.payloads.store,
+        () => {
+          if (!this._stub) throw new Error("The payload purge transport is not connected.");
+          return this._stub;
+        },
+        this._metadataGenerator,
+        () => this._abortController?.signal,
+        this._logger,
+      );
+    }
   }
 
   /** The configured maximum backend timer interval in milliseconds. */
@@ -880,7 +894,7 @@ export class TaskHubGrpcWorker {
         this._workItemFilters === "auto"
           ? generateWorkItemFiltersFromRegistry(this._registry, this._versioning)
           : this._workItemFilters;
-      request.setWorkitemfilters(toGrpcWorkItemFilters(filters));
+      request.setWorkitemfilters(toGrpcWorkItemFilters(this._payloads ? withPayloadPurgeFilters(filters) : filters));
     }
 
     return request;
@@ -889,13 +903,17 @@ export class TaskHubGrpcWorker {
   /**
    * Result of version compatibility check.
    */
-  private _checkVersionCompatibility(orchestrationVersion?: string): {
+  private _checkVersionCompatibility(
+    orchestrationVersion?: string,
+    taskName?: string,
+  ): {
     compatible: boolean;
     shouldFail: boolean;
     orchestrationVersion?: string;
     errorType?: string;
     errorMessage?: string;
   } {
+    if (this._payloads && isPayloadPurgeTask(taskName)) return { compatible: true, shouldFail: false };
     // If no versioning options configured or match strategy is None, always compatible
     if (
       !this._versioning ||
@@ -1158,7 +1176,11 @@ export class TaskHubGrpcWorker {
     }
 
     // Check version compatibility if versioning is enabled
-    const versionCheckResult = this._checkVersionCompatibility(this._getOrchestrationVersion(req));
+    const taskName = [...req.getPasteventsList(), ...req.getNeweventsList()]
+      .find((event) => event.hasExecutionstarted())
+      ?.getExecutionstarted()
+      ?.getName();
+    const versionCheckResult = this._checkVersionCompatibility(this._getOrchestrationVersion(req), taskName);
     if (!versionCheckResult.compatible) {
       if (versionCheckResult.shouldFail) {
         // Fail the orchestration with version mismatch error
@@ -1382,7 +1404,7 @@ export class TaskHubGrpcWorker {
       throw new Error("Activity request does not contain an orchestration instance id");
     }
 
-    const versionCheck = this._checkVersionCompatibility(req.getVersion()?.getValue());
+    const versionCheck = this._checkVersionCompatibility(req.getVersion()?.getValue(), req.getName());
     if (!versionCheck.compatible && !versionCheck.shouldFail) {
       WorkerLogs.versionMismatchAbandon(this._logger, instanceId, versionCheck.errorType!, versionCheck.errorMessage!);
       try {
