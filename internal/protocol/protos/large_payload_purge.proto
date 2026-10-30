@@ -1,0 +1,56 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+//
+// DTS-only contract from durabletask-dotnet 91739687ff647699079cdadd627daa00562982b7.
+
+syntax = "proto3";
+
+package microsoft.durabletask.largepayloads;
+
+option csharp_namespace = "Microsoft.DurableTask.Protobuf.LargePayloads";
+
+// The backend owns the tombstone ledger, task-hub setting, and retry scheduling.
+// The credentialed worker performs ownership-checked blob deletes and reports outcomes.
+service LargePayloadPurge {
+  rpc SetLargePayloadAutoPurge(SetLargePayloadAutoPurgeRequest) returns (SetLargePayloadAutoPurgeResponse);
+  rpc GetLargePayloadTombstones(GetLargePayloadTombstonesRequest) returns (GetLargePayloadTombstonesResponse);
+  rpc ReportLargePayloadPurgeResults(ReportLargePayloadPurgeResultsRequest) returns (ReportLargePayloadPurgeResultsResponse);
+}
+
+message SetLargePayloadAutoPurgeRequest {
+  bool enabled = 1;
+}
+
+message SetLargePayloadAutoPurgeResponse {}
+
+message LargePayloadTombstone {
+  // Opaque correlation token. Echo unchanged; never parse or reconstruct it.
+  string tombstone_token = 1;
+  string payload_token = 2;
+}
+
+enum LargePayloadPurgeDisposition {
+  LARGE_PAYLOAD_PURGE_DISPOSITION_UNSPECIFIED = 0;
+  LARGE_PAYLOAD_PURGE_DISPOSITION_DELETED = 1;
+  LARGE_PAYLOAD_PURGE_DISPOSITION_RETRY = 2;
+  LARGE_PAYLOAD_PURGE_DISPOSITION_QUARANTINED = 3;
+}
+
+message LargePayloadPurgeResult {
+  string tombstone_token = 1;
+  LargePayloadPurgeDisposition disposition = 2;
+}
+
+message GetLargePayloadTombstonesRequest {
+  int32 limit = 1;
+}
+
+message GetLargePayloadTombstonesResponse {
+  repeated LargePayloadTombstone tombstones = 1;
+}
+
+message ReportLargePayloadPurgeResultsRequest {
+  repeated LargePayloadPurgeResult results = 1;
+}
+
+message ReportLargePayloadPurgeResultsResponse {}
