@@ -119,8 +119,11 @@ options must identify the account, not a container or blob.
 The store checks the incoming normalized URL and the final destination after decoding blob-name
 escaping and applying SDK path normalization, before HTTP requests or token acquisition. Encoded
 separators or dot segments cannot escape the authorized account or container. Blob-name escaping
-and both token versions remain supported. Token query parameters do not select credentials:
-requests use only configured authentication. Uploads always use the configured primary
+and both token versions remain supported.
+Literal backslashes remain part of the blob name: v1 `folder\item.json` and v2
+`folder%5Citem.json` select the same blob, distinct from `folder/item.json`.
+Token query parameters do not select credentials: requests use only configured authentication.
+Uploads always use the configured primary
 `containerName` and write credential-free v2 tokens, regardless of read/delete scope.
 
 | Authentication configuration       | Primary container or account scope                                       | Additional accounts                                 |

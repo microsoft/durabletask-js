@@ -1011,7 +1011,6 @@ describe("BlobPayloadStore", () => {
         `${endpoint}/durabletask-payloads/../other/blob`,
         `${endpoint}/durabletask-payloads/%2e%2e/other/blob`,
         `${endpoint}/durabletask-payloads/folder%2f..%2f..%2fother%2fblob`,
-        `${endpoint}/durabletask-payloads/folder%5c..%5c..%5cother%5cblob`,
         `${endpoint}/durabletask-payloads%2f..%2fother/blob`,
       ];
       const tokens = [
@@ -1059,7 +1058,6 @@ describe("BlobPayloadStore", () => {
           `${endpoint}/other/folder%2f..%2f..%2farchive%2fblob`,
           `${endpoint}/other/folder/../../archive/blob`,
           `${endpoint}/other/%2e%2e/archive/blob`,
-          `${endpoint}/other/folder%5c..%5c..%5carchive%5cblob`,
           "blob:v1:other:../archive/blob",
         ]) {
           const token = target.startsWith("blob:") ? target : `blob:v2:${target}`;
@@ -1532,6 +1530,34 @@ describe("BlobPayloadStore", () => {
     await store.download("blob:v2:https://account.invalid/durabletask-payloads/blob");
     expect(new URL(http.requests.at(-1)!.url).searchParams.get("sig")).toBe("synthetic");
   });
+
+  it.each([false, true])(
+    "preserves literal backslashes in v1/v2 reads and deletion (account-wide=%s)",
+    async (accountWide) => {
+      const container = accountWide ? "archive" : "durabletask-payloads";
+      const store = make(http, { allowAllContainersInConfiguredAccount: accountWide });
+      for (const [v1Name, v2Name, expectedPath] of [
+        ["folder\\item.json", "folder%5Citem.json", "folder%5Citem.json"],
+        ["folder/item.json", "folder/item.json", "folder/item.json"],
+        ["folder\\..\\..\\other\\blob", "folder%5c..%5c..%5cother%5cblob", "folder%5C..%5C..%5Cother%5Cblob"],
+      ]) {
+        for (const token of [
+          `blob:v1:${container}:${v1Name}`,
+          `blob:v2:https://account.invalid/${container}/${v2Name}`,
+        ]) {
+          http.requests.length = 0;
+          expect(await store.download(token)).toBe("payload");
+          expect(await store.delete(token)).toBe(PayloadDeleteOutcome.Deleted);
+          expect(http.requests.map((request) => request.method)).toEqual(["GET", "HEAD", "DELETE"]);
+          for (const request of http.requests) {
+            expect(new URL(request.url).pathname).toBe(`/${container}/${expectedPath}`);
+            expect(request.headers.get("authorization")).toMatch(/^SharedKey /);
+          }
+          expect(http.requests[2].headers.get("if-match")).toBe('"owned-etag"');
+        }
+      }
+    },
+  );
 
   it.each([
     ["blob:v1:durabletask-payloads:folder/a%2Fb +?#", "/durabletask-payloads/folder/a%252Fb%20%2B%3F%23"],

@@ -289,7 +289,7 @@ export class BlobPayloadStore extends PayloadStore {
     if (separator < 1 || separator === relative.length - 1) throw new TypeError("Invalid external payload blob URL.");
     this._validateBlobUrl(url, location);
     const containerName = decodeURIComponent(relative.slice(0, separator));
-    const name = decodeURIComponent(relative.slice(separator + 1)).replace(/\\/g, "/");
+    const name = decodeURIComponent(relative.slice(separator + 1));
     const blob = location.service.getContainerClient(containerName).getBlobClient(name);
     // Decoding an escaped blob name can introduce path traversal during SDK normalization.
     this._validateBlobUrl(new URL(blob.url), location, containerName);
