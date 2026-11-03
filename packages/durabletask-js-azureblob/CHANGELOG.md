@@ -2,7 +2,7 @@
 
 ### Fixes
 
-- Limit payload reads and deletion to the configured storage endpoint and container, including
+- Default payload reads and deletion to the configured storage endpoint and container, including
   normalized blob paths and path-style account names. Out-of-location deletion references
   remain available for retry. Changing storage locations requires explicit migration or a
   store configured for the original location; v2 tokens retain their absolute URLs.
@@ -22,6 +22,11 @@
 
 ### New
 
+- Add explicit `allowAllContainersInConfiguredAccount: true` for all containers in the configured account and
+  `additionalAccountUris` for identity-authenticated access to specific additional account
+  endpoints. Preserve default container scope, v2 writes, v1/v2 reads, and conditional deletion.
+  Additional-account configuration requires `accountUri` and `TokenCredential`; connection-string
+  key/SAS authentication remains limited to the configured account.
 - Require core SDK `>=0.4.1`, excluding published `0.4.0`, which does not export the payload APIs.
 - Add opt-in Azure Blob payload storage, interoperable with durabletask-dotnet
   `91739687ff647699079cdadd627daa00562982b7`: UTF-8/gzip blobs, credential-free v2 tokens,

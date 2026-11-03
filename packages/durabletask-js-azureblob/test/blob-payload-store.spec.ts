@@ -1007,6 +1007,342 @@ describe("BlobPayloadStore", () => {
       expect(http.requests).toHaveLength(0);
       expect(getToken).not.toHaveBeenCalled();
     });
+
+    it.each(["https://account.invalid", "https://127.0.0.1:10000/accounta"])(
+      "allows other containers, but not other account endpoints, with account scope at %s",
+      async (endpoint) => {
+        const getToken = jest.fn(async () => ({
+          token: "synthetic-access-token",
+          expiresOnTimestamp: Date.now() + 3600000,
+        }));
+        const store = make(http, {
+          allowAllContainersInConfiguredAccount: true,
+          connectionString:
+            authentication === "identity"
+              ? undefined
+              : authentication === "SAS"
+                ? `AccountName=accounta;SharedAccessSignature=sv=2025-01-05&ss=b&srt=sco&sp=rwd&sig=synthetic;BlobEndpoint=${endpoint}`
+                : `DefaultEndpointsProtocol=https;AccountName=accounta;AccountKey=${accountKey};BlobEndpoint=${endpoint}`,
+          accountUri: authentication === "identity" ? endpoint : undefined,
+          credential: authentication === "identity" ? { getToken } : undefined,
+        });
+        const url = new URL(endpoint);
+        for (const target of [
+          "https://unlisted.invalid/other/blob",
+          endpoint.replace("https:", "http:") + "/other/blob",
+          `${url.origin.replace(/:\d+$/, "")}:444${url.pathname}/other/blob`,
+          ...(url.pathname === "/"
+            ? []
+            : [
+                `${url.origin}/accountb/other/blob`,
+                `${endpoint}/other/folder%2f..%2f..%2f..%2f..%2faccountb%2fother%2fblob`,
+              ]),
+          `${endpoint}/other/folder%2f..%2f..%2farchive%2fblob`,
+          `${endpoint}/other/folder/../../archive/blob`,
+          `${endpoint}/other/%2e%2e/archive/blob`,
+          `${endpoint}/other/folder%5c..%5c..%5carchive%5cblob`,
+          "blob:v1:other:../archive/blob",
+        ]) {
+          const token = target.startsWith("blob:") ? target : `blob:v2:${target}`;
+          await expect(store.download(token)).rejects.toBeInstanceOf(PayloadStorageException);
+          await expect(store.delete(token)).rejects.toBeInstanceOf(PayloadStorageException);
+        }
+        expect(http.requests).toHaveLength(0);
+        expect(getToken).not.toHaveBeenCalled();
+        for (const token of [
+          `blob:v2:${endpoint}/other/folder%2fblob`,
+          "blob:v1:other:folder/blob",
+          `blob:v2:${endpoint}/other/folder%2f..%2fblob`,
+        ]) {
+          expect(await store.download(token)).toBe("payload");
+          expect(await store.delete(token)).toBe(PayloadDeleteOutcome.Deleted);
+        }
+        expect(http.requests.map((request) => request.method)).toEqual([
+          "GET",
+          "HEAD",
+          "DELETE",
+          "GET",
+          "HEAD",
+          "DELETE",
+          "GET",
+          "HEAD",
+          "DELETE",
+        ]);
+        for (const request of http.requests) {
+          expect(new URL(request.url).origin).toBe(url.origin);
+          if (authentication === "SharedKey") expect(request.headers.get("authorization")).toMatch(/^SharedKey /);
+          if (authentication === "SAS") expect(new URL(request.url).searchParams.get("sig")).toBe("synthetic");
+          if (authentication === "identity") expect(request.headers.get("authorization")).toMatch(/^Bearer /);
+          if (request.method === "DELETE") {
+            expect(request.headers.get("if-match")).toBe('"owned-etag"');
+            expect(request.headers.get("x-ms-delete-snapshots")).toBe("include");
+          }
+        }
+        const token = await store.upload("payload");
+        expect(token).toMatch(/^blob:v2:/);
+        expect(new URL(token.slice("blob:v2:".length)).pathname).toMatch(/\/durabletask-payloads\/[a-f0-9]{32}$/);
+      },
+    );
+  });
+
+  describe("additional account endpoints", () => {
+    const makeIdentity = (
+      endpoint: string,
+      additionalAccountUris: readonly (string | URL)[],
+      allowAllContainersInConfiguredAccount?: boolean,
+    ) => {
+      const getToken = jest.fn(async () => ({
+        token: "synthetic-access-token",
+        expiresOnTimestamp: Date.now() + 3600000,
+      }));
+      const store = make(http, {
+        connectionString: undefined,
+        accountUri: endpoint,
+        credential: { getToken },
+        additionalAccountUris,
+        allowAllContainersInConfiguredAccount,
+        clientOptions: {
+          httpClient: http,
+          retryOptions: { maxTries: 2, retryDelayInMs: 0, secondaryHost: "primary-secondary.invalid" },
+        },
+      });
+      return { store, getToken };
+    };
+
+    it.each([
+      ["https://account.invalid", "https://other.invalid", "https://other.invalid.evil.invalid/other/blob"],
+      [
+        "https://127.0.0.1:10000/accounta",
+        "https://127.0.0.1:10000/accountb",
+        "https://127.0.0.1:10000/accountbb/other/blob",
+      ],
+    ])("allows all containers only at the listed endpoint %s -> %s", async (endpoint, additional, unlisted) => {
+      const configured = new URL(additional);
+      const { store, getToken } = makeIdentity(endpoint, [new URL(additional + "/")]);
+      for (const target of [
+        `${endpoint}/other/blob`,
+        unlisted,
+        "https://unlisted.invalid/other/blob",
+        additional.replace("https:", "http:") + "/other/blob",
+        `${configured.origin.replace(/:\d+$/, "")}:444${configured.pathname}/other/blob`,
+        ...(configured.pathname === "/"
+          ? []
+          : [`${additional}/other/folder%2f..%2f..%2f..%2f..%2funlisted%2fother%2fblob`]),
+      ]) {
+        await expect(store.download(`blob:v2:${target}`)).rejects.toBeInstanceOf(PayloadStorageException);
+        await expect(store.delete(`blob:v2:${target}`)).rejects.toBeInstanceOf(PayloadStorageException);
+      }
+      expect(http.requests).toHaveLength(0);
+      expect(getToken).not.toHaveBeenCalled();
+      for (const container of ["other", "archive"]) {
+        const token = `blob:v2:${additional}/${container}/folder%2fblob?sig=ignored#ignored`;
+        expect(await store.download(token)).toBe("payload");
+        expect(await store.delete(token)).toBe(PayloadDeleteOutcome.Deleted);
+      }
+      expect(http.requests).toHaveLength(6);
+      for (const request of http.requests) {
+        const url = new URL(request.url);
+        expect(url.origin).toBe(configured.origin);
+        expect(url.pathname.startsWith(configured.pathname.replace(/\/$/, "") + "/")).toBe(true);
+        expect(url.searchParams.has("sig")).toBe(false);
+        expect(request.headers.get("authorization")).toMatch(/^Bearer /);
+        if (request.method === "DELETE") expect(request.headers.get("if-match")).toBe('"owned-etag"');
+      }
+    });
+
+    it("combines primary account scope with additional endpoints without sharing secondary routing", async () => {
+      const { store } = makeIdentity("https://account.invalid", ["https://other.invalid"], true);
+      expect(await store.download("blob:v1:other:blob")).toBe("payload");
+      http.failures.push({ status: 503, code: "ServerBusy" });
+      expect(await store.download("blob:v2:https://other.invalid/archive/blob")).toBe("payload");
+      expect(http.requests.map((request) => new URL(request.url).hostname)).toEqual([
+        "account.invalid",
+        "other.invalid",
+        "other.invalid",
+      ]);
+    });
+
+    it("retains disallowed deletions for retry after explicitly adding their account", async () => {
+      const token = "blob:v2:https://other.invalid/archive/blob";
+      const original = makeIdentity("https://account.invalid", []);
+      await expect(original.store.delete(token)).rejects.toBeInstanceOf(PayloadStorageException);
+      expect(original.getToken).not.toHaveBeenCalled();
+      expect(http.requests).toHaveLength(0);
+      const expanded = makeIdentity("https://account.invalid", ["https://other.invalid"]);
+      expect(await expanded.store.delete(token)).toBe(PayloadDeleteOutcome.Deleted);
+      expect(http.requests.map((request) => request.method)).toEqual(["HEAD", "DELETE"]);
+    });
+
+    it("keeps ownership and ETag conditions on additional-account deletion", async () => {
+      const { store } = makeIdentity("https://account.invalid", ["https://other.invalid"]);
+      const token = "blob:v2:https://other.invalid/archive/blob";
+      http.metadata = { managed_by: "customer" };
+      expect(await store.delete(token)).toBe(PayloadDeleteOutcome.NotStoreOwned);
+      expect(http.requests.map((request) => request.method)).toEqual(["HEAD"]);
+      http.metadata = { MANAGED_BY: "dts" };
+      http.failures.push(undefined, { status: 412, code: "ConditionNotMet" });
+      await expect(store.delete(token)).rejects.toMatchObject({ statusCode: 412 });
+      expect(http.requests.at(-1)!.headers.get("if-match")).toBe('"owned-etag"');
+      expect(http.requests.at(-1)!.headers.get("x-ms-delete-snapshots")).toBe("include");
+    });
+
+    it("propagates Storage permission failures without retrying another account or credential", async () => {
+      const { store } = makeIdentity("https://account.invalid", ["https://other.invalid"], true);
+      http.error = { status: 403, code: "AuthorizationPermissionMismatch" };
+      await expect(store.download("blob:v2:https://other.invalid/archive/blob")).rejects.toMatchObject({
+        statusCode: 403,
+      });
+      expect(http.requests).toHaveLength(1);
+      expect(new URL(http.requests[0].url).hostname).toBe("other.invalid");
+      expect(http.requests[0].headers.get("authorization")).toMatch(/^Bearer /);
+    });
+
+    it("does not fall back to a connection string when the explicitly selected identity fails", async () => {
+      const failure = new Error("Identity token unavailable");
+      const getToken = jest.fn(async () => {
+        throw failure;
+      });
+      const store = make(http, {
+        accountUri: "https://account.invalid",
+        credential: { getToken },
+        additionalAccountUris: ["https://other.invalid"],
+      });
+      await expect(store.download("blob:v2:https://other.invalid/archive/blob")).rejects.toBe(failure);
+      expect(getToken).toHaveBeenCalled();
+      expect(http.requests).toHaveLength(0);
+    });
+
+    it("does not turn a v1 container into an additional-account reference", async () => {
+      const { store, getToken } = makeIdentity("https://account.invalid", ["https://other.invalid"]);
+      await expect(store.download("blob:v1:archive:blob")).rejects.toBeInstanceOf(TypeError);
+      expect(http.requests).toHaveLength(0);
+      expect(getToken).not.toHaveBeenCalled();
+    });
+
+    it("deduplicates equivalent additional service endpoints", async () => {
+      const { store, getToken } = makeIdentity("https://account.invalid", [
+        "https://OTHER.invalid:443/",
+        new URL("https://other.invalid"),
+        "https://other.invalid///",
+      ]);
+      await store.download("blob:v2:https://other.invalid/archive/one");
+      await store.download("blob:v2:https://OTHER.invalid:443/archive/two");
+      expect(getToken).toHaveBeenCalledTimes(1);
+      expect(http.requests).toHaveLength(2);
+    });
+
+    it.each(["download", "delete"] as const)("does not follow a Storage redirect during %s", async (operation) => {
+      const { store } = makeIdentity("https://account.invalid", ["https://other.invalid"]);
+      http.failures.push({
+        status: 307,
+        code: "TemporaryRedirect",
+        headers: { location: "https://unlisted.invalid/archive/blob" },
+      });
+      await expect(store[operation]("blob:v2:https://other.invalid/archive/blob")).rejects.toMatchObject({
+        statusCode: 307,
+      });
+      expect(http.requests).toHaveLength(1);
+      expect(new URL(http.requests[0].url).hostname).toBe("other.invalid");
+    });
+
+    it("keeps path-style account names case-sensitive", async () => {
+      const { store, getToken } = makeIdentity("https://127.0.0.1:10000/accounta", [
+        "https://127.0.0.1:10000/accountB",
+      ]);
+      await expect(store.download("blob:v2:https://127.0.0.1:10000/accountb/archive/blob")).rejects.toBeInstanceOf(
+        PayloadStorageException,
+      );
+      expect(getToken).not.toHaveBeenCalled();
+      expect(http.requests).toHaveLength(0);
+      expect(await store.download("blob:v2:https://127.0.0.1:10000/accountB/archive/blob")).toBe("payload");
+    });
+
+    it("snapshots the boolean, selected credential, and primary endpoint", async () => {
+      const getToken = jest.fn(async () => ({
+        token: "original-token",
+        expiresOnTimestamp: Date.now() + 3600000,
+      }));
+      const replacement = { getToken: jest.fn() };
+      const endpoint = new URL("https://account.invalid");
+      const options = {
+        accountUri: endpoint,
+        credential: { getToken },
+        allowAllContainersInConfiguredAccount: false,
+        additionalAccountUris: [] as string[],
+      };
+      const store = make(http, options);
+      options.allowAllContainersInConfiguredAccount = true;
+      options.credential = replacement;
+      endpoint.hostname = "unlisted.invalid";
+      options.additionalAccountUris.push("https://unlisted.invalid");
+      for (const token of [
+        "blob:v2:https://account.invalid/other/blob",
+        "blob:v2:https://unlisted.invalid/archive/blob",
+      ]) {
+        await expect(store.download(token)).rejects.toBeInstanceOf(PayloadStorageException);
+      }
+      expect(getToken).not.toHaveBeenCalled();
+      expect(http.requests).toHaveLength(0);
+      expect(await store.download("blob:v2:https://account.invalid/durabletask-payloads/blob")).toBe("payload");
+      expect(getToken).toHaveBeenCalled();
+      expect(replacement.getToken).not.toHaveBeenCalled();
+    });
+
+    it("snapshots scope and endpoint configuration at construction", async () => {
+      const endpoint = new URL("https://other.invalid");
+      const additional = [endpoint];
+      const { store, getToken } = makeIdentity("https://account.invalid", additional);
+      endpoint.hostname = "unlisted.invalid";
+      additional.push(new URL("https://another.invalid"));
+      for (const target of ["https://unlisted.invalid/other/blob", "https://another.invalid/other/blob"]) {
+        await expect(store.download(`blob:v2:${target}`)).rejects.toBeInstanceOf(PayloadStorageException);
+      }
+      expect(http.requests).toHaveLength(0);
+      expect(getToken).not.toHaveBeenCalled();
+      expect(await store.download("blob:v2:https://other.invalid/other/blob")).toBe("payload");
+    });
+
+    it.each([
+      "https://user:password@other.invalid",
+      "https://other.invalid?sig=synthetic",
+      "https://other.invalid#fragment",
+      "ftp://other.invalid",
+      "http://other.invalid",
+      "not-an-endpoint",
+      "https://ACCOUNT.invalid:443/",
+      "https://*.other.invalid",
+      "https://other.invalid/container",
+      "https://other.invalid/arbitrary/account/prefix",
+      "https://127.0.0.1:10000",
+      "https://127.0.0.1:10000/accountb/container",
+      "https://localhost/accountb/container/blob",
+    ])("rejects invalid or primary-account additional endpoints (%s)", (endpoint) => {
+      expect(() => makeIdentity("https://account.invalid", [endpoint])).toThrow(TypeError);
+      expect(http.requests).toHaveLength(0);
+    });
+  });
+
+  it.each([
+    { connectionString },
+    { connectionString, credential: { getToken: jest.fn() } },
+    {
+      connectionString:
+        "AccountName=account;SharedAccessSignature=sv=2025-01-05&sig=synthetic;BlobEndpoint=https://account.invalid",
+    },
+  ])("rejects additional accounts without active identity authentication (%#)", (options) => {
+    expect(() => make(http, { ...options, additionalAccountUris: ["https://other.invalid"] })).toThrow(
+      "additionalAccountUris requires accountUri and a TokenCredential.",
+    );
+    expect(http.requests).toHaveLength(0);
+    if (options.credential) expect(options.credential.getToken).not.toHaveBeenCalled();
+  });
+
+  it.each(["true", 1, null])("rejects an invalid account-container boolean (%s)", (value) => {
+    expect(() => {
+      // @ts-expect-error Exercise runtime validation for JavaScript callers.
+      return make(http, { allowAllContainersInConfiguredAccount: value });
+    }).toThrow("allowAllContainersInConfiguredAccount must be a boolean.");
+    expect(http.requests).toHaveLength(0);
   });
 
   it.each([
@@ -1107,6 +1443,21 @@ describe("BlobPayloadStore", () => {
     expect(field.getValue()).toBe("payload");
     expect(http.requests).toHaveLength(1);
     expect(getToken).toHaveBeenCalled();
+    const expanded = new PayloadProcessor({
+      store: make(http, {
+        connectionString: undefined,
+        accountUri: "https://account.invalid",
+        credential: { getToken },
+        allowAllContainersInConfiguredAccount: true,
+        additionalAccountUris: ["https://other.invalid"],
+      }),
+    });
+    for (const token of ["blob:v1:other:blob", "blob:v2:https://other.invalid/archive/blob"]) {
+      const expandedField = getStringValue(token)!;
+      await expanded.resolve(message(expandedField));
+      expect(expandedField.getValue()).toBe("payload");
+    }
+    expect(http.requests).toHaveLength(3);
   });
 
   it("rejects cross-account reads even when an identity is also configured", async () => {
@@ -1161,6 +1512,26 @@ describe("BlobPayloadStore", () => {
     expect(token).not.toContain("sig=");
     await store.download("blob:v2:https://account.invalid/durabletask-payloads/blob");
     expect(new URL(http.requests.at(-1)!.url).searchParams.get("sig")).toBe("synthetic");
+  });
+
+  it.each([
+    ["blob:v1:durabletask-payloads:folder/a%2Fb +?#", "/durabletask-payloads/folder/a%252Fb%20%2B%3F%23"],
+    [
+      "blob:v2:https://account.invalid/durabletask-payloads/folder/a%252Fb%20%2B%3F%23?sig=ignored&snapshot=old&versionid=old#ignored",
+      "/durabletask-payloads/folder/a%252Fb%20%2B%3F%23",
+    ],
+  ])("preserves literal and escaped blob names without using token query selection (%s)", async (token, path) => {
+    const store = make(http, {
+      connectionString:
+        "AccountName=account;SharedAccessSignature=sv=2025-01-05&sig=configured;BlobEndpoint=https://account.invalid",
+    });
+    expect(await store.download(token)).toBe("payload");
+    const url = new URL(http.requests[0].url);
+    expect(url.pathname).toBe(path);
+    expect(url.searchParams.get("sig")).toBe("configured");
+    expect(url.searchParams.has("snapshot")).toBe(false);
+    expect(url.searchParams.has("versionid")).toBe(false);
+    expect(url.hash).toBe("");
   });
 
   it.each([
