@@ -806,6 +806,25 @@ describe("BlobPayloadStore", () => {
       ...options,
     });
 
+  it.each(["", "suffix"])("bounds endpoint normalization with a long slash run ending in %s", async (suffix) => {
+    const getToken = jest.fn(async () => ({
+      token: "synthetic-access-token",
+      expiresOnTimestamp: Date.now() + 3600000,
+    }));
+    const start = performance.now();
+    const store = make(http, {
+      connectionString: undefined,
+      accountUri: `https://account.invalid/prefix/${"/".repeat(100000)}${suffix}`,
+      credential: { getToken },
+    });
+    const token = "blob:v2:https://unlisted.invalid/durabletask-payloads/blob";
+    await expect(store.download(token)).rejects.toBeInstanceOf(PayloadStorageException);
+    await expect(store.delete(token)).rejects.toBeInstanceOf(PayloadStorageException);
+    expect(performance.now() - start).toBeLessThan(2000);
+    expect(http.requests).toHaveLength(0);
+    expect(getToken).not.toHaveBeenCalled();
+  });
+
   it.each([true, false])(
     "writes credential-free v2 GUID tokens and ownership metadata (gzip=%s)",
     async (compressionEnabled) => {

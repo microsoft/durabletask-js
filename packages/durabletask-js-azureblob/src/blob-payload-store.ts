@@ -114,10 +114,10 @@ export class BlobPayloadStore extends PayloadStore {
           "additionalAccountUris must contain HTTPS account endpoints without credentials, query, or fragment.",
         );
       }
-      endpoint.pathname = endpoint.pathname.replace(/\/+$/, "") || "/";
+      endpoint.pathname = trimTrailingSlashes(endpoint.pathname) || "/";
       if (
         endpoint.origin === primary.endpoint.origin &&
-        endpoint.pathname.replace(/\/+$/, "") === primary.endpoint.pathname.replace(/\/+$/, "")
+        trimTrailingSlashes(endpoint.pathname) === trimTrailingSlashes(primary.endpoint.pathname)
       ) {
         throw new TypeError("Use allowAllContainersInConfiguredAccount to configure access to the primary account.");
       }
@@ -297,7 +297,7 @@ export class BlobPayloadStore extends PayloadStore {
   }
 
   private _relativeBlobPath(url: URL, location: AccountLocation): string | undefined {
-    const prefix = location.endpoint.pathname.replace(/\/+$/, "") + "/";
+    const prefix = trimTrailingSlashes(location.endpoint.pathname) + "/";
     if (url.origin === location.endpoint.origin && url.pathname.startsWith(prefix)) {
       return url.pathname.slice(prefix.length);
     }
@@ -346,6 +346,12 @@ export class BlobPayloadStore extends PayloadStore {
       throw error;
     }
   }
+}
+
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end--;
+  return value.slice(0, end);
 }
 
 async function waitForInitialization(promise: Promise<object>, signal?: AbortSignal): Promise<object> {
