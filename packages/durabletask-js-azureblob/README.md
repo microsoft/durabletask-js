@@ -82,10 +82,16 @@ messages still use bounded I/O with cancellation and message-order storage failu
 New blobs have 32-character GUID names and `managed_by=dts` metadata on compressed and
 uncompressed writes. Tokens are `blob:v2:{absoluteBlobUrl}`, without account keys or SAS.
 Readers also recognize `blob:v1:{container}:{blobName}` in the configured container.
-Same-service v2 reads preserve the configured credential/pipeline across containers,
-including path-style/Azurite endpoints. Another account or endpoint requires an explicit
-`TokenCredential`; account keys and configured SAS credentials are never forwarded there.
-Account-specific `secondaryHost` failover is not forwarded to a cross-endpoint identity client.
+Both token versions are restricted to the configured storage endpoint **and container**,
+including the account path on path-style/Azurite endpoints. Scheme, host, port, account path,
+and container are checked on the normalized destination before any HTTP request or credential
+acquisition. Configured credentials and pipeline options are used only within that location.
+V2 tokens remain self-describing absolute URLs; a URL identifies a blob but does not grant access.
+
+This intentionally replaces cross-container and cross-account v2 routing. Changing the storage
+location requires explicit payload migration or a store configured for the original location;
+a v2 token is not reinterpreted relative to a new location. There is no dashboard or
+delegated-user read path in this package, and no fallback to another credential or location.
 
 The Azure Storage JavaScript SDK owns the only HTTP retry loop, including endpoint selection,
 error classification and retry delays. The provider supplies defaults of nine total attempts,
@@ -143,6 +149,10 @@ Deletion checks the case-insensitive ownership marker, then uses that read's ETa
 snapshots. Unowned blobs are never deleted. Only confirmed `BlobNotFound`/`ContainerNotFound`
 responses count as already absent; uncertain failures propagate. Configuring the provider alone
 does not invoke deletion. Later cleanup phases add the authenticated backend lifecycle and runner.
+Out-of-location references throw before storage access, rather than returning a terminal
+`PayloadDeleteOutcome`. Cleanup callers must retain these references for `RETRY`, not acknowledge
+them as deleted, absent, or unowned. Retry requires migration or a store configured for their
+original location.
 `Deleted` means storage accepted deletion or confirmed a terminal outcome, **not** immediate
 physical reclamation. Soft-delete retention and blob versions can continue to consume storage.
 

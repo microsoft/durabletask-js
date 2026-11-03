@@ -14,6 +14,10 @@ import {
   StorageRetryPolicyType,
 } from "@azure/storage-blob";
 import { PayloadDeleteOutcome, PayloadStorageException } from "@microsoft/durabletask-js";
+import type { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
+import { PayloadProcessor } from "../../durabletask-js/src/payloads/payload-processor";
+import * as pb from "../../durabletask-js/src/proto/orchestrator_service_pb";
+import { getStringValue } from "../../durabletask-js/src/utils/pb-helper.util";
 import { BlobPayloadStore } from "../src";
 import fixtures from "./dotnet-payload-fixtures.json";
 
@@ -334,7 +338,7 @@ describe("BlobPayloadStore", () => {
       expect(hosts).toEqual(["account.invalid", "secondary.invalid", "account.invalid"]);
     });
 
-    it("does not redirect a cross-account identity retry to the configured account's secondary", async () => {
+    it("rejects cross-account identity references before retries or secondary selection", async () => {
       const hosts: string[] = [];
       const send = http.sendRequest.bind(http);
       http.sendRequest = async (request) => {
@@ -348,10 +352,10 @@ describe("BlobPayloadStore", () => {
         clientOptions: { httpClient: http, retryOptions: { maxTries: 2, secondaryHost: "account-secondary.invalid" } },
       });
       const pending = store.download("blob:v2:https://other.invalid/durabletask-payloads/blob");
-      const assertion = expect(pending).resolves.toBe("payload");
+      const assertion = expect(pending).rejects.toBeInstanceOf(PayloadStorageException);
       await jest.runAllTimersAsync();
       await assertion;
-      expect(hosts).toEqual(["other.invalid", "other.invalid"]);
+      expect(hosts).toEqual([]);
     });
 
     it.each(["download", "delete"] as const)(
@@ -468,7 +472,7 @@ describe("BlobPayloadStore", () => {
       expect(http.requests).toHaveLength(3);
     });
 
-    it("uses the same retry boundary for credentialed cross-account and same-account reads", async () => {
+    it("preserves retry and transport options for configured-store reads", async () => {
       const store = new BlobPayloadStore({
         connectionString,
         credential: { getToken: async () => ({ token: "synthetic-token", expiresOnTimestamp: Date.now() + 3600000 }) },
@@ -480,7 +484,10 @@ describe("BlobPayloadStore", () => {
           retryOptions: { maxTries: 2 },
         },
       });
-      for (const endpoint of ["account.invalid/other/blob", "other.invalid/other/blob"]) {
+      for (const endpoint of [
+        "account.invalid/durabletask-payloads/blob",
+        "account.invalid/durabletask-payloads/folder/blob",
+      ]) {
         http.failures.push({ status: 503, code: "ServerBusy" });
         const assertion = expect(store.download(`blob:v2:https://${endpoint}`)).resolves.toBe("payload");
         await jest.runAllTimersAsync();
@@ -920,9 +927,9 @@ describe("BlobPayloadStore", () => {
   });
 
   it.each([
-    ["https://account.invalid", "https://account.invalid/old/folder/a%20b%252Fc"],
-    ["http://127.0.0.1:10000/accounta", "http://127.0.0.1:10000/accounta/old/blob"],
-  ])("preserves configured SharedKey pipeline across containers in %s", async (endpoint, target) => {
+    ["https://account.invalid", "https://account.invalid/durabletask-payloads/folder/a%20b%252Fc"],
+    ["http://127.0.0.1:10000/accounta", "http://127.0.0.1:10000/accounta/durabletask-payloads/blob"],
+  ])("preserves configured SharedKey pipeline within the container in %s", async (endpoint, target) => {
     const store = make(http, {
       connectionString: `DefaultEndpointsProtocol=http;AccountName=account;AccountKey=${accountKey};BlobEndpoint=${endpoint}`,
     });
@@ -951,13 +958,168 @@ describe("BlobPayloadStore", () => {
     expect(http.requests).toHaveLength(0);
   });
 
-  it("uses identity, not the configured account key, for cross-account reads", async () => {
+  describe.each(["SharedKey", "SAS", "identity"] as const)("%s destination boundaries", (authentication) => {
+    const endpoints = ["https://account.invalid", "http://127.0.0.1:10000/accounta"];
+
+    it.each(endpoints)("rejects references outside the configured location at %s before I/O", async (endpoint) => {
+      const getToken = jest.fn(async () => ({
+        token: "synthetic-access-token",
+        expiresOnTimestamp: Date.now() + 3600000,
+      }));
+      const store = make(http, {
+        connectionString:
+          authentication === "identity"
+            ? undefined
+            : authentication === "SAS"
+              ? `AccountName=accounta;SharedAccessSignature=sv=2025-01-05&sr=c&sp=rwd&sig=synthetic;BlobEndpoint=${endpoint}`
+              : `DefaultEndpointsProtocol=http;AccountName=accounta;AccountKey=${accountKey};BlobEndpoint=${endpoint}`,
+        accountUri: authentication === "identity" ? endpoint : undefined,
+        credential: authentication === "identity" ? { getToken } : undefined,
+      });
+      const url = new URL(endpoint);
+      const changedScheme = new URL(endpoint);
+      changedScheme.protocol = url.protocol === "https:" ? "http:" : "https:";
+      const changedPort = new URL(endpoint);
+      changedPort.port = "444";
+      const targets = [
+        `${endpoint}/other/blob`,
+        `${endpoint}/durabletask-payloads-other/blob`,
+        "https://other.invalid/durabletask-payloads/blob",
+        "https://account.invalid.other.invalid/durabletask-payloads/blob",
+        `${changedScheme.href.replace(/\/$/, "")}/durabletask-payloads/blob`,
+        `${changedPort.href.replace(/\/$/, "")}/durabletask-payloads/blob`,
+        `${url.origin}/accountb/durabletask-payloads/blob`,
+        `${endpoint}/durabletask-payloads/../other/blob`,
+        `${endpoint}/durabletask-payloads/%2e%2e/other/blob`,
+        `${endpoint}/durabletask-payloads/folder%2f..%2f..%2fother%2fblob`,
+        `${endpoint}/durabletask-payloads/folder%5c..%5c..%5cother%5cblob`,
+        `${endpoint}/durabletask-payloads%2f..%2fother/blob`,
+      ];
+      const tokens = [
+        ...targets.map((target) => `blob:v2:${target}`),
+        "blob:v1:durabletask-payloads:../other/blob",
+        "blob:v1:durabletask-payloads:folder/../../other/blob",
+      ];
+      for (const token of tokens) {
+        await expect(store.download(token)).rejects.toBeInstanceOf(PayloadStorageException);
+        await expect(store.delete(token)).rejects.toBeInstanceOf(PayloadStorageException);
+      }
+      expect(http.requests).toHaveLength(0);
+      expect(getToken).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    "blob:v1:archive:folder/a b%2Fc",
+    "blob:v2:https://ACCOUNT.invalid:443/archive/folder/a%20b%252Fc",
+    "blob:v2:https://account.invalid/archive/folder%2fa%20b%252Fc",
+  ])("reads and conditionally deletes configured custom-container references (%s)", async (token) => {
+    const getToken = jest.fn(async () => ({
+      token: "synthetic-access-token",
+      expiresOnTimestamp: Date.now() + 3600000,
+    }));
+    const store = make(http, {
+      connectionString: undefined,
+      accountUri: "https://account.invalid",
+      containerName: "archive",
+      credential: { getToken },
+    });
+    expect(await store.download(token)).toBe("payload");
+    expect(await store.delete(token)).toBe(PayloadDeleteOutcome.Deleted);
+    expect(getToken).toHaveBeenCalled();
+    expect(http.requests.map((request) => request.method)).toEqual(["GET", "HEAD", "DELETE"]);
+    for (const request of http.requests) {
+      const url = new URL(request.url);
+      expect(url.origin + url.pathname).toBe("https://account.invalid/archive/folder/a%20b%252Fc");
+    }
+    expect(http.requests[2].headers.get("if-match")).toBe('"owned-etag"');
+    expect(http.requests[2].headers.get("x-ms-delete-snapshots")).toBe("include");
+  });
+
+  it("leaves out-of-location deletion references available for retry with the original store", async () => {
+    const token = "blob:v2:https://account.invalid/archive/blob";
+    await expect(make(http).delete(token)).rejects.toBeInstanceOf(PayloadStorageException);
+    expect(http.requests).toHaveLength(0);
+    expect(await make(http, { containerName: "archive" }).delete(token)).toBe(PayloadDeleteOutcome.Deleted);
+    expect(http.requests.map((request) => request.method)).toEqual(["HEAD", "DELETE"]);
+    expect(http.requests[1].headers.get("if-match")).toBe('"owned-etag"');
+  });
+
+  it.each<{ name: string; message: (field: StringValue) => unknown }>([
+    { name: "activity input", message: (field) => new pb.ActivityRequest().setInput(field) },
+    {
+      name: "orchestration input",
+      message: (field) =>
+        new pb.OrchestratorRequest().setNeweventsList([
+          new pb.HistoryEvent().setExecutionstarted(new pb.ExecutionStartedEvent().setInput(field)),
+        ]),
+    },
+    {
+      name: "external event",
+      message: (field) =>
+        new pb.OrchestratorRequest().setNeweventsList([
+          new pb.HistoryEvent().setEventraised(new pb.EventRaisedEvent().setInput(field)),
+        ]),
+    },
+    {
+      name: "replayed task result",
+      message: (field) =>
+        new pb.OrchestratorRequest().setPasteventsList([
+          new pb.HistoryEvent().setTaskcompleted(new pb.TaskCompletedEvent().setResult(field)),
+        ]),
+    },
+    {
+      name: "streamed history result",
+      message: (field) =>
+        new pb.HistoryChunk().setEventsList([
+          new pb.HistoryEvent().setExecutioncompleted(new pb.ExecutionCompletedEvent().setResult(field)),
+        ]),
+    },
+    {
+      name: "queried output",
+      message: (field) =>
+        new pb.GetInstanceResponse().setOrchestrationstate(new pb.OrchestrationState().setOutput(field)),
+    },
+    {
+      name: "entity state",
+      message: (field) => new pb.EntityBatchRequest().setEntitystate(field),
+    },
+  ])("enforces the store location during automatic hydration of $name", async ({ message }) => {
+    const getToken = jest.fn(async () => ({
+      token: "synthetic-access-token",
+      expiresOnTimestamp: Date.now() + 3600000,
+    }));
+    const store = make(http, {
+      connectionString: undefined,
+      accountUri: "https://account.invalid",
+      credential: { getToken },
+    });
+    const processor = new PayloadProcessor({ store });
+    for (const target of ["https://account.invalid/other/blob", "https://other.invalid/durabletask-payloads/blob"]) {
+      const field = getStringValue(`blob:v2:${target}`)!;
+      await expect(processor.resolve(message(field))).rejects.toBeInstanceOf(PayloadStorageException);
+      expect(field.getValue()).toBe(`blob:v2:${target}`);
+    }
+    expect(http.requests).toHaveLength(0);
+    expect(getToken).not.toHaveBeenCalled();
+    const field = getStringValue("blob:v2:https://account.invalid/durabletask-payloads/blob")!;
+    await processor.resolve(message(field));
+    expect(field.getValue()).toBe("payload");
+    expect(http.requests).toHaveLength(1);
+    expect(getToken).toHaveBeenCalled();
+  });
+
+  it("rejects cross-account reads even when an identity is also configured", async () => {
     const credential = {
       getToken: async () => ({ token: "synthetic-access-token", expiresOnTimestamp: Date.now() + 3600000 }),
     };
+    const getToken = jest.spyOn(credential, "getToken");
     const store = make(http, { credential });
-    expect(await store.download("blob:v2:https://other.invalid/old/blob")).toBe("payload");
-    expect(http.requests[0].headers.get("authorization")).toBe("Bearer synthetic-access-token");
+    await expect(store.download("blob:v2:https://other.invalid/old/blob")).rejects.toBeInstanceOf(
+      PayloadStorageException,
+    );
+    expect(http.requests).toHaveLength(0);
+    expect(getToken).not.toHaveBeenCalled();
   });
 
   it("supports account URI and identity without a connection string", async () => {
@@ -973,9 +1135,11 @@ describe("BlobPayloadStore", () => {
   });
 
   it("classifies the service endpoint independently of normalized blob-name escaping", async () => {
-    expect(await make(http).download("blob:v2:https://account.invalid/old/folder%2fblob")).toBe("payload");
+    expect(await make(http).download("blob:v2:https://account.invalid/durabletask-payloads/folder%2fblob")).toBe(
+      "payload",
+    );
     expect(http.requests[0].headers.get("authorization")).toMatch(/^SharedKey /);
-    expect(new URL(http.requests[0].url).pathname).toBe("/old/folder/blob");
+    expect(new URL(http.requests[0].url).pathname).toBe("/durabletask-payloads/folder/blob");
   });
 
   it("rejects another path-style account on the same host without sending SharedKey", async () => {
@@ -988,14 +1152,14 @@ describe("BlobPayloadStore", () => {
     expect(http.requests).toHaveLength(0);
   });
 
-  it("preserves a configured SAS across same-account containers without persisting it", async () => {
+  it("preserves a configured SAS within its container without persisting it", async () => {
     const store = make(http, {
       connectionString:
         "AccountName=account;SharedAccessSignature=sv=2025-01-05&sr=c&sp=rwd&sig=synthetic;BlobEndpoint=https://account.invalid",
     });
     const token = await store.upload("payload");
     expect(token).not.toContain("sig=");
-    await store.download("blob:v2:https://account.invalid/old/blob");
+    await store.download("blob:v2:https://account.invalid/durabletask-payloads/blob");
     expect(new URL(http.requests.at(-1)!.url).searchParams.get("sig")).toBe("synthetic");
   });
 
@@ -1034,7 +1198,7 @@ describe("BlobPayloadStore", () => {
     "blob:v1:bad",
     "blob:v1:other:blob",
     "blob:v2:invalid",
-    "blob:v2:https://account.invalid/container/",
+    "blob:v2:https://account.invalid/durabletask-payloads/",
     "blob:v3:future",
   ])("rejects malformed or mismatched tokens without storage I/O (%s)", async (token) => {
     await expect(make(http).download(token)).rejects.toBeInstanceOf(TypeError);

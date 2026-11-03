@@ -178,7 +178,9 @@ export class BlobPayloadStore extends PayloadStore {
       ) {
         throw new TypeError("Invalid external payload token or token container does not match.");
       }
-      return this._container.getBlobClient(rest.slice(separator + 1));
+      const blob = this._container.getBlobClient(rest.slice(separator + 1));
+      this._validateBlobUrl(blob.url);
+      return blob;
     }
     if (!token.startsWith("blob:v2:")) throw new TypeError("Invalid external payload token.");
     let url: URL;
@@ -192,27 +194,22 @@ export class BlobPayloadStore extends PayloadStore {
     }
     const decoded = new BlobClient(url.href);
     if (!decoded.containerName || !decoded.name) throw new TypeError("Invalid external payload blob URL.");
-    const container = this._service.getContainerClient(decoded.containerName);
-    const configuredUrl = new URL(container.url);
-    // Match the service/container boundary, not normalized blob-name escaping. The SDK
-    // preserves path-style account prefixes and the configured credential/pipeline.
-    if (
-      url.origin === configuredUrl.origin &&
-      url.pathname.startsWith(configuredUrl.pathname.replace(/\/+$/, "") + "/")
-    ) {
-      return container.getBlobClient(decoded.name);
-    }
-    if (this._options.credential)
-      return new BlobClient(
-        url.href,
-        newPipeline(this._options.credential, {
-          ...this._clientOptions,
-          retryOptions: { ...this._clientOptions.retryOptions, secondaryHost: undefined },
-        }),
+    this._validateBlobUrl(url.href);
+    const blob = this._container.getBlobClient(decoded.name);
+    // Decoding an escaped blob name can introduce path traversal during SDK normalization.
+    this._validateBlobUrl(blob.url);
+    return blob;
+  }
+
+  private _validateBlobUrl(value: string): void {
+    const url = new URL(value);
+    const configured = new URL(this._container.url);
+    const prefix = configured.pathname.replace(/\/+$/, "") + "/";
+    if (url.origin !== configured.origin || !url.pathname.startsWith(prefix) || url.pathname === prefix) {
+      throw new PayloadStorageException(
+        "The payload blob URL must belong to the configured storage endpoint and container.",
       );
-    throw new PayloadStorageException(
-      "Cross-account or cross-endpoint payload access requires identity authentication.",
-    );
+    }
   }
 
   private async _ensureContainer(signal?: AbortSignal): Promise<object> {
