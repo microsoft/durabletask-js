@@ -49,6 +49,8 @@
 
 ### Fixes
 
+- Scope reserved payload-cleanup version exemptions and filters to their task kind, preserving
+  customer tasks with reserved names in another category and their configured versions.
 - Validate malformed v2 cleanup tokens before store I/O; use `InvalidPayloadTokenError` for
   provider-specific token failures, including path-style missing blob names. Retry uncertain
   store failures such as native fetch `TypeError` network errors, not every `TypeError` as malformed.

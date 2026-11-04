@@ -904,8 +904,9 @@ export class TaskHubGrpcWorker {
    * Result of version compatibility check.
    */
   private _checkVersionCompatibility(
-    orchestrationVersion?: string,
-    taskName?: string,
+    orchestrationVersion: string | undefined,
+    taskName: string | undefined,
+    taskKind: "orchestrator" | "activity",
   ): {
     compatible: boolean;
     shouldFail: boolean;
@@ -913,7 +914,7 @@ export class TaskHubGrpcWorker {
     errorType?: string;
     errorMessage?: string;
   } {
-    if (this._payloads && isPayloadPurgeTask(taskName)) return { compatible: true, shouldFail: false };
+    if (this._payloads && isPayloadPurgeTask(taskName, taskKind)) return { compatible: true, shouldFail: false };
     // If no versioning options configured or match strategy is None, always compatible
     if (
       !this._versioning ||
@@ -1180,7 +1181,11 @@ export class TaskHubGrpcWorker {
       .find((event) => event.hasExecutionstarted())
       ?.getExecutionstarted()
       ?.getName();
-    const versionCheckResult = this._checkVersionCompatibility(this._getOrchestrationVersion(req), taskName);
+    const versionCheckResult = this._checkVersionCompatibility(
+      this._getOrchestrationVersion(req),
+      taskName,
+      "orchestrator",
+    );
     if (!versionCheckResult.compatible) {
       if (versionCheckResult.shouldFail) {
         // Fail the orchestration with version mismatch error
@@ -1404,7 +1409,7 @@ export class TaskHubGrpcWorker {
       throw new Error("Activity request does not contain an orchestration instance id");
     }
 
-    const versionCheck = this._checkVersionCompatibility(req.getVersion()?.getValue(), req.getName());
+    const versionCheck = this._checkVersionCompatibility(req.getVersion()?.getValue(), req.getName(), "activity");
     if (!versionCheck.compatible && !versionCheck.shouldFail) {
       WorkerLogs.versionMismatchAbandon(this._logger, instanceId, versionCheck.errorType!, versionCheck.errorMessage!);
       try {
