@@ -180,13 +180,10 @@ async function deletePayload(
   }
 }
 
-export function isPayloadPurgeTask(name?: string): boolean {
-  return (
-    name === BlobPurgeConstants.orchestrator ||
-    name === BlobPurgeConstants.fetch ||
-    name === BlobPurgeConstants.delete ||
-    name === BlobPurgeConstants.report
-  );
+export function isPayloadPurgeTask(name: string | undefined, kind: "orchestrator" | "activity"): boolean {
+  return kind === "orchestrator"
+    ? name === BlobPurgeConstants.orchestrator
+    : name === BlobPurgeConstants.fetch || name === BlobPurgeConstants.delete || name === BlobPurgeConstants.report;
 }
 
 export function withPayloadPurgeFilters(filters: WorkItemFilters): WorkItemFilters {
@@ -194,11 +191,11 @@ export function withPayloadPurgeFilters(filters: WorkItemFilters): WorkItemFilte
   return {
     ...filters,
     orchestrations: [
-      ...(filters.orchestrations ?? []).filter((f) => f.name !== BlobPurgeConstants.orchestrator),
+      ...(filters.orchestrations ?? []).filter((f) => !isPayloadPurgeTask(f.name, "orchestrator")),
       { name: BlobPurgeConstants.orchestrator, versions: [] },
     ],
     activities: [
-      ...(filters.activities ?? []).filter((f) => !isPayloadPurgeTask(f.name)),
+      ...(filters.activities ?? []).filter((f) => !isPayloadPurgeTask(f.name, "activity")),
       ...[BlobPurgeConstants.fetch, BlobPurgeConstants.delete, BlobPurgeConstants.report].map((name) => ({
         name,
         versions: [],

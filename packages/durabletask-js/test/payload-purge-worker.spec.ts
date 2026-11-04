@@ -7,16 +7,22 @@ import {
   PayloadStore,
   PayloadDeleteOutcome,
   VersionMatchStrategy,
+  VersionFailureStrategy,
   WorkItemFilters,
   TaskFailedError,
 } from "../src";
+import * as grpc from "@grpc/grpc-js";
 import * as pb from "../src/proto/orchestrator_service_pb";
+import * as stubs from "../src/proto/orchestrator_service_grpc_pb";
+import * as lp from "../src/proto/large_payload_purge_pb";
+import { StringValue } from "google-protobuf/google/protobuf/wrappers_pb";
+import { newExecutionStartedEvent, newOrchestratorStartedEvent } from "../src/utils/pb-helper.util";
 import { BlobPurgeConstants, BlobPurgeOutcome, LargePayloadPurgeDisposition } from "../src/payloads/purge";
 import { blobPurgeJobOrchestrator } from "../src/payloads/purge-orchestrator";
 import { deletePayloadChunk } from "../src/payloads/purge-worker";
 import { RuntimeOrchestrationContext } from "../src/worker/runtime-orchestration-context";
 import { RetryPolicy } from "../src/task/retry/retry-policy";
-import { getEventListeners } from "events";
+import { EventEmitter, getEventListeners } from "events";
 import { createServer } from "net";
 import { execFile } from "child_process";
 import { join } from "path";
@@ -63,8 +69,296 @@ describe("payload purge worker registrations", () => {
     ]);
     expect(wire.getActivitiesList()).toHaveLength(3);
     expect(filters).toEqual({ entities: [{ name: "counter" }] });
-    expect(worker["_checkVersionCompatibility"]("", BlobPurgeConstants.orchestrator).compatible).toBe(true);
-    expect(worker["_checkVersionCompatibility"]("", "business").compatible).toBe(false);
+    expect(worker["_checkVersionCompatibility"]("", BlobPurgeConstants.orchestrator, "orchestrator").compatible).toBe(
+      true,
+    );
+    expect(worker["_checkVersionCompatibility"]("", "business", "orchestrator").compatible).toBe(false);
+  });
+
+  it.each([
+    { automatic: false, payloads: true },
+    { automatic: true, payloads: true },
+    { automatic: false, payloads: false },
+    { automatic: true, payloads: false },
+  ])(
+    "preserves wrong-kind customer filter names/versions (auto=$automatic,payloads=$payloads)",
+    ({ automatic, payloads }) => {
+      const activities = [BlobPurgeConstants.fetch, BlobPurgeConstants.delete, BlobPurgeConstants.report];
+      const filters: WorkItemFilters = {
+        orchestrations: [...activities, BlobPurgeConstants.orchestrator].map((name) => ({
+          name,
+          versions: ["customer-version"],
+        })),
+        activities: [BlobPurgeConstants.orchestrator, ...activities].map((name) => ({
+          name,
+          versions: ["customer-version"],
+        })),
+      };
+      const original = JSON.parse(JSON.stringify(filters));
+      const worker = new TaskHubGrpcWorker({
+        payloads: payloads ? { store: new Store() } : undefined,
+        workItemFilters: automatic ? "auto" : filters,
+        versioning: { version: "2.0", matchStrategy: VersionMatchStrategy.Strict },
+      });
+      for (const { name } of filters.orchestrations!) {
+        if (!worker["_registry"].getOrchestrator(name)) worker.addNamedOrchestrator(name, async () => {});
+      }
+      for (const { name } of filters.activities!) {
+        if (!worker["_registry"].getActivity(name)) worker.addNamedActivity(name, () => {});
+      }
+      const wire = worker["_buildGetWorkItemsRequest"]().getWorkitemfilters()!;
+      const customerVersions = automatic ? ["2.0"] : ["customer-version"];
+      expect(wire.getOrchestrationsList().map((filter) => [filter.getName(), filter.getVersionsList()])).toEqual([
+        ...activities.map((name) => [name, customerVersions]),
+        [BlobPurgeConstants.orchestrator, payloads ? [] : customerVersions],
+      ]);
+      expect(wire.getActivitiesList().map((filter) => [filter.getName(), filter.getVersionsList()])).toEqual([
+        [BlobPurgeConstants.orchestrator, customerVersions],
+        ...activities.map((name) => [name, payloads ? [] : customerVersions]),
+      ]);
+      expect(filters).toEqual(original);
+    },
+  );
+
+  it.each([undefined, {}])("does not add filters to an unfiltered payload worker (%#)", (filters) => {
+    const worker = new TaskHubGrpcWorker({ payloads: { store: new Store() }, workItemFilters: filters });
+    const wire = worker["_buildGetWorkItemsRequest"]().getWorkitemfilters();
+    expect(wire?.getOrchestrationsList() ?? []).toEqual([]);
+    expect(wire?.getActivitiesList() ?? []).toEqual([]);
+  });
+});
+
+describe("payload purge task-kind version dispatch", () => {
+  type Kind = "activity" | "orchestrator";
+  const reserved: { kind: Kind; name: string }[] = [
+    { kind: "orchestrator", name: BlobPurgeConstants.orchestrator },
+    ...[BlobPurgeConstants.fetch, BlobPurgeConstants.delete, BlobPurgeConstants.report].map((name) => ({
+      kind: "activity" as const,
+      name,
+    })),
+  ];
+  const wrongKind: { kind: Kind; name: string }[] = reserved.map(({ kind, name }) => ({
+    kind: kind === "activity" ? "orchestrator" : "activity",
+    name,
+  }));
+  const customerTasks: { kind: Kind; name: string }[] = [
+    ...wrongKind,
+    { kind: "activity", name: "business-activity" },
+    { kind: "orchestrator", name: "business-orchestration" },
+    { kind: "activity", name: `${BlobPurgeConstants.fetch}-copy` },
+    { kind: "orchestrator", name: `${BlobPurgeConstants.orchestrator}-copy` },
+    { kind: "activity", name: BlobPurgeConstants.fetch.toLowerCase() },
+    { kind: "orchestrator", name: BlobPurgeConstants.orchestrator.toLowerCase() },
+  ];
+
+  async function dispatch(
+    kind: Kind,
+    name: string,
+    matchStrategy = VersionMatchStrategy.Strict,
+    failureStrategy = VersionFailureStrategy.Reject,
+    payloads = true,
+    version = "3.0",
+  ) {
+    const worker = new TaskHubGrpcWorker({
+      payloads: payloads ? { store: new Store() } : undefined,
+      versioning: { version: "2.0", matchStrategy, failureStrategy },
+      logger,
+    });
+    const stub = new stubs.TaskHubSidecarServiceClient("127.0.0.1:1", grpc.credentials.createInsecure());
+    worker["_stub"] = stub;
+    const execute = jest.fn(() => "done");
+    const call = () =>
+      Object.assign(new EventEmitter(), {
+        cancel: jest.fn(),
+        getPeer: () => "test",
+        getAuthContext: () => null,
+      });
+    const activities: pb.ActivityResponse[] = [];
+    const orchestrations: pb.OrchestratorResponse[] = [];
+    const abandon = jest.fn();
+    type Callback<T> = (error: grpc.ServiceError | null, response: T) => void;
+    jest
+      .spyOn(stub, "completeActivityTask")
+      .mockImplementation(
+        (
+          request,
+          _metadata,
+          optionsOrCallback: Partial<grpc.CallOptions> | Callback<pb.CompleteTaskResponse>,
+          callback?: Callback<pb.CompleteTaskResponse>,
+        ) => {
+          activities.push(request);
+          (typeof optionsOrCallback === "function" ? optionsOrCallback : callback!)(
+            null,
+            new pb.CompleteTaskResponse(),
+          );
+          return call();
+        },
+      );
+    jest
+      .spyOn(stub, "completeOrchestratorTask")
+      .mockImplementation(
+        (
+          request,
+          _metadata,
+          optionsOrCallback: Partial<grpc.CallOptions> | Callback<pb.CompleteTaskResponse>,
+          callback?: Callback<pb.CompleteTaskResponse>,
+        ) => {
+          orchestrations.push(request);
+          (typeof optionsOrCallback === "function" ? optionsOrCallback : callback!)(
+            null,
+            new pb.CompleteTaskResponse(),
+          );
+          return call();
+        },
+      );
+    jest
+      .spyOn(stub, "abandonTaskActivityWorkItem")
+      .mockImplementation(
+        (
+          _request,
+          _metadata,
+          optionsOrCallback: Partial<grpc.CallOptions> | Callback<pb.AbandonActivityTaskResponse>,
+          callback?: Callback<pb.AbandonActivityTaskResponse>,
+        ) => {
+          abandon();
+          (typeof optionsOrCallback === "function" ? optionsOrCallback : callback!)(
+            null,
+            new pb.AbandonActivityTaskResponse(),
+          );
+          return call();
+        },
+      );
+    jest
+      .spyOn(stub, "abandonTaskOrchestratorWorkItem")
+      .mockImplementation(
+        (
+          _request,
+          _metadata,
+          optionsOrCallback: Partial<grpc.CallOptions> | Callback<pb.AbandonOrchestrationTaskResponse>,
+          callback?: Callback<pb.AbandonOrchestrationTaskResponse>,
+        ) => {
+          abandon();
+          (typeof optionsOrCallback === "function" ? optionsOrCallback : callback!)(
+            null,
+            new pb.AbandonOrchestrationTaskResponse(),
+          );
+          return call();
+        },
+      );
+    Object.defineProperty(stub, "makeUnaryRequest", {
+      value: (
+        _path: string,
+        _serialize: (request: lp.GetLargePayloadTombstonesRequest) => Buffer,
+        _deserialize: (buffer: Buffer) => lp.GetLargePayloadTombstonesResponse,
+        _request: lp.GetLargePayloadTombstonesRequest,
+        _metadata: grpc.Metadata,
+        _options: grpc.CallOptions,
+        callback: Callback<lp.GetLargePayloadTombstonesResponse>,
+      ) => {
+        callback(null, new lp.GetLargePayloadTombstonesResponse());
+        return call();
+      },
+    });
+    if (kind === "activity" && !worker["_registry"].getActivity(name)) worker.addNamedActivity(name, execute);
+    if (kind === "orchestrator" && !worker["_registry"].getOrchestrator(name)) {
+      worker.addNamedOrchestrator(name, async () => execute());
+    }
+    const item = new pb.WorkItem().setCompletiontoken("kind-token");
+    if (kind === "activity") {
+      item.setActivityrequest(
+        new pb.ActivityRequest()
+          .setName(name)
+          .setTaskid(1)
+          .setVersion(new StringValue().setValue(version))
+          .setInput(new StringValue().setValue(name === BlobPurgeConstants.fetch ? "50" : "[]"))
+          .setOrchestrationinstance(new pb.OrchestrationInstance().setInstanceid("kind-test")),
+      );
+    } else {
+      item.setOrchestratorrequest(
+        new pb.OrchestratorRequest()
+          .setInstanceid("kind-test")
+          .setNeweventsList([
+            newOrchestratorStartedEvent(),
+            newExecutionStartedEvent(
+              name,
+              "kind-test",
+              '{"PurgeBatchSize":50,"PurgedCount":0}',
+              undefined,
+              undefined,
+              version,
+            ),
+          ]),
+      );
+    }
+    try {
+      worker["_dispatchWorkItem"](item, stub);
+      await Promise.all(worker["_pendingWorkItems"]);
+      expect(worker["_pendingWorkItems"].size).toBe(0);
+      const failure =
+        kind === "activity"
+          ? activities[0]?.getFailuredetails()
+          : orchestrations[0]
+              ?.getActionsList()
+              .find((action) => action.hasCompleteorchestration())
+              ?.getCompleteorchestration()
+              ?.getFailuredetails();
+      return { execute, abandon, activities, orchestrations, failure };
+    } finally {
+      stub.close();
+    }
+  }
+
+  describe.each([VersionMatchStrategy.Strict, VersionMatchStrategy.CurrentOrOlder])("strategy%s", (strategy) => {
+    it.each(customerTasks)("$kind $name keeps its mismatch policy", async ({ kind, name }) => {
+      const result = await dispatch(kind, name, strategy);
+      expect(result.execute).not.toHaveBeenCalled();
+      expect(result.abandon).toHaveBeenCalledTimes(1);
+      expect(result.activities).toEqual([]);
+      expect(result.orchestrations).toEqual([]);
+    });
+    it.each(wrongKind)("$kind $name keeps the Fail mismatch strategy", async ({ kind, name }) => {
+      const result = await dispatch(kind, name, strategy, VersionFailureStrategy.Fail);
+      expect(result.execute).not.toHaveBeenCalled();
+      expect(result.abandon).not.toHaveBeenCalled();
+      expect(result.failure?.getErrortype()).toBe("VersionMismatch");
+    });
+  });
+
+  it.each(reserved)("$kind $name is exempt only when it is a reserved task of that kind", async ({ kind, name }) => {
+    const result = await dispatch(kind, name, VersionMatchStrategy.Strict, VersionFailureStrategy.Fail);
+    expect(result.abandon).not.toHaveBeenCalled();
+    expect(result.failure).toBeUndefined();
+    expect(result.activities.length + result.orchestrations.length).toBe(1);
+    if (kind === "orchestrator") {
+      expect(result.orchestrations[0].getActionsList()[0].getScheduletask()?.getName()).toBe(BlobPurgeConstants.fetch);
+    }
+  });
+
+  it.each(reserved)("$kind $name has no exemption without payloads", async ({ kind, name }) => {
+    const result = await dispatch(kind, name, VersionMatchStrategy.Strict, VersionFailureStrategy.Reject, false);
+    expect(result.execute).not.toHaveBeenCalled();
+    expect(result.abandon).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(wrongKind)("$kind $name still runs when version matching is None", async ({ kind, name }) => {
+    const result = await dispatch(kind, name, VersionMatchStrategy.None);
+    expect(result.execute).toHaveBeenCalledTimes(1);
+    expect(result.abandon).not.toHaveBeenCalled();
+    expect(result.failure).toBeUndefined();
+  });
+
+  it.each(wrongKind)("$kind $name still accepts older versions under CurrentOrOlder", async ({ kind, name }) => {
+    const result = await dispatch(
+      kind,
+      name,
+      VersionMatchStrategy.CurrentOrOlder,
+      VersionFailureStrategy.Reject,
+      true,
+      "1.0",
+    );
+    expect(result.execute).toHaveBeenCalledTimes(1);
+    expect(result.abandon).not.toHaveBeenCalled();
+    expect(result.failure).toBeUndefined();
   });
 });
 
