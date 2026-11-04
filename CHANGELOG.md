@@ -49,6 +49,13 @@
 
 ### Fixes
 
+- Validate malformed v2 cleanup tokens before store I/O; use `InvalidPayloadTokenError` for
+  provider-specific token failures, including path-style missing blob names. Retry uncertain
+  store failures such as native fetch `TypeError` network errors, not every `TypeError` as malformed.
+- Stop queued cleanup deletes on caller/worker cancellation, drain started deletes and preserve
+  the original cancellation reason. The independent 60-second per-delete timeout remains retryable.
+- Preserve cleanup activity metadata failures unchanged; only scheduler RPC failures trigger
+  precondition idling or unsupported-backend handling.
 - Cancel metadata acquisition waits before dispatch and preserve the original cancellation reason,
   including auto-purge setting and runner lifecycle calls. Cancellation detaches the SDK wait;
   third-party metadata generation may finish later, but cannot dispatch a canceled RPC.

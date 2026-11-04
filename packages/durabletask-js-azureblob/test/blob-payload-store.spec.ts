@@ -13,7 +13,13 @@ import {
   StorageRetryOptions,
   StorageRetryPolicyType,
 } from "@azure/storage-blob";
-import { PayloadDeleteOutcome, PayloadStorageException } from "@microsoft/durabletask-js";
+import {
+  InvalidPayloadTokenError,
+  NoOpLogger,
+  PayloadDeleteOutcome,
+  PayloadStorageException,
+} from "@microsoft/durabletask-js";
+import { deletePayloadChunk } from "../../durabletask-js/src/payloads/purge-worker";
 import { BlobPayloadStore } from "../src";
 import fixtures from "./dotnet-payload-fixtures.json";
 
@@ -83,6 +89,21 @@ describe("BlobPayloadStore", () => {
   beforeEach(() => {
     http = new RecordingClient();
   });
+
+  it.each(["127.0.0.1", "localhost"])(
+    "quarantines the real provider's missing path-style blob name without storage I/O (%s)",
+    async (host) => {
+      const endpoint = `http://${host}:10000/devstoreaccount1`;
+      const store = new BlobPayloadStore({
+        connectionString: `DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=${accountKey};BlobEndpoint=${endpoint}`,
+        clientOptions: { httpClient: http },
+      });
+      const token = `blob:v2:${endpoint}/payloads/`;
+      await expect(store.delete(token)).rejects.toBeInstanceOf(InvalidPayloadTokenError);
+      await expect(deletePayloadChunk(store, [token], new NoOpLogger())).resolves.toEqual([{ Disposition: 3 }]);
+      expect(http.requests).toHaveLength(0);
+    },
+  );
 
   describe("BlobPayloadStore native SDK retries and options", () => {
     let http: RecordingClient;
