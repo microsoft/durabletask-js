@@ -2,6 +2,9 @@
 
 ### New
 
+- Add `restartOrchestration(id, { newInstanceId, version? })` for restart-as-clone with a required
+  target ID. Omitted versions preserve backend restart defaults; `""` selects unversioned execution.
+  Boolean restart calls remain unchanged. Target/version support requires the updated backend protocol.
 - Add payload storage contracts and bounded protobuf payload processing, with inclusive UTF-8
   thresholds, explicit storage/size failures, and non-retriable worker upload-failure conversion.
   This is phase 1 of the external-payload feature; transport, providers, and cleanup follow separately.

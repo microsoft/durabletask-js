@@ -28,7 +28,7 @@ import { convertFailureDetails } from "../utils/failure-details.util";
 import { HistoryEvent } from "../orchestration/history-event";
 import { convertProtoHistoryEvent } from "../utils/history-event-converter";
 import { Logger, ConsoleLogger } from "../types/logger.type";
-import { StartOrchestrationOptions } from "../task/options";
+import { StartOrchestrationOptions, RestartOrchestrationOptions } from "../task/options";
 import { toProtobufOrchestrationIdReusePolicy } from "../orchestration/orchestration-id-reuse-policy";
 import { OrchestrationAlreadyExistsError } from "../orchestration/exception/orchestration-already-exists-error";
 import { mapToRecord } from "../utils/tags.util";
@@ -738,13 +738,16 @@ export class TaskHubGrpcClient {
    *
    * Restarting with a new ID is a restart-as-clone, not execution-history cloning.
    * The context's `sourceInstanceId` is available only if the backend supplies
-   * lineage metadata. The current protocol does not support choosing a destination ID or version.
+   * lineage metadata. Pass options to choose a target ID and optionally override the version.
+   * Omitted versions preserve backend restart defaults; an empty string selects an unversioned orchestration.
+   * Explicit target IDs and version overrides require a backend supporting these protocol fields.
    *
    * @param instanceId - The unique ID of the orchestration instance to restart.
    * @param restartWithNewInstanceId - If true, the restarted orchestration will be assigned
    * a new instance ID. If false (default), the same instance ID will be reused.
    * When reusing the same instance ID, the orchestration must be in a terminal state
    * (Completed, Failed, or Terminated).
+   * Alternatively, pass options with a required `newInstanceId` and optional `version`.
    * @returns A Promise that resolves to the instance ID of the restarted orchestration.
    * This will be the same as the input instanceId if restartWithNewInstanceId is false,
    * or a new ID if restartWithNewInstanceId is true.
@@ -752,16 +755,38 @@ export class TaskHubGrpcClient {
    * @throws Error if the orchestration cannot be restarted (e.g., it's still running
    * and restartWithNewInstanceId is false).
    */
-  async restartOrchestration(instanceId: string, restartWithNewInstanceId: boolean = false): Promise<string> {
+  async restartOrchestration(
+    instanceId: string,
+    restartWithNewInstanceId: boolean | RestartOrchestrationOptions = false,
+  ): Promise<string> {
     if (!instanceId) {
       throw new Error("instanceId cannot be null or empty");
     }
 
     const req = new pb.RestartInstanceRequest();
     req.setInstanceid(instanceId);
-    req.setRestartwithnewinstanceid(restartWithNewInstanceId);
+    if (typeof restartWithNewInstanceId === "boolean") {
+      req.setRestartwithnewinstanceid(restartWithNewInstanceId);
+    } else {
+      if (
+        !restartWithNewInstanceId ||
+        typeof restartWithNewInstanceId.newInstanceId !== "string" ||
+        !restartWithNewInstanceId.newInstanceId
+      ) {
+        throw new TypeError("newInstanceId is required and must be a non-empty string");
+      }
+      const { newInstanceId, version } = restartWithNewInstanceId;
+      if (version !== undefined && typeof version !== "string") {
+        throw new TypeError("version must be a string");
+      }
+      req.setRestartwithnewinstanceid(true);
+      req.setNewinstanceid(new StringValue().setValue(newInstanceId));
+      if (version !== undefined) {
+        req.setVersion(new StringValue().setValue(version));
+      }
+    }
 
-    ClientLogs.restartingInstance(this._logger, instanceId, restartWithNewInstanceId);
+    ClientLogs.restartingInstance(this._logger, instanceId, req.getRestartwithnewinstanceid());
 
     const res = await this._call<pb.RestartInstanceRequest, pb.RestartInstanceResponse>(
       this._stub.restartInstance.bind(this._stub),
