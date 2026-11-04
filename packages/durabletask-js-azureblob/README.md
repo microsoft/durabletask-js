@@ -120,6 +120,9 @@ The store checks the incoming normalized URL and the final destination after dec
 escaping and applying SDK path normalization, before HTTP requests or token acquisition. Encoded
 separators or dot segments cannot escape the authorized account or container. Blob-name escaping
 and both token versions remain supported.
+V2 blob names containing standalone `.` or `..` segments after decoding are rejected before
+access, even when normalization would remain in the same account and container, rather than
+selecting another object.
 Literal backslashes remain part of the blob name: v1 `folder\item.json` and v2
 `folder%5Citem.json` select the same blob, distinct from `folder/item.json`.
 Token query parameters do not select credentials: requests use only configured authentication.

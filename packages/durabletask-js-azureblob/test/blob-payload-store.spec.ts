@@ -1069,7 +1069,7 @@ describe("BlobPayloadStore", () => {
         for (const token of [
           `blob:v2:${endpoint}/other/folder%2fblob`,
           "blob:v1:other:folder/blob",
-          `blob:v2:${endpoint}/other/folder%2f..%2fblob`,
+          `blob:v2:${endpoint}/other/folder%2fnested%2fblob`,
         ]) {
           expect(await store.download(token)).toBe("payload");
           expect(await store.delete(token)).toBe(PayloadDeleteOutcome.Deleted);
@@ -1125,6 +1125,61 @@ describe("BlobPayloadStore", () => {
       });
       return { store, getToken };
     };
+
+    it.each(["container", "account", "additional"])(
+      "rejects decoded dot segments without reading or deleting another object (%s)",
+      async (scope) => {
+        const { store, getToken } = makeIdentity(
+          "https://account.invalid",
+          scope === "additional" ? ["https://other.invalid"] : [],
+          scope === "account",
+        );
+        const endpoint = scope === "additional" ? "https://other.invalid" : "https://account.invalid";
+        const container = scope === "container" ? "durabletask-payloads" : "archive";
+        const send = http.sendRequest.bind(http);
+        const objects = new Map([
+          [`/${container}/folder/item`, "nested object"],
+          [`/${container}/item`, "root object"],
+        ]);
+        http.sendRequest = async (request) => {
+          const path = new URL(request.url).pathname;
+          const content = objects.get(path);
+          if (content === undefined) throw new Error(`Unexpected object request: ${path}`);
+          http.content = Buffer.from(content);
+          const response = await send(request);
+          if (request.method === "DELETE") objects.delete(path);
+          return response;
+        };
+        for (const name of [
+          "folder%2f..%2fitem",
+          "folder%2F%2E%2E%2Fitem",
+          "folder%2f.%2fitem",
+          "folder/.%2fitem",
+          "folder%2f..",
+        ]) {
+          const token = `blob:v2:${endpoint}/${container}/${name}`;
+          await expect(store.download(token)).rejects.toBeInstanceOf(PayloadStorageException);
+          await expect(store.delete(token)).rejects.toBeInstanceOf(PayloadStorageException);
+        }
+        expect(http.requests).toHaveLength(0);
+        expect(getToken).not.toHaveBeenCalled();
+        expect(objects.size).toBe(2);
+        const nested = `blob:v2:${endpoint}/${container}/folder%2fitem`;
+        const root = `blob:v2:${endpoint}/${container}/item`;
+        expect(await store.download(nested)).toBe("nested object");
+        expect(await store.download(root)).toBe("root object");
+        expect(await store.delete(nested)).toBe(PayloadDeleteOutcome.Deleted);
+        expect(objects.has(`/${container}/folder/item`)).toBe(false);
+        expect(objects.get(`/${container}/item`)).toBe("root object");
+        expect(http.requests.map((request) => [request.method, new URL(request.url).pathname])).toEqual([
+          ["GET", `/${container}/folder/item`],
+          ["GET", `/${container}/item`],
+          ["HEAD", `/${container}/folder/item`],
+          ["DELETE", `/${container}/folder/item`],
+        ]);
+        expect(http.requests[3].headers.get("if-match")).toBe('"owned-etag"');
+      },
+    );
 
     it.each([
       ["https://account.invalid", "https://other.invalid", "https://other.invalid.evil.invalid/other/blob"],
