@@ -310,12 +310,16 @@ export class BlobPayloadStore extends PayloadStore {
   private _validateBlobUrl(url: URL, location: AccountLocation, selectedContainer?: string): void {
     const relative = this._relativeBlobPath(url, location);
     const separator = relative?.indexOf("/") ?? -1;
+    const container =
+      relative !== undefined && separator > 0
+        ? encodeURIComponent(decodeURIComponent(relative.slice(0, separator)))
+        : undefined;
     if (
       relative === undefined ||
       separator < 1 ||
       separator === relative.length - 1 ||
-      (selectedContainer !== undefined && relative.slice(0, separator) !== selectedContainer) ||
-      (!location.accountWide && relative.slice(0, separator) !== this._container.containerName)
+      (selectedContainer !== undefined && container !== encodeURIComponent(selectedContainer)) ||
+      (!location.accountWide && container !== encodeURIComponent(this._container.containerName))
     ) {
       throw new PayloadStorageException("The payload blob URL is outside the configured access scope.");
     }

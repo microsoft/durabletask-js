@@ -1102,6 +1102,72 @@ describe("BlobPayloadStore", () => {
     );
   });
 
+  describe.each(["container", "account", "additional"] as const)("%s special container names", (scope) => {
+    it.each([
+      ["https://account.invalid", "$root"],
+      ["https://account.invalid", "$web"],
+      ["https://127.0.0.1:10000/accounta", "$root"],
+      ["https://127.0.0.1:10000/accounta", "$web"],
+    ])("preserves %s/%s in upload, read, and deletion requests", async (endpoint, containerName) => {
+      const getToken = jest.fn(async () => ({
+        token: "synthetic-access-token",
+        expiresOnTimestamp: Date.now() + 3600000,
+      }));
+      const configuredContainer = scope === "container" ? containerName : "durabletask-payloads";
+      const store = make(http, {
+        connectionString: undefined,
+        accountUri: endpoint,
+        credential: { getToken },
+        containerName: configuredContainer,
+        compressionEnabled: false,
+        allowAllContainersInConfiguredAccount: scope === "account",
+        additionalAccountUris: scope === "additional" ? ["https://other.invalid"] : [],
+      });
+      for (const token of [
+        `blob:v2:https://unlisted.invalid/${containerName}/blob`,
+        ...(scope === "account"
+          ? []
+          : [`blob:v2:${endpoint}/${containerName}-other/blob`, `blob:v1:${containerName}-other:blob`]),
+        ...(scope === "additional" ? [`blob:v2:${endpoint}/${containerName}/blob`] : []),
+      ]) {
+        const errorType = token.startsWith("blob:v1:") ? TypeError : PayloadStorageException;
+        await expect(store.download(token)).rejects.toBeInstanceOf(errorType);
+        await expect(store.delete(token)).rejects.toBeInstanceOf(errorType);
+      }
+      expect(http.requests).toHaveLength(0);
+      expect(getToken).not.toHaveBeenCalled();
+
+      const uploaded = await store.upload("payload");
+      const uploadedUrl = new URL(uploaded.slice("blob:v2:".length));
+      expect(uploadedUrl.origin).toBe(new URL(endpoint).origin);
+      expect(uploadedUrl.pathname).toBe(
+        `${new URL(endpoint).pathname.replace(/\/$/, "")}/${encodeURIComponent(configuredContainer)}/${uploadedUrl.pathname.split("/").at(-1)}`,
+      );
+      const target = scope === "additional" ? "https://other.invalid" : endpoint;
+      const tokens = [
+        `blob:v2:${target}/${encodeURIComponent(containerName)}/blob`,
+        `blob:v2:${target}/${containerName}/blob`,
+        ...(scope === "additional" ? [] : [`blob:v1:${containerName}:blob`]),
+        ...(scope === "container" ? [uploaded] : []),
+      ];
+      for (const token of tokens) {
+        http.requests.length = 0;
+        expect(await store.download(token)).toBe("payload");
+        expect(await store.delete(token)).toBe(PayloadDeleteOutcome.Deleted);
+        expect(http.requests.map((request) => request.method)).toEqual(["GET", "HEAD", "DELETE"]);
+        for (const request of http.requests) {
+          const url = new URL(request.url);
+          expect(url.origin).toBe(new URL(target).origin);
+          expect(url.pathname).toBe(
+            `${new URL(target).pathname.replace(/\/$/, "")}/${encodeURIComponent(containerName)}/${token === uploaded ? uploadedUrl.pathname.split("/").at(-1) : "blob"}`,
+          );
+        }
+        expect(http.requests[2].headers.get("if-match")).toBe('"owned-etag"');
+        expect(http.requests[2].headers.get("x-ms-delete-snapshots")).toBe("include");
+      }
+    });
+  });
+
   describe("additional account endpoints", () => {
     const makeIdentity = (
       endpoint: string,
