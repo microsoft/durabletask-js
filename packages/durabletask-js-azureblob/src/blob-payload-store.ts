@@ -10,7 +10,12 @@ import {
   RestError,
   StoragePipelineOptions,
 } from "@azure/storage-blob";
-import { PayloadStore, PayloadStorageException, PayloadDeleteOutcome } from "@microsoft/durabletask-js";
+import {
+  InvalidPayloadTokenError,
+  PayloadStore,
+  PayloadStorageException,
+  PayloadDeleteOutcome,
+} from "@microsoft/durabletask-js";
 import { randomUUID } from "crypto";
 import { Writable } from "stream";
 import { pipeline } from "stream/promises";
@@ -176,22 +181,23 @@ export class BlobPayloadStore extends PayloadStore {
         separator === rest.length - 1 ||
         rest.slice(0, separator) !== this._container.containerName
       ) {
-        throw new TypeError("Invalid external payload token or token container does not match.");
+        throw new InvalidPayloadTokenError("Invalid external payload token or token container does not match.");
       }
       return this._container.getBlobClient(rest.slice(separator + 1));
     }
-    if (!token.startsWith("blob:v2:")) throw new TypeError("Invalid external payload token.");
+    if (!token.startsWith("blob:v2:")) throw new InvalidPayloadTokenError("Invalid external payload token.");
     let url: URL;
     try {
       url = new URL(token.slice("blob:v2:".length));
     } catch (error) {
-      throw new TypeError("Invalid external payload blob URL.", { cause: error });
+      throw new InvalidPayloadTokenError("Invalid external payload blob URL.", { cause: error });
     }
     if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
-      throw new TypeError("Invalid external payload blob URL.");
+      throw new InvalidPayloadTokenError("Invalid external payload blob URL.");
     }
     const decoded = new BlobClient(url.href);
-    if (!decoded.containerName || !decoded.name) throw new TypeError("Invalid external payload blob URL.");
+    if (!decoded.containerName || !decoded.name)
+      throw new InvalidPayloadTokenError("Invalid external payload blob URL.");
     const container = this._service.getContainerClient(decoded.containerName);
     const configuredUrl = new URL(container.url);
     // Match the service/container boundary, not normalized blob-name escaping. The SDK

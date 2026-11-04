@@ -7,8 +7,8 @@ import { LargePayloadPurgeService } from "../proto/large_payload_purge_grpc_pb";
 import { Registry } from "../worker/registry";
 import { WorkItemFilters } from "../worker/work-item-filters";
 import { Logger } from "../types/logger.type";
-import { MetadataGenerator } from "../utils/grpc-helper.util";
-import { PayloadStore, PayloadDeleteOutcome, PayloadStorageException } from "./payload-store";
+import { getMetadata, MetadataGenerator } from "../utils/grpc-helper.util";
+import { InvalidPayloadTokenError, PayloadStore, PayloadDeleteOutcome, PayloadStorageException } from "./payload-store";
 import { runBounded } from "./run-bounded";
 import { callPayloadPurge } from "./purge-transport";
 import {
@@ -42,20 +42,21 @@ export function registerPayloadPurge(
   );
   registry.addNamedActivity(BlobPurgeConstants.fetch, async (_ctx, limit: number) => {
     validatePurgeBatchSize(limit);
+    const signal = getSignal();
+    const metadata = metadataGenerator ? await getMetadata(metadataGenerator, signal) : undefined;
+    const client = getClient();
+    let response: lp.GetLargePayloadTombstonesResponse;
     try {
-      const response = await callPayloadPurge(
-        getClient(),
+      response = await callPayloadPurge(
+        client,
         LargePayloadPurgeService.getLargePayloadTombstones,
         new lp.GetLargePayloadTombstonesRequest().setLimit(limit),
-        metadataGenerator,
-        getSignal(),
+        metadata ? async () => metadata : undefined,
+        signal,
         new Date(Date.now() + 60000),
       );
-      return response.getTombstonesList().map((t) => ({
-        TombstoneToken: t.getTombstoneToken(),
-        PayloadToken: t.getPayloadToken(),
-      }));
     } catch (error) {
+      signal?.throwIfAborted();
       if (grpcStatus(error) === grpc.status.FAILED_PRECONDITION) {
         logger.info("Large payload purge fetch precondition not met; idling.");
         return [];
@@ -63,6 +64,10 @@ export function registerPayloadPurge(
       if (grpcStatus(error) === grpc.status.UNIMPLEMENTED) throw unsupportedBackend(error);
       throw error;
     }
+    return response.getTombstonesList().map((t) => ({
+      TombstoneToken: t.getTombstoneToken(),
+      PayloadToken: t.getPayloadToken(),
+    }));
   });
   registry.addNamedActivity(BlobPurgeConstants.delete, async (_ctx, tokens: string[]) =>
     deletePayloadChunk(store, tokens, logger, getSignal()),
@@ -76,16 +81,20 @@ export function registerPayloadPurge(
         return new lp.LargePayloadPurgeResult().setTombstoneToken(r.TombstoneToken).setDisposition(disposition);
       }),
     );
+    const signal = getSignal();
+    const metadata = metadataGenerator ? await getMetadata(metadataGenerator, signal) : undefined;
+    const client = getClient();
     try {
       await callPayloadPurge(
-        getClient(),
+        client,
         LargePayloadPurgeService.reportLargePayloadPurgeResults,
         request,
-        metadataGenerator,
-        getSignal(),
+        metadata ? async () => metadata : undefined,
+        signal,
         new Date(Date.now() + 60000),
       );
     } catch (error) {
+      signal?.throwIfAborted();
       if (grpcStatus(error) === grpc.status.UNIMPLEMENTED) throw unsupportedBackend(error);
       throw error;
     }
@@ -99,12 +108,15 @@ export async function deletePayloadChunk(
   logger: Logger,
   signal?: AbortSignal,
 ): Promise<BlobPurgeOutcome[]> {
+  signal?.throwIfAborted();
   const outcomes: BlobPurgeOutcome[] = new Array(tokens.length);
   await runBounded(
     tokens.map((token, index) => async () => {
       outcomes[index] = { Disposition: await deletePayload(store, token, logger, signal) };
     }),
+    signal,
   );
+  signal?.throwIfAborted();
   return outcomes;
 }
 
@@ -114,18 +126,34 @@ async function deletePayload(
   logger: Logger,
   signal?: AbortSignal,
 ): Promise<LargePayloadPurgeDisposition> {
+  signal?.throwIfAborted();
   const classify = (disposition: LargePayloadPurgeDisposition, reason: string) => {
     logger.warn(`Large payload purge: ${reason}; disposition=${disposition}.`);
     return disposition;
   };
   if (token.startsWith("blob:v1:")) return classify(LargePayloadPurgeDisposition.Quarantined, "LegacyV1Token");
   if (!token.startsWith("blob:v2:")) return classify(LargePayloadPurgeDisposition.Retry, "UnsupportedTokenVersion");
+  let url: URL;
+  try {
+    url = new URL(token.slice("blob:v2:".length));
+  } catch {
+    return classify(LargePayloadPurgeDisposition.Quarantined, "MalformedToken");
+  }
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.username ||
+    url.password ||
+    !/^\/[^/]+\/.+/.test(url.pathname)
+  ) {
+    return classify(LargePayloadPurgeDisposition.Quarantined, "MalformedToken");
+  }
   const timeout = new AbortController();
   const timer = setTimeout(() => timeout.abort(), 60000);
   timer.unref();
   try {
     const deleteSignal = signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal;
     const outcome = await store.delete(token, deleteSignal);
+    signal?.throwIfAborted();
     switch (outcome) {
       case PayloadDeleteOutcome.Deleted:
       case PayloadDeleteOutcome.AlreadyAbsent:
@@ -137,7 +165,9 @@ async function deletePayload(
         return classify(LargePayloadPurgeDisposition.Retry, "UnexpectedDeleteOutcome");
     }
   } catch (error) {
-    if (error instanceof TypeError) return classify(LargePayloadPurgeDisposition.Quarantined, "MalformedToken");
+    signal?.throwIfAborted();
+    if (error instanceof InvalidPayloadTokenError)
+      return classify(LargePayloadPurgeDisposition.Quarantined, "MalformedToken");
     if (error instanceof PayloadStorageException)
       return classify(LargePayloadPurgeDisposition.Retry, "StorageAccountUnreachable");
     const status = error !== null && typeof error === "object" && "statusCode" in error ? error.statusCode : undefined;

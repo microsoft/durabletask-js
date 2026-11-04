@@ -4,6 +4,7 @@
 // Client and Worker
 export {
   PayloadStore,
+  InvalidPayloadTokenError,
   PayloadStorageOptions,
   PayloadStorageException,
   PayloadDeleteOutcome,

@@ -16,6 +16,11 @@ import { blobPurgeJobOrchestrator } from "../src/payloads/purge-orchestrator";
 import { deletePayloadChunk } from "../src/payloads/purge-worker";
 import { RuntimeOrchestrationContext } from "../src/worker/runtime-orchestration-context";
 import { RetryPolicy } from "../src/task/retry/retry-policy";
+import { getEventListeners } from "events";
+import { createServer } from "net";
+import { execFile } from "child_process";
+import { join } from "path";
+import { promisify } from "util";
 
 class Store extends PayloadStore {
   async upload(): Promise<string> {
@@ -27,7 +32,7 @@ class Store extends PayloadStore {
   isKnownPayloadToken(value: string): boolean {
     return value.startsWith("blob:");
   }
-  async delete(_token: string): Promise<PayloadDeleteOutcome> {
+  async delete(_token: string, _signal?: AbortSignal): Promise<PayloadDeleteOutcome> {
     return PayloadDeleteOutcome.Deleted;
   }
 }
@@ -91,6 +96,11 @@ describe("purge delete classification", () => {
   it.each([
     ["blob:v1:c:b", 3],
     ["blob:v3:future", 2],
+    ["blob:v2:not-a-url", 3],
+    ["blob:v2:", 3],
+    ["blob:v2:ftp://account.invalid/c/b", 3],
+    ["blob:v2:https://user:password@account.invalid/c/b", 3],
+    ["blob:v2:https://account.invalid/c/", 3],
   ])("does not delete %s", async (token, disposition) => {
     const store = new Store();
     store.delete = jest.fn();
@@ -98,7 +108,18 @@ describe("purge delete classification", () => {
     expect(store.delete).not.toHaveBeenCalled();
   });
   it.each([
-    [new TypeError("bad token"), 3],
+    "blob:v2:https://account.invalid/c/nested/blob",
+    "blob:v2:https://account.invalid/c/folder/",
+    "blob:v2:https://account.invalid/c/%2F",
+    "blob:v2:http://127.0.0.1:10000/account/container/blob",
+  ])("preserves valid encoded, nested and path-style v2 tokens (%#)", async (token) => {
+    const store = new Store();
+    store.delete = jest.fn(async () => PayloadDeleteOutcome.Deleted);
+    await expect(deletePayloadChunk(store, [token], logger)).resolves.toEqual([{ Disposition: 1 }]);
+    expect(store.delete).toHaveBeenCalledWith(token, expect.any(AbortSignal));
+  });
+  it.each([
+    [new TypeError("uncertain store failure"), 2],
     [Object.assign(new Error("bad"), { statusCode: 400 }), 3],
     [Object.assign(new Error("bad"), { statusCode: 401 }), 2],
     [Object.assign(new Error("bad"), { statusCode: 412 }), 2],
@@ -112,6 +133,57 @@ describe("purge delete classification", () => {
       { Disposition: disposition },
     ]);
   });
+
+  it("retries a native fetch connection failure on a valid v2 token without logging its URL or error", async () => {
+    const portHolder = createServer();
+    await new Promise<void>((resolve) => portHolder.listen(0, "127.0.0.1", resolve));
+    const address = portHolder.address();
+    if (!address || typeof address === "string") throw new Error("Expected an ephemeral loopback port");
+    await new Promise<void>((resolve, reject) => portHolder.close((error) => (error ? reject(error) : resolve())));
+    const token = `blob:v2:http://127.0.0.1:${address.port}/c/b`;
+    // Native fetch errors must share the runtime realm with the classifier, not Jest's VM realm.
+    const script = `
+      require("ts-node").register({project: process.argv[2], transpileOnly: true, swc: true});
+      const {deletePayloadChunk} = require(process.argv[3]);
+      const controller = new AbortController();
+      const warnings = [];
+      let observed, watchdogFired = false;
+      const store = {async delete(value, signal) {
+        signal.throwIfAborted();
+        try { await fetch(value.slice("blob:v2:".length), {method: "DELETE", signal}); }
+        catch(error) {
+          observed = {name: error.name, causeCode: error.cause?.code, sameRealmTypeError: error instanceof TypeError};
+          throw error;
+        }
+      }};
+      const logger = {warn: value => warnings.push(value), info() {}, error() {}, debug() {}};
+      const watchdog = setTimeout(() => {watchdogFired = true; controller.abort();}, 800);
+      deletePayloadChunk(store, [process.argv[1]], logger, controller.signal).then(outcomes => {
+        clearTimeout(watchdog);
+        console.log(JSON.stringify({outcomes, observed, warnings, watchdogFired, callerAborted: controller.signal.aborted}));
+      }, error => {clearTimeout(watchdog); console.error(error); process.exitCode = 1;});
+    `;
+    const { stdout, stderr } = await promisify(execFile)(
+      process.execPath,
+      [
+        "-e",
+        script,
+        token,
+        join(__dirname, "..", "tsconfig.json"),
+        join(__dirname, "..", "src", "payloads", "purge-worker.ts"),
+      ],
+      { cwd: join(__dirname, "../../.."), timeout: 4000 },
+    );
+    const result = JSON.parse(stdout);
+    expect(stderr).toBe("");
+    expect(result.watchdogFired).toBe(false);
+    expect(result.observed).toEqual({ name: "TypeError", causeCode: "ECONNREFUSED", sameRealmTypeError: true });
+    expect(result.outcomes).toEqual([{ Disposition: LargePayloadPurgeDisposition.Retry }]);
+    expect(result.callerAborted).toBe(false);
+    expect(JSON.stringify(result.warnings)).not.toContain("MalformedToken");
+    expect(JSON.stringify(result.warnings)).not.toContain("127.0.0.1");
+    expect(JSON.stringify(result.warnings)).not.toContain("fetch failed");
+  });
   it.each([PayloadDeleteOutcome.Deleted, PayloadDeleteOutcome.AlreadyAbsent, PayloadDeleteOutcome.NotStoreOwned])(
     "maps confirmed delete outcome %s to terminal success",
     async (outcome) => {
@@ -120,6 +192,153 @@ describe("purge delete classification", () => {
       expect(await deletePayloadChunk(store, ["blob:v2:https://a.invalid/c/b"], logger)).toEqual([{ Disposition: 1 }]);
     },
   );
+});
+
+describe("purge delete cancellation", () => {
+  const tokens = Array.from({ length: 50 }, (_, index) => `blob:v2:https://account.invalid/c/${index}`);
+
+  it.each([{ input: [] }, { input: tokens }])(
+    "rejects pre-aborted chunks before invoking the store (%#)",
+    async ({ input }) => {
+      const controller = new AbortController();
+      const reason = Object.freeze(new Error("Already canceled cleanup"));
+      const store = new Store();
+      store.delete = jest.fn(async (_token: string, signal?: AbortSignal) => {
+        signal?.throwIfAborted();
+        return PayloadDeleteOutcome.Deleted;
+      });
+      controller.abort(reason);
+      await expect(deletePayloadChunk(store, input, logger, controller.signal)).rejects.toBe(reason);
+      expect(store.delete).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([new Error("Stop cleanup"), new TypeError("Storage-shaped cancellation")])(
+    "stops queued deletes, drains the active eight and preserves cancellation (%#)",
+    async (reason) => {
+      Object.freeze(reason);
+      const controller = new AbortController();
+      const store = new Store();
+      let markEight!: () => void;
+      const eightStarted = new Promise<void>((resolve) => (markEight = resolve));
+      let release!: () => void;
+      const drain = new Promise<void>((resolve) => (release = resolve));
+      const signals: AbortSignal[] = [];
+      let calls = 0;
+      let active = 0;
+      let peak = 0;
+      let settled = false;
+      let observed: unknown;
+      store.delete = async (_token, signal) => {
+        calls++;
+        if (!signal) throw new Error("Expected a delete signal");
+        signal.throwIfAborted();
+        signals.push(signal);
+        peak = Math.max(peak, ++active);
+        let onAbort = () => {};
+        try {
+          return await new Promise<never>((_resolve, reject) => {
+            onAbort = () => reject(signal.reason);
+            signal.addEventListener("abort", onAbort, { once: true });
+            if (calls === 8) markEight();
+            if (signal.aborted) onAbort();
+          });
+        } finally {
+          signal.removeEventListener("abort", onAbort);
+          await drain;
+          active--;
+        }
+      };
+      const pending = deletePayloadChunk(store, tokens, logger, controller.signal).then(
+        () => {
+          settled = true;
+        },
+        (error: unknown) => {
+          settled = true;
+          observed = error;
+        },
+      );
+      let watchdogFired = false;
+      const watchdog = setTimeout(() => {
+        watchdogFired = true;
+        controller.abort(reason);
+        release();
+      }, 800);
+      try {
+        await Promise.race([
+          eightStarted,
+          pending.then(() => {
+            throw new Error("Chunk settled before eight cancel-aware deletes started");
+          }),
+        ]);
+        controller.abort(reason);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(settled).toBe(false);
+        expect(calls).toBe(8);
+        release();
+        await pending;
+        expect(watchdogFired).toBe(false);
+        expect(observed).toBe(reason);
+        expect(calls).toBe(8);
+        expect(peak).toBe(8);
+        expect(active).toBe(0);
+        expect(signals.every((signal) => getEventListeners(signal, "abort").length === 0)).toBe(true);
+        expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+      } finally {
+        clearTimeout(watchdog);
+        controller.abort(reason);
+        release();
+        await pending;
+      }
+    },
+  );
+
+  it("does not turn a cancellation racing with a successful delete into success", async () => {
+    const controller = new AbortController();
+    const reason = Object.freeze(new Error("Canceled as the delete completed"));
+    const store = new Store();
+    store.delete = async () => {
+      controller.abort(reason);
+      return PayloadDeleteOutcome.Deleted;
+    };
+    await expect(deletePayloadChunk(store, [tokens[0]], logger, controller.signal)).rejects.toBe(reason);
+  });
+
+  it("keeps the per-delete timeout retryable without canceling the caller", async () => {
+    jest.useFakeTimers();
+    const controller = new AbortController();
+    const store = new Store();
+    let deleteSignal: AbortSignal | undefined;
+    store.delete = async (_token, signal) => {
+      deleteSignal = signal;
+      if (!signal) throw new Error("Expected a delete signal");
+      signal.throwIfAborted();
+      let onAbort = () => {};
+      try {
+        return await new Promise<PayloadDeleteOutcome>((_resolve, reject) => {
+          onAbort = () => reject(signal.reason);
+          signal.addEventListener("abort", onAbort, { once: true });
+        });
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+      }
+    };
+    const pending = deletePayloadChunk(store, [tokens[0]], logger, controller.signal);
+    try {
+      await jest.advanceTimersByTimeAsync(59999);
+      expect(deleteSignal?.aborted).toBe(false);
+      await jest.advanceTimersByTimeAsync(1);
+      await expect(pending).resolves.toEqual([{ Disposition: LargePayloadPurgeDisposition.Retry }]);
+      expect(deleteSignal?.aborted).toBe(true);
+      expect(controller.signal.aborted).toBe(false);
+      expect(getEventListeners(deleteSignal!, "abort")).toHaveLength(0);
+      expect(jest.getTimerCount()).toBe(0);
+    } finally {
+      controller.abort();
+      await pending.catch(() => {});
+      jest.useRealTimers();
+    }
+  });
 });
 
 describe("replay-safe purge runner", () => {

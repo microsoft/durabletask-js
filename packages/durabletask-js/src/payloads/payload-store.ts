@@ -15,9 +15,20 @@ export abstract class PayloadStore {
   abstract download(token: string, signal?: AbortSignal): Promise<string>;
   abstract isKnownPayloadToken(value: string): boolean;
 
-  /** Optional cleanup support. Never delete a blob without verifying ownership and its ETag. */
+  /**
+   * Optional cleanup support. Never delete a blob without verifying ownership and its ETag.
+   * Use InvalidPayloadTokenError only for deterministic token-validation failures.
+   */
   async delete(_token: string, _signal?: AbortSignal): Promise<PayloadDeleteOutcome> {
     throw new Error("This payload store does not support deletion.");
+  }
+}
+
+/** A deterministic malformed storage token, distinct from uncertain I/O TypeErrors. */
+export class InvalidPayloadTokenError extends TypeError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "InvalidPayloadTokenError";
   }
 }
 
