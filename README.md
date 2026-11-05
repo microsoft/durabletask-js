@@ -23,14 +23,19 @@ const entityResponseBytes = await worker.processEntityBatchRequest(entityBatchRe
 
 `TaskHubGrpcClient` already exposes orchestration start/query/event/terminate/suspend/resume/purge APIs and entity signal/read/query/clean APIs through its existing `hostAddress` and `metadataGenerator` options. Host integrations that need task-hub routing metadata should provide it through `metadataGenerator`, keeping host-specific metadata policy outside the core client. Azure-managed scheduler connection strings remain in `@microsoft/durabletask-js-azuremanaged`.
 
-## External payload transport
+## Large payloads
 
-Core clients and workers accept opt-in `payloads: { store }` options, where `store` implements
-the exported `PayloadStore` contract. The same store must be configured on every participant.
-The default threshold is 256 KiB of serialized UTF-8 bytes (inclusive), with a 10 MiB maximum.
-Requests are externalized before sending; queries, history chunks and work items are hydrated
-before conversion or execution. Empty payloads remain inline, and disabling the option preserves
-the existing transport behavior.
+Clients and workers can opt into transparent external payload storage with the `payloads`
+option. The optional [`@microsoft/durabletask-js-azureblob`](./packages/durabletask-js-azureblob)
+package implements .NET-compatible Azure Blob tokens and UTF-8/gzip storage. The default
+externalization threshold is 256 KiB (inclusive); the maximum payload size is 10 MiB.
+Core users do not acquire Azure Storage dependencies; payload transport remains opt-in.
+
+Configure all participating clients and workers before storing externalized payloads.
+Azure-managed builders expose `.useExternalizedPayloads({ store })`. Cleanup is separately
+opt-in through `client.setLargePayloadAutoPurge(true)` and requires a supporting DTS backend.
+Single-instance purges now route ordinary/entity IDs correctly even without payload storage.
+See the package's [configuration, interoperability, and cleanup contract](./packages/durabletask-js-azureblob/README.md).
 
 Workers abandon acquired queue work items when payload downloads or unconverted output storage/size
 checks fail. Release is awaited with bounded gRPC retries and the original work item's cancellation
@@ -44,28 +49,8 @@ RPC failures enter operation-specific error translation or retry; storage and me
 propagate unchanged. Completion waits retry scheduler deadlines with fresh metadata, without
 re-uploading the request or retrying response hydration. Cancellation stops RPCs and retry backoff.
 
-Azure-managed builders expose `.useExternalizedPayloads({ store })` and require core `>=0.4.1`
-for the public payload types. A custom/in-memory store or the optional Azure Blob provider can
-implement storage independently of the transport. Complete the six-phase feature stack before release.
-
-### Payload cleanup client protocol
-
-`client.setLargePayloadAutoPurge(enabled, batchSize?, signal?)` manages the authenticated DTS
-task-hub cleanup setting. Enabling writes the setting first, starts/deduplicates and verifies
-the reserved Running orchestration, then signals its batch size. Disabling only writes the
-backend setting. These steps are not transactional; earlier successful steps are not rolled back.
-
-This client operation does not require blob credentials. It requires a backend implementing
-the DTS `LargePayloadPurge` service and a compatible worker. Payload-enabled JavaScript workers
-now register the reserved cleanup orchestrator and activities automatically, preserve their
-wildcard filters and bypass business version policy without changing customer filters.
-Deletion verifies ownership and ETags, batches 50 tokens per activity and limits concurrency;
-the runner backs off empty/retry-only batches and preserves configuration through continue-as-new.
-Do not publish the feature until all six phases are complete.
-
-Single-instance purges now identify the instance kind even on management-only clients without
-payload storage: ordinary IDs set `isOrchestration=true`, while `@name@key` entity IDs set it false.
-The existing timeout and completion-status behavior is unchanged.
+This feature is reviewed as a six-phase dependency stack. Merge all phases before preparing
+a release; publish the completed core `0.4.1` before the dependent packages.
 
 ## Long durable timers
 

@@ -48,6 +48,12 @@ jobs:
               npm pack
             displayName: "pack @microsoft/durabletask-js"
           
+          # Pack @microsoft/durabletask-js-azureblob
+          - script: |
+              cd packages/durabletask-js-azureblob
+              npm pack
+            displayName: "pack @microsoft/durabletask-js-azureblob"
+
           # Pack @microsoft/durabletask-js-azuremanaged
           - script: |
               cd packages/durabletask-js-azuremanaged
@@ -73,6 +79,12 @@ jobs:
                 SourceFolder: $(System.DefaultWorkingDirectory)/packages/durabletask-js-azuremanaged
                 Contents: "*.tgz"
                 TargetFolder: $(Build.ArtifactStagingDirectory)/buildoutputs/durabletask-js-azuremanaged
+          - task: CopyFiles@2
+            displayName: "Copy durabletask-js-azureblob to staging"
+            inputs:
+                SourceFolder: $(System.DefaultWorkingDirectory)/packages/durabletask-js-azureblob
+                Contents: "*.tgz"
+                TargetFolder: $(Build.ArtifactStagingDirectory)/buildoutputs/durabletask-js-azureblob
           - task: CopyFiles@2
             displayName: "Copy azure-functions-durable to staging"
             inputs:

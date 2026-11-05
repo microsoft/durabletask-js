@@ -1,0 +1,7 @@
+{
+  "name": "large-payloads",
+  "description": "Transparent orchestration/activity payload externalization and .NET-compatible Azure Blob storage",
+  "requiresEmulator": true,
+  "skipCi": true,
+  "skipCiReason": "Requires an independently configured Azure Blob/Azurite endpoint in addition to DTS."
+}
