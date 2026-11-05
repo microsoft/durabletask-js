@@ -294,8 +294,8 @@ export class BlobPayloadStore extends PayloadStore {
     if (separator < 1 || separator === relative.length - 1)
       throw new InvalidPayloadTokenError("Invalid external payload blob URL.");
     this._validateBlobUrl(url, location);
-    const containerName = decodeURIComponent(relative.slice(0, separator));
-    const name = decodeURIComponent(relative.slice(separator + 1));
+    const containerName = decodeTokenComponent(relative.slice(0, separator));
+    const name = decodeTokenComponent(relative.slice(separator + 1));
     if (name.split("/").some((segment) => segment === "." || segment === "..")) {
       throw new PayloadStorageException("The payload blob name must not contain dot segments.");
     }
@@ -318,7 +318,7 @@ export class BlobPayloadStore extends PayloadStore {
     const separator = relative?.indexOf("/") ?? -1;
     const container =
       relative !== undefined && separator > 0
-        ? encodeURIComponent(decodeURIComponent(relative.slice(0, separator)))
+        ? encodeURIComponent(decodeTokenComponent(relative.slice(0, separator)))
         : undefined;
     if (
       relative === undefined ||
@@ -358,6 +358,17 @@ export class BlobPayloadStore extends PayloadStore {
       }
       throw error;
     }
+  }
+}
+
+function decodeTokenComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch (error) {
+    if (error instanceof URIError) {
+      throw new InvalidPayloadTokenError("Invalid external payload blob URL encoding.", { cause: error });
+    }
+    throw error;
   }
 }
 
