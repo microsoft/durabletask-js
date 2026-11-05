@@ -3,7 +3,7 @@
 
 import { randomUUID, createHash } from "crypto";
 import { ContainerClient } from "@azure/storage-blob";
-import { PayloadDeleteOutcome } from "@microsoft/durabletask-js";
+import { PayloadDeleteOutcome, PayloadStorageException } from "@microsoft/durabletask-js";
 import { BlobPayloadStore } from "../src";
 import fixtures from "./dotnet-payload-fixtures.json";
 import { createLocalAzuriteClient } from "./local-azurite-client";
@@ -34,7 +34,17 @@ const service = createLocalAzuriteClient(connectionString);
     expect(properties.metadata).toMatchObject({ managed_by: "dts" });
     expect(properties.contentEncoding ?? "").toBe(compressionEnabled ? "gzip" : "");
     const rotated = new BlobPayloadStore({ connectionString, containerName: `rotated-${randomUUID()}` });
-    expect(await rotated.download(token)).toBe(value);
+    await expect(rotated.download(token)).rejects.toBeInstanceOf(PayloadStorageException);
+    await expect(rotated.delete(token)).rejects.toBeInstanceOf(PayloadStorageException);
+    expect(await store.download(token)).toBe(value);
+    const accountWide = new BlobPayloadStore({
+      connectionString,
+      containerName: `rotated-${randomUUID()}`,
+      allowAllContainersInConfiguredAccount: true,
+    });
+    expect(await accountWide.download(token)).toBe(value);
+    expect(await accountWide.download(`blob:v1:${containerName}:${blobName}`)).toBe(value);
+    expect(await accountWide.delete(token)).toBe(PayloadDeleteOutcome.Deleted);
   });
 
   it.each(fixtures.vectors)("hydrates .NET-produced compressed blob $id", async (fixture) => {

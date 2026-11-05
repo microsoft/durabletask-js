@@ -53,12 +53,14 @@ This feature targets the Durable Task Scheduler; it does not reconfigure a Durab
 
 ## Payload contract
 
-| Option                     | Default                | Behavior                                                                                  |
-| -------------------------- | ---------------------- | ----------------------------------------------------------------------------------------- |
-| `payloads.thresholdBytes`  | 262144 (256 KiB)       | Externalize at **greater than or equal** serialized UTF-8 bytes; maximum threshold 1 MiB. |
-| `payloads.maxPayloadBytes` | 10485760 (10 MiB)      | Reject larger externalized payloads before uploading.                                     |
-| `containerName`            | `durabletask-payloads` | Lazily create a private container, once per successful initialization.                    |
-| `compressionEnabled`       | `true`                 | Gzip payload bytes; record `Content-Encoding: gzip`.                                      |
+| Option                                  | Default                | Behavior                                                                                                           |
+| --------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `payloads.thresholdBytes`               | 262144 (256 KiB)       | Externalize at **greater than or equal** serialized UTF-8 bytes; maximum threshold 1 MiB.                          |
+| `payloads.maxPayloadBytes`              | 10485760 (10 MiB)      | Reject larger externalized payloads before uploading.                                                              |
+| `containerName`                         | `durabletask-payloads` | Lazily create a private container, once per successful initialization.                                             |
+| `allowAllContainersInConfiguredAccount` | `false`                | Read/delete only in the configured container; `true` allows every container at the configured account endpoint.    |
+| `additionalAccountUris`                 | `[]`                   | Allow read/delete in all containers at these additional exact account endpoints; requires identity authentication. |
+| `compressionEnabled`                    | `true`                 | Gzip payload bytes; record `Content-Encoding: gzip`.                                                               |
 
 Sizes refer to serialized values, including JSON quotes/escapes, not JavaScript string length
 or compressed size. Absent and empty payloads remain inline. Payload transport is opt-in.
@@ -78,11 +80,87 @@ messages still use bounded I/O with cancellation and message-order storage failu
 
 New blobs have 32-character GUID names and `managed_by=dts` metadata on compressed and
 uncompressed writes. Tokens are `blob:v2:{absoluteBlobUrl}`, without account keys or SAS.
-Readers also recognize `blob:v1:{container}:{blobName}` in the configured container.
-Same-service v2 reads preserve the configured credential/pipeline across containers,
-including path-style/Azurite endpoints. Another account or endpoint requires an explicit
-`TokenCredential`; account keys and configured SAS credentials are never forwarded there.
-Account-specific `secondaryHost` failover is not forwarded to a cross-endpoint identity client.
+Readers also recognize `blob:v1:{container}:{blobName}`. V1 tokens select a container in the
+configured primary account; they cannot identify an additional account.
+V2 tokens remain self-describing absolute URLs; a URL identifies a blob but does not grant access.
+
+### Payload access scopes
+
+The default `allowAllContainersInConfiguredAccount: false` permits reads and explicit deletion only at the
+configured storage account endpoint **and** `containerName`, even if the configured credential
+can access other locations. No hostname-only allowlist is used.
+
+Set `allowAllContainersInConfiguredAccount: true` to allow every container at the configured primary account
+endpoint. This relaxes only the container restriction. Set `additionalAccountUris` to allow every
+container at specific additional account endpoints. These options are independent: adding an
+account does not broaden access to other containers in the primary account.
+
+The following example **explicitly enables broader access**:
+
+```typescript
+const store = new BlobPayloadStore({
+  accountUri: "https://myaccount.blob.core.windows.net",
+  credential: new DefaultAzureCredential(),
+  allowAllContainersInConfiguredAccount: true,
+  additionalAccountUris: ["https://archiveaccount.blob.core.windows.net"],
+});
+```
+
+In all scopes, the scheme, hostname, effective port, and complete account path must match an
+authorized endpoint. The container must also match for container-scoped access. Default ports
+and hostname casing normalize normally; changing scheme or port does not retain permission.
+For path-style endpoints such as `https://127.0.0.1:10000/accounta`, `/accountb` is a different
+account, not another container. Endpoint paths are matched on segment boundaries. Account endpoint
+options must identify the account, not a container or blob.
+
+The store checks the incoming normalized URL and the final destination after decoding blob-name
+escaping and applying SDK path normalization, before HTTP requests or token acquisition. Encoded
+separators or dot segments cannot escape the authorized account or container. Blob-name escaping
+and both token versions remain supported.
+V2 blob names containing standalone `.` or `..` segments after decoding are rejected before
+access, even when normalization would remain in the same account and container, rather than
+selecting another object.
+Literal backslashes remain part of the blob name: v1 `folder\item.json` and v2
+`folder%5Citem.json` select the same blob, distinct from `folder/item.json`.
+Token query parameters do not select credentials: requests use only configured authentication.
+Uploads always use the configured primary
+`containerName` and write credential-free v2 tokens, regardless of read/delete scope.
+
+| Authentication configuration       | Primary container or account scope                                       | Additional accounts                                 |
+| ---------------------------------- | ------------------------------------------------------------------------ | --------------------------------------------------- |
+| Connection string with account key | Supported, using that same key/pipeline                                  | Not supported                                       |
+| Connection string with SAS         | Supported, using that same SAS/pipeline; SAS permissions may be narrower | Not supported                                       |
+| `accountUri` and `TokenCredential` | Supported, using the configured identity                                 | Supported, using that same identity; HTTPS required |
+
+A nonempty `additionalAccountUris` list without both `accountUri` and `credential` fails at
+construction, including a connection string with an otherwise unused `credential`. Additional
+endpoints must be absolute HTTPS account URLs without embedded credentials, query, or fragment.
+Equivalent additional endpoints are deduplicated. Container/blob URLs and arbitrary account-path
+prefixes are rejected: the Azure SDK must recognize the endpoint as an account service endpoint,
+including the account segment for its supported path-style endpoints. Wildcards are not supported.
+Use `allowAllContainersInConfiguredAccount` rather than listing the primary endpoint again. The existing constructor
+precedence is unchanged: both `accountUri` and `credential` select identity authentication;
+otherwise `connectionString` selects its key/SAS authentication. No operation silently switches
+between modes. Identity-authenticated requests require HTTPS, as enforced by the Azure SDK.
+
+Broader scopes permit using the configured Storage identity only at the explicitly configured
+destinations. Independent Azure Storage permissions are still required; an allowed destination
+can return 403. Account-specific `secondaryHost` retry routing is retained for the primary account
+but is not forwarded to additional accounts. Other configured HTTP, retry, and transport options
+are preserved. HTTP redirects are disabled so a response cannot select another endpoint.
+Scope and endpoint values are captured when the store is constructed.
+
+This intentionally replaces unrestricted cross-container/cross-account v2 routing. Changing the
+primary endpoint, container, or access scopes can leave existing references outside the new scope.
+Explicitly migrate those payloads and references, use a store configured for the original location,
+or explicitly authorize the original account/container with these options. A v2 token is never
+reinterpreted relative to a new location. V1 contains no account location, so moving accounts
+requires explicit migration or a store pointed at the original account.
+
+All SDK client/worker hydration paths use this store policy, including inputs, events, history,
+results, and entity state. This package implements neither a scheduler/service backend nor a
+dashboard/delegated-user read path; it does not change their identity behavior or fall back to
+another credential or location.
 
 The Azure Storage JavaScript SDK owns the only HTTP retry loop, including endpoint selection,
 error classification and retry delays. The provider supplies defaults of nine total attempts,
@@ -175,6 +253,10 @@ responses count as already absent. Malformed v2 tokens, legacy v1 tokens, and in
 requests are quarantined; authorization, uncertain errors, ETag conflicts, unsupported stores,
 and unknown token versions remain retryable. The backend owns retry scheduling and quarantined
 evidence. Logs contain bounded classifications, not payload tokens or raw storage errors.
+References outside the configured access scopes throw before storage access, rather than returning a terminal
+`PayloadDeleteOutcome`. Cleanup callers must retain these references for `RETRY`, not acknowledge
+them as deleted, absent, or unowned. Retry requires migration, a store configured for their
+original location, or explicit authorization of that location through the access-scope options.
 
 Only tracked v2 references are eligible for automatic cleanup; v1 blobs remain in storage.
 `Deleted` means storage accepted deletion or confirmed a terminal outcome, **not** immediate
