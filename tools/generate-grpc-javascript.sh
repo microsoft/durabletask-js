@@ -27,7 +27,11 @@ generateGrpc() {
         --js_out="import_style=commonjs,binary:$PATH_PROTO_OUT" \
         --ts_out="grpc_js:$PATH_PROTO_OUT" \
         --grpc_out="grpc_js:$PATH_PROTO_OUT" \
-        ${PROTO_FILE_PATH_ABSOLUTE}
+        ${PROTO_FILE_PATH_ABSOLUTE} || return $?
+
+    # The TS plugin emits trailing spaces on class declarations.
+    node -e 'const fs = require("fs"); const file = process.argv[1]; fs.writeFileSync(file, fs.readFileSync(file, "utf8").replace(/[ \t]+$/gm, ""));' \
+        "${PATH_PROTO_OUT}/${PROTO_FILE_NAME_NO_PROTO}_pb.d.ts" || return $?
 
     echo "- Generated '${PATH_PROTO_OUT}/${PROTO_FILE_NAME_NO_PROTO}_pb.js'"
     echo "- Generated '${PATH_PROTO_OUT}/${PROTO_FILE_NAME_NO_PROTO}_pb.d.ts'"
@@ -39,7 +43,7 @@ fail_trap() {
     result=$?
 
     if [ $result != 0 ]; then
-        echo "Failed to generate gRPC interface and proto buf: $ret_val"
+        echo "Failed to generate gRPC interface and proto buf: $result"
     fi
 
     exit $result
@@ -79,4 +83,5 @@ fi
 echo "=============================================="
 
 echo "Generating Javascript code in $PATH_PROTO_OUT"
-generateGrpc "$PATH_PROTO_SRC/orchestrator_service.proto"
+generateGrpc "$PATH_PROTO_SRC/orchestrator_service.proto" || exit $?
+generateGrpc "$PATH_PROTO_SRC/large_payload_purge.proto" || exit $?
