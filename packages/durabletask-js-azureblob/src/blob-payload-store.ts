@@ -25,17 +25,29 @@ export interface BlobPayloadStoreOptions {
   credential?: TokenCredential;
   /** Defaults to durabletask-payloads. */
   containerName?: string;
+  /** Allow reads/deletes in all primary-account containers. Defaults to false. Uploads stay in containerName. */
+  allowAllContainersInConfiguredAccount?: boolean;
+  /** Additional HTTPS account endpoints with account-wide read/delete access. Requires accountUri and credential. */
+  additionalAccountUris?: readonly (string | URL)[];
   /** Defaults to true. */
   compressionEnabled?: boolean;
   /** Azure SDK HTTP, proxy, and retry configuration. */
   clientOptions?: StoragePipelineOptions;
 }
 
+interface AccountLocation {
+  service: BlobServiceClient;
+  endpoint: URL;
+  accountWide: boolean;
+}
+
 /** .NET-compatible blob:v2 writes and blob:v1/v2 reads, with ownership-checked conditional cleanup. */
 export class BlobPayloadStore extends PayloadStore {
   private readonly _service: BlobServiceClient;
   private readonly _container: ContainerClient;
-  private readonly _clientOptions: StoragePipelineOptions;
+  private readonly _clientOptions: StoragePipelineOptions & { redirectOptions: { maxRetries: number } };
+  private readonly _primaryLocation: AccountLocation;
+  private readonly _locations: readonly AccountLocation[];
   private _generation?: object;
   private _initializing?: { promise: Promise<object>; signal?: AbortSignal };
 
@@ -43,9 +55,16 @@ export class BlobPayloadStore extends PayloadStore {
     super();
     const containerName = _options.containerName ?? "durabletask-payloads";
     if (!containerName) throw new TypeError("containerName must not be empty.");
+    if (
+      _options.allowAllContainersInConfiguredAccount !== undefined &&
+      typeof _options.allowAllContainersInConfiguredAccount !== "boolean"
+    ) {
+      throw new TypeError("allowAllContainersInConfiguredAccount must be a boolean.");
+    }
     const retryOptions = _options.clientOptions?.retryOptions;
     this._clientOptions = {
       ..._options.clientOptions,
+      redirectOptions: { maxRetries: 0 },
       retryOptions: {
         ...retryOptions,
         maxTries: retryOptions?.maxTries ?? 9,
@@ -66,6 +85,70 @@ export class BlobPayloadStore extends PayloadStore {
       throw new TypeError("Provide connectionString or both accountUri and credential.");
     }
     this._container = this._service.getContainerClient(containerName);
+    this._primaryLocation = {
+      service: this._service,
+      endpoint: new URL(this._service.url),
+      accountWide: _options.allowAllContainersInConfiguredAccount ?? false,
+    };
+    const primary = this._primaryLocation;
+    const additional = new Map<string, AccountLocation>();
+    for (const value of _options.additionalAccountUris ?? []) {
+      if (!_options.accountUri || !_options.credential) {
+        throw new TypeError("additionalAccountUris requires accountUri and a TokenCredential.");
+      }
+      let endpoint: URL;
+      try {
+        endpoint = new URL(String(value));
+      } catch (error) {
+        throw new TypeError("additionalAccountUris must contain valid absolute account endpoints.", { cause: error });
+      }
+      if (
+        endpoint.protocol !== "https:" ||
+        endpoint.hostname.includes("*") ||
+        endpoint.username ||
+        endpoint.password ||
+        endpoint.search ||
+        endpoint.hash
+      ) {
+        throw new TypeError(
+          "additionalAccountUris must contain HTTPS account endpoints without credentials, query, or fragment.",
+        );
+      }
+      endpoint.pathname = trimTrailingSlashes(endpoint.pathname) || "/";
+      if (
+        endpoint.origin === primary.endpoint.origin &&
+        trimTrailingSlashes(endpoint.pathname) === trimTrailingSlashes(primary.endpoint.pathname)
+      ) {
+        throw new TypeError("Use allowAllContainersInConfiguredAccount to configure access to the primary account.");
+      }
+      if (additional.has(endpoint.href)) continue;
+      const service = new BlobServiceClient(
+        endpoint.href,
+        newPipeline(_options.credential, {
+          ...this._clientOptions,
+          // A primary account's secondary endpoint does not belong to an additional account.
+          retryOptions: { ...this._clientOptions.retryOptions, secondaryHost: undefined },
+        }),
+      );
+      const probe = new BlobClient(service.getContainerClient("dts-scope-check").getBlobClient("probe").url);
+      if (
+        probe.containerName !== "dts-scope-check" ||
+        probe.name !== "probe" ||
+        probe.accountName !== service.accountName
+      ) {
+        throw new TypeError(
+          "additionalAccountUris must identify SDK-recognized account service endpoints, not containers or blobs.",
+        );
+      }
+      additional.set(endpoint.href, {
+        endpoint,
+        accountWide: true,
+        service,
+      });
+    }
+    this._locations = [primary, ...additional.values()].sort(
+      (a, b) => b.endpoint.pathname.length - a.endpoint.pathname.length,
+    );
   }
 
   isKnownPayloadToken(value: string): boolean {
@@ -171,16 +254,23 @@ export class BlobPayloadStore extends PayloadStore {
     if (token.startsWith("blob:v1:")) {
       const rest = token.slice("blob:v1:".length);
       const separator = rest.indexOf(":");
-      if (
-        separator < 1 ||
-        separator === rest.length - 1 ||
-        rest.slice(0, separator) !== this._container.containerName
-      ) {
+      if (separator < 1 || separator === rest.length - 1) {
+        throw new TypeError("Invalid external payload token.");
+      }
+      const containerName = rest.slice(0, separator);
+      const primary = this._primaryLocation;
+      if (!primary.accountWide && containerName !== this._container.containerName) {
         throw new TypeError("Invalid external payload token or token container does not match.");
       }
-      return this._container.getBlobClient(rest.slice(separator + 1));
+      const blob = this._service.getContainerClient(containerName).getBlobClient(rest.slice(separator + 1));
+      this._validateBlobUrl(new URL(blob.url), primary, containerName);
+      return blob;
     }
     if (!token.startsWith("blob:v2:")) throw new TypeError("Invalid external payload token.");
+    const value = token.slice("blob:v2:".length).split(/[?#]/, 1)[0];
+    if (/\/(?:\.|%2e){1,2}(?=\/|$)/i.test(value)) {
+      throw new PayloadStorageException("The payload blob URL must not contain dot-segment traversal.");
+    }
     let url: URL;
     try {
       url = new URL(token.slice("blob:v2:".length));
@@ -190,29 +280,49 @@ export class BlobPayloadStore extends PayloadStore {
     if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
       throw new TypeError("Invalid external payload blob URL.");
     }
-    const decoded = new BlobClient(url.href);
-    if (!decoded.containerName || !decoded.name) throw new TypeError("Invalid external payload blob URL.");
-    const container = this._service.getContainerClient(decoded.containerName);
-    const configuredUrl = new URL(container.url);
-    // Match the service/container boundary, not normalized blob-name escaping. The SDK
-    // preserves path-style account prefixes and the configured credential/pipeline.
-    if (
-      url.origin === configuredUrl.origin &&
-      url.pathname.startsWith(configuredUrl.pathname.replace(/\/+$/, "") + "/")
-    ) {
-      return container.getBlobClient(decoded.name);
+    url.search = "";
+    url.hash = "";
+    const location = this._locations.find((candidate) => this._relativeBlobPath(url, candidate) !== undefined);
+    if (!location) throw new PayloadStorageException("The payload blob URL is outside the configured access scope.");
+    const relative = this._relativeBlobPath(url, location)!;
+    const separator = relative.indexOf("/");
+    if (separator < 1 || separator === relative.length - 1) throw new TypeError("Invalid external payload blob URL.");
+    this._validateBlobUrl(url, location);
+    const containerName = decodeURIComponent(relative.slice(0, separator));
+    const name = decodeURIComponent(relative.slice(separator + 1));
+    if (name.split("/").some((segment) => segment === "." || segment === "..")) {
+      throw new PayloadStorageException("The payload blob name must not contain dot segments.");
     }
-    if (this._options.credential)
-      return new BlobClient(
-        url.href,
-        newPipeline(this._options.credential, {
-          ...this._clientOptions,
-          retryOptions: { ...this._clientOptions.retryOptions, secondaryHost: undefined },
-        }),
-      );
-    throw new PayloadStorageException(
-      "Cross-account or cross-endpoint payload access requires identity authentication.",
-    );
+    const blob = location.service.getContainerClient(containerName).getBlobClient(name);
+    // Decoding an escaped blob name can introduce path traversal during SDK normalization.
+    this._validateBlobUrl(new URL(blob.url), location, containerName);
+    return blob;
+  }
+
+  private _relativeBlobPath(url: URL, location: AccountLocation): string | undefined {
+    const prefix = trimTrailingSlashes(location.endpoint.pathname) + "/";
+    if (url.origin === location.endpoint.origin && url.pathname.startsWith(prefix)) {
+      return url.pathname.slice(prefix.length);
+    }
+    return undefined;
+  }
+
+  private _validateBlobUrl(url: URL, location: AccountLocation, selectedContainer?: string): void {
+    const relative = this._relativeBlobPath(url, location);
+    const separator = relative?.indexOf("/") ?? -1;
+    const container =
+      relative !== undefined && separator > 0
+        ? encodeURIComponent(decodeURIComponent(relative.slice(0, separator)))
+        : undefined;
+    if (
+      relative === undefined ||
+      separator < 1 ||
+      separator === relative.length - 1 ||
+      (selectedContainer !== undefined && container !== encodeURIComponent(selectedContainer)) ||
+      (!location.accountWide && container !== encodeURIComponent(this._container.containerName))
+    ) {
+      throw new PayloadStorageException("The payload blob URL is outside the configured access scope.");
+    }
   }
 
   private async _ensureContainer(signal?: AbortSignal): Promise<object> {
@@ -243,6 +353,12 @@ export class BlobPayloadStore extends PayloadStore {
       throw error;
     }
   }
+}
+
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end--;
+  return value.slice(0, end);
 }
 
 async function waitForInitialization(promise: Promise<object>, signal?: AbortSignal): Promise<object> {
