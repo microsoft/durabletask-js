@@ -136,6 +136,67 @@ describe("BlobPayloadStore", () => {
     },
   );
 
+  describe.each([
+    { endpoint: "https://account.invalid", connectionString },
+    {
+      endpoint: "http://127.0.0.1:10000/devstoreaccount1",
+      connectionString: `DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=${accountKey};BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1`,
+    },
+  ])("token URI decoding ($endpoint)", ({ endpoint, connectionString }) => {
+    const malformedPaths = [
+      "durabletask-payloads/%FF",
+      "durabletask-payloads/%",
+      "durabletask-payloads/%E2%82",
+      "%FF/blob",
+      "%/blob",
+      "%E2%82/blob",
+    ];
+    const make = () =>
+      new BlobPayloadStore({
+        connectionString,
+        clientOptions: { httpClient: http, retryOptions: { maxTries: 1 } },
+      });
+
+    it.each(malformedPaths)("reports malformed encoding as a typed token failure (%s)", async (path) => {
+      const failure: unknown = await make()
+        .delete(`blob:v2:${endpoint}/${path}`)
+        .catch((error: unknown) => error);
+      expect(http.requests).toHaveLength(0);
+      expect(failure).toBeInstanceOf(InvalidPayloadTokenError);
+      expect(failure).toHaveProperty("cause", expect.any(URIError));
+    });
+
+    it.each(malformedPaths)("quarantines malformed encoding without storage I/O (%s)", async (path) => {
+      const result = await deletePayloadChunk(make(), [`blob:v2:${endpoint}/${path}`], new NoOpLogger());
+      expect(http.requests).toHaveLength(0);
+      expect(result).toEqual([{ Disposition: 3 }]);
+    });
+
+    it.each([
+      ["/durabletask%2Dpayloads/folder%2Fnested%2F%25FF%2F100%25", "/durabletask-payloads/folder/nested/%25FF/100%25"],
+      ["/durabletask-payloads/folder/a%252Fb%20%25", "/durabletask-payloads/folder/a%252Fb%20%25"],
+    ])("preserves valid percent and nested names through conditional deletion (%s)", async (path, expected) => {
+      const store = make();
+      const token = `blob:v2:${endpoint}${path}`;
+      await expect(store.download(token)).resolves.toBe("payload");
+      await expect(deletePayloadChunk(store, [token], new NoOpLogger())).resolves.toEqual([{ Disposition: 1 }]);
+      expect(http.requests.map((request) => request.method)).toEqual(["GET", "HEAD", "DELETE"]);
+      for (const request of http.requests) {
+        const url = new URL(request.url);
+        expect(url.origin + url.pathname).toBe(`${endpoint}${expected}`);
+      }
+      expect(http.requests[2].headers.get("if-match")).toBe('"owned-etag"');
+    });
+
+    it("keeps a transport URIError retryable rather than quarantining it", async () => {
+      http.failures.push(new URIError("Synthetic transport failure"));
+      await expect(
+        deletePayloadChunk(make(), [`blob:v2:${endpoint}/durabletask-payloads/blob`], new NoOpLogger()),
+      ).resolves.toEqual([{ Disposition: 2 }]);
+      expect(http.requests.map((request) => request.method)).toEqual(["HEAD"]);
+    });
+  });
+
   describe("BlobPayloadStore native SDK retries and options", () => {
     let http: RecordingClient;
     const token = "blob:v2:https://account.invalid/durabletask-payloads/blob";
