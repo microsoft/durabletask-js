@@ -10,7 +10,12 @@ import {
   RestError,
   StoragePipelineOptions,
 } from "@azure/storage-blob";
-import { PayloadStore, PayloadStorageException, PayloadDeleteOutcome } from "@microsoft/durabletask-js";
+import {
+  InvalidPayloadTokenError,
+  PayloadStore,
+  PayloadStorageException,
+  PayloadDeleteOutcome,
+} from "@microsoft/durabletask-js";
 import { randomUUID } from "crypto";
 import { Writable } from "stream";
 import { pipeline } from "stream/promises";
@@ -255,7 +260,7 @@ export class BlobPayloadStore extends PayloadStore {
       const rest = token.slice("blob:v1:".length);
       const separator = rest.indexOf(":");
       if (separator < 1 || separator === rest.length - 1) {
-        throw new TypeError("Invalid external payload token.");
+        throw new InvalidPayloadTokenError("Invalid external payload token.");
       }
       const containerName = rest.slice(0, separator);
       const primary = this._primaryLocation;
@@ -266,7 +271,7 @@ export class BlobPayloadStore extends PayloadStore {
       this._validateBlobUrl(new URL(blob.url), primary, containerName);
       return blob;
     }
-    if (!token.startsWith("blob:v2:")) throw new TypeError("Invalid external payload token.");
+    if (!token.startsWith("blob:v2:")) throw new InvalidPayloadTokenError("Invalid external payload token.");
     const value = token.slice("blob:v2:".length).split(/[?#]/, 1)[0];
     if (/\/(?:\.|%2e){1,2}(?=\/|$)/i.test(value)) {
       throw new PayloadStorageException("The payload blob URL must not contain dot-segment traversal.");
@@ -275,10 +280,10 @@ export class BlobPayloadStore extends PayloadStore {
     try {
       url = new URL(token.slice("blob:v2:".length));
     } catch (error) {
-      throw new TypeError("Invalid external payload blob URL.", { cause: error });
+      throw new InvalidPayloadTokenError("Invalid external payload blob URL.", { cause: error });
     }
     if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
-      throw new TypeError("Invalid external payload blob URL.");
+      throw new InvalidPayloadTokenError("Invalid external payload blob URL.");
     }
     url.search = "";
     url.hash = "";
@@ -286,10 +291,11 @@ export class BlobPayloadStore extends PayloadStore {
     if (!location) throw new PayloadStorageException("The payload blob URL is outside the configured access scope.");
     const relative = this._relativeBlobPath(url, location)!;
     const separator = relative.indexOf("/");
-    if (separator < 1 || separator === relative.length - 1) throw new TypeError("Invalid external payload blob URL.");
+    if (separator < 1 || separator === relative.length - 1)
+      throw new InvalidPayloadTokenError("Invalid external payload blob URL.");
     this._validateBlobUrl(url, location);
-    const containerName = decodeURIComponent(relative.slice(0, separator));
-    const name = decodeURIComponent(relative.slice(separator + 1));
+    const containerName = decodeTokenComponent(relative.slice(0, separator));
+    const name = decodeTokenComponent(relative.slice(separator + 1));
     if (name.split("/").some((segment) => segment === "." || segment === "..")) {
       throw new PayloadStorageException("The payload blob name must not contain dot segments.");
     }
@@ -312,7 +318,7 @@ export class BlobPayloadStore extends PayloadStore {
     const separator = relative?.indexOf("/") ?? -1;
     const container =
       relative !== undefined && separator > 0
-        ? encodeURIComponent(decodeURIComponent(relative.slice(0, separator)))
+        ? encodeURIComponent(decodeTokenComponent(relative.slice(0, separator)))
         : undefined;
     if (
       relative === undefined ||
@@ -352,6 +358,17 @@ export class BlobPayloadStore extends PayloadStore {
       }
       throw error;
     }
+  }
+}
+
+function decodeTokenComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch (error) {
+    if (error instanceof URIError) {
+      throw new InvalidPayloadTokenError("Invalid external payload blob URL encoding.", { cause: error });
+    }
+    throw error;
   }
 }
 

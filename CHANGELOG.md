@@ -2,6 +2,9 @@
 
 ### New
 
+- Add reserved cleanup worker tasks with bounded deletion chunks, retry/quarantine handling,
+  configuration-preserving continue-as-new, authenticated current-channel RPCs and filter/version isolation.
+  This completes the cleanup runtime; aggregate release/consumer validation follows in phase 6.
 - Add the DTS payload-purge protocol and `setLargePayloadAutoPurge()` client lifecycle,
   including setting-first enable/disable and reserved-instance identity verification.
   A compatible .NET worker or the later cleanup-worker phase is required; do not publish partial phases.
@@ -50,6 +53,15 @@
 
 ### Fixes
 
+- Scope reserved payload-cleanup version exemptions and filters to their task kind, preserving
+  customer tasks with reserved names in another category and their configured versions.
+- Validate malformed v2 cleanup tokens before store I/O; use `InvalidPayloadTokenError` for
+  provider-specific token failures, including path-style missing blob names. Retry uncertain
+  store failures such as native fetch `TypeError` network errors, not every `TypeError` as malformed.
+- Stop queued cleanup deletes on caller/worker cancellation, drain started deletes and preserve
+  the original cancellation reason. The independent 60-second per-delete timeout remains retryable.
+- Preserve cleanup activity metadata failures unchanged; only scheduler RPC failures trigger
+  precondition idling or unsupported-backend handling.
 - Cancel metadata acquisition waits before dispatch and preserve the original cancellation reason,
   including auto-purge setting and runner lifecycle calls. Cancellation detaches the SDK wait;
   third-party metadata generation may finish later, but cannot dispatch a canceled RPC.

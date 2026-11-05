@@ -2,6 +2,9 @@
 
 ### Fixes
 
+- Classify malformed percent/UTF-8 encodings in v2 token paths as `InvalidPayloadTokenError`
+  so cleanup quarantines them without storage I/O. Keep access-scope denials and unrelated
+  storage failures retryable.
 - Default payload reads and deletion to the configured storage endpoint and container, including
   normalized blob paths and path-style account names. Out-of-location deletion references
   remain available for retry. Changing storage locations requires explicit migration or a

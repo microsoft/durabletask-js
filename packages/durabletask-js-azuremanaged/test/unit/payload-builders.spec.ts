@@ -27,7 +27,7 @@ describe("Azure-managed payload configuration", () => {
     expect(client["_payloads"]).toBeDefined();
     await client.stop();
   });
-  it("preserves worker payload settings and business registrations", () => {
+  it("preserves worker payload settings, business registrations, and internal wildcard filters", () => {
     const worker = new DurableTaskAzureManagedWorkerBuilder()
       .useExternalizedPayloads({ store: new Store() })
       .addNamedOrchestrator("business", () => undefined)
@@ -41,6 +41,6 @@ describe("Azure-managed payload configuration", () => {
         .getWorkitemfilters()!
         .getOrchestrationsList()
         .map((f) => f.getName()),
-    ).toEqual(["business"]);
+    ).toEqual(["business", "BlobPurgeJobOrchestrator"]);
   });
 });
