@@ -395,7 +395,20 @@ are `@deprecated`):
 | `client.suspend(id)`                                    | `client.suspendOrchestration(id)`                                       |
 | `client.resume(id)`                                     | `client.resumeOrchestration(id)`                                        |
 | `client.rewind(id, reason)`                             | `client.rewindInstance(id, reason)`                                     |
-| `client.restart(id, restartWithNewInstanceId?)`         | `client.restartOrchestration(id, restartWithNewInstanceId?)`            |
+| `client.restart(id, booleanOrOptions?)`                 | `client.restartOrchestration(id, booleanOrOptions?)`                    |
+
+To restart as a clone with a chosen ID:
+
+```typescript
+await client.restart("order-123", { newInstanceId: "order-123-retry", version: "2.0" });
+```
+
+The options form requires `newInstanceId`. Omit `version` to retain backend restart defaults;
+use `""` for unversioned execution. Existing boolean calls are unchanged. The clone starts with
+the original name/input and fresh history. With backend lineage support,
+`context.df.sourceInstanceId` is the immediate source ID on execution and replay; sub-orchestrations
+do not inherit it. Target/version options require an updated backend; Functions lineage additionally
+requires extension lineage support and provider tag persistence.
 
 ## Status
 

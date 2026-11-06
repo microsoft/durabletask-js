@@ -14,6 +14,7 @@ export {
   DurableFunctionsClientInput,
   DurableOrchestrationClient,
   StartNewOptions,
+  RestartOptions,
   TaskHubOptions,
   getGrpcHostAddress,
 } from "./client";

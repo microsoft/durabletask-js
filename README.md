@@ -469,6 +469,27 @@ Azure Functions `app.orchestration` / `app.activity` remain host registrations w
 names, not a multi-version host-routing API. The embedded `DurableFunctionsWorker` inherits core
 version dispatch and child defaults for integrations that supply versioned protobuf requests.
 
+### Restart as clone
+
+Restart an existing orchestration from the beginning with its original name and input, not its history:
+
+```typescript
+await client.restartOrchestration("order-123", {
+  newInstanceId: "order-123-retry",
+  version: "2.0",
+});
+```
+
+The options form requires a non-empty `newInstanceId`. Omitting `version` preserves the backend's
+restart defaults (not the client's default version); `version: ""` selects an unversioned orchestration.
+Existing `restartOrchestration(id, boolean)` calls are unchanged.
+
+With backend lineage support, the clone sees `ctx.instanceId === "order-123-retry"` and
+`ctx.sourceInstanceId === "order-123"`, including during replay. Cloning the clone again references
+`"order-123-retry"` as its immediate source. Sub-orchestrations do not inherit this source reference.
+Explicit target IDs and version overrides require a backend supporting the updated restart protocol;
+older backends may ignore these fields.
+
 ### Continue as new
 
 Long-running orchestrations can restart with fresh history and optionally move to a new

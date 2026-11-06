@@ -21816,7 +21816,9 @@ proto.RestartInstanceRequest.prototype.toObject = function(opt_includeInstance) 
 proto.RestartInstanceRequest.toObject = function(includeInstance, msg) {
   var f, obj = {
     instanceid: jspb.Message.getFieldWithDefault(msg, 1, ""),
-    restartwithnewinstanceid: jspb.Message.getBooleanFieldWithDefault(msg, 2, false)
+    restartwithnewinstanceid: jspb.Message.getBooleanFieldWithDefault(msg, 2, false),
+    newinstanceid: (f = msg.getNewinstanceid()) && google_protobuf_wrappers_pb.StringValue.toObject(includeInstance, f),
+    version: (f = msg.getVersion()) && google_protobuf_wrappers_pb.StringValue.toObject(includeInstance, f)
   };
 
   if (includeInstance) {
@@ -21861,6 +21863,16 @@ proto.RestartInstanceRequest.deserializeBinaryFromReader = function(msg, reader)
       var value = /** @type {boolean} */ (reader.readBool());
       msg.setRestartwithnewinstanceid(value);
       break;
+    case 3:
+      var value = new google_protobuf_wrappers_pb.StringValue;
+      reader.readMessage(value,google_protobuf_wrappers_pb.StringValue.deserializeBinaryFromReader);
+      msg.setNewinstanceid(value);
+      break;
+    case 4:
+      var value = new google_protobuf_wrappers_pb.StringValue;
+      reader.readMessage(value,google_protobuf_wrappers_pb.StringValue.deserializeBinaryFromReader);
+      msg.setVersion(value);
+      break;
     default:
       reader.skipField();
       break;
@@ -21904,6 +21916,22 @@ proto.RestartInstanceRequest.serializeBinaryToWriter = function(message, writer)
       f
     );
   }
+  f = message.getNewinstanceid();
+  if (f != null) {
+    writer.writeMessage(
+      3,
+      f,
+      google_protobuf_wrappers_pb.StringValue.serializeBinaryToWriter
+    );
+  }
+  f = message.getVersion();
+  if (f != null) {
+    writer.writeMessage(
+      4,
+      f,
+      google_protobuf_wrappers_pb.StringValue.serializeBinaryToWriter
+    );
+  }
 };
 
 
@@ -21940,6 +21968,80 @@ proto.RestartInstanceRequest.prototype.getRestartwithnewinstanceid = function() 
  */
 proto.RestartInstanceRequest.prototype.setRestartwithnewinstanceid = function(value) {
   return jspb.Message.setProto3BooleanField(this, 2, value);
+};
+
+
+/**
+ * optional google.protobuf.StringValue newInstanceId = 3;
+ * @return {?proto.google.protobuf.StringValue}
+ */
+proto.RestartInstanceRequest.prototype.getNewinstanceid = function() {
+  return /** @type{?proto.google.protobuf.StringValue} */ (
+    jspb.Message.getWrapperField(this, google_protobuf_wrappers_pb.StringValue, 3));
+};
+
+
+/**
+ * @param {?proto.google.protobuf.StringValue|undefined} value
+ * @return {!proto.RestartInstanceRequest} returns this
+*/
+proto.RestartInstanceRequest.prototype.setNewinstanceid = function(value) {
+  return jspb.Message.setWrapperField(this, 3, value);
+};
+
+
+/**
+ * Clears the message field making it undefined.
+ * @return {!proto.RestartInstanceRequest} returns this
+ */
+proto.RestartInstanceRequest.prototype.clearNewinstanceid = function() {
+  return this.setNewinstanceid(undefined);
+};
+
+
+/**
+ * Returns whether this field is set.
+ * @return {boolean}
+ */
+proto.RestartInstanceRequest.prototype.hasNewinstanceid = function() {
+  return jspb.Message.getField(this, 3) != null;
+};
+
+
+/**
+ * optional google.protobuf.StringValue version = 4;
+ * @return {?proto.google.protobuf.StringValue}
+ */
+proto.RestartInstanceRequest.prototype.getVersion = function() {
+  return /** @type{?proto.google.protobuf.StringValue} */ (
+    jspb.Message.getWrapperField(this, google_protobuf_wrappers_pb.StringValue, 4));
+};
+
+
+/**
+ * @param {?proto.google.protobuf.StringValue|undefined} value
+ * @return {!proto.RestartInstanceRequest} returns this
+*/
+proto.RestartInstanceRequest.prototype.setVersion = function(value) {
+  return jspb.Message.setWrapperField(this, 4, value);
+};
+
+
+/**
+ * Clears the message field making it undefined.
+ * @return {!proto.RestartInstanceRequest} returns this
+ */
+proto.RestartInstanceRequest.prototype.clearVersion = function() {
+  return this.setVersion(undefined);
+};
+
+
+/**
+ * Returns whether this field is set.
+ * @return {boolean}
+ */
+proto.RestartInstanceRequest.prototype.hasVersion = function() {
+  return jspb.Message.getField(this, 4) != null;
 };
 
 
@@ -27815,7 +27917,8 @@ proto.StartNewOrchestrationAction.toObject = function(includeInstance, msg) {
     input: (f = msg.getInput()) && google_protobuf_wrappers_pb.StringValue.toObject(includeInstance, f),
     scheduledtime: (f = msg.getScheduledtime()) && google_protobuf_timestamp_pb.Timestamp.toObject(includeInstance, f),
     requesttime: (f = msg.getRequesttime()) && google_protobuf_timestamp_pb.Timestamp.toObject(includeInstance, f),
-    parenttracecontext: (f = msg.getParenttracecontext()) && proto.TraceContext.toObject(includeInstance, f)
+    parenttracecontext: (f = msg.getParenttracecontext()) && proto.TraceContext.toObject(includeInstance, f),
+    tagsMap: (f = msg.getTagsMap()) ? f.toObject(includeInstance, undefined) : []
   };
 
   if (includeInstance) {
@@ -27884,6 +27987,12 @@ proto.StartNewOrchestrationAction.deserializeBinaryFromReader = function(msg, re
       var value = new proto.TraceContext;
       reader.readMessage(value,proto.TraceContext.deserializeBinaryFromReader);
       msg.setParenttracecontext(value);
+      break;
+    case 8:
+      var value = msg.getTagsMap();
+      reader.readMessage(value, function(message, reader) {
+        jspb.Map.deserializeBinary(message, reader, jspb.BinaryReader.prototype.readString, jspb.BinaryReader.prototype.readString, null, "", "");
+         });
       break;
     default:
       reader.skipField();
@@ -27967,6 +28076,10 @@ proto.StartNewOrchestrationAction.serializeBinaryToWriter = function(message, wr
       f,
       proto.TraceContext.serializeBinaryToWriter
     );
+  }
+  f = message.getTagsMap(true);
+  if (f && f.getLength() > 0) {
+    f.serializeBinary(8, writer, jspb.BinaryWriter.prototype.writeString, jspb.BinaryWriter.prototype.writeString);
   }
 };
 
@@ -28190,6 +28303,28 @@ proto.StartNewOrchestrationAction.prototype.clearParenttracecontext = function()
 proto.StartNewOrchestrationAction.prototype.hasParenttracecontext = function() {
   return jspb.Message.getField(this, 7) != null;
 };
+
+
+/**
+ * map<string, string> tags = 8;
+ * @param {boolean=} opt_noLazyCreate Do not create the map if
+ * empty, instead returning `undefined`
+ * @return {!jspb.Map<string,string>}
+ */
+proto.StartNewOrchestrationAction.prototype.getTagsMap = function(opt_noLazyCreate) {
+  return /** @type {!jspb.Map<string,string>} */ (
+      jspb.Message.getMapField(this, 8, opt_noLazyCreate,
+      null));
+};
+
+
+/**
+ * Clears values from the map. The map will be non-null.
+ * @return {!proto.StartNewOrchestrationAction} returns this
+ */
+proto.StartNewOrchestrationAction.prototype.clearTagsMap = function() {
+  this.getTagsMap().clear();
+  return this;};
 
 
 

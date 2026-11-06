@@ -92,6 +92,16 @@ export interface StartOrchestrationOptions {
 }
 
 /**
+ * Options for restarting an orchestration with a chosen instance ID.
+ */
+export interface RestartOrchestrationOptions {
+  /** The required target instance ID. */
+  newInstanceId: string;
+  /** Omit to preserve backend restart defaults; an empty string selects an unversioned orchestration. */
+  version?: string;
+}
+
+/**
  * Type guard to check if the retry option is a RetryPolicy.
  *
  * @param retry - The retry option to check

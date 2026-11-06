@@ -2,6 +2,9 @@
 
 ### New
 
+- Add `restartOrchestration(id, { newInstanceId, version? })` for restart-as-clone with a required
+  target ID. Omitted versions preserve backend restart defaults; `""` selects unversioned execution.
+  Boolean restart calls remain unchanged. Target/version support requires the updated backend protocol.
 - Add reserved cleanup worker tasks with bounded deletion chunks, retry/quarantine handling,
   configuration-preserving continue-as-new, authenticated current-channel RPCs and filter/version isolation.
   This completes the cleanup runtime; aggregate release/consumer validation follows in phase 6.

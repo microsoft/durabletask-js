@@ -106,6 +106,13 @@ describe("DurableFunctionsClient", () => {
       const restart = jest.spyOn(client, "restartOrchestration").mockResolvedValue("id-2");
       await expect(client.restart("id-1", true)).resolves.toBe("id-2");
       expect(restart).toHaveBeenCalledWith("id-1", true);
+      await expect(client.restart("id-1")).resolves.toBe("id-2");
+      expect(restart).toHaveBeenLastCalledWith("id-1", false);
+      for (const version of [undefined, "", "2.0"]) {
+        const options = { newInstanceId: "id-2", version };
+        await expect(client.restart("id-1", options)).resolves.toBe("id-2");
+        expect(restart).toHaveBeenLastCalledWith("id-1", options);
+      }
 
       const purge = jest.spyOn(client, "purgeOrchestration").mockResolvedValue(undefined);
       const purgeResult = await client.purgeInstanceHistoryBy({
