@@ -11,6 +11,7 @@ import { PurgeInstanceCriteria } from "../src/orchestration/orchestration-purge-
 import { PurgeResult } from "../src/orchestration/orchestration-purge-result";
 import * as pb from "../src/proto/orchestrator_service_pb";
 import { NoOpLogger } from "../src/types/logger.type";
+import { PayloadStore } from "../src/payloads/payload-store";
 
 type Callback = (error: grpc.ServiceError | null, response?: pb.PurgeInstancesResponse) => void;
 
@@ -72,7 +73,7 @@ describe("TaskHubGrpcClient purge", () => {
         const request = rpc.mock.calls[0][0];
         expect(request.getRecursive()).toBe(true);
         expect(request.hasInstancebatch()).toBe(false);
-        expect(request.getIsorchestration()).toBe(false);
+        expect(request.getIsorchestration()).toBe(path === "single instance");
         if (path === "single instance") {
           expect(request.getInstanceid()).toBe("instance-1");
           expect(request.hasPurgeinstancefilter()).toBe(false);
@@ -136,5 +137,31 @@ describe("TaskHubGrpcClient purge", () => {
     expect(rpc.mock.calls[0][0].getPurgeinstancefilter()?.hasTimeout()).toBe(false);
     expect(cancel).not.toHaveBeenCalled();
     callback(null, new pb.PurgeInstancesResponse());
+  });
+
+  describe.each([false, true])("payloads enabled=%s", (enabled) => {
+    it.each(["instance-1", "@counter@key"])("routes purge %s to its backend instance kind", async (id) => {
+      client["_stub"].close();
+      const store = new (class extends PayloadStore {
+        async upload(): Promise<string> {
+          return "";
+        }
+        async download(): Promise<string> {
+          return "";
+        }
+        isKnownPayloadToken(): boolean {
+          return false;
+        }
+      })();
+      client = new TaskHubGrpcClient({ payloads: enabled ? { store } : undefined, logger: new NoOpLogger() });
+      Object.defineProperty(client["_stub"], "purgeInstances", { value: rpc });
+      const result = client.purgeOrchestration(id);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(rpc).toHaveBeenCalledTimes(1);
+      const request = rpc.mock.calls[0][0];
+      callback(null, new pb.PurgeInstancesResponse());
+      await result;
+      expect(request.getIsorchestration()).toBe(!id.startsWith("@"));
+    });
   });
 });

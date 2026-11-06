@@ -5,6 +5,12 @@
 - Add `restartOrchestration(id, { newInstanceId, version? })` for restart-as-clone with a required
   target ID. Omitted versions preserve backend restart defaults; `""` selects unversioned execution.
   Boolean restart calls remain unchanged. Target/version support requires the updated backend protocol.
+- Add reserved cleanup worker tasks with bounded deletion chunks, retry/quarantine handling,
+  configuration-preserving continue-as-new, authenticated current-channel RPCs and filter/version isolation.
+  This completes the cleanup runtime; aggregate release/consumer validation follows in phase 6.
+- Add the DTS payload-purge protocol and `setLargePayloadAutoPurge()` client lifecycle,
+  including setting-first enable/disable and reserved-instance identity verification.
+  A compatible .NET worker or the later cleanup-worker phase is required; do not publish partial phases.
 - Add payload storage contracts and bounded protobuf payload processing, with inclusive UTF-8
   thresholds, explicit storage/size failures, and non-retriable worker upload-failure conversion.
   This is phase 1 of the external-payload feature; transport, providers, and cleanup follow separately.
@@ -50,6 +56,22 @@
 
 ### Fixes
 
+- Scope reserved payload-cleanup version exemptions and filters to their task kind, preserving
+  customer tasks with reserved names in another category and their configured versions.
+- Validate malformed v2 cleanup tokens before store I/O; use `InvalidPayloadTokenError` for
+  provider-specific token failures, including path-style missing blob names. Retry uncertain
+  store failures such as native fetch `TypeError` network errors, not every `TypeError` as malformed.
+- Stop queued cleanup deletes on caller/worker cancellation, drain started deletes and preserve
+  the original cancellation reason. The independent 60-second per-delete timeout remains retryable.
+- Preserve cleanup activity metadata failures unchanged; only scheduler RPC failures trigger
+  precondition idling or unsupported-backend handling.
+- Cancel metadata acquisition waits before dispatch and preserve the original cancellation reason,
+  including auto-purge setting and runner lifecycle calls. Cancellation detaches the SDK wait;
+  third-party metadata generation may finish later, but cannot dispatch a canceled RPC.
+- Deduplicate auto-purge runner startup only after an actual scheduler RPC duplicate response.
+  Preserve upload/metadata error identity, including matching semantic error types, and cancellation.
+- Determine single-instance purge routing from the instance ID regardless of payload configuration,
+  matching .NET management clients: ordinary IDs are orchestrations and `@name@key` IDs are entities.
 - Share the unary client payload/metadata/RPC/hydration pipeline across scheduling, waits, rewind,
   and restart. Only actual RPC failures enter operation-specific error translation or retry;
   storage and metadata failures keep their original identity, and cancellation prevents retries.
