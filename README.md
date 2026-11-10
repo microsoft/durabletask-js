@@ -49,9 +49,6 @@ RPC failures enter operation-specific error translation or retry; storage and me
 propagate unchanged. Completion waits retry scheduler deadlines with fresh metadata, without
 re-uploading the request or retrying response hydration. Cancellation stops RPCs and retry backoff.
 
-This feature is reviewed as a six-phase dependency stack. Merge all phases before preparing
-a release; publish the completed core `0.4.1` before the dependent packages.
-
 ## Long durable timers
 
 `createTimer(Date | seconds)` has no SDK-imposed total-duration cap. Like the Python SDK,

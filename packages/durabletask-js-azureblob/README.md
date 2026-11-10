@@ -221,7 +221,18 @@ await client.setLargePayloadAutoPurge(true, 250); // update through SetBatchSize
 await client.setLargePayloadAutoPurge(false); // pause backend fetches; do not terminate the runner
 ```
 
-This requires a DTS backend implementing `microsoft.durabletask.largepayloads.LargePayloadPurge`.
+This requires a DTS backend implementing
+[`microsoft.durabletask.largepayloads.LargePayloadPurge`](https://github.com/microsoft/durabletask-dotnet/blob/91739687ff647699079cdadd627daa00562982b7/src/Grpc/durable-task-scheduler/large_payload_purge.proto).
+Hosted DTS has no customer-selectable backend version; confirm that the target scheduler
+supports this service before enabling cleanup. The core SDK version requirement above does
+not guarantee backend support.
+
+No minimum DTS emulator image version for this service is currently documented. The
+[emulator setup guide](https://learn.microsoft.com/azure/durable-task/scheduler/develop-with-durable-task-scheduler#durable-task-scheduler-emulator)
+uses `mcr.microsoft.com/dts/dts-emulator:latest`, a moving tag, not a compatibility guarantee.
+If the backend returns gRPC `UNIMPLEMENTED`, automatic cleanup is unavailable. For a local
+emulator, re-pull the image; enable cleanup again only after the backend implements the service.
+
 Merely configuring storage does **not** enable deletion. The last explicit setting wins;
 coordinate calls from multiple clients.
 
