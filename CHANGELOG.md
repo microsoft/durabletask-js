@@ -2,6 +2,9 @@
 
 ### New
 
+- Add `restartOrchestration(id, { newInstanceId, version? })` for restart-as-clone with a required
+  target ID. Omitted versions preserve backend restart defaults; `""` selects unversioned execution.
+  Boolean restart calls remain unchanged. Target/version support requires the updated backend protocol.
 - Add opt-in `payloads` storage to gRPC clients/workers, with transparent UTF-8-size-based
   externalization and awaited query/history/work-item hydration across orchestration, activity,
   and entity V1/V2 payloads. Add the optional `@microsoft/durabletask-js-azureblob` storage package.

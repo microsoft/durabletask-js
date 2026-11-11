@@ -9,6 +9,7 @@ import {
   OrchestrationState,
   OrchestrationStatus,
   PurgeInstanceCriteria,
+  RestartOrchestrationOptions,
   TaskHubGrpcClient,
 } from "@microsoft/durabletask-js";
 import { HttpManagementPayload, createHttpManagementPayload as createPayload } from "./http-management-payload";
@@ -79,6 +80,9 @@ export interface StartNewOptions {
    */
   dedupeStatuses?: readonly OrchestrationStatus[];
 }
+
+/** Options for {@link DurableFunctionsClient.restart} with a chosen target ID. */
+export type RestartOptions = RestartOrchestrationOptions;
 
 /**
  * @hidden
@@ -559,7 +563,7 @@ export class DurableFunctionsClient extends TaskHubGrpcClient {
    * @param restartWithNewInstanceId - When `true`, the restarted instance is assigned a new ID.
    * @returns The instance ID of the restarted orchestration.
    */
-  async restart(instanceId: string, restartWithNewInstanceId = false): Promise<string> {
+  async restart(instanceId: string, restartWithNewInstanceId: boolean | RestartOptions = false): Promise<string> {
     return this.restartOrchestration(instanceId, restartWithNewInstanceId);
   }
 

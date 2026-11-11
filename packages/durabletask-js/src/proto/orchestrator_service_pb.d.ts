@@ -2647,6 +2647,16 @@ export class RestartInstanceRequest extends jspb.Message {
     getRestartwithnewinstanceid(): boolean;
     setRestartwithnewinstanceid(value: boolean): RestartInstanceRequest;
 
+    hasNewinstanceid(): boolean;
+    clearNewinstanceid(): void;
+    getNewinstanceid(): google_protobuf_wrappers_pb.StringValue | undefined;
+    setNewinstanceid(value?: google_protobuf_wrappers_pb.StringValue): RestartInstanceRequest;
+
+    hasVersion(): boolean;
+    clearVersion(): void;
+    getVersion(): google_protobuf_wrappers_pb.StringValue | undefined;
+    setVersion(value?: google_protobuf_wrappers_pb.StringValue): RestartInstanceRequest;
+
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): RestartInstanceRequest.AsObject;
     static toObject(includeInstance: boolean, msg: RestartInstanceRequest): RestartInstanceRequest.AsObject;
@@ -2661,6 +2671,8 @@ export namespace RestartInstanceRequest {
     export type AsObject = {
         instanceid: string,
         restartwithnewinstanceid: boolean,
+        newinstanceid?: google_protobuf_wrappers_pb.StringValue.AsObject,
+        version?: google_protobuf_wrappers_pb.StringValue.AsObject,
     }
 }
 
@@ -3505,6 +3517,9 @@ export class StartNewOrchestrationAction extends jspb.Message {
     getParenttracecontext(): TraceContext | undefined;
     setParenttracecontext(value?: TraceContext): StartNewOrchestrationAction;
 
+    getTagsMap(): jspb.Map<string, string>;
+    clearTagsMap(): void;
+
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): StartNewOrchestrationAction.AsObject;
     static toObject(includeInstance: boolean, msg: StartNewOrchestrationAction): StartNewOrchestrationAction.AsObject;
@@ -3524,6 +3539,8 @@ export namespace StartNewOrchestrationAction {
         scheduledtime?: google_protobuf_timestamp_pb.Timestamp.AsObject,
         requesttime?: google_protobuf_timestamp_pb.Timestamp.AsObject,
         parenttracecontext?: TraceContext.AsObject,
+
+        tagsMap: Array<[string, string]>,
     }
 }
 

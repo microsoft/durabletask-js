@@ -112,6 +112,7 @@ export {
   TaskOptions,
   SubOrchestrationOptions,
   StartOrchestrationOptions,
+  RestartOrchestrationOptions,
   TaskRetryOptions,
   isRetryPolicy,
   isRetryHandler,

@@ -62,6 +62,42 @@ describe("Orchestration Context", () => {
 });
 
 describe("Orchestration Executor", () => {
+  it("starts clones afresh with immediate lineage without passing lineage to sub-orchestrations", async () => {
+    const registry = new Registry();
+    registry.addNamedOrchestrator("Flow", async function* (ctx, input) {
+      ctx.setCustomStatus([ctx.name, input, ctx.instanceId, ctx.sourceInstanceId, ctx.version, ctx.isReplaying]);
+      yield ctx.callSubOrchestrator("Child", input, { instanceId: `${ctx.instanceId}-child` });
+    });
+    registry.addNamedOrchestrator("Child", async (ctx, input) => [
+      input, ctx.instanceId, ctx.sourceInstanceId, ctx.parent?.instanceId,
+    ]);
+    for (const [sourceId, cloneId] of [["original", "clone"], ["clone", "next-clone"]]) {
+      const startEvents = [
+        newOrchestratorStartedEvent(),
+        newExecutionStartedEvent("Flow", cloneId, '"original-input"', undefined, undefined, "2.0"),
+      ];
+      const initial = await new OrchestrationExecutor(registry, testLogger).execute(
+        cloneId, [], startEvents, undefined, sourceId,
+      );
+      expect(JSON.parse(initial.customStatus!)).toEqual([
+        "Flow", "original-input", cloneId, sourceId, "2.0", false,
+      ]);
+      expect(initial.actions).toHaveLength(1);
+      const childAction = initial.actions[0];
+      expect(childAction.getId()).toBe(1);
+      expect(childAction.getCreatesuborchestration()?.getInput()?.getValue()).toBe('"original-input"');
+      const childId = childAction.getCreatesuborchestration()!.getInstanceid();
+      const child = await new OrchestrationExecutor(registry, testLogger).execute(childId, [], [
+        newExecutionStartedEvent("Child", childId, '"original-input"', {
+          name: "Flow", instanceId: cloneId, taskScheduledId: childAction.getId(),
+        }),
+      ]);
+      expect(getAndValidateSingleCompleteOrchestrationAction(child)?.getResult()?.getValue()).toBe(
+        JSON.stringify(["original-input", childId, undefined, cloneId]),
+      );
+    }
+  });
+
   it.each([undefined, "", "Source:@Case/with.punctuation-123"])(
     "preserves source %s independently of parent, identity, version, actions, and replay",
     async (sourceInstanceId) => {
