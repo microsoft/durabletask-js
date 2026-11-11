@@ -243,6 +243,10 @@ Do not use these names/IDs for business tasks. The steps are not transactional: 
 steps remain applied if a later step fails or is canceled. Completion acknowledges event enqueue,
 not application of the configuration. The optional third argument is an `AbortSignal`.
 Disabling ignores batch size and only writes the backend setting; already-fetched deletes may finish.
+It stops both new tombstone creation and fetching existing tombstones without terminating the runner.
+Existing tombstones are retained for re-enabling, but instances purged while disabled leave their blobs
+untracked and unavailable to automatic cleanup. Re-enable before purging instances whose payload blobs
+should be reclaimed.
 
 Payload-enabled workers automatically register the runner and its three activities, include
 them with wildcard versions in nonempty filters, and bypass business version policy for those
