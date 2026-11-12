@@ -20,22 +20,6 @@ This package supersedes the legacy [`durable-functions`](https://github.com/Azur
 - **Client** — `getClient(context)` returns a `DurableFunctionsClient` for scheduling, querying, signaling, and managing instances, plus HTTP management-payload helpers (`createCheckStatusResponse`, `createHttpManagementPayload`) for durable HTTP starters. The `app.client.*` starter helpers (`http`, `timer`, `storageBlob`, `storageQueue`, `serviceBusQueue`, `serviceBusTopic`, `eventHub`, `eventGrid`, `cosmosDB`, `generic`) register a normal trigger and inject the client as the handler's second argument, so `(trigger, client, context)` works without manually wiring `df.input.durableClient()` + `df.getClient(context)`.
 - **Classic (v3) compatibility** — orchestrators and entities written in the legacy `context.df.*` style, `RetryOptions`, `EntityId`, and the deprecated client aliases are adapted onto the core engine.
 
-### Client invocation correlation
-
-During a Functions invocation, client gRPC calls include the current `InvocationContext.invocationId`
-as `x-azure-functions-invocationid`, alongside the existing task-hub and user-agent metadata. This
-applies to `getClient(context)`, `app.client.*` starters, and their compatibility aliases.
-
-The provider automatically scopes each function handler using a Functions pre-invocation hook.
-Correlation survives asynchronous continuations and remains isolated between concurrent invocations,
-even when they share the same cached client and gRPC channel. The ID is resolved for each RPC, not
-stored on the client. Calls outside a Functions invocation omit the header; standalone
-`@microsoft/durabletask-js` clients are unchanged.
-
-Host-side correlation requires an extension build that supports this header. Published SDK version
-and mandatory host correlation coverage are tracked separately in
-[Azure/azure-functions-durable-extension#3327](https://github.com/Azure/azure-functions-durable-extension/issues/3327).
-
 ### Versioning boundary
 
 `app.orchestration` and `app.activity` register **unique Azure Function names**. They do not expose
