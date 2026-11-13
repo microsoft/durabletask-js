@@ -28,6 +28,11 @@
 
 ### Fixes
 
+- Forward the active Functions invocation ID in client gRPC metadata, including `getClient(context)`
+  and `app.client.*` starters. Invocation-local scoping preserves correlation across awaits and
+  concurrent calls without retaining IDs on cached clients or changing channel reuse. Calls outside
+  a Functions invocation omit the header
+  ([#395](https://github.com/microsoft/durabletask-js/issues/395)).
 - Preserve received failure `properties` in `durable-functions/testing` results, including
   nested failures. This does not collect arbitrary JavaScript `Error` fields.
 - Forward the optional `reason` from the classic `suspend()` / `resume()` aliases to the
